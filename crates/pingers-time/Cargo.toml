@@ -1,0 +1,24 @@
+[package]
+name = "pingers-time"
+description = "Clock and Timer traits, UnixSeconds and the 15-minute Bucket."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 0
+
+[features]
+# ManualClock, a Clock and Timer that tests advance by hand.
+test-util = []
+
+[dependencies]
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true
