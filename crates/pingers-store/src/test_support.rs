@@ -32,6 +32,8 @@ pub(crate) enum TestError {
     Receive(#[from] std::sync::mpsc::RecvError),
     #[error(transparent)]
     Mls(#[from] pingers_mls::StorageError),
+    #[error(transparent)]
+    MlsGroup(#[from] pingers_mls::MlsError),
 }
 
 /// A fresh directory under the system temporary directory, removed on drop.

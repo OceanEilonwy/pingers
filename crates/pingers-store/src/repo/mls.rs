@@ -8,6 +8,10 @@ use zeroize::Zeroizing;
 
 use crate::{Session, StoreError};
 
+/// Deletes every `mls_kv` row whose key starts with `?1`. `substr` on a BLOB compares bytes,
+/// so this matches exactly those keys, with no LIKE wildcards or collation to worry about.
+pub(crate) const DELETE_PREFIX: &str = "DELETE FROM mls_kv WHERE substr(key, 1, length(?1)) = ?1";
+
 /// OpenMLS state as opaque bytes (design C.2 `mls_*`). pingers-mls chooses the key layout.
 ///
 /// Each call is atomic. Inside [`Session::transaction`], MLS writes commit or roll back
@@ -55,13 +59,8 @@ impl MlsStorage for Session {
     }
 
     fn delete_prefix(&self, prefix: &[u8]) -> Result<(), StorageError> {
-        // `substr` on a BLOB compares bytes, so this matches exactly the keys that start with
-        // `prefix`, with no LIKE wildcards or collation to worry about.
         self.with(|connection| {
-            connection.execute(
-                "DELETE FROM mls_kv WHERE substr(key, 1, length(?1)) = ?1",
-                [prefix],
-            )?;
+            connection.execute(DELETE_PREFIX, [prefix])?;
             Ok(())
         })
         .map_err(|error| storage_error(&error))
@@ -78,7 +77,8 @@ fn storage_error(error: &StoreError) -> StorageError {
         StoreError::Database(_)
         | StoreError::OutOfRange { .. }
         | StoreError::NotFound { .. }
-        | StoreError::InvalidText { .. } => StorageError::Failed,
+        | StoreError::InvalidText { .. }
+        | StoreError::Internal => StorageError::Failed,
         StoreError::WrongKey
         | StoreError::Busy
         | StoreError::Lock(_)

@@ -140,22 +140,25 @@ impl Meetups<'_> {
     }
 
     /// Ends a Meetup: deletes its row and, by cascade, its chat, peers (with their location
-    /// keys and last positions), this device's location and grant keys, grants and asks.
-    /// With `secure_delete` the freed pages are zeroed; outside a transaction the WAL is then
-    /// checkpointed and truncated. Inside one, call [`Session::checkpoint`] after committing.
-    ///
-    /// MLS state of the group is not in these tables: delete it in the same transaction with
-    /// pingers-mls's `delete_group` (see the crate's Decisions).
+    /// keys and last positions), this device's location and grant keys, grants and asks, and
+    /// every MLS row of its group (epoch secrets, key pairs, roster), as pingers-mls's
+    /// `delete_group` would. With `secure_delete` the freed pages are zeroed; outside a
+    /// transaction the WAL is then checkpointed and truncated. Inside one, call
+    /// [`Session::checkpoint`] after committing.
     ///
     /// # Errors
     ///
-    /// [`StoreError::NotFound`] if there is no such Meetup.
+    /// [`StoreError::NotFound`] if there is no such Meetup; [`StoreError::Internal`] if the
+    /// group's MLS storage prefix cannot be encoded.
     pub fn end(&self, group: &GroupId) -> Result<(), StoreError> {
+        let mls_prefix =
+            pingers_mls::group_storage_prefix(group).map_err(|_| StoreError::Internal)?;
         let outside_transaction = self.session.with(|connection| {
             expect_one(
                 connection.execute("DELETE FROM meetup WHERE group_id = ?1", [group.as_bytes()])?,
                 "meetup",
             )?;
+            connection.execute(crate::repo::mls::DELETE_PREFIX, [mls_prefix.as_slice()])?;
             Ok(connection.is_autocommit())
         })?;
         if outside_transaction {

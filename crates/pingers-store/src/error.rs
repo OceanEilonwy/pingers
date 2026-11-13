@@ -52,6 +52,10 @@ pub enum StoreError {
         /// The maximum length in bytes.
         max: usize,
     },
+    /// A value the store derives itself could not be encoded (for example a group's MLS
+    /// storage prefix). Not caused by stored data.
+    #[error("internal encoding error")]
+    Internal,
     /// A thread panicked while holding the session's connection.
     #[error("the session's connection was poisoned by a panic")]
     Poisoned,

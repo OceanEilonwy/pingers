@@ -37,7 +37,8 @@
 //! - **Crash-safe.** WAL journal, `synchronous = FULL`; [`Session::transaction`] commits all
 //!   or nothing, including on a panic.
 //! - **Deleted means gone.** `secure_delete` zeroes freed pages; ending a Meetup deletes every
-//!   row that held its keys and content, then truncates the WAL ([`Meetups::end`]).
+//!   row that held its keys and content, its MLS group state included, then truncates the WAL
+//!   ([`Meetups::end`]).
 //! - **No location history.** Coordinates exist only in Spot and zone geometry and in the
 //!   latest decrypted position of a granted Meetup peer (one row per peer, deleted with the
 //!   Meetup). A test walks the schema to keep it that way.
@@ -50,10 +51,9 @@
 //! - **`MlsStorage` is implemented on [`Session`]**, so MLS writes join the session's
 //!   transaction. The trait's error kinds have no source, so database errors become
 //!   `StorageError::Unavailable` and undecodable values `StorageError::Corrupt`.
-//! - **MLS rows of an ended Meetup are not deleted by [`Meetups::end`].** The trait's keys
-//!   are opaque (pingers-mls chooses the layout), so the store cannot tell which `mls_kv`
-//!   rows belong to a group. The caller must also call pingers-mls's `delete_group` in the
-//!   same transaction. A `delete_prefix` on the trait would let the store do it.
+//! - **[`Meetups::end`] deletes the group's MLS rows too**, under pingers-mls's
+//!   `group_storage_prefix`, so no caller can end a Meetup and leave its epoch secrets behind
+//!   (style guide §8, design B.5). Calling `delete_group` as well is harmless.
 //! - **`lease.records` is normalised** into `lease_slot` (four rows), and the store keeps only
 //!   the current lease: replacing it deletes the old one, so past buckets' Spots are not kept.
 //! - **`meetup_self_lk.gk_sk` moved to `meetup.gk_sk`.** The grant key pair is per Meetup, not
