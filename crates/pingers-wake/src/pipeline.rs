@@ -371,6 +371,13 @@ where
             reads_due,
         } = self.sync_parties(state, parties, decision).await;
         let active = self.derive_keys(state, &parties, decision)?;
+        let keys = Keys {
+            parties: &parties,
+            active: &active,
+        };
+        // Knocks answer the records the server held when the wake began, including any the
+        // upload is about to replace.
+        let held_at_start = state.leases.clone();
         let upload = match plan {
             UploadPlan::NotBefore(time) => UploadOutcome::NotDue(time),
             UploadPlan::UploadNow => {
@@ -383,16 +390,12 @@ where
                     trigger: upload_trigger,
                     epoch_change,
                 };
-                let keys = Keys {
-                    parties: &parties,
-                    active: &active,
-                };
                 self.upload(state, &keys, why).await?
             }
         };
 
         if reads_due {
-            self.answer_knocks(state, &active).await;
+            self.answer_knocks(state, &keys, &held_at_start).await;
             self.read_replies(state).await;
         }
         if network_needed {
@@ -438,7 +441,8 @@ where
         };
         let mut upload_trigger = self.upload_trigger(state, &parties, facts);
         let mut plan = plan_upload(upload_trigger, state.last_upload, self.now);
-        let network_needed = plan == UploadPlan::UploadNow || commit_push || reads_due;
+        // A Commit push always makes the upload due (`EpochChanged`).
+        let network_needed = plan == UploadPlan::UploadNow || reads_due;
         let server = self.env.server;
         if network_needed
             && self
@@ -688,10 +692,12 @@ where
             epoch_changed,
         } = facts;
         let posting = Self::posting(state, parties, decision);
-        let entered = self.report.transitions.iter().any(|change| {
-            change.transition.to == PresenceState::Inside
-                && posting.iter().any(|key| key.spot == change.spot)
-        });
+        // Only a confirmed Spot with sharing allowed can become Inside in this wake.
+        let entered = self
+            .report
+            .transitions
+            .iter()
+            .any(|change| change.transition.to == PresenceState::Inside);
         let stale_record = state.leases.iter().any(|lease| {
             lease.real_records().any(|(_slot, real)| {
                 !posting
@@ -988,8 +994,19 @@ where
     /// Reads the knock mailbox of every real record the server may hold, verifies what opens,
     /// re-validates with a fresh fix and the gate, and decides (design B.4.4 steps 4 to 6).
     /// Records whose Spot has no keys now are read like the others, but nothing opens.
-    async fn answer_knocks(&mut self, state: &mut WakeState, active: &[ActiveSpot]) {
-        let received = self.receive_knocks(state, active).await;
+    async fn answer_knocks(
+        &mut self,
+        state: &mut WakeState,
+        keys: &Keys<'_>,
+        held_at_start: &[LiveLease],
+    ) {
+        let mut leases = held_at_start.to_vec();
+        for lease in &state.leases {
+            if !leases.contains(lease) {
+                leases.push(*lease);
+            }
+        }
+        let received = self.receive_knocks(state, keys, &leases).await;
         if received.is_empty() {
             return;
         }
@@ -1000,11 +1017,12 @@ where
     async fn receive_knocks(
         &mut self,
         state: &WakeState,
-        active: &[ActiveSpot],
+        keys: &Keys<'_>,
+        leases: &[LiveLease],
     ) -> Vec<ReceivedKnock> {
+        let Keys { parties, active } = *keys;
         let mut received = Vec::new();
-        let records: Vec<(Bucket, RecordRandomness, RealRecord)> = state
-            .leases
+        let records: Vec<(Bucket, RecordRandomness, RealRecord)> = leases
             .iter()
             .flat_map(|lease| {
                 lease
@@ -1034,11 +1052,7 @@ where
             let roster = PartyRoster {
                 parties: self.env.parties,
                 party: real.spot.party,
-                current: state
-                    .epochs
-                    .iter()
-                    .find(|known| known.party == real.spot.party)
-                    .map_or(real.epoch, |known| known.epoch),
+                current: current_epoch(parties, real.spot).unwrap_or(real.epoch),
             };
             for post in posts {
                 let Ok(opened) = open_knock(&context, &post) else {

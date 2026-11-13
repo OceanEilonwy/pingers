@@ -125,8 +125,26 @@ async fn second_arrival_knocks_and_the_poster_admits_after_a_liveness_check()
     assert_eq!(admission.epoch, EPOCH);
     assert_eq!(admission.bucket, alice.now().bucket());
     assert_eq!(admission.knock.knocker, town.party.member("bob")?.leaf);
-    // Not an upload wake: the push only made Alice read her mailbox.
+    // Bob's knock names his own record, for the tie-break.
+    let bob_record = bob.state.snapshot().leases.last().and_then(|lease| {
+        lease
+            .slots
+            .iter()
+            .find(|slot| slot.real.is_some())
+            .map(|slot| slot.randomness)
+    });
+    assert_eq!(admission.knock.knock.own_randomness, bob_record);
+    // Not an upload wake: the push only made Alice read her mailbox, after pulling the group
+    // logs so the roster she verified against was current; the pool was refilled after.
     assert!(matches!(answered.upload, UploadOutcome::NotDue(_)));
+    let calls = alice.server.calls();
+    let pushed: Vec<&Call> = calls
+        .iter()
+        .skip_while(|call| **call != Call::Refill)
+        .skip(1)
+        .collect();
+    assert_eq!(pushed.first(), Some(&&Call::PullLogs));
+    assert_eq!(pushed.last(), Some(&&Call::Refill));
 
     // A second read of the same mailbox does not decide the same knock again.
     alice.platform.script_fix(spot.fix_inside(alice.now()));
@@ -153,6 +171,10 @@ async fn second_arrival_knocks_and_the_poster_admits_after_a_liveness_check()
     // Answered knocks are not read again.
     let read_again = bob.wake(WakeTrigger::Push(PushReason::Mailbox)).await?;
     assert_eq!(read_again.welcomes, 0);
+    // The match and the Welcome both count as peer activity at the Spot, kept once.
+    let activity = bob.state.snapshot().peer_activity;
+    assert_eq!(activity.len(), 1);
+    assert_eq!(activity.first().map(|seen| seen.spot), Some(anchor));
     Ok(())
 }
 
@@ -255,6 +277,12 @@ async fn knock_during_the_grace_period_names_the_epoch_it_matched_under() -> Res
     assert_eq!(arrives.knocks_sent, 1);
     let sent = bob.state.snapshot().sent_knocks;
     assert_eq!(sent.first().map(|knock| knock.epoch), Some(EPOCH));
+    // Bob posts with his current epoch's keys only.
+    let bob_lease = bob.state.snapshot().leases;
+    let posted = bob_lease
+        .last()
+        .and_then(|lease| lease.slots.iter().find_map(|slot| slot.real));
+    assert_eq!(posted.map(|record| record.epoch), Some(Epoch::new(4)));
 
     alice.platform.script_fix(spot.fix_inside(alice.now()));
     alice.wake(WakeTrigger::Push(PushReason::Mailbox)).await?;
@@ -499,5 +527,201 @@ async fn several_inside_spots_each_get_a_real_record() -> Result<(), TestError> 
     let spot = town.spot("anchor")?;
     alice.enter(spot, anchor).await?;
     assert_eq!(alice.real_records(), 2);
+    Ok(())
+}
+
+/// More than four Spots inside: four get records, and on the next refresh a Spot left out
+/// goes in (design B.4.2, "rotates the rest in on refresh").
+#[tokio::test]
+async fn spots_left_out_of_a_full_lease_rotate_in() -> Result<(), TestError> {
+    let town = Town::new()?;
+    let mut alice = town.phone(0)?;
+    let anchor = town.spot_ref("anchor")?;
+    let spot = town.spot("anchor")?;
+    let _added = overlap_five_spots(&alice, &spot.fence);
+    alice.enter(spot, anchor).await?;
+    let first = spots_in_lease(&alice);
+    assert_eq!(first.len(), 4);
+    let left_out: Vec<pingers_proto::SpotId> = alice
+        .parties
+        .info()
+        .spots
+        .iter()
+        .map(|info| info.spot)
+        .filter(|id| !first.contains(id))
+        .collect();
+    assert_eq!(left_out.len(), 1);
+
+    town.advance(MIN_UPLOAD_SPACING);
+    alice.platform.script_fix(spot.fix_inside(alice.now()));
+    alice.wake(WakeTrigger::Scheduled).await?;
+    let second = spots_in_lease(&alice);
+    assert_eq!(second.len(), 4);
+    assert!(left_out.iter().all(|id| second.contains(id)));
+    Ok(())
+}
+
+/// The Spots with a real record in the phone's newest lease.
+fn spots_in_lease(phone: &super::Phone) -> Vec<pingers_proto::SpotId> {
+    phone
+        .state
+        .snapshot()
+        .leases
+        .last()
+        .map(|lease| {
+            lease
+                .slots
+                .iter()
+                .filter_map(|slot| slot.real.map(|real| real.spot.spot))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Gives every Spot of the phone's Party the same fence and adds two more, so one position is
+/// inside five Spots. Returns the added Spots, which come last in the Party's order.
+fn overlap_five_spots(
+    phone: &super::Phone,
+    fence: &pingers_geo::Fence,
+) -> Vec<pingers_proto::SpotId> {
+    let extra: Vec<pingers_proto::SpotId> = [0xe1_u8, 0xe2]
+        .into_iter()
+        .map(|byte| pingers_proto::SpotId::from_bytes([byte; 16]))
+        .collect();
+    phone.parties.edit(|party| {
+        for info in &mut party.spots {
+            info.fence = fence.clone();
+        }
+        for id in &extra {
+            party.spots.push(crate::ports::SpotInfo {
+                spot: *id,
+                fence: fence.clone(),
+            });
+        }
+    });
+    extra
+}
+
+/// A Spot where a peer was seen recently takes a slot ahead of the Party's order.
+#[tokio::test]
+async fn recent_peer_activity_wins_a_slot() -> Result<(), TestError> {
+    let town = Town::new()?;
+    let mut alice = town.phone(0)?;
+    let anchor = town.spot_ref("anchor")?;
+    let spot = town.spot("anchor")?;
+    let extra = overlap_five_spots(&alice, &spot.fence);
+    let last = *extra.last().ok_or(TestError::Missing("spot"))?;
+    alice.state = crate::WakeState::restore(crate::WakeSnapshot {
+        peer_activity: vec![crate::PeerActivity {
+            spot: pingers_presence::SpotRef {
+                party: town.party.id,
+                spot: last,
+            },
+            at: town.now(),
+        }],
+        ..crate::WakeSnapshot::default()
+    });
+    alice.enter(spot, anchor).await?;
+    assert!(spots_in_lease(&alice).contains(&last));
+    Ok(())
+}
+
+/// Alice's record was sealed at epoch 3; she processes an ordinary Commit before Bob's knock
+/// reaches her. During the grace period she still holds epoch 3's keys and answers, even in
+/// the wake whose re-post replaces that record.
+#[tokio::test]
+async fn poster_answers_a_knock_on_its_previous_epoch_record() -> Result<(), TestError> {
+    let town = Town::new()?;
+    let mut alice = town.phone(0)?;
+    let mut bob = town.phone(1)?;
+    let anchor = town.spot_ref("anchor")?;
+    let spot = town.spot("anchor")?;
+    alice.enter(spot, anchor).await?;
+    bob.enter(spot, anchor).await?;
+
+    alice.parties.set_epoch(EpochState {
+        current: Epoch::new(4),
+        entered_at: town.now(),
+        transition: EpochTransition::Other,
+    });
+    alice.platform.script_fix(spot.fix_inside(alice.now()));
+    let woken = alice.wake(WakeTrigger::Push(PushReason::Mailbox)).await?;
+    assert!(matches!(
+        woken.upload,
+        UploadOutcome::Uploaded {
+            trigger: UploadTrigger::EpochChanged,
+            ..
+        }
+    ));
+    // The knock opened under epoch 3's keys and was decided. (The re-post's board read also
+    // matched Bob's record, so Alice knocked back and the tie-break applies.)
+    assert_eq!(
+        woken.knock_decisions,
+        vec![KnockOutcome {
+            spot: anchor,
+            decision: KnockDecision::WaitForPeer,
+        }]
+    );
+    Ok(())
+}
+
+/// Both knocked each other in the same moment (design B.4.4 step 6): the device whose record
+/// randomness is smaller creates the group, the other waits for its Welcome.
+#[tokio::test]
+async fn mutual_knocks_are_broken_by_record_randomness() -> Result<(), TestError> {
+    let town = Town::new()?;
+    let mut alice = town.phone(0)?;
+    let mut bob = town.phone(1)?;
+    alice.settings.mailbox_reads = crate::MailboxReads::EveryWake;
+    let anchor = town.spot_ref("anchor")?;
+    let spot = town.spot("anchor")?;
+    alice.enter(spot, anchor).await?;
+    bob.enter(spot, anchor).await?;
+    let alice_record = alice
+        .state
+        .snapshot()
+        .leases
+        .last()
+        .and_then(|lease| lease.slots.iter().find(|slot| slot.real.is_some()))
+        .map(|slot| slot.randomness)
+        .ok_or(TestError::Missing("record"))?;
+    let bob_record = bob
+        .state
+        .snapshot()
+        .sent_knocks
+        .first()
+        .ok_or(TestError::Missing("knock"))
+        .and_then(|_sent| {
+            bob.state
+                .snapshot()
+                .leases
+                .last()
+                .and_then(|lease| lease.slots.iter().find(|slot| slot.real.is_some()))
+                .map(|slot| slot.randomness)
+                .ok_or(TestError::Missing("record"))
+        })?;
+
+    // Alice's next sync matches Bob's record and knocks it, then reads Bob's knock on her
+    // previous record.
+    town.advance(MIN_UPLOAD_SPACING);
+    alice
+        .platform
+        .script_fixes([spot.fix_inside(alice.now()), spot.fix_inside(alice.now())]);
+    let woken = alice.wake(WakeTrigger::Scheduled).await?;
+    assert_eq!(woken.knocks_sent, 1);
+    let expected = if bob_record < alice_record {
+        KnockDecision::WaitForPeer
+    } else {
+        KnockDecision::Accept(Admission::CreateMeetup)
+    };
+    assert_eq!(
+        woken
+            .knock_decisions
+            .first()
+            .map(|outcome| outcome.decision),
+        Some(expected)
+    );
+    // The seeds are chosen so this run takes the waiting branch.
+    assert_eq!(expected, KnockDecision::WaitForPeer);
     Ok(())
 }

@@ -578,3 +578,134 @@ async fn without_pushes_every_wake_reads_the_mailboxes() -> Result<(), TestError
     assert_eq!(reads, 1);
     Ok(())
 }
+
+/// A Commit push while the Party view already shows the new epoch is still an epoch change.
+#[tokio::test]
+async fn commit_push_with_a_new_epoch_in_view_reposts() -> Result<(), TestError> {
+    let town = Town::new()?;
+    let mut alice = town.phone(0)?;
+    let away = town.spot("canal")?;
+    alice.platform.script_fix(away.fix_outside(alice.now())?);
+    alice.wake(WakeTrigger::Scheduled).await?;
+    town.advance(Duration::from_mins(1));
+    alice.parties.set_epoch(EpochState {
+        current: Epoch::new(4),
+        entered_at: town.now(),
+        transition: EpochTransition::Other,
+    });
+    let commit = alice
+        .wake(WakeTrigger::Push(PushReason::GroupCommit))
+        .await?;
+    assert!(matches!(
+        commit.upload,
+        UploadOutcome::Uploaded {
+            trigger: UploadTrigger::EpochChanged,
+            ..
+        }
+    ));
+    Ok(())
+}
+
+/// The re-post after a Commit failed: the next wake still replaces the old epoch's record,
+/// though the epoch change itself is no longer new.
+#[tokio::test]
+async fn failed_epoch_repost_is_retried_on_the_next_wake() -> Result<(), TestError> {
+    let town = Town::new()?;
+    let mut alice = town.phone(0)?;
+    let anchor = town.spot_ref("anchor")?;
+    let spot = town.spot("anchor")?;
+    alice.enter(spot, anchor).await?;
+    alice.parties.set_epoch(EpochState {
+        current: Epoch::new(4),
+        entered_at: town.now(),
+        transition: EpochTransition::Other,
+    });
+    alice.server.disturb(CallKind::Upload, Effect::Fail);
+    let failed = alice.wake(WakeTrigger::Scheduled).await?;
+    assert_eq!(
+        failed.upload,
+        UploadOutcome::Interrupted(UploadTrigger::EpochChanged)
+    );
+
+    alice.server.calm();
+    town.advance(Duration::from_secs(1));
+    let retried = alice.wake(WakeTrigger::Scheduled).await?;
+    assert!(matches!(
+        retried.upload,
+        UploadOutcome::Uploaded {
+            real_records: 1,
+            ..
+        }
+    ));
+    Ok(())
+}
+
+/// A lease is forgotten when it expires (bucket start + 4): a real record that has left the
+/// board needs no withdrawing.
+#[tokio::test]
+async fn expired_lease_needs_no_withdrawal() -> Result<(), TestError> {
+    let town = Town::new()?;
+    let mut alice = town.phone(0)?;
+    let anchor = town.spot_ref("anchor")?;
+    alice.enter(town.spot("anchor")?, anchor).await?;
+    let start = alice
+        .state
+        .snapshot()
+        .leases
+        .last()
+        .map(|lease| lease.start)
+        .ok_or(TestError::Missing("lease"))?;
+    let expiry = start
+        .checked_add(pingers_presence::LEASE_BUCKETS)
+        .ok_or(TestError::Missing("bucket"))?
+        .start();
+    town.advance(expiry.saturating_duration_since(town.now()));
+    alice.settings.pause = pingers_gate::PauseState::Paused;
+    let paused = alice.wake(WakeTrigger::Scheduled).await?;
+    assert!(matches!(
+        paused.upload,
+        UploadOutcome::Uploaded {
+            trigger: UploadTrigger::Wake,
+            ..
+        }
+    ));
+    Ok(())
+}
+
+/// Everything the snapshot holds survives a restore.
+#[tokio::test]
+async fn restore_keeps_every_stored_field() -> Result<(), TestError> {
+    let town = Town::new()?;
+    let anchor = town.spot_ref("anchor")?;
+    let mailbox = pingers_proto::MailboxId::from_bytes([5; 16]);
+    let record = pingers_proto::RecordRandomness::from_bytes([6; 16]);
+    let snapshot = crate::WakeSnapshot {
+        spots: Vec::new(),
+        last_in_zone: Some(town.now()),
+        leases: Vec::new(),
+        sent_knocks: vec![crate::SentKnock {
+            spot: anchor,
+            epoch: Epoch::new(3),
+            knock_mailbox: mailbox,
+            matched: record,
+            reply_mailbox: mailbox,
+            sent_at: town.now(),
+            status: crate::KnockStatus::Waiting,
+        }],
+        decided_knocks: vec![crate::DecidedKnock {
+            reply_mailbox: mailbox,
+            at: town.now(),
+        }],
+        last_upload: Some(town.now()),
+        epochs: vec![crate::KnownEpoch {
+            party: town.party.id,
+            epoch: Epoch::new(3),
+        }],
+        peer_activity: vec![crate::PeerActivity {
+            spot: anchor,
+            at: town.now(),
+        }],
+    };
+    assert_eq!(WakeState::restore(snapshot.clone()).snapshot(), snapshot);
+    Ok(())
+}
