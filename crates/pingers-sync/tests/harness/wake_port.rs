@@ -69,6 +69,14 @@ async fn the_pool_fills_one_per_call_and_hands_out_long_enough_mailboxes() -> Te
             .take_mailbox_for_lease(MailboxPurpose::Reply, start)?,
         None
     );
+    // The same 30-minute mailbox serves anything that ends sooner.
+    let soon = UnixSeconds::new(world.clock.now().get().saturating_add(20 * 60));
+    assert!(
+        device
+            .engine
+            .take_mailbox_until(MailboxPurpose::Reply, soon)?
+            .is_some()
+    );
     let first = device
         .engine
         .take_mailbox_for_lease(MailboxPurpose::Knock, start)?;

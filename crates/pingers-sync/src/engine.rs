@@ -2,10 +2,13 @@
 //! The engine: sends one request with the right privacy class and credential, inside the wake
 //! budget, and queues or drops what could not be sent.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use pingers_ohttp::{BinaryResponse, OhttpError};
-use pingers_proto::{ServerId, WireDecode};
+use pingers_proto::{
+    CommitResponse, GroupId, MessageAccepted, SequenceNumber, ServerId, WireDecode,
+};
 use pingers_store::Session;
 use pingers_time::{Clock, Timer, UnixSeconds};
 use pingers_transport::{DuplexStream, PrivacyClass, Transport, TransportError};
@@ -217,6 +220,7 @@ pub struct SyncEngine {
     clock_status: Mutex<ClockStatus>,
     pub(crate) wake_push: Mutex<Option<WakePush>>,
     pub(crate) previous_lease: Mutex<Option<HeldLease>>,
+    pub(crate) own_entries: Mutex<HashSet<(GroupId, SequenceNumber)>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -248,6 +252,7 @@ impl SyncEngine {
             clock_status: Mutex::new(ClockStatus::Unchecked),
             wake_push: Mutex::new(None),
             previous_lease: Mutex::new(None),
+            own_entries: Mutex::new(HashSet::new()),
             settings: Mutex::new(settings),
         }
     }
@@ -436,7 +441,11 @@ impl SyncEngine {
             .await;
         match sent {
             None => Err(SyncError::BudgetExhausted { route }),
-            Some(Ok(response)) => Ok(Attempt::Answered(Response::new(route, response))),
+            Some(Ok(response)) => {
+                let response = Response::new(route, response);
+                self.note_own_entry(&request, &response);
+                Ok(Attempt::Answered(response))
+            }
             Some(Err(TransportError::NoRelay)) => {
                 self.restore(attached).await?;
                 Ok(Attempt::NotSent(request, NotSentReason::NoRelay))
@@ -447,6 +456,32 @@ impl SyncEngine {
                 Err(SyncError::RelayKeyMismatch)
             }
             Some(Err(error)) => Err(SyncError::Transport(error)),
+        }
+    }
+
+    /// Remembers the log position of a group entry this engine stored (a commit accepted or
+    /// a stored message), so pulls pass over it, including posts sent from the queue.
+    fn note_own_entry(&self, request: &ApiRequest, response: &Response) {
+        let Some(group) = request.group() else {
+            return;
+        };
+        if !response.is_success() {
+            return;
+        }
+        // Only commits and group messages name their group.
+        let sequence = if request.route() == Route::Commit {
+            match response.decode::<CommitResponse>() {
+                Ok(CommitResponse::Accepted { sequence }) => Some(sequence),
+                Ok(CommitResponse::Conflict { .. }) | Err(_) => None,
+            }
+        } else {
+            response
+                .decode::<MessageAccepted>()
+                .ok()
+                .map(|accepted| accepted.sequence)
+        };
+        if let Some(sequence) = sequence {
+            lock(&self.own_entries).insert((group, sequence));
         }
     }
 

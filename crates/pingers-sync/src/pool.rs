@@ -126,7 +126,21 @@ impl SyncEngine {
         purpose: MailboxPurpose,
         lease_start: Bucket,
     ) -> Result<Option<MailboxId>, SyncError> {
-        let until = lease_end(lease_start)?;
+        self.take_mailbox_until(purpose, lease_end(lease_start)?)
+    }
+
+    /// Takes a pooled mailbox of `purpose` that lives at least until `until` (an invite's
+    /// expiry, a join's reply), marking it in use. Synchronous, like
+    /// [`SyncEngine::take_mailbox_for_lease`].
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Store`].
+    pub fn take_mailbox_until(
+        &self,
+        purpose: MailboxPurpose,
+        until: UnixSeconds,
+    ) -> Result<Option<MailboxId>, SyncError> {
         Ok(self
             .session
             .mailboxes()

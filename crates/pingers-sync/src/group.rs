@@ -60,6 +60,16 @@ pub trait GroupLogOwner: Send {
     ///
     /// The owner's own; the pull stops at this entry.
     fn apply(&mut self, entry: GroupLogEntry) -> Result<(), Self::Error>;
+
+    /// The entry at `sequence` is one this device posted (its position came back from the
+    /// post): it is not handed to [`GroupLogOwner::apply`], since an own commit was merged by
+    /// `commit_accepted` and an own application message cannot be decrypted by its sender.
+    /// `applied_through` must still move past it.
+    ///
+    /// # Errors
+    ///
+    /// The owner's own; the pull stops at this entry.
+    fn skip_own(&mut self, sequence: SequenceNumber) -> Result<(), Self::Error>;
 }
 
 /// An owner that also makes commits.
@@ -114,11 +124,21 @@ pub enum Committed {
 pub struct Pulled {
     /// Entries handed to the owner.
     pub applied: usize,
+    /// This device's own entries, passed over (`skip_own`).
+    pub skipped: usize,
     /// The log's epoch, from the last page.
     pub head_epoch: Option<Epoch>,
 }
 
 impl SyncEngine {
+    /// Whether the entry at `sequence` of `group` was posted by this engine; forgets it.
+    fn take_own_entry(&self, group: &GroupId, sequence: SequenceNumber) -> bool {
+        self.own_entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&(*group, sequence))
+    }
+
     fn signer<'key>(&self, key: &'key LogAuthKeyPair) -> GroupSigner<'key> {
         GroupSigner {
             key,
@@ -157,6 +177,7 @@ impl SyncEngine {
     ) -> Result<Pulled, GroupError<O::Error>> {
         let mut pulled = Pulled {
             applied: 0,
+            skipped: 0,
             head_epoch: None,
         };
         loop {
@@ -175,8 +196,13 @@ impl SyncEngine {
                 return Ok(pulled);
             }
             for entry in page.messages {
-                owner.apply(entry).map_err(GroupError::Owner)?;
-                pulled.applied = pulled.applied.saturating_add(1);
+                if self.take_own_entry(group, entry.sequence) {
+                    owner.skip_own(entry.sequence).map_err(GroupError::Owner)?;
+                    pulled.skipped = pulled.skipped.saturating_add(1);
+                } else {
+                    owner.apply(entry).map_err(GroupError::Owner)?;
+                    pulled.applied = pulled.applied.saturating_add(1);
+                }
             }
         }
     }

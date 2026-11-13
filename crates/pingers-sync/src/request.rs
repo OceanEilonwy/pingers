@@ -168,6 +168,7 @@ pub struct GroupSigner<'key> {
 #[derive(Clone)]
 pub struct ApiRequest {
     route: Route,
+    group: Option<GroupId>,
     method: &'static str,
     path: String,
     headers: Vec<Header>,
@@ -208,6 +209,7 @@ impl ApiRequest {
     fn new(route: Route, method: &'static str, path: String) -> Self {
         Self {
             route,
+            group: None,
             method,
             path,
             headers: Vec::new(),
@@ -259,6 +261,17 @@ impl ApiRequest {
                 GROUP_SIGNATURE_HEADER,
                 hex::encode(signature.as_bytes()).into_bytes(),
             ))
+    }
+
+    fn in_group(mut self, group: &GroupId) -> Self {
+        self.group = Some(*group);
+        self
+    }
+
+    /// The group a group-log request addresses.
+    #[must_use]
+    pub const fn group(&self) -> Option<GroupId> {
+        self.group
     }
 
     /// The route.
@@ -486,6 +499,7 @@ impl ApiRequest {
             "POST",
             format!("/v1/groups/{}/commit", id_hex(group.as_bytes())),
         )
+        .in_group(group)
         .with_cbor(request)?
         .signed(signer)
     }
@@ -552,6 +566,7 @@ impl ApiRequest {
             "POST",
             format!("/v1/groups/{}/msgs", id_hex(group.as_bytes())),
         )
+        .in_group(group)
         .with_cbor(message)?
         .signed(signer)
     }

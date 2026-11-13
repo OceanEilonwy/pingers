@@ -39,6 +39,7 @@ pub(crate) struct Member {
     applied: Option<SequenceNumber>,
     entries: Vec<GroupLogEntry>,
     rejections: Vec<Epoch>,
+    skipped: Vec<SequenceNumber>,
     refuse_at: Option<SequenceNumber>,
 }
 
@@ -51,6 +52,7 @@ impl Member {
             applied: None,
             entries: Vec::new(),
             rejections: Vec::new(),
+            skipped: Vec::new(),
             refuse_at: None,
         }
     }
@@ -96,6 +98,12 @@ impl GroupLogOwner for Member {
         self.entries.push(entry);
         Ok(())
     }
+
+    fn skip_own(&mut self, sequence: SequenceNumber) -> Result<(), Refused> {
+        self.applied = Some(sequence);
+        self.skipped.push(sequence);
+        Ok(())
+    }
 }
 
 impl CommitOwner for Member {
@@ -131,6 +139,10 @@ impl GroupLogOwner for Idle {
     fn apply(&mut self, entry: GroupLogEntry) -> Result<(), Refused> {
         self.0.apply(entry)
     }
+
+    fn skip_own(&mut self, sequence: SequenceNumber) -> Result<(), Refused> {
+        self.0.skip_own(sequence)
+    }
 }
 
 impl CommitOwner for Idle {
@@ -163,6 +175,14 @@ pub(crate) async fn create(device: &Device) -> TestResult {
         )
         .await?;
     Ok(())
+}
+
+async fn pull(device: &Device, member: &mut Member) -> Result<pingers_sync::Pulled, TestError> {
+    device
+        .engine
+        .pull_group(&GROUP, member, WakeBudget::UNLIMITED)
+        .await
+        .map_err(|_| TestError::Unexpected("pull failed"))
 }
 
 /// Another member's commit for `epoch`, as it would arrive at the server.
@@ -216,11 +236,7 @@ async fn a_group_log_round_trip_with_a_commit_conflict() -> TestResult {
     };
 
     let mut bob_state = Member::new(b'B');
-    let pulled = bob
-        .engine
-        .pull_group(&GROUP, &mut bob_state, WakeBudget::UNLIMITED)
-        .await
-        .map_err(|_| TestError::Unexpected("pull failed"))?;
+    let pulled = pull(&bob, &mut bob_state).await?;
     assert_eq!(pulled.applied, 1);
     assert_eq!(pulled.head_epoch, Some(Epoch::new(0)));
     assert_eq!(bob_state.applied, Some(first));
@@ -256,14 +272,18 @@ async fn a_group_log_round_trip_with_a_commit_conflict() -> TestResult {
         .collect();
     assert_eq!(applied, [vec![1, 2, 3], vec![b'A', 0]]);
 
-    // Alice sees everything in order, ending with Bob's commit for epoch 1.
+    // Bob's own commit is passed over on his next pull, not handed back.
+    let pulled = pull(&bob, &mut bob_state).await?;
+    assert_eq!((pulled.applied, pulled.skipped), (0, 1));
+    assert_eq!(bob_state.skipped, [bob_commit]);
+    assert_eq!(bob_state.applied, Some(bob_commit));
+
+    // Alice sees the others' entries in order, ending with Bob's commit for epoch 1; her own
+    // message is passed over.
     let mut alice_state = Member::new(b'A');
-    let pulled = alice
-        .engine
-        .pull_group(&GROUP, &mut alice_state, WakeBudget::UNLIMITED)
-        .await
-        .map_err(|_| TestError::Unexpected("pull failed"))?;
-    assert_eq!(pulled.applied, 3);
+    let pulled = pull(&alice, &mut alice_state).await?;
+    assert_eq!((pulled.applied, pulled.skipped), (2, 1));
+    assert_eq!(alice_state.skipped, [first]);
     assert_eq!(pulled.head_epoch, Some(Epoch::new(2)));
     assert_eq!(alice_state.applied, Some(bob_commit));
     assert_eq!(
@@ -366,9 +386,10 @@ async fn an_entry_the_owner_refuses_stops_the_pull_there() -> TestResult {
             )
             .await?;
     }
+    let bob = world.device()?;
     let mut member = Member::new(b'B');
     member.refuse_at = Some(SequenceNumber::new(2));
-    let pulled = alice
+    let pulled = bob
         .engine
         .pull_group(&GROUP, &mut member, WakeBudget::UNLIMITED)
         .await;

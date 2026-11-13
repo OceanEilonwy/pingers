@@ -124,3 +124,46 @@ async fn a_refused_commit_is_an_error_not_a_conflict() -> TestResult {
     assert_eq!(member.epoch, Epoch::new(0));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_own_message_sent_from_the_queue_is_passed_over() -> TestResult {
+    let world = World::start()?;
+    let alice = world.device()?;
+    let _ = alice.stock_tokens().await?;
+    create(&alice).await?;
+    let key = key_for(Epoch::new(0));
+    alice.link.set_offline(true);
+    let until = pingers_time::UnixSeconds::new(
+        pingers_time::Clock::now(&world.clock)
+            .get()
+            .saturating_add(600),
+    );
+    let queued = alice
+        .engine
+        .post_group_message(
+            GroupCall {
+                group: &GROUP,
+                key: &key,
+            },
+            &AppMessage {
+                epoch: Epoch::new(0),
+                body: MlsMessageBytes::from_bytes(vec![7]),
+                delivery: Delivery::Stored,
+                wake: None,
+            },
+            Sending::or_keep_until(until, WakeBudget::UNLIMITED),
+        )
+        .await?;
+    assert!(matches!(queued, Delivered::Queued(_)));
+    alice.link.set_offline(false);
+    let flushed = alice.engine.flush_queue(WakeBudget::UNLIMITED).await?;
+    assert_eq!(flushed.sent.len(), 1);
+    let mut member = Member::new(b'A');
+    let pulled = alice
+        .engine
+        .pull_group(&GROUP, &mut member, WakeBudget::UNLIMITED)
+        .await
+        .map_err(|_| crate::support::TestError::Unexpected("pull failed"))?;
+    assert_eq!((pulled.applied, pulled.skipped), (0, 1));
+    Ok(())
+}

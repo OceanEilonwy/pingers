@@ -37,6 +37,14 @@ B.4.9, B.12, D, E.2). L3: tokio (spawn_blocking, select), no detached tasks.
   `refill_mailbox_pool(&PoolTarget { purpose, size, lifetime })` (at most one registration),
   `knock_subscription(lifetime)` (the knock's Meetup subscription, `None` with pushes off),
   `set_wake_push(Option<WakePush { knock, alert }>)`, `pull_group`.
+- For pingers-parties' `Outbound` (adapters in pingers-client): `CreateGroup` ->
+  `create_group`; `Commit` -> `commit` through a `CommitOwner` whose `prepare_commit` hands
+  out the `OutgoingCommit` and whose `commit_accepted` stashes the Welcome, which the adapter
+  then posts with `post_to_mailbox`; `GroupMessage` -> `post_group_message`; `MailboxPost` ->
+  `post_to_mailbox`; `DeleteMailbox` -> `delete_mailbox`; `Leave` -> `post_group_message`
+  then `delete_subscription`, both with the `GroupCall` key the `LeaveRequest` carries.
+  Invites take a pooled `Invite` mailbox and joins a pooled `Reply` one with
+  `take_mailbox_until(purpose, until)`.
 - Clock (design F.1): `observe_server_time(t) -> ClockStatus::{Unchecked, Corrected,
   Uncorrected, Skewed}` (`ClockOffset`), `corrected_now()`, `clock_status()`, `fetch_params`
   (re-checks the clock). `board_sync` observes the server time it returns.
@@ -66,6 +74,12 @@ B.4.9, B.12, D, E.2). L3: tokio (spawn_blocking, select), no detached tasks.
 - **Root epoch** = `unix seconds / 3600`, as pingers-quota computes it.
 - **Queue** is in memory (32 entries, oldest dropped when full): pingers-store has no
   table for it yet. Reads, board syncs, mailbox registrations and commits are never queued.
+- **Own entries** are not handed back: the positions of this engine's accepted commits and
+  stored messages (also those sent from the queue) are remembered, and `pull_group` calls
+  `GroupLogOwner::skip_own(sequence)` for them instead of `apply`. The set is in memory; after
+  a restart an own entry not yet pulled would reach `apply` (the owner should treat that
+  error as consumed, or pingers-store could keep the positions).
+- **Epochs** are the owner's: the loop never assumes a group starts at epoch 0 or 1.
 - **Commits**: pull, `prepare_commit`, post; on 409 `commit_rejected(head_epoch)`, pull
   again (which applies the winner) and retry, up to `CommitAttempts` (3). The 200 and 409
   bodies are both `CommitResponse`.
