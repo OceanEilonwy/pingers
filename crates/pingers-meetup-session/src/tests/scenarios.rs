@@ -235,12 +235,27 @@ async fn a_dropped_channel_reopens_and_catches_up_from_the_log() -> TestResult {
     Ok(())
 }
 
+/// Waits until both members' first ticks are out: each sent one frame on its channel and one
+/// dummy grant. Until then a member can still send something the clock has not been moved
+/// for, and the other would count it as heard at whatever time the test has moved to.
+async fn first_ticks_sent(world: &World) -> TestResult {
+    for member in ["Alice", "Bob"] {
+        for delivery in [Delivery::Ephemeral, Delivery::Stored] {
+            world.server.until_uplinks(member, delivery, 1).await?;
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_silent_member_is_removed() -> TestResult {
     let world = World::new(2)?;
     let [alice, bob] = world.meetup_of_two().await?;
+    first_ticks_sent(&world).await?;
     // Bob's phone dies: no frame, no leave.
     drop(bob);
+    world.server.until_no_channel("Bob").await?;
+    world.server.until_drained("Alice").await?;
     world.clock.advance(Duration::from_mins(11));
     let view = alice
         .view_until("Bob removed", |view| view.peers.is_empty())
@@ -260,17 +275,25 @@ async fn a_silent_member_is_removed() -> TestResult {
 async fn a_member_removed_while_away_ends_its_meetup() -> TestResult {
     let world = World::new(2)?;
     let [alice, bob] = world.meetup_of_two().await?;
-    // Bob loses the network: no channel, and his own commits fail.
+    first_ticks_sent(&world).await?;
+    // Bob loses the network: no channel, and nothing he commits or posts gets through.
     world.server.refuse_commits_from("Bob");
+    world.server.refuse_posts_from("Bob");
     world.server.refuse_streams(true);
     world.server.drop_channels("Bob");
+    // He notices at once and tries again straight away; Alice has taken in all he sent.
+    world.server.until_refused("Bob", 1).await?;
+    world.server.until_drained("Alice").await?;
     world.clock.advance(Duration::from_mins(11));
     alice
         .view_until("Bob removed", |view| view.peers.is_empty())
         .await?;
+    // His second attempt came after the 1 s backoff; the next waits 2 s.
+    world.server.until_refused("Bob", 2).await?;
 
     // Back online, Bob reads Alice's commit from the log and learns he was removed.
     world.server.refuse_streams(false);
+    world.server.allow_posts_from("Bob");
     world.clock.advance(MAX_RECONNECT_DELAY);
     let ended = tokio::time::timeout(super::PATIENCE, bob.handle.finished())
         .await

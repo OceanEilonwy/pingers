@@ -28,6 +28,8 @@ struct Channel {
     group: GroupId,
     member: &'static str,
     downlink: mpsc::UnboundedSender<Vec<u8>>,
+    /// Frames put on the downlink so far.
+    forwarded: usize,
 }
 
 /// Something a member sent, as the server saw it.
@@ -48,6 +50,9 @@ struct State {
     hang_posts: bool,
     hung: usize,
     refuse_commits_from: Vec<&'static str>,
+    refuse_posts_from: Vec<&'static str>,
+    /// Frames each channel's member has taken off its downlink, by channel id.
+    pulled: HashMap<u64, usize>,
     ephemeral_posts: usize,
     refused_commits: usize,
     uplinks: Vec<Uplink>,
@@ -159,7 +164,18 @@ impl FakeServer {
         self.touch();
     }
 
-    /// Makes every attempt to open a live channel fail, or succeed again.
+    /// Waits until `member` has no live channel open, as when its Meetup task has stopped.
+    pub(crate) async fn until_no_channel(&self, member: &'static str) -> Result<(), TestError> {
+        self.until("the channel closed", |state| {
+            !state
+                .channels
+                .iter()
+                .any(|channel| channel.member == member)
+        })
+        .await
+    }
+
+    /// Waits until `member` has made `count` refused attempts to open a channel.
     pub(crate) async fn until_refused(
         &self,
         member: &'static str,
@@ -193,6 +209,36 @@ impl FakeServer {
             .retain(|refused| *refused != member);
     }
 
+    /// Answers every message `member` posts to a group log with `NetworkError::Unavailable`.
+    pub(crate) fn refuse_posts_from(&self, member: &'static str) {
+        self.lock().refuse_posts_from.push(member);
+    }
+
+    /// Lets `member`'s posts through again.
+    pub(crate) fn allow_posts_from(&self, member: &str) {
+        self.lock()
+            .refuse_posts_from
+            .retain(|refused| *refused != member);
+    }
+
+    /// Waits until `member` has taken every frame forwarded to it off its open channels.
+    ///
+    /// A member reads the clock for a frame before it next yields, and the tests run on one
+    /// thread, so once this returns no frame already sent can be timed after a later
+    /// `advance`.
+    pub(crate) async fn until_drained(&self, member: &'static str) -> Result<(), TestError> {
+        self.until("a drained channel", |state| {
+            state
+                .channels
+                .iter()
+                .filter(|channel| channel.member == member)
+                .all(|channel| {
+                    state.pulled.get(&channel.id).copied().unwrap_or(0) >= channel.forwarded
+                })
+        })
+        .await
+    }
+
     /// Ephemeral frames posted to the group log (they never should be).
     pub(crate) fn ephemeral_posts(&self) -> usize {
         self.lock().ephemeral_posts
@@ -217,6 +263,7 @@ impl FakeServer {
             .await
     }
 
+    /// Makes every attempt to open a live channel fail, or succeed again.
     pub(crate) fn refuse_streams(&self, refuse: bool) {
         self.lock().refuse_streams = refuse;
     }
@@ -248,15 +295,27 @@ impl FakeServer {
         }
     }
 
-    fn forward(state: &State, group: &GroupId, frame: &LiveFrame, except: Option<u64>) {
+    fn forward(state: &mut State, group: &GroupId, frame: &LiveFrame, except: Option<u64>) {
         let Ok(bytes) = frame.encode() else {
             return;
         };
-        for channel in &state.channels {
-            if channel.group == *group && Some(channel.id) != except {
-                let _sent = channel.downlink.send(bytes.clone());
+        for channel in &mut state.channels {
+            if channel.group == *group
+                && Some(channel.id) != except
+                && channel.downlink.send(bytes.clone()).is_ok()
+            {
+                channel.forwarded = channel.forwarded.saturating_add(1);
             }
         }
+    }
+
+    /// Counts a frame `channel`'s member took off its downlink.
+    fn pulled(&self, channel: u64) {
+        let mut state = self.lock();
+        let pulled = state.pulled.entry(channel).or_insert(0);
+        *pulled = pulled.saturating_add(1);
+        drop(state);
+        self.touch();
     }
 
     fn uplink(&self, id: u64, bytes: &[u8]) -> Result<(), TransportError> {
@@ -273,7 +332,7 @@ impl FakeServer {
         if frame.delivery == Delivery::Stored {
             Self::append(&mut state, &group, &frame, ContentType::Application);
         }
-        Self::forward(&state, &group, &frame, Some(id));
+        Self::forward(&mut state, &group, &frame, Some(id));
         drop(state);
         self.touch();
         Ok(())
@@ -334,7 +393,7 @@ impl GroupNetwork for FakeNetwork {
             delivery: Delivery::Stored,
         };
         FakeServer::append(&mut state, group, &frame, ContentType::Commit);
-        FakeServer::forward(&state, group, &frame, None);
+        FakeServer::forward(&mut state, group, &frame, None);
         drop(state);
         self.server.touch();
         Ok(CommitResponse::Accepted { sequence })
@@ -346,6 +405,9 @@ impl GroupNetwork for FakeNetwork {
         _auth: &LogAuthKeyPair,
         message: AppMessage,
     ) -> Result<(), NetworkError> {
+        if self.server.lock().refuse_posts_from.contains(&self.member) {
+            return Err(NetworkError::Unavailable);
+        }
         let hang = {
             let mut state = self.server.lock();
             if state.hang_posts {
@@ -367,7 +429,7 @@ impl GroupNetwork for FakeNetwork {
             state.ephemeral_posts = state.ephemeral_posts.saturating_add(1);
         }
         FakeServer::append(&mut state, group, &frame, ContentType::Application);
-        FakeServer::forward(&state, group, &frame, None);
+        FakeServer::forward(&mut state, group, &frame, None);
         drop(state);
         self.server.touch();
         Ok(())
@@ -457,6 +519,7 @@ impl Transport for FakeNetwork {
             group,
             member: self.member,
             downlink,
+            forwarded: 0,
         });
         state.opened.push(self.member);
         drop(state);
@@ -487,7 +550,11 @@ impl DuplexStream for FakeStream {
     }
 
     async fn receive(&mut self) -> Result<Option<Vec<u8>>, TransportError> {
-        Ok(self.receiver.recv().await)
+        let frame = self.receiver.recv().await;
+        if frame.is_some() {
+            self.server.pulled(self.id);
+        }
+        Ok(frame)
     }
 
     async fn close(&mut self) -> Result<(), TransportError> {
