@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "Workspace checks that cargo cannot express: the layer rule, and the CI sequence."
+description = "Workspace checks that cargo cannot express: the layer rule, the CI sequence, and nodo packaging."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,6 +13,17 @@ layer = "dev"
 [dependencies]
 anyhow = { workspace = true }
 toml = { workspace = true }
+# nodo-dist: the tarball's gzip (deterministic header) and its SHA-256.
+flate2 = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+# dev-ca: a throwaway CA and leaf for the tier-1 local stack.
+rcgen = { workspace = true }
+
+[dev-dependencies]
+# tests/nodo_packaging.rs checks packaging/nodo with nodo's own parsers.
+nodo-manifest = { workspace = true }
+nodo-settings = { workspace = true }
 
 [lints]
 workspace = true
