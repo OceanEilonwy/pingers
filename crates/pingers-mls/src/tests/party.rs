@@ -626,6 +626,24 @@ fn welcomes_are_checked_before_joining() -> TestResult {
 }
 
 #[test]
+fn a_welcome_with_a_group_id_of_the_wrong_length_is_refused() -> TestResult {
+    let mut rng = rng(31);
+    let (a, b) = (Device::new(&mut rng), Device::new(&mut rng));
+    // group_id(1) followed by one more byte: cut to 32 bytes it would name group_id(1).
+    let mut longer = group_id(1).as_bytes().to_vec();
+    longer.push(0);
+    let mut group_a =
+        a.context()
+            .build_party_group(&longer, CipherSuitePolicy::Classical, &mut rng)?;
+    let add_b = group_a.add_members(&[b.party_key_package(&mut rng)?], &mut rng)?;
+    assert!(matches!(
+        b.context().join_party_group(welcome(&add_b)?),
+        Err(MlsError::InvalidMessage)
+    ));
+    Ok(())
+}
+
+#[test]
 fn unknown_leaf_and_unknown_group_are_not_members() -> TestResult {
     let mut rng = rng(16);
     let a = Device::new(&mut rng);

@@ -221,38 +221,8 @@ mod tests {
     }
 
     #[test]
-    fn sharing_off_suppresses() -> Result<(), GateError> {
-        let inputs = GateInputs {
-            location_sharing: LocationSharing::Off,
-            ..sharing()?
-        };
-        assert_eq!(
-            decide(&inputs),
-            GateDecision::Suppress(SuppressReason::LocationSharingOff)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn pause_suppresses() -> Result<(), GateError> {
-        let inputs = GateInputs {
-            pause: PauseState::Paused,
-            ..sharing()?
-        };
-        assert_eq!(
-            decide(&inputs),
-            GateDecision::Suppress(SuppressReason::Paused)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn focus_suppresses_but_unknown_focus_does_not() -> Result<(), GateError> {
-        let on = GateInputs {
-            focus: FocusState::On,
-            ..sharing()?
-        };
-        assert_eq!(decide(&on), GateDecision::Suppress(SuppressReason::Focus));
+    fn unknown_focus_does_not_suppress() -> Result<(), GateError> {
+        // Focus On is covered by reasons_are_reported_in_priority_order.
         let unknown = GateInputs {
             focus: FocusState::Unknown,
             ..sharing()?
@@ -349,19 +319,6 @@ mod tests {
             ..sharing()?
         };
         assert_eq!(decide(&inputs), GateDecision::Share);
-        Ok(())
-    }
-
-    #[test]
-    fn being_inside_a_zone_suppresses() -> Result<(), GateError> {
-        let inputs = GateInputs {
-            zones: ZoneStatus::InsideZone,
-            ..sharing()?
-        };
-        assert_eq!(
-            decide(&inputs),
-            GateDecision::Suppress(SuppressReason::ExclusionZone)
-        );
         Ok(())
     }
 

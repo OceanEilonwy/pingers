@@ -25,6 +25,21 @@ fn status_codes_outside_100_to_599_are_refused() {
 }
 
 #[test]
+fn debug_prints_neither_paths_nor_bodies_nor_header_values() -> Result<(), TestError> {
+    assert_eq!(
+        format!("{:?}", common::live_request()),
+        "BinaryRequest { method: \"POST\", headers: [Header { name: \"authorization\", .. }], \
+         body_length: 0, .. }"
+    );
+    assert_eq!(
+        format!("{:?}", response()?),
+        "BinaryResponse { status: StatusCode(200), headers: [Header { name: \"content-type\", .. }], \
+         body_length: 1, .. }"
+    );
+    Ok(())
+}
+
+#[test]
 fn request_encoding_is_known_length_with_https_scheme_and_no_authority() -> Result<(), TestError> {
     let encoded = request().encode()?;
     let expected = [

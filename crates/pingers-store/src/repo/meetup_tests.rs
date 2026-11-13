@@ -143,6 +143,55 @@ fn ending_a_meetup_leaves_no_rows() -> Result<(), TestError> {
     Ok(())
 }
 
+#[test]
+fn an_out_of_range_stored_coordinate_is_corrupt() -> Result<(), TestError> {
+    let fixture = Fixture::new()?;
+    let session = &fixture.session;
+    let owner = party(1)?;
+    session.parties().insert(&owner)?;
+    let live = meetup(&owner.id, 1);
+    populate(session, &live, 1)?;
+    let stored = 98_765_432_101_i64;
+    session.with(|connection| {
+        Ok(connection.execute(
+            "UPDATE meetup_peer SET location_lat_e7 = ?1 WHERE group_id = ?2",
+            rusqlite::params![stored, live.group.as_bytes()],
+        )?)
+    })?;
+    let result = session.meetup_peers().get(&live.group, LeafIndex::new(2));
+    assert!(matches!(
+        result,
+        Err(StoreError::Corrupt {
+            field: "meetup_peer.location_lat_e7"
+        })
+    ));
+    Ok(())
+}
+
+#[test]
+fn ending_a_meetup_deletes_its_mls_state() -> Result<(), TestError> {
+    let fixture = Fixture::new()?;
+    let session = &fixture.session;
+    let owner = party(1)?;
+    session.parties().insert(&owner)?;
+    let ended = meetup(&owner.id, 1);
+    let other = meetup(&owner.id, 2);
+    session.meetups().start(&ended)?;
+    session.meetups().start(&other)?;
+    let mut ended_key = pingers_mls::group_storage_prefix(&ended.group)?;
+    ended_key.extend_from_slice(b"epoch_secrets");
+    let mut other_key = pingers_mls::group_storage_prefix(&other.group)?;
+    other_key.extend_from_slice(b"epoch_secrets");
+    session.write(&ended_key, &[0x5a; 32])?;
+    session.write(&other_key, &[0x5b; 32])?;
+    session.write(b"key_package/global", &[0x5c; 32])?;
+    session.meetups().end(&ended.group)?;
+    assert!(session.read(&ended_key)?.is_none());
+    assert!(session.read(&other_key)?.is_some());
+    assert!(session.read(b"key_package/global")?.is_some());
+    Ok(())
+}
+
 /// Decrypts the whole database into a plaintext copy and returns its bytes.
 fn decrypted_file(directory: &TestDir, path: &std::path::Path) -> Result<Vec<u8>, TestError> {
     let plain = directory.file("plain.db");

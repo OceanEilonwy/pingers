@@ -9,7 +9,7 @@ version = 2
 yanked = "deny"
 # Each entry needs a reason and is re-examined when the crate that pulls it in is implemented.
 ignore = [
-  { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 timing issues: via p256 in hpke-rs-rust-crypto (openmls_rust_crypto); Pingers uses no P-256 MLS suite. Re-check when pingers-mls is implemented." },
+  { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 timing issues: via p256 in hpke-rs-rust-crypto (openmls_rust_crypto). pingers-mls runs only suite 0x0003 (and 0x004D with x-wing), and parse_key_package refuses any other suite before OpenMLS verifies a signature, so no P-256 code runs; the inputs would be public anyway. Re-checked 2026-11-13." },
   # rln entries, re-checked 2026-11-13 with pingers-anon implemented. sled cannot be removed:
   # rln 3.x lists it as a non-optional dependency for every non-wasm target (with the
   # `compression` feature that pulls zstd-safe 4), and every zerokit_utils release does the same,

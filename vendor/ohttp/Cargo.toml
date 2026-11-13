@@ -24,7 +24,7 @@ hex = "0.4"
 hkdf = "0.13"
 # No "getrandom": every random value comes from the caller's RNG.
 hpke = { version = "0.14", default-features = false, features = ["x25519", "nistp", "mlkem", "aes", "chacha"] }
-log = { version = "0.4", default-features = false }
 rand_core = "0.10.1"
 sha2 = "0.11"
 thiserror = "2"
+zeroize = "1.9"

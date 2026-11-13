@@ -33,6 +33,28 @@ impl core::fmt::Debug for Header {
     }
 }
 
+impl core::fmt::Debug for BinaryRequest {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("BinaryRequest")
+            .field("method", &self.method)
+            .field("headers", &self.headers)
+            .field("body_length", &self.body.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl core::fmt::Debug for BinaryResponse {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("BinaryResponse")
+            .field("status", &self.status)
+            .field("headers", &self.headers)
+            .field("body_length", &self.body.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// An HTTP status code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StatusCode(u16);
@@ -58,8 +80,10 @@ impl StatusCode {
     }
 }
 
-/// An inner request: method, path (with query), headers, body.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// An inner request: method, path (with query), headers, body. `Debug` prints the method,
+/// header names and body length only: paths name groups and mailboxes, and bodies are
+/// message contents (style guide §9).
+#[derive(Clone, PartialEq, Eq)]
 pub struct BinaryRequest {
     /// Upper-case method.
     pub method: String,
@@ -111,8 +135,9 @@ impl BinaryRequest {
     }
 }
 
-/// An inner response: status, headers, body.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// An inner response: status, headers, body. `Debug` prints the status, header names and
+/// body length only.
+#[derive(Clone, PartialEq, Eq)]
 pub struct BinaryResponse {
     /// The status.
     pub status: StatusCode,

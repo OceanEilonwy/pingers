@@ -140,22 +140,25 @@ impl Meetups<'_> {
     }
 
     /// Ends a Meetup: deletes its row and, by cascade, its chat, peers (with their location
-    /// keys and last positions), this device's location and grant keys, grants and asks.
-    /// With `secure_delete` the freed pages are zeroed; outside a transaction the WAL is then
-    /// checkpointed and truncated. Inside one, call [`Session::checkpoint`] after committing.
-    ///
-    /// MLS state of the group is not in these tables: delete it in the same transaction with
-    /// pingers-mls's `delete_group` (see the crate's Decisions).
+    /// keys and last positions), this device's location and grant keys, grants and asks, and
+    /// every MLS row of its group (epoch secrets, key pairs, roster), as pingers-mls's
+    /// `delete_group` would. With `secure_delete` the freed pages are zeroed; outside a
+    /// transaction the WAL is then checkpointed and truncated. Inside one, call
+    /// [`Session::checkpoint`] after committing.
     ///
     /// # Errors
     ///
-    /// [`StoreError::NotFound`] if there is no such Meetup.
+    /// [`StoreError::NotFound`] if there is no such Meetup; [`StoreError::Internal`] if the
+    /// group's MLS storage prefix cannot be encoded.
     pub fn end(&self, group: &GroupId) -> Result<(), StoreError> {
+        let mls_prefix =
+            pingers_mls::group_storage_prefix(group).map_err(|_| StoreError::Internal)?;
         let outside_transaction = self.session.with(|connection| {
             expect_one(
                 connection.execute("DELETE FROM meetup WHERE group_id = ?1", [group.as_bytes()])?,
                 "meetup",
             )?;
+            connection.execute(crate::repo::mls::DELETE_PREFIX, [mls_prefix.as_slice()])?;
             Ok(connection.is_autocommit())
         })?;
         if outside_transaction {
@@ -286,14 +289,18 @@ fn peer_from_row(row: &Row<'_>) -> Result<MeetupPeer, StoreError> {
             expires_at: read_time(row, 5, "meetup_peer.peer_lk_expires_at")?,
         }),
     };
-    let location = match row.get::<_, Option<i32>>(6)? {
+    // Read as i64 and narrowed here: rusqlite's own out-of-range error would carry the
+    // stored coordinate into `StoreError::Database` (style guide §9).
+    let location = match row.get::<_, Option<i64>>(6)? {
         None => None,
         Some(latitude) => {
             let corrupt = |_| StoreError::Corrupt {
                 field: "meetup_peer.location",
             };
+            let latitude = narrow(latitude, "meetup_peer.location_lat_e7")?;
+            let longitude = narrow(row.get::<_, i64>(7)?, "meetup_peer.location_lon_e7")?;
             Some(LocationPlaintext {
-                position: E7Coordinate::new(latitude, row.get(7)?).map_err(corrupt)?,
+                position: E7Coordinate::new(latitude, longitude).map_err(corrupt)?,
                 accuracy: AccuracyMeters::new(row.get(8)?),
                 heading: row
                     .get::<_, Option<u16>>(9)?

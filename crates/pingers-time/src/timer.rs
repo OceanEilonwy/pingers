@@ -93,3 +93,30 @@ impl<T: Timer + ?Sized> Timer for std::sync::Arc<T> {
         (**self).sleep_until(deadline)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adding_moves_a_reading_forward_until_it_overflows() {
+        let reading = MonotonicTime::from_elapsed(Duration::from_secs(5));
+        assert_eq!(reading.elapsed(), Duration::from_secs(5));
+        assert_eq!(
+            reading.checked_add(Duration::from_secs(2)),
+            Some(MonotonicTime::from_elapsed(Duration::from_secs(7)))
+        );
+        assert_eq!(reading.checked_add(Duration::MAX), None);
+    }
+
+    #[test]
+    fn duration_since_a_later_reading_is_zero() {
+        let earlier = MonotonicTime::from_elapsed(Duration::from_secs(5));
+        let later = MonotonicTime::from_elapsed(Duration::from_secs(8));
+        assert_eq!(
+            later.saturating_duration_since(earlier),
+            Duration::from_secs(3)
+        );
+        assert_eq!(earlier.saturating_duration_since(later), Duration::ZERO);
+    }
+}

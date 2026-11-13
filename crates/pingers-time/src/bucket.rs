@@ -179,6 +179,18 @@ mod tests {
     }
 
     #[test]
+    fn earlier_buckets_count_back() -> Result<(), TimeError> {
+        let bucket = Bucket::from_index(10)?;
+        assert_eq!(bucket.previous(), Some(Bucket::from_index(9)?));
+        assert_eq!(
+            bucket.checked_sub(BucketCount::new(10)),
+            Some(Bucket::from_index(0)?)
+        );
+        assert_eq!(bucket.checked_sub(BucketCount::new(11)), None);
+        Ok(())
+    }
+
+    #[test]
     fn index_encodes_big_endian() -> Result<(), TimeError> {
         assert_eq!(
             Bucket::from_index(0x0102)?.to_be_bytes(),
