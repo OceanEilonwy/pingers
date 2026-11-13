@@ -77,10 +77,10 @@ pub(crate) fn router(
 /// what it accepts, and RLN proofs need a live leaf first.
 pub(crate) fn engine(
     instance: &Instance,
+    transport: Arc<dyn Transport>,
     database: &Arc<Database>,
     outside: &Outside,
 ) -> Result<Arc<SyncEngine>, ClientError> {
-    let transport = router(instance, Arc::clone(&outside.timer), outside)?;
     Ok(Arc::new(SyncEngine::new(
         SyncParts {
             transport,

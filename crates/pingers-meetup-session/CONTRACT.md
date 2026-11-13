@@ -7,9 +7,13 @@ design B.5, B.6, B.6.1, G.4 to G.7).
 
 - `Runtime { database, transport, network, clock, timer }` (all `Arc`), `SessionRng`.
 - `knock_key_package(&database, suite, rng) -> KnockKeyPackage { key_package, grant_key }`.
-- `create(&runtime, CreateMeetup, rng) -> Created { handle, events, welcome }`: post the
-  Welcome to the knocker's reply mailbox.
-- `join(&runtime, JoinMeetup, rng) -> Joined { handle, events }`.
+- `create(&runtime, CreateMeetup { key, group, knocker, subscriptions, own_subscription, suite },
+  rng) -> Created { handle, events, welcome }`: post the Welcome to the knocker's reply mailbox.
+- `join(&runtime, JoinMeetup { key, welcome, grant_key, own_subscription }, rng) -> Joined {
+  handle, events }`. Both futures are `Send`.
+- `key` is pingers-presence's `MeetupKey`: `PSK_meet(b)` and its id, from which the Party and
+  Spot are taken and the MLS PSK id `(party_id, epoch, spot_id, b)` is built in one place
+  (design B.5). Callers can no longer pass a PSK under the wrong id.
 - `discard_stale(&database) -> usize`: call once at launch.
 - `MeetupHandle`: `group`, `view() -> watch::Receiver<MeetupView>`, `screen(MeetupScreen)`,
   `own_fix(Fix)`, `board_seen(segments)`, `act(MeetupAction)`, `add_member(AddMember) ->

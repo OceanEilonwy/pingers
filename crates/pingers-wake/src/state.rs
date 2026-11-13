@@ -75,6 +75,8 @@ pub struct SentKnock {
     pub knock_mailbox: MailboxId,
     /// The record it answers (for the tie-break, design B.4.4 step 6).
     pub matched: RecordRandomness,
+    /// The start bucket of that record: the `b` of the Meetup's `PSK_meet(b)` (design B.5).
+    pub matched_start: Bucket,
     /// Where the Welcome will come.
     pub reply_mailbox: MailboxId,
     /// When it was sent.

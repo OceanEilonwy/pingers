@@ -17,3 +17,12 @@ reason = "equivalent: at 0.0 both branches give a zero length (Meters::ZERO and 
 [[mutant]]
 name = "crates/pingers-geo/src/presence.rs: replace > with >= in SpotPresence::restore"
 reason = "equivalent (two sites): when the compared times are equal, both branches pick the same UnixSeconds"
+
+[[mutant]]
+name = "crates/pingers-client/src/real/meetups.rs: replace Meetups::runtime -> Option<Runtime> with None"
+reason = "equivalent in the client tests: they run without an instance, so there is no runtime either way, and with one the create_group call needs a reachable server. Remove when a client test runs against the harness server."
+
+[[mutant]]
+name = "crates/pingers-client/src/real/meetups.rs: replace <impl MeetupPort for Meetups>::leave -> Result<(), PortError> with Ok(())"
+reason = "equivalent in the client tests: without a harness server no Meetup goes live, so leave always finds none and answers Ok(()). Remove when a client test runs a Meetup against the harness server."
+

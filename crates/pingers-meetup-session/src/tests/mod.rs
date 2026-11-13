@@ -5,6 +5,7 @@
 #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
 mod catch_up;
+mod psk;
 mod scenarios;
 mod server;
 mod units;
@@ -14,10 +15,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use pingers_crypto::{AccountPublicKey, AccountSigningKey, MeetupPsk};
-use pingers_geo::{Coordinate, Fix, Meters};
+use pingers_crypto::{AccountPublicKey, AccountSigningKey, PresenceRoot};
+use pingers_geo::{Coordinate, Fix, Meters, PresenceState};
 use pingers_meetup::MeetupEvent;
-use pingers_mls::{CipherSuitePolicy, MeetupPskId, MlsContext, MlsError};
+use pingers_mls::{CipherSuitePolicy, MlsContext, MlsError};
+use pingers_presence::{ActiveSpot, MeetupKey, SpotRef, SpotStatus};
 use pingers_proto::{
     AccountId, Epoch, GroupId, KeyConfigHash, LeafIndex, PartyId, ServerId, SpotId,
 };
@@ -47,6 +49,10 @@ pub(crate) enum TestError {
     Time(#[from] pingers_time::TimeError),
     #[error(transparent)]
     Proto(#[from] pingers_proto::ProtoError),
+    #[error(transparent)]
+    Presence(#[from] pingers_presence::PresenceError),
+    #[error(transparent)]
+    Crypto(#[from] pingers_crypto::CryptoError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("timed out waiting for {0}")]
@@ -244,13 +250,22 @@ impl World {
         pingers_time::Clock::now(&self.clock)
     }
 
-    fn psk_id(&self) -> Result<MeetupPskId, TestError> {
-        Ok(MeetupPskId {
-            party: self.party,
+    /// The Spot as a device `Inside` it sees it at the Party's epoch 1.
+    pub(crate) fn status(&self) -> SpotStatus {
+        SpotStatus {
+            spot: SpotRef {
+                party: self.party,
+                spot: self.spot,
+            },
             epoch: Epoch::new(1),
-            spot: self.spot,
-            bucket: Bucket::from_index(2_000_000)?,
-        })
+            state: PresenceState::Inside,
+        }
+    }
+
+    /// `PSK_meet(b)` for the record the knock answered, as each device derives it on its own
+    /// from the Party's presence root while `Inside` the Spot (design B.4.1, B.5).
+    pub(crate) fn meetup_key(&self) -> Result<MeetupKey, TestError> {
+        key_for(&self.status(), record_start()?)
     }
 
     /// Alice creates the Meetup with Bob, and Bob joins it; both channels are open.
@@ -266,11 +281,8 @@ impl World {
         let created = create(
             &alice.runtime,
             CreateMeetup {
-                party: self.party,
-                spot: self.spot,
+                key: self.meetup_key()?,
                 group: GROUP,
-                psk_id: self.psk_id()?,
-                psk: psk(),
                 knocker: knock.key_package,
                 subscriptions: Vec::new(),
                 own_subscription: None,
@@ -296,14 +308,24 @@ impl World {
         welcome: pingers_proto::WelcomeBytes,
         grant_key: pingers_crypto::GrantSecretKey,
     ) -> Result<Live, TestError> {
+        let key = self.meetup_key()?;
+        self.join_with(index, Reply { welcome, grant_key }, key)
+            .await
+    }
+
+    /// Device `index` tries to join with `welcome` under `key`.
+    pub(crate) async fn join_with(
+        &self,
+        index: usize,
+        reply: Reply,
+        key: MeetupKey,
+    ) -> Result<Live, TestError> {
+        let Reply { welcome, grant_key } = reply;
         let joined = join(
             &self.device(index)?.runtime,
             JoinMeetup {
-                party: self.party,
-                spot: self.spot,
+                key,
                 welcome,
-                psk_id: self.psk_id()?,
-                psk: psk(),
                 grant_key,
                 own_subscription: None,
             },
@@ -319,8 +341,26 @@ impl World {
     }
 }
 
-fn psk() -> MeetupPsk {
-    MeetupPsk::from_bytes(Zeroizing::new([0x99; 32]))
+/// What a joiner got back for its knock: the Welcome, and the grant secret of the KeyPackage
+/// it knocked with.
+pub(crate) struct Reply {
+    pub(crate) welcome: pingers_proto::WelcomeBytes,
+    pub(crate) grant_key: pingers_crypto::GrantSecretKey,
+}
+
+/// `PSK_meet` for any Spot status and record start bucket, derived through pingers-presence.
+pub(crate) fn key_for(status: &SpotStatus, start: Bucket) -> Result<MeetupKey, TestError> {
+    Ok(ActiveSpot::derive(&presence_root(), status)?.meetup_key(start)?)
+}
+
+/// The Party's presence root at epoch 1, which every member exports from the Party group.
+pub(crate) fn presence_root() -> PresenceRoot {
+    PresenceRoot::from_bytes(Zeroizing::new([0x99; 32]))
+}
+
+/// The start bucket of the record the knock answered.
+pub(crate) fn record_start() -> Result<Bucket, TestError> {
+    Ok(Bucket::from_index(2_000_000)?)
 }
 
 pub(crate) fn fix(at: UnixSeconds) -> Result<Fix, TestError> {

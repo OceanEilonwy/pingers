@@ -10,7 +10,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use pingers_crypto::{AccountPublicKey, AccountSigningKey, PresenceRoot};
 use pingers_gate::FocusState;
 use pingers_geo::Fix;
-use pingers_presence::{EpochState, MailboxPurpose, OutgoingKnock, SpotRef};
+use pingers_presence::{
+    Admission, EpochState, MailboxPurpose, MeetupKeyId, OutgoingKnock, SpotRef, VerifiedKnock,
+};
 use pingers_proto::{
     BoardCursor, BoardPage, Epoch, GroupId, KeyPackageBytes, LeafIndex, Lease, MailboxId, PartyId,
     ReadBoard, Record, SegmentInfo,
@@ -430,12 +432,31 @@ impl PartyView for FakeParties {
     }
 }
 
+/// What a fake pingers-meetup-session keeps of an admission: the PSK is copied out so tests
+/// can compare what the poster and the knocker derived.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Admitted {
+    pub(crate) key: MeetupKeyId,
+    pub(crate) psk: [u8; 32],
+    pub(crate) admission: Admission,
+    pub(crate) knock: VerifiedKnock,
+}
+
+/// What a fake pingers-meetup-session keeps of a Welcome hand-off.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Replied {
+    pub(crate) key: MeetupKeyId,
+    pub(crate) psk: [u8; 32],
+    pub(crate) post: Vec<u8>,
+}
+
 #[derive(Default)]
 struct MeetupsInner {
     meetups: Vec<(SpotRef, GroupId)>,
-    admitted: Vec<MeetupAdmission>,
-    welcomes: Vec<ReplyPost>,
+    admitted: Vec<Admitted>,
+    welcomes: Vec<Replied>,
     leave_calls: usize,
+    left: Vec<SpotRef>,
 }
 
 /// pingers-meetup-session, recording what it was handed.
@@ -449,12 +470,17 @@ impl FakeMeetups {
         lock(&self.inner).meetups.push((spot, group));
     }
 
-    pub(crate) fn admitted(&self) -> Vec<MeetupAdmission> {
+    pub(crate) fn admitted(&self) -> Vec<Admitted> {
         lock(&self.inner).admitted.clone()
     }
 
-    pub(crate) fn welcomes(&self) -> Vec<ReplyPost> {
+    pub(crate) fn welcomes(&self) -> Vec<Replied> {
         lock(&self.inner).welcomes.clone()
+    }
+
+    /// The Spots whose Meetup this device left one by one.
+    pub(crate) fn left(&self) -> Vec<SpotRef> {
+        lock(&self.inner).left.clone()
     }
 
     pub(crate) fn leave_calls(&self) -> usize {
@@ -475,12 +501,28 @@ impl MeetupPort for FakeMeetups {
         &self,
         admission: MeetupAdmission,
     ) -> impl Future<Output = Result<(), PortError>> + Send {
-        lock(&self.inner).admitted.push(admission);
+        lock(&self.inner).admitted.push(Admitted {
+            key: admission.key.id(),
+            psk: *admission.key.psk().expose_bytes(),
+            admission: admission.admission,
+            knock: admission.knock,
+        });
         ready(Ok(()))
     }
 
     fn welcome(&self, reply: ReplyPost) -> impl Future<Output = Result<(), PortError>> + Send {
-        lock(&self.inner).welcomes.push(reply);
+        lock(&self.inner).welcomes.push(Replied {
+            key: reply.key.id(),
+            psk: *reply.key.psk().expose_bytes(),
+            post: reply.post,
+        });
+        ready(Ok(()))
+    }
+
+    fn leave(&self, spot: SpotRef) -> impl Future<Output = Result<(), PortError>> + Send {
+        let mut inner = lock(&self.inner);
+        inner.left.push(spot);
+        inner.meetups.retain(|(at, _group)| *at != spot);
         ready(Ok(()))
     }
 

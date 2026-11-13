@@ -12,7 +12,7 @@ use pingers_crypto::{AccountPublicKey, AccountSigningKey, PresenceRoot, RevokeKe
 use pingers_gate::FocusState;
 use pingers_geo::{Circle, Fence, Fix};
 use pingers_presence::{
-    Admission, EpochState, MailboxPurpose, OutgoingKnock, SpotRef, VerifiedKnock,
+    Admission, EpochState, MailboxPurpose, MeetupKey, OutgoingKnock, SpotRef, VerifiedKnock,
 };
 use pingers_proto::{
     BoardCursor, BoardPage, Epoch, GroupId, KeyPackageBytes, LeafIndex, Lease, MailboxId, PartyId,
@@ -184,27 +184,27 @@ pub trait ServerPort: Send + Sync {
 
 /// An accepted knock, for pingers-meetup-session to create or extend the Meetup group and post
 /// the Welcome to the knocker's reply mailbox.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Not `Clone` or `Debug`: it carries `PSK_meet` (style guide §8).
 pub struct MeetupAdmission {
-    /// The Spot.
-    pub spot: SpotRef,
-    /// The Party epoch of the record the knock answered.
-    pub epoch: Epoch,
-    /// The bucket whose `PSK_meet` binds the group.
-    pub bucket: Bucket,
+    /// `PSK_meet(b)` and its id `(party, epoch, spot, b)`, where the epoch is that of the
+    /// record the knock answered and `b` its start bucket (design B.5). The knocker derives the
+    /// same key from the same record.
+    pub key: MeetupKey,
     /// Create a Meetup, or add to the current one.
     pub admission: Admission,
     /// The verified knock: key package, reply mailbox, subscription, knocker key.
     pub knock: VerifiedKnock,
 }
 
-/// A post read from the reply mailbox of a knock this device sent: the Welcome.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A post read from the reply mailbox of a knock this device sent: the Welcome. Handed on only
+/// while the device is still Inside the Spot, since the key comes from its Spot keys.
+///
+/// Not `Clone` or `Debug`: it carries `PSK_meet` (style guide §8).
 pub struct ReplyPost {
-    /// The Spot the knock was for.
-    pub spot: SpotRef,
-    /// The Party epoch the knock was sent under.
-    pub epoch: Epoch,
+    /// `PSK_meet(b)` and its id for the record the knock answered: the Spot, the epoch the
+    /// knock was sent under, and the record's start bucket.
+    pub key: MeetupKey,
     /// The post.
     pub post: Vec<u8>,
 }
@@ -222,6 +222,9 @@ pub trait MeetupPort: Send + Sync {
 
     /// Joins from a Welcome.
     fn welcome(&self, reply: ReplyPost) -> impl Future<Output = Result<(), PortError>> + Send;
+
+    /// The device left `spot`: leave the Meetup there (design B.5).
+    fn leave(&self, spot: SpotRef) -> impl Future<Output = Result<(), PortError>> + Send;
 
     /// Sharing is suppressed: leave every Meetup (design B.10, B.11).
     fn leave_all(&self) -> impl Future<Output = Result<(), PortError>> + Send;

@@ -26,6 +26,27 @@ fn reconnect_is_immediate_once_then_backs_off_to_a_minute() {
     assert_eq!(Reconnect::delay(u32::MAX), MAX_RECONNECT_DELAY);
 }
 
+/// Creating and joining run inside pingers-wake's hand-off, whose futures must be `Send`; a
+/// non-`Sync` value (the random generator) borrowed across an await once broke that. The
+/// check is at compile time: `check` is never called.
+#[test]
+fn creating_and_joining_are_send() {
+    fn send<T: Send>(_future: T) {}
+    fn check(runtime: &crate::Runtime, creation: crate::CreateMeetup, joining: crate::JoinMeetup) {
+        send(crate::create(
+            runtime,
+            creation,
+            Box::new(pingers_testkit::seeded_rng(1)),
+        ));
+        send(crate::join(
+            runtime,
+            joining,
+            Box::new(pingers_testkit::seeded_rng(2)),
+        ));
+    }
+    let _: fn(&crate::Runtime, crate::CreateMeetup, crate::JoinMeetup) = check;
+}
+
 #[test]
 fn only_storage_failures_stop_a_meetup() {
     assert!(SessionError::Store(StoreError::Busy).is_fatal());

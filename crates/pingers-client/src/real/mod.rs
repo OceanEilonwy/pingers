@@ -83,15 +83,28 @@ impl Crates {
         outside: Outside,
         instance: Option<&Instance>,
     ) -> Result<Self, ClientError> {
+        let transport = instance
+            .map(|instance| network::router(instance, Arc::clone(&outside.timer), &outside))
+            .transpose()?;
         let backend = Arc::new(Backend {
             database: Arc::new(database),
             outside,
+            transport,
         });
-        let engine = instance
-            .map(|instance| network::engine(instance, &backend.database, &backend.outside))
-            .transpose()?;
+        let engine = match (instance, &backend.transport) {
+            (Some(instance), Some(transport)) => Some(network::engine(
+                instance,
+                Arc::clone(transport),
+                &backend.database,
+                &backend.outside,
+            )?),
+            _ => None,
+        };
         let net = Arc::new(sync::Net::new(Arc::clone(&backend), engine));
-        let meetups = Arc::new(meetups::Meetups::new(Arc::clone(&backend)));
+        let meetups = Arc::new(meetups::Meetups::new(
+            Arc::clone(&backend),
+            Arc::clone(&net),
+        ));
         Ok(Self {
             parties: Arc::new(parties::Parties::new(
                 Arc::clone(&backend),
@@ -113,6 +126,9 @@ impl Crates {
 pub(crate) struct Backend {
     database: Arc<Database>,
     outside: Outside,
+    /// The router over the configured instance, for pingers-sync's engine and the live
+    /// channels of Meetups.
+    transport: Option<Arc<dyn pingers_transport::Transport>>,
 }
 
 impl Backend {

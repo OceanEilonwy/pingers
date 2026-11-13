@@ -22,7 +22,8 @@ use pingers_parties::{LeaveRequest, Outbound, OutgoingCommit, PartiesError, Part
 use pingers_presence::{MailboxPurpose, OutgoingKnock};
 use pingers_proto::{
     AppMessage, BoardCursor, BoardPage, CommitRequest, CommitResponse, CreateGroup, Epoch, GroupId,
-    GroupLogEntry, MailboxId, Padded, SequenceNumber, SubscriptionId, TimeToLive,
+    GroupLogEntry, MailboxId, Padded, SequenceNumber, SizeClass, SubscriptionId, TimeToLive,
+    WelcomeBytes,
 };
 use pingers_store::{MailboxPurpose as StoredPurpose, WakePushes as StoredPushes};
 use pingers_sync::{
@@ -365,6 +366,28 @@ impl Net {
     }
 }
 
+impl Net {
+    /// Posts a Meetup Welcome to the knocker's reply mailbox, padded to a mailbox class. If it
+    /// never arrives, a Meetup this device just created ends by itself after 30 minutes alone
+    /// (design B.5).
+    pub(crate) async fn post_welcome(
+        &self,
+        mailbox: MailboxId,
+        welcome: WelcomeBytes,
+    ) -> Result<(), PortError> {
+        let engine = self.engine().map_err(|_none| PortError::Unavailable)?;
+        let body = Padded::pad_smallest(welcome.as_bytes(), &SizeClass::MAILBOX_POST)
+            .map_err(|_too_big| PortError::Unavailable)?;
+        match self
+            .server(engine.post_to_mailbox(&mailbox, &body, self.keep_until()))
+            .await?
+        {
+            Delivered::Done(_) | Delivered::Queued(_) => Ok(()),
+            Delivered::Dropped(_) => Err(PortError::Unreachable),
+        }
+    }
+}
+
 impl ServerPort for Net {
     async fn pull_group_logs(&self) -> Result<(), PortError> {
         // A Party may have changed: the wake's next Party view reads it again.
@@ -490,19 +513,11 @@ impl SyncPort for Sync {
 /// WAITING(pingers-meetup-session): `live_head` hands back a raw `BinaryRequest` for its own
 /// transport, while pingers-sync builds and sends the live request itself (`open_live`); until
 /// the two meet, the live channel is not opened from here.
-#[expect(
-    dead_code,
-    reason = "goes into pingers-meetup-session's Runtime once a Meetup can be created (PSK_meet)"
-)]
 pub(crate) struct GroupLogs(pub(crate) Arc<Net>);
 
 #[expect(
     clippy::wildcard_enum_match_arm,
     reason = "every other failure is the network's or local, to try again later"
-)]
-#[expect(
-    dead_code,
-    reason = "used by GroupLogs, which nothing builds yet (see there)"
 )]
 fn network_error(error: &SyncError) -> NetworkError {
     match error {
