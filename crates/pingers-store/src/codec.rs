@@ -288,4 +288,22 @@ mod tests {
             Err(StoreError::Corrupt { field: "field" })
         ));
     }
+
+    #[test]
+    fn a_secret_of_the_wrong_length_is_corrupt() -> Result<(), TestError> {
+        let connection = rusqlite::Connection::open_in_memory()?;
+        let read = |sql: &str| -> Result<Result<[u8; 4], StoreError>, TestError> {
+            Ok(connection.query_row(sql, [], |row| {
+                Ok(read_secret::<4>(row, 0, "secret").map(|secret| *secret))
+            })?)
+        };
+        assert!(matches!(read("SELECT x'01020304'")?, Ok([1, 2, 3, 4])));
+        for wrong in ["SELECT x'010203'", "SELECT x'0102030405'", "SELECT NULL"] {
+            assert!(matches!(
+                read(wrong)?,
+                Err(StoreError::Corrupt { field: "secret" })
+            ));
+        }
+        Ok(())
+    }
 }

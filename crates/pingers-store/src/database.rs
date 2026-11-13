@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::Connection;
 
 use crate::lock::ProcessLock;
 use crate::{DatabaseKey, StoreError, migrations};
@@ -88,12 +88,9 @@ pub struct Session {
 
 impl Session {
     fn connect(lock: ProcessLock, path: &Path, key: &DatabaseKey) -> Result<Self, StoreError> {
-        let connection = Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE
-                | OpenFlags::SQLITE_OPEN_CREATE
-                | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
+        // Read-write, create if absent; no SQLite mutex because the session's own Mutex
+        // already serialises use of the connection.
+        let connection = Connection::open(path)?;
         // SQLCipher logs decryption failures to stderr (logcat on Android) by default; the
         // app logs nothing (style guide §9).
         connection.execute_batch("PRAGMA cipher_log_level = NONE;")?;

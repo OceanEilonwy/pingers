@@ -77,6 +77,17 @@
 //!   reused after removals.
 //! - **Unsigned values past `i64::MAX`** are refused ([`StoreError::OutOfRange`]), never
 //!   wrapped.
+//!
+//! # Mutation testing
+//!
+//! `cargo mutants -p pingers-store` leaves six survivors, all waiting on stubs in lower
+//! crates rather than on missing tests:
+//!
+//! - Polygon geometry (`decode_fence`'s polygon arm and `Reader::u16`, four mutants):
+//!   `pingers_geo::Polygon::new` still returns `NotImplemented`, so no polygon can be built
+//!   to round-trip. Add a polygon round-trip test when pingers-geo lands it.
+//! - `RlnIdentities::save` and `load` (two mutants): `pingers_anon::RlnSecret` cannot be
+//!   constructed yet. The column round-trip beneath them (`save_row`, `load_row`) is tested.
 #![forbid(unsafe_code)]
 
 mod codec;
