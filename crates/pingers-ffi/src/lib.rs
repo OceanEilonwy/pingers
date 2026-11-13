@@ -1,26 +1,50 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! UniFFI bindings.
 //!
-//! UniFFI only. It converts types, maps errors, turns async calls into Kotlin `suspend`, and
-//! exposes `Platform` and `Events` as callback interfaces. No logic. A `wipe-freed` feature
-//! with a zeroing allocator will be added as in fob-ffi.
+//! UniFFI only (architecture §3, L5). It converts types, maps errors, turns async calls into
+//! Kotlin `suspend`, and exposes `Platform` and `Events` as callback interfaces. No logic: each
+//! exported call is one call into pingers-client, pingers-screens or pingers-words and a
+//! conversion.
 //!
-//! Wave 2 exports two calls that prove the bridge end to end: [`core_version`] and
-//! [`current_bucket`]. The client API arrives with pingers-client's async API.
+//! - [`Core`]: the client. Opened with a [`Platform`] and an [`Events`] sink; actions are
+//!   `suspend` functions; [`Core::snapshot`] returns the state the screens are computed from.
+//! - [`Snapshot`]: each screen's view model, as records (views.rs).
+//! - [`AreaEditor`]: the Draw area editing model.
+//! - [`CoreError`]: every error, flattened.
+//!
+//! Feature `wipe-freed` (default) installs a zeroing global allocator (wiping.rs), the
+//! workspace's one `unsafe` exception.
 
 uniffi::setup_scaffolding!();
 
-/// What went wrong, for the app to show. (The field is `reason`, not `message`, which
-/// Kotlin's `Throwable` already has.)
-#[derive(Debug, thiserror::Error, uniffi::Error)]
-pub enum CoreError {
-    /// The device clock reads before 1970.
-    #[error("{reason}")]
-    Clock {
-        /// Why, in English, for logs.
-        reason: String,
-    },
-}
+mod callbacks;
+mod core;
+mod error;
+mod geo;
+mod ids;
+mod snapshot;
+mod views;
+#[cfg(feature = "wipe-freed")]
+mod wiping;
+
+pub use callbacks::{
+    Events, FixQuality, FocusState, LocationMode, Notice, OsRegion, Platform, PlatformError,
+    PushPlatform, PushTokens,
+};
+pub use core::Core;
+pub use error::CoreError;
+pub use geo::{Coordinate, Fence, Fix};
+pub use ids::{
+    InviteId, LocationRequestId, MeetupId, MemberId, MessageId, PartyId, SpotId, ZoneId,
+};
+pub use snapshot::{AreaEditor, LocalClock, Snapshot};
+pub use views::*;
+
+/// Freed memory is zeroed, so secrets and positions copied on their way to and from the app do
+/// not outlive their use (see wiping.rs).
+#[cfg(feature = "wipe-freed")]
+#[global_allocator]
+static ALLOCATOR: wiping::Wiping = wiping::Wiping;
 
 /// The version of the Rust core, for the app's security details.
 #[uniffi::export]
