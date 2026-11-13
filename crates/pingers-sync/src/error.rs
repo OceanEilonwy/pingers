@@ -20,6 +20,13 @@ pub enum SyncError {
     /// repinned.
     #[error("the OHTTP gateway key does not match the pin")]
     RelayKeyMismatch,
+    /// The device clock is more than half a bucket from the server's (design F.1): nothing is
+    /// posted. Raise `Notice::ClockSkew`.
+    #[error("device clock is skewed from the server's")]
+    ClockSkew {
+        /// Server minus device.
+        offset: crate::ClockOffset,
+    },
     /// The wake budget ran out before or while the request was made. If it ran out while the
     /// request was in flight, the server may have received it.
     #[error("wake budget exhausted before {route:?} completed")]

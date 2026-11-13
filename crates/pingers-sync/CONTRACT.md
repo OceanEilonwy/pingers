@@ -31,6 +31,15 @@ B.4.9, B.12, D, E.2). L3: tokio (spawn_blocking, select), no detached tasks.
   key }`. Errors: `GroupError::{Sync, Owner, ConflictsExhausted}`.
 - Board: `board_sync` (never queued), `board_page`, `revoke_lease`; `refresh_membership`
   (the RLN leaf list into the local tree).
+- For pingers-wake's `ServerPort` (adapters live in pingers-client): `upload_lease(NewLease {
+  lease, revoke_key, read })` (replaces the previous upload), `board_page`,
+  `post_to_mailbox`, `read_mailbox`, `take_mailbox_for_lease(purpose, lease_start)` (sync),
+  `refill_mailbox_pool(&PoolTarget { purpose, size, lifetime })` (at most one registration),
+  `knock_subscription(lifetime)` (the knock's Meetup subscription, `None` with pushes off),
+  `set_wake_push(Option<WakePush { knock, alert }>)`, `pull_group`.
+- Clock (design F.1): `observe_server_time(t) -> ClockStatus::{Unchecked, Corrected,
+  Uncorrected, Skewed}` (`ClockOffset`), `corrected_now()`, `clock_status()`, `fetch_params`
+  (re-checks the clock). `board_sync` observes the server time it returns.
 - `Delivered<T>::{Done, Queued, Dropped}` for writes; `SyncError` per crate.
 
 ## Decisions
@@ -44,6 +53,16 @@ B.4.9, B.12, D, E.2). L3: tokio (spawn_blocking, select), no detached tasks.
   server accepting proofs and the prover enabled: RLN proof (message id reserved and persisted
   before proving, on the blocking pool); otherwise, or when the bucket's 8 ids are spent, a
   Privacy Pass token. Extensions never prove.
+- **Clock skew** follows design F.1: within ±120 s the device clock is corrected; up to half
+  a bucket (450 s) it is used unchanged; beyond that every credentialed request fails with
+  `SyncError::ClockSkew` (raise `Notice::ClockSkew`) until a server time within range is
+  observed. Reads still go.
+- **Revoke keys** of the last upload are held in memory: pingers-store's lease table wants
+  every slot's Spot and knock mailbox, which only pingers-wake knows. After a restart the first
+  upload does not name the old lease, which then expires by itself.
+- **Pool**: knock mailboxes are sealed with `WakePush::knock`, reply and invite mailboxes and
+  knock subscriptions with `WakePush::alert`. `take_mailbox_for_lease` hands out only
+  mailboxes that outlive the lease (`start + 4` buckets).
 - **Root epoch** = `unix seconds / 3600`, as pingers-quota computes it.
 - **Queue** is in memory (32 entries, oldest dropped when full): pingers-store has no
   table for it yet. Reads, board syncs, mailbox registrations and commits are never queued.

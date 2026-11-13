@@ -36,17 +36,20 @@
 mod base64url;
 mod board;
 mod budget;
+mod clock;
 mod credential;
 mod engine;
 mod error;
 mod group;
 mod mailbox;
+mod pool;
 mod queue;
 mod request;
 mod tokens;
 
-pub use board::MembershipRefresh;
+pub use board::{MembershipRefresh, NewLease};
 pub use budget::{MIN_REQUEST_TIME, WakeBudget};
+pub use clock::{ClockOffset, ClockStatus, MAX_CORRECTION, MAX_SKEW};
 pub use credential::{
     CredentialChoice, CredentialPolicy, ProcessRole, ProverStatus, RlnReadiness, choose_credential,
 };
@@ -56,6 +59,7 @@ pub use engine::{
 pub use error::{GroupError, SyncError};
 pub use group::{CommitAttempts, CommitOwner, Committed, GroupCall, GroupLogOwner, Pulled};
 pub use mailbox::{Delivered, NewMailbox, PushSeal};
+pub use pool::{LEASE_BUCKETS, PoolRefill, PoolTarget, WakePush};
 pub use queue::{QueueCapacity, QueuePolicy, Sending};
 pub use request::{ApiRequest, GroupSigner, Route};
 pub use tokens::{Refill, TokenIssuer, TokenStock};

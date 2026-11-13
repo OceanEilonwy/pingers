@@ -10,10 +10,13 @@ use pingers_store::Session;
 use pingers_time::{Clock, Timer, UnixSeconds};
 use pingers_transport::{DuplexStream, PrivacyClass, Transport, TransportError};
 
+use crate::board::HeldLease;
+use crate::clock::{ClockOffset, ClockStatus};
 use crate::credential::{
     Attached, CredentialChoice, CredentialPolicy, ProcessRole, ProofInput, choose_credential,
     proof_header, prove_request, readiness, token_header,
 };
+use crate::pool::WakePush;
 use crate::queue::{Pushed, QueueCapacity, Queued, RequestQueue};
 use crate::{
     ApiRequest, CommitAttempts, QueuePolicy, Route, Sending, SyncError, TokenStock, WakeBudget,
@@ -211,6 +214,9 @@ pub struct SyncEngine {
     pub(crate) rng: Arc<Mutex<SyncRng>>,
     pub(crate) settings: Mutex<SyncSettings>,
     queue: Mutex<RequestQueue>,
+    clock_status: Mutex<ClockStatus>,
+    pub(crate) wake_push: Mutex<Option<WakePush>>,
+    pub(crate) previous_lease: Mutex<Option<HeldLease>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -239,6 +245,9 @@ impl SyncEngine {
             timer: parts.timer,
             rng: Arc::new(Mutex::new(parts.rng)),
             queue: Mutex::new(RequestQueue::new(settings.queue_capacity)),
+            clock_status: Mutex::new(ClockStatus::Unchecked),
+            wake_push: Mutex::new(None),
+            previous_lease: Mutex::new(None),
             settings: Mutex::new(settings),
         }
     }
@@ -253,7 +262,30 @@ impl SyncEngine {
     }
 
     pub(crate) fn now(&self) -> UnixSeconds {
-        self.clock.now()
+        self.corrected_now()
+    }
+
+    /// The device clock, corrected by the server's time when the last observed offset was
+    /// within ±120 s (design F.1). Buckets, expiries and signatures use this; so should the
+    /// caller's leases.
+    #[must_use]
+    pub fn corrected_now(&self) -> UnixSeconds {
+        lock(&self.clock_status).correct(self.clock.now())
+    }
+
+    /// What the last server time said about the device clock.
+    #[must_use]
+    pub fn clock_status(&self) -> ClockStatus {
+        *lock(&self.clock_status)
+    }
+
+    /// Records a `server_time` the server reported (params, auth, board sync) against the
+    /// device clock. Returns the new status: [`ClockStatus::Skewed`] means raise
+    /// `Notice::ClockSkew`; posting stays refused until a later server time is within range.
+    pub fn observe_server_time(&self, server_time: UnixSeconds) -> ClockStatus {
+        let status = ClockStatus::from_offset(ClockOffset::between(server_time, self.clock.now()));
+        *lock(&self.clock_status) = status;
+        status
     }
 
     /// Draws from the engine's randomness.
@@ -389,6 +421,11 @@ impl SyncEngine {
     /// Sends `request` once, or reports why it was not sent.
     async fn attempt(&self, request: ApiRequest, budget: WakeBudget) -> Result<Attempt, SyncError> {
         let route = request.route();
+        if let ClockStatus::Skewed(offset) = self.clock_status()
+            && route.credential().is_some()
+        {
+            return Err(SyncError::ClockSkew { offset });
+        }
         if !budget.allows_request(&*self.timer) {
             return Ok(Attempt::NotSent(request, NotSentReason::BudgetExhausted));
         }
