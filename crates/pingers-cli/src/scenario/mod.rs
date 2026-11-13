@@ -1,19 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Scripted timelines: the file format, the runner, and the bundled G.3 to G.7 scenarios.
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "run_scenarios gets it once the L3 crates exist to build clients from"
-    )
-)]
 mod client_driver;
 mod format;
 mod runner;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use client_driver::ClientDriver;
 pub(crate) use format::parse_with_seed;
 pub(crate) use runner::{Checks, DryRunDriver, run};
 

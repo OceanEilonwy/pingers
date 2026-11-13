@@ -3403,6 +3403,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "pingers-client",
+ "pingers-e2e",
  "pingers-gate",
  "pingers-geo",
  "pingers-proto",
@@ -3472,6 +3473,34 @@ dependencies = [
  "rand_core 0.10.1",
  "rusqlite",
  "thiserror",
+]
+
+[[package]]
+name = "pingers-e2e"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "hex",
+ "hyper",
+ "hyper-util",
+ "pingers-crypto",
+ "pingers-delivery",
+ "pingers-geo",
+ "pingers-mailbox",
+ "pingers-mls",
+ "pingers-ohttp",
+ "pingers-presence",
+ "pingers-proto",
+ "pingers-server",
+ "pingers-testkit",
+ "pingers-time",
+ "pingers-transport",
+ "rand_chacha 0.10.0",
+ "rand_core 0.10.1",
+ "rusqlite",
+ "thiserror",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]
