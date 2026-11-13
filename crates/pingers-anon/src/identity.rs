@@ -223,6 +223,8 @@ fn length_prefix(bytes: &[u8]) -> Result<[u8; 8], AnonError> {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
     use super::*;
 
     #[test]
@@ -230,5 +232,31 @@ mod tests {
         assert!(MessageId::new(MESSAGE_LIMIT).is_err());
         let last = MessageId::new(MESSAGE_LIMIT.saturating_sub(1));
         assert_eq!(last.ok().and_then(MessageId::next), None);
+    }
+
+    #[test]
+    fn message_ids_count_up() -> Result<(), AnonError> {
+        let first = MessageId::new(0)?;
+        assert_eq!(first.get(), 0);
+        assert_eq!(first.next().map(MessageId::get), Some(1));
+        Ok(())
+    }
+
+    #[test]
+    fn a_stored_secret_loads_back() -> Result<(), AnonError> {
+        let secret = RlnSecret::generate(&mut pingers_testkit::seeded_rng(3))?;
+        let loaded = RlnSecret::from_bytes(Zeroizing::new(*secret.expose_bytes()))?;
+        assert_eq!(loaded.expose_bytes(), secret.expose_bytes());
+        assert_eq!(loaded.id_commitment()?, secret.id_commitment()?);
+        Ok(())
+    }
+
+    #[test]
+    fn generated_secrets_differ() -> Result<(), AnonError> {
+        let mut rng = pingers_testkit::seeded_rng(4);
+        let first = RlnSecret::generate(&mut rng)?;
+        let second = RlnSecret::generate(&mut rng)?;
+        assert_ne!(first.expose_bytes(), second.expose_bytes());
+        Ok(())
     }
 }

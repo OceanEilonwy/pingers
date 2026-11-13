@@ -38,6 +38,11 @@ zeroize = { workspace = true }
 pingers-testkit = { workspace = true }
 hex = { workspace = true }
 serde_json = { workspace = true }
+rand_chacha = { workspace = true }
+
+[[example]]
+name = "prove_bench"
+required-features = ["prover", "verifier"]
 
 [lints]
 workspace = true

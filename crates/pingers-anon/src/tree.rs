@@ -274,6 +274,11 @@ mod tests {
     }
 
     #[test]
+    fn positions_keep_their_value() {
+        assert_eq!(LeafPosition::new(77).get(), 77);
+    }
+
+    #[test]
     fn empty_root_is_the_zero_subtree_root() -> Result<(), AnonError> {
         let tree = MembershipTree::empty()?;
         let mut node = Fr::from(0_u64);
