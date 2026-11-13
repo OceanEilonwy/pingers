@@ -49,6 +49,7 @@ struct State {
     hung: usize,
     refuse_commits_from: Vec<&'static str>,
     ephemeral_posts: usize,
+    refused_commits: usize,
     uplinks: Vec<Uplink>,
     deleted: Vec<GroupId>,
 }
@@ -180,6 +181,18 @@ impl FakeServer {
         self.lock().refuse_commits_from.push(member);
     }
 
+    pub(crate) async fn until_refused_commits(&self, count: usize) -> Result<(), TestError> {
+        self.until("a refused commit", |state| state.refused_commits >= count)
+            .await
+    }
+
+    /// Lets `member`'s commits through again.
+    pub(crate) fn allow_commits_from(&self, member: &str) {
+        self.lock()
+            .refuse_commits_from
+            .retain(|refused| *refused != member);
+    }
+
     /// Ephemeral frames posted to the group log (they never should be).
     pub(crate) fn ephemeral_posts(&self) -> usize {
         self.lock().ephemeral_posts
@@ -302,6 +315,9 @@ impl GroupNetwork for FakeNetwork {
     ) -> Result<CommitResponse, NetworkError> {
         let mut state = self.server.lock();
         if state.refuse_commits_from.contains(&self.member) {
+            state.refused_commits = state.refused_commits.saturating_add(1);
+            drop(state);
+            self.server.touch();
             return Err(NetworkError::Unavailable);
         }
         let log = state.groups.get_mut(group).ok_or(NetworkError::Rejected)?;

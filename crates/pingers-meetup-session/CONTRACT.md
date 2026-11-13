@@ -46,7 +46,8 @@ design B.5, B.6, B.6.1, G.4 to G.7).
 - **Consent**: `AlwaysAllowAdded(leaf)` writes the member's signature key to `always_allow`;
   chat is written to `meetup_msg`. Visibility comes from the Party override, else the device
   setting; the allow-list from the Party's members on `always_allow`.
-- **Members**: a received proposal (a leaver) is committed at once; `RemoveSilentMember` is a
+- **Members**: a received proposal (a leaver) is committed at once, and again on every tick
+  until a commit lands (MLS refuses to send while it waits); `RemoveSilentMember` is a
   remove commit; a lost race (409) discards the commit and reads the log. Every member commit
   uses `Urgency::Quiet` and no snapshot.
 - **End**: `leave` sends the self-remove proposal (or, alone, deletes the group on the server);

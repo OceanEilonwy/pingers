@@ -77,6 +77,9 @@ pub(crate) struct Core {
     /// The latest decrypted position of each peer whose key is held. Overwritten, never
     /// appended: there is no location history (design C.2).
     positions: BTreeMap<LeafIndex, PeerLocation>,
+    /// A received proposal waits for a commit; until one lands MLS refuses to send, so every
+    /// tick retries the commit (an earlier attempt may have failed on the network).
+    proposals: Proposals,
     /// The time of the latest step, for the view.
     now: UnixSeconds,
     rng: SessionRng,
@@ -125,6 +128,7 @@ impl Core {
                 .map(|member| (member.leaf, member))
                 .collect(),
             positions: BTreeMap::new(),
+            proposals: Proposals::None,
             now,
             rng,
         })
@@ -158,8 +162,16 @@ impl Core {
         now: UnixSeconds,
     ) -> Result<Effects, SessionError> {
         self.now = now;
+        let retry = if matches!(input, MeetupInput::Tick) {
+            self.proposals
+        } else {
+            Proposals::None
+        };
         let outputs = self.meetup.handle(input, now, &mut self.rng)?;
-        let mut effects = Effects::default();
+        let mut effects = Effects {
+            commit_proposals: retry,
+            ..Effects::default()
+        };
         self.carry_out(local, outputs, &mut effects)?;
         Ok(effects)
     }
@@ -201,10 +213,13 @@ impl Core {
                 }
                 self.members_changed(local, &handle, now)
             }
-            ProcessedMessage::Proposal { .. } => Ok(Effects {
-                commit_proposals: Proposals::Waiting,
-                ..Effects::default()
-            }),
+            ProcessedMessage::Proposal { .. } => {
+                self.proposals = Proposals::Waiting;
+                Ok(Effects {
+                    commit_proposals: Proposals::Waiting,
+                    ..Effects::default()
+                })
+            }
             // A kind of message this version does not handle: ignored.
             _ => Ok(Effects::default()),
         }
@@ -317,6 +332,8 @@ impl Core {
     ) -> Result<Effects, SessionError> {
         let members = group::members_of(handle)?;
         self.epoch = handle.epoch();
+        // A new epoch drops every proposal not committed in it.
+        self.proposals = Proposals::None;
         self.auth = handle.log_auth_key_pair()?;
         self.members = members
             .iter()

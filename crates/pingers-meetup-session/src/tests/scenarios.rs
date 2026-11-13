@@ -282,6 +282,22 @@ async fn a_member_removed_while_away_ends_its_meetup() -> TestResult {
 }
 
 #[tokio::test]
+async fn a_leaver_is_committed_once_the_network_is_back() -> TestResult {
+    let world = World::new(2)?;
+    let [alice, bob] = world.meetup_of_two().await?;
+    world.server.refuse_commits_from("Bob");
+    assert_eq!(alice.handle.leave().await?, Ended::Left);
+    // Bob's commit of Alice's proposal fails; the next tick retries it.
+    world.server.until_refused_commits(1).await?;
+    world.server.allow_commits_from("Bob");
+    world.clock.advance(Duration::from_secs(60));
+    bob.view_until("Alice gone", |view| view.peers.is_empty())
+        .await?;
+    assert_eq!(world.server.commits(&GROUP), 2);
+    Ok(())
+}
+
+#[tokio::test]
 async fn refused_actions_and_adds_leave_the_meetup_running() -> TestResult {
     let world = World::new(2)?;
     let [alice, mut bob] = world.meetup_of_two().await?;
