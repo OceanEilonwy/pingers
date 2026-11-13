@@ -140,8 +140,8 @@ impl PushRelayPrivateKey {
     }
 }
 
-/// Seals a push token to the relay: `HPKE.Seal(pk, info = "pingers/v1/push" || bind,
-/// padded plaintext)`, giving exactly 320 bytes. Fresh randomness every time, so two blobs
+/// Seals a push token to the relay: `HPKE.Seal(pk, info = "pingers/v1/push" || bind ||
+/// key_id, padded plaintext)`, giving exactly 320 bytes; `key_id` is `relay_key.key_id()`. Fresh randomness every time, so two blobs
 /// for the same token never look alike.
 ///
 /// # Errors
@@ -174,16 +174,18 @@ pub(crate) fn seal_push_padded(
             suite: Suite::PushRelay,
             public_key: relay_key.public_key(),
         },
-        &push_info(bind),
+        &push_info(bind, relay_key.key_id()),
         padded,
         rng,
     )?;
     push_blob(&sealed)
 }
 
-/// `"pingers/v1/push" || bind`.
-fn push_info(bind: &PushBind) -> Vec<u8> {
-    [labels::PUSH, bind.as_bytes()].concat()
+/// `"pingers/v1/push" || bind || key_id`. The key id is bound so a blob sealed to one relay
+/// key cannot be presented under another key id (for example after an operator reuses a
+/// private key under a new id); the design's info has only the bind.
+pub(crate) fn push_info(bind: &PushBind, key_id: u8) -> Vec<u8> {
+    [labels::PUSH, bind.as_bytes(), &[key_id]].concat()
 }
 
 fn push_blob(sealed: &[u8]) -> Result<SealedPushBlob, CryptoError> {
@@ -195,14 +197,13 @@ fn push_blob(sealed: &[u8]) -> Result<SealedPushBlob, CryptoError> {
 /// Opens a blob to its padded plaintext, before proto decodes it.
 pub(crate) fn open_push_padded(
     relay_key: &PushRelayPrivateKey,
-    bind: &PushBind,
-    blob: &SealedPushBlob,
+    token: &PushTokenToOpen<'_>,
 ) -> Result<zeroize::Zeroizing<[u8; PushTokenPlaintext::PADDED_SIZE]>, CryptoError> {
     let plaintext = hpke::open(
         Suite::PushRelay,
         relay_key.expose_bytes(),
-        &push_info(bind),
-        blob.as_bytes(),
+        &push_info(&token.bind, token.key_id),
+        token.blob.as_bytes(),
     )?;
     let padded: [u8; PushTokenPlaintext::PADDED_SIZE] = plaintext
         .as_slice()
@@ -220,17 +221,30 @@ pub struct PushTokenToSeal<'token> {
     pub plaintext: &'token PushTokenPlaintext,
 }
 
-/// Opens a sealed push token on the relay. Fails if `bind` is not the one it was sealed with.
+/// A sealed push token as the relay receives it: the blob, and the bind and key id the server
+/// presented it with.
+#[derive(Clone, Copy, Debug)]
+pub struct PushTokenToOpen<'blob> {
+    /// The key id the request names; must be the id of the key the blob was sealed to.
+    pub key_id: u8,
+    /// The bind of the mailbox or subscription.
+    pub bind: PushBind,
+    /// The sealed token.
+    pub blob: &'blob SealedPushBlob,
+}
+
+/// Opens a sealed push token on the relay with the private key of `token.key_id`. Fails if
+/// the bind or the key id is not the one it was sealed with: `info = "pingers/v1/push" ||
+/// bind || key_id`.
 ///
 /// # Errors
 ///
-/// [`CryptoError::OpenFailed`] if the blob does not open under this key and bind;
+/// [`CryptoError::OpenFailed`] if the blob does not open under this key, bind and key id;
 /// [`CryptoError::Encoding`] if the plaintext is malformed.
 pub fn open_push_token(
     relay_key: &PushRelayPrivateKey,
-    bind: &PushBind,
-    blob: &SealedPushBlob,
+    token: &PushTokenToOpen<'_>,
 ) -> Result<PushTokenPlaintext, CryptoError> {
-    let padded = open_push_padded(relay_key, bind, blob)?;
+    let padded = open_push_padded(relay_key, token)?;
     PushTokenPlaintext::decode_padded(&padded).map_err(CryptoError::Encoding)
 }

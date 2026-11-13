@@ -56,7 +56,7 @@ impl FakeOpener {
 impl TokenOpener for FakeOpener {
     fn open(
         &self,
-        _key: &PushRelayPrivateKey,
+        _key: &RelayKey,
         bind: &PushBind,
         blob: &SealedPushBlob,
     ) -> Result<PushTokenPlaintext, OpenError> {

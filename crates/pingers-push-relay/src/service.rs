@@ -179,10 +179,7 @@ impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
             // Retired (or never ours): the blob can never open here again.
             return PushOutcome::TokenGone;
         };
-        let plaintext = match self
-            .opener
-            .open(key.private_key(), &request.bind, &request.blob)
-        {
+        let plaintext = match self.opener.open(key, &request.bind, &request.blob) {
             Ok(plaintext) => plaintext,
             Err(OpenError::DoesNotOpen) => return PushOutcome::DoesNotOpen,
             Err(OpenError::Malformed) => return PushOutcome::TokenGone,

@@ -6,7 +6,7 @@ use std::future::Future;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use pingers_crypto::{PushBind, PushRelayPrivateKey};
+use pingers_crypto::PushBind;
 use pingers_proto::{
     PushClass, PushHandle, PushToken, PushTokenPlaintext, SealedPushBlob, Urgency,
 };
@@ -45,7 +45,7 @@ impl FakeOpener {
 impl TokenOpener for FakeOpener {
     fn open(
         &self,
-        _key: &PushRelayPrivateKey,
+        _key: &crate::keys::RelayKey,
         bind: &PushBind,
         blob: &SealedPushBlob,
     ) -> Result<PushTokenPlaintext, OpenError> {

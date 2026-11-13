@@ -22,7 +22,7 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
 - **Identity**: `account_id`, `AccountSigningKey::public_key` (implemented),
   `sign_registration`.
 - **Mailboxes and push**: `mailbox_id`, `push_bind_for_mailbox`, `push_bind_for_subscription`
-  (implemented), `seal_push_token`, `open_push_token`.
+  (implemented), `seal_push_token`, `open_push_token` (with `PushTokenToOpen`).
 - **Groups**: `LogAuthKeyPair::public_key` (implemented), `sign_group_request`,
   `seal_state_snapshot`, `open_state_snapshot`.
 - **Location**: `GrantKeyPair::generate`, `seal_location`, `open_location`, `dummy_location`
@@ -78,8 +78,13 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
   of `ikmE` per X25519 seal, 64 per X-Wing seal), checked against RFC 9180 A.1.1. This needs
   two new workspace dependencies, `hpke-rs-crypto` (the provider trait) and `x-wing`
   (optional), and hpke-rs's `hazmat` feature (to read derived private-key bytes).
-- **Push relay `key_id`** is not sealed or bound: the 320-byte blob has no room, and the design
-  puts only `bind` in `info`.
+- **Push relay `key_id` is bound in the HPKE `info`**: `info = "pingers/v1/push" || bind ||
+  key_id` (one byte), which costs no blob space. The design puts only `bind` in `info`; without
+  the key id, a blob sealed for one key would open when presented under another key id that
+  maps to the same private key (an operator reusing a key under a new id). Opening therefore
+  takes the key id: `open_push_token(&PushRelayPrivateKey, &PushTokenToOpen { key_id, bind,
+  blob })` replaces `open_push_token(key, bind, blob)` (only pingers-push-relay calls it).
+  `seal_push_token` is unchanged and takes the id from `PushRelayPublicKey::key_id`.
 - **Subscription binds have their own label**, `pingers/v1/sub-bind` (design D says "as for a
   mailbox"). Mailbox binds keep the design's `pingers/v1/push-bind`. With one shared label a
   subscription and a mailbox whose ids had the same bytes would have the same bind, so a blob
