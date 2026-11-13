@@ -3,7 +3,8 @@
 //!
 //! The publisher-run push relay (design B.4.9, B.7, C.1a, D). Stateless: open the sealed token
 //! with the relay's HPKE key under the mailbox bind, check expiry, and send one content-free
-//! push (`{"v":1,"h":"<handle>"}`) by UnifiedPush or FCM HTTP v1. Per-token and per-server
+//! push (`{"v":1,"h":"<handle>"}`) by UnifiedPush or FCM HTTP v1. Request and config bodies
+//! are pingers-proto's `PushRequest` and `PushRelayConfig`, in CBOR. Per-token and per-server
 //! rate limits, a bearer credential per Pingers server, a key config endpoint, key rotation
 //! with an overlap window, and logging off by default (counts only when on). No database.
 //!
@@ -12,6 +13,7 @@
 //! time t, with what class, on behalf of which server.
 #![forbid(unsafe_code)]
 
+pub mod address;
 pub mod config;
 pub mod counts;
 pub mod credentials;
@@ -21,7 +23,6 @@ pub mod http;
 pub mod keys;
 pub mod opener;
 pub mod rate;
-pub mod request;
 pub mod service;
 
 #[cfg(test)]
@@ -37,13 +38,16 @@ use zeroize::Zeroizing;
 
 use crate::config::{Logging, RelayConfig};
 use crate::counts::{CountsSnapshot, report_counts};
-use crate::delivery::{Dispatcher, DispatcherSettings, FcmAccessToken, FcmSettings, PushSender};
+use crate::delivery::{
+    Dispatcher, DispatcherSettings, EndpointPolicy, FcmAccessToken, FcmSettings, PushSender,
+};
 use crate::error::{ConfigError, RelayError};
 use crate::opener::CryptoOpener;
 use crate::service::{Relay, RelayParts};
 
-/// The HTTP client for push services. It never follows redirects: a redirect from a
-/// device-chosen UnifiedPush endpoint would get around the endpoint policy.
+/// An HTTP client for push services that never follows redirects (a redirect from a
+/// device-chosen UnifiedPush endpoint would get around the endpoint policy) but resolves names
+/// without restriction: for [`EndpointPolicy::AllowInsecureLocal`] and tests only.
 ///
 /// # Errors
 ///
@@ -51,6 +55,21 @@ use crate::service::{Relay, RelayParts};
 pub fn http_client() -> Result<reqwest::Client, RelayError> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(RelayError::HttpClient)
+}
+
+/// The production HTTP client: no redirects, and names resolve only to public addresses
+/// ([`address::PublicOnlyResolver`]), checked at connect time so DNS rebinding cannot reach
+/// the relay's network.
+///
+/// # Errors
+///
+/// [`RelayError::HttpClient`] if the TLS backend cannot be set up.
+pub fn public_http_client() -> Result<reqwest::Client, RelayError> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .dns_resolver(address::PublicOnlyResolver::new(address::SystemLookup))
         .build()
         .map_err(RelayError::HttpClient)
 }
@@ -106,8 +125,13 @@ pub fn dispatcher(config: &RelayConfig) -> Result<Dispatcher<TokioTimer>, RelayE
         }
         None => None,
     };
+    let client = if config.unifiedpush == Some(EndpointPolicy::AllowInsecureLocal) {
+        http_client()?
+    } else {
+        public_http_client()?
+    };
     Ok(Dispatcher::new(
-        http_client()?,
+        client,
         TokioTimer::new(),
         DispatcherSettings {
             timeout: config.upstream_timeout,
@@ -165,6 +189,7 @@ pub async fn serve_with<S: PushSender, C: Clock + 'static>(
         clock,
         keys: config.keys,
         servers: config.servers,
+        token_hash_key: config.token_hash_key,
         token_limit: config.token_limit,
         max_ttl: config.max_ttl,
         operator: config.operator,

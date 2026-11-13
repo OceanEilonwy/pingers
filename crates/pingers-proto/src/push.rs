@@ -7,7 +7,7 @@ use minicbor::Decoder;
 use pingers_time::UnixSeconds;
 
 use crate::cbor::{self, CborBody, Writer, versioned_cbor};
-use crate::{MailboxId, ProtoError, PushHandle, RelayId, SubscriptionId};
+use crate::{MailboxId, ProtoError, PushHandle, PushRelayKeyId, RelayId, SubscriptionId};
 
 /// How long a mailbox or subscription lives on the server: at least one second and at most
 /// `u32::MAX` seconds, as the wire's `ttl_s: u32` allows.
@@ -35,14 +35,14 @@ impl TimeToLive {
     }
 
     /// Writes `ttl_s: u32`; the constructor guarantees it fits.
-    fn encode_cbor(self, writer: &mut Writer) -> Result<(), ProtoError> {
+    pub(crate) fn encode_cbor(self, writer: &mut Writer) -> Result<(), ProtoError> {
         let seconds = u32::try_from(self.0.as_secs())
             .map_err(|_overflow| ProtoError::OutOfRange { field: "ttl" })?;
         writer.unsigned(seconds);
         Ok(())
     }
 
-    fn decode_cbor(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+    pub(crate) fn decode_cbor(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
         Self::new(Duration::from_secs(u64::from(decoder.u32()?)))
     }
 }
@@ -86,14 +86,14 @@ pub enum PushPlatform {
 }
 
 impl PushPlatform {
-    const fn to_wire(self) -> u8 {
+    pub(crate) const fn to_wire(self) -> u8 {
         match self {
             Self::Fcm => 1,
             Self::UnifiedPush => 2,
         }
     }
 
-    const fn from_wire(value: u8) -> Result<Self, ProtoError> {
+    pub(crate) const fn from_wire(value: u8) -> Result<Self, ProtoError> {
         match value {
             1 => Ok(Self::Fcm),
             2 => Ok(Self::UnifiedPush),
@@ -283,6 +283,25 @@ impl core::fmt::Debug for SealedPushBlob {
     }
 }
 
+/// `bind`: ties a sealed push to one mailbox or subscription, so the server cannot move it
+/// (design B.4.9). pingers-crypto derives it; the relay is given this hash, never the id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PushBind([u8; 32]);
+
+impl PushBind {
+    /// Wraps bind bytes received by the push relay.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// The bind bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 /// SHA-256 of an OHTTP or push relay key config, as pinned in Party state (design B.12).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct KeyConfigHash([u8; 32]);
@@ -396,6 +415,9 @@ impl CborBody for RelayRef {
 pub struct SealedPush {
     /// The relay that can open it.
     pub relay: RelayRef,
+    /// Which of that relay's keys the blob is sealed to. The key id is bound into the seal, so
+    /// the server forwards it as given instead of substituting its own idea of the current key.
+    pub key_id: PushRelayKeyId,
     /// The sealed token, fresh for every mailbox and subscription.
     pub blob: SealedPushBlob,
     /// Priority for class Standard; ignored for class Location.
@@ -404,20 +426,22 @@ pub struct SealedPush {
     pub handle: PushHandle,
 }
 
-/// Layout: `[relay, blob (320 bytes), urgency, handle (8 bytes)]`.
+/// Layout: `[relay, relay key id, blob (320 bytes), urgency, handle (8 bytes)]`.
 impl CborBody for SealedPush {
     fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
-        writer.array(4)?;
+        writer.array(5)?;
         self.relay.encode_body(writer)?;
+        writer.unsigned(self.key_id.get());
         writer.bytes(self.blob.as_bytes())?;
         self.urgency.encode_cbor(writer);
         writer.bytes(self.handle.as_bytes())
     }
 
     fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
-        cbor::array_of(decoder, 4)?;
+        cbor::array_of(decoder, 5)?;
         Ok(Self {
             relay: RelayRef::decode_body(decoder)?,
+            key_id: PushRelayKeyId::new(decoder.u8()?),
             blob: SealedPushBlob::from_bytes(cbor::fixed_bytes(decoder)?),
             urgency: Urgency::decode_cbor(decoder)?,
             handle: PushHandle::from_bytes(cbor::fixed_bytes(decoder)?),

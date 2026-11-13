@@ -5,18 +5,19 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::Duration;
 
-use pingers_crypto::{PushBind, PushRelayPrivateKey};
+use pingers_crypto::PushBind;
 use pingers_proto::{
-    PushClass, PushHandle, PushToken, PushTokenPlaintext, SealedPushBlob, Urgency,
+    PushClass, PushHandle, PushRelayKeyId, PushToken, PushTokenPlaintext, SealedPushBlob,
+    TimeToLive, Urgency, WireEncode as _,
 };
 use pingers_testkit::ManualClock;
 use pingers_time::UnixSeconds;
 
 use super::*;
-use crate::credentials::tests::{CREDENTIAL_A, CREDENTIAL_B, entry};
+use crate::credentials::tests::{CREDENTIAL_A, CREDENTIAL_B, entry, hash_key};
 use crate::delivery::Priority;
-use crate::keys::KeyId;
 use crate::keys::tests::key;
 
 const NOW: u64 = 1_800_000_000;
@@ -45,7 +46,7 @@ impl FakeOpener {
 impl TokenOpener for FakeOpener {
     fn open(
         &self,
-        _key: &PushRelayPrivateKey,
+        _key: &crate::keys::RelayKey,
         bind: &PushBind,
         blob: &SealedPushBlob,
     ) -> Result<PushTokenPlaintext, OpenError> {
@@ -135,7 +136,7 @@ impl Setup {
         }
     }
 
-    fn build(self) -> Result<Harness, crate::error::ConfigError> {
+    fn build(self) -> Result<Harness, Box<dyn std::error::Error>> {
         let clock = ManualClock::new(UnixSeconds::new(NOW));
         let sent = Arc::new(Mutex::new(Vec::new()));
         let relay = Relay::new(RelayParts {
@@ -151,12 +152,16 @@ impl Setup {
                 key(1, 0, Some(NOW + 29 * DAY)),
                 key(2, NOW - DAY, None),
             ])?,
-            servers: ServerRegistry::new(vec![
-                entry("a", CREDENTIAL_A, self.server_a_per_minute),
-                entry("b", CREDENTIAL_B, 1000),
-            ])?,
+            servers: ServerRegistry::new(
+                hash_key(),
+                vec![
+                    entry("a", CREDENTIAL_A, self.server_a_per_minute),
+                    entry("b", CREDENTIAL_B, 1000),
+                ],
+            )?,
+            token_hash_key: hash_key(),
             token_limit: per_minute(self.token_per_minute),
-            max_ttl: Duration::from_secs(30 * DAY),
+            max_ttl: TimeToLive::new(Duration::from_secs(30 * DAY))?,
             operator: "Test Relay Ltd".to_owned(),
         });
         Ok(Harness { relay, clock, sent })
@@ -165,13 +170,14 @@ impl Setup {
 
 fn body(key_id: u8, blob: &SealedPushBlob, bind: [u8; 32], urgency: Urgency) -> Vec<u8> {
     PushRequest {
-        key_id: KeyId::new(key_id),
+        key_id: PushRelayKeyId::new(key_id),
         blob: *blob,
         bind: PushBind::from_bytes(bind),
         urgency,
         handle: PushHandle::from_bytes(HANDLE),
     }
-    .encode_json()
+    .encode()
+    .unwrap_or_default()
 }
 
 impl Harness {
@@ -282,6 +288,59 @@ async fn a_blob_presented_with_another_bind_does_not_open() -> TestResult {
 }
 
 #[tokio::test]
+async fn a_blob_living_longer_than_max_ttl_is_gone() -> TestResult {
+    // The harness publishes max_ttl = 30 days; one hour of clock skew is allowed on top.
+    let limit = NOW + 30 * DAY + 3600;
+    let mut opener = FakeOpener::default();
+    let at_limit = opener.seal(
+        1,
+        Ok(plaintext(
+            PushPlatform::UnifiedPush,
+            PushClass::Standard,
+            "https://a.example/one",
+            limit,
+        )),
+    );
+    let beyond = opener.seal(
+        2,
+        Ok(plaintext(
+            PushPlatform::UnifiedPush,
+            PushClass::Standard,
+            "https://a.example/two",
+            limit + 1,
+        )),
+    );
+    let far_future = opener.seal(
+        3,
+        Ok(plaintext(
+            PushPlatform::UnifiedPush,
+            PushClass::Standard,
+            "https://a.example/three",
+            u64::MAX,
+        )),
+    );
+    let harness = Setup::new(opener).build()?;
+    assert_eq!(
+        harness
+            .push(&body(2, &at_limit, BIND, Urgency::Alert))
+            .await,
+        PushOutcome::Accepted
+    );
+    assert_eq!(
+        harness.push(&body(2, &beyond, BIND, Urgency::Alert)).await,
+        PushOutcome::TokenGone
+    );
+    assert_eq!(
+        harness
+            .push(&body(2, &far_future, BIND, Urgency::Alert))
+            .await,
+        PushOutcome::TokenGone
+    );
+    assert_eq!(harness.sent().len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn an_expired_blob_is_gone_but_one_expiring_now_is_sent() -> TestResult {
     let mut opener = FakeOpener::default();
     let expired = opener.seal(
@@ -326,7 +385,7 @@ async fn the_old_key_opens_during_the_overlap_and_is_gone_after() -> TestResult 
             PushPlatform::UnifiedPush,
             PushClass::Standard,
             "https://a.example/",
-            NOW + 60 * DAY,
+            NOW + 30 * DAY,
         )),
     );
     let harness = Setup::new(opener).build()?;
@@ -515,9 +574,12 @@ fn the_published_config_follows_rotation_and_lists_served_platforms() -> TestRes
         .relay
         .published_config()
         .ok_or("nothing published")?;
-    assert_eq!(config.key_config.as_bytes().first(), Some(&2));
+    assert_eq!(config.key_config.key_id, PushRelayKeyId::new(2));
     assert_eq!(config.platforms, vec![PushPlatform::Fcm]);
-    assert_eq!(config.max_ttl, Duration::from_secs(30 * DAY));
+    assert_eq!(
+        config.max_time_to_live.duration(),
+        Duration::from_secs(30 * DAY)
+    );
     assert_eq!(config.operator, "Test Relay Ltd");
     Ok(())
 }

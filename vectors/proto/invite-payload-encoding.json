@@ -1,0 +1,61 @@
+{
+  "name": "invite-payload-encoding",
+  "description": "Invite link fragment payload (https://<host>/j#v1.<base64url(this)>) as canonical CBOR: [server, invite mailbox, invite secret, inviter fingerprint, expires, uses (0 multiple, 1 single)] (design D, invite flow)",
+  "vectors": [
+    {
+      "name": "single-use",
+      "inputs": {
+        "server": "https://pingers.example",
+        "invite_mailbox": "2122232425262728292a2b2c2d2e2f30",
+        "invite_secret": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "inviter_fingerprint": "08090a0b0c0d0e0f",
+        "expires": 1800604800,
+        "uses": "single"
+      },
+      "expected": {
+        "encoding": "8201867768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c8001"
+      }
+    },
+    {
+      "name": "multiple-use",
+      "inputs": {
+        "server": "https://pingers.example",
+        "invite_mailbox": "2122232425262728292a2b2c2d2e2f30",
+        "invite_secret": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "inviter_fingerprint": "08090a0b0c0d0e0f",
+        "expires": 1800000000,
+        "uses": "multiple"
+      },
+      "expected": {
+        "encoding": "8201867768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b49d20000"
+      }
+    },
+    {
+      "name": "http-server",
+      "inputs": {
+        "encoding": "82018676687474703a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f0100"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    },
+    {
+      "name": "short-secret",
+      "inputs": {
+        "encoding": "8201867768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f30581fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbe4808090a0b0c0d0e0f0100"
+      },
+      "expected": {
+        "error": "WrongLength"
+      }
+    },
+    {
+      "name": "unknown-uses",
+      "inputs": {
+        "encoding": "8201867768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f0102"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    }
+  ]
+}

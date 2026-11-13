@@ -22,11 +22,15 @@ mod codec;
 mod error;
 mod group;
 mod ids;
+mod invite;
 mod knock;
 mod meetup;
 mod padding;
+mod privacy_pass;
 mod push;
 mod redacted;
+mod relay;
+mod secret;
 
 pub use api::{
     AnonymousCredential, AuthRequest, AuthResponse, BoardSyncRequest, BoardSyncResponse,
@@ -51,6 +55,7 @@ pub use ids::{
     LocationRequestId, MailboxId, PartyId, PushHandle, RecordRandomness, RelayId, SequenceNumber,
     SpotId, SubscriptionId,
 };
+pub use invite::{DisplayName, InvitePayload, InviteUses, InviterFingerprint, JoinRequest};
 pub use knock::{Knock, KnockSignature};
 pub use meetup::{
     AccuracyMeters, ChatBody, E7Coordinate, HeadingDegrees, LocationPlaintext, MeetPoint,
@@ -58,8 +63,13 @@ pub use meetup::{
     SpeedCentimetresPerSecond,
 };
 pub use padding::{Padded, SizeClass};
+pub use privacy_pass::{
+    MAX_TOKENS_PER_ISSUANCE, PrivacyPassIssueRequest, PrivacyPassIssueResponse,
+};
 pub use push::{
-    KeyConfigHash, MailboxSpec, PushClass, PushPlatform, PushToken, PushTokenPlaintext, RelayRef,
-    RelayUrl, SealedPush, SealedPushBlob, Subscription, TimeToLive, Urgency,
+    KeyConfigHash, MailboxSpec, PushBind, PushClass, PushPlatform, PushToken, PushTokenPlaintext,
+    RelayRef, RelayUrl, SealedPush, SealedPushBlob, Subscription, TimeToLive, Urgency,
 };
 pub use redacted::Redacted;
+pub use relay::{PushRelayConfig, PushRelayKeyConfig, PushRelayKeyId, PushRequest};
+pub use secret::{SecretBytes, SecretText};

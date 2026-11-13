@@ -6,7 +6,7 @@ use core::time::Duration;
 use pingers_crypto::{RevokeKey, revoke_commitment, segment_hash};
 use pingers_proto::{
     BoardCursor, BoardPage, BoardSyncRequest, Lease, LeaseId, LeaseReplacement, ReadBoard, Record,
-    RecordRandomness, RecordTag, Redacted, SealedBeacon,
+    RecordRandomness, RecordTag, SealedBeacon, SecretBytes,
 };
 use pingers_testkit::{ManualClock, TEST_START, TestRng, seeded_rng, test_clock};
 use pingers_time::{Bucket, BucketCount};
@@ -108,8 +108,8 @@ fn revoke_key(id: u8) -> RevokeKey {
     RevokeKey::from_bytes(Zeroizing::new([id; 32]))
 }
 
-fn revealed(id: u8) -> Redacted<[u8; 32]> {
-    Redacted::new([id; 32])
+fn revealed(id: u8) -> SecretBytes<32> {
+    SecretBytes::new([id; 32])
 }
 
 fn records_of(pages: &[BoardPage]) -> Vec<Record> {

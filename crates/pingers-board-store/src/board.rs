@@ -4,15 +4,14 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use pingers_crypto::{RevokeKey, revoke_commitment, segment_hash};
+use pingers_crypto::{revoke_key_matches, segment_hash};
 use pingers_presence::{check_lease, segment_expired};
 use pingers_proto::{
     BoardCursor, BoardPage, BoardSyncRequest, BoardSyncResponse, LeaseId, ReadBoard, Record,
-    Redacted, RevokeCommitment, SegmentHash, SegmentInfo,
+    RevokeCommitment, SecretBytes, SegmentHash, SegmentInfo,
 };
 use pingers_time::{Bucket, BucketCount, Clock};
 use rand_core::CryptoRng;
-use zeroize::Zeroizing;
 
 use crate::BoardError;
 use crate::cursor::{CursorKey, ReadPosition};
@@ -199,7 +198,7 @@ impl<C: Clock> Board<C> {
     pub fn revoke(
         &mut self,
         lease_id: &LeaseId,
-        revoke_key: &Redacted<[u8; 32]>,
+        revoke_key: &SecretBytes<32>,
     ) -> Result<(), BoardError> {
         self.expire();
         self.authorise(lease_id, revoke_key)?;
@@ -231,13 +230,10 @@ impl<C: Clock> Board<C> {
     fn authorise(
         &self,
         lease_id: &LeaseId,
-        revoke_key: &Redacted<[u8; 32]>,
+        revoke_key: &SecretBytes<32>,
     ) -> Result<(), BoardError> {
         let lease = self.leases.get(lease_id).ok_or(BoardError::UnknownLease)?;
-        let key = RevokeKey::from_bytes(Zeroizing::new(*revoke_key.get()));
-        // The commitment is a hash of the key; matching it needs a preimage, so a timing
-        // difference in this comparison reveals nothing useful.
-        if revoke_commitment(&key) == lease.commitment {
+        if revoke_key_matches(revoke_key, &lease.commitment) {
             Ok(())
         } else {
             Err(BoardError::RevokeKeyMismatch)

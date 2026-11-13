@@ -1,6 +1,6 @@
 {
   "name": "mailbox-and-push-bind",
-  "description": "mailbox_id = SHA-256(\"pingers/v1/mbox\" || read_key)[..16]; bind = SHA-256(\"pingers/v1/push-bind\" || mailbox_id or subscription_id) (design B.4.9, D)",
+  "description": "mailbox_id = SHA-256(\"pingers/v1/mbox\" || read_key)[..16]; bind = SHA-256(\"pingers/v1/push-bind\" || mailbox_id) for a mailbox, SHA-256(\"pingers/v1/sub-bind\" || subscription_id) for a group subscription (design B.4.9, D; the subscription label is a decision)",
   "vectors": [
     {
       "name": "mailbox-one",
@@ -28,7 +28,7 @@
         "subscription_id": "3389df226f8a58475989a93363a737cf"
       },
       "expected": {
-        "push_bind": "7c2cb72215b7730f012b8462f36765d97b972968978eb623a692a8b50c07b971"
+        "push_bind": "5ef9cb0354061b0f29840cbf8d3cba0deab9c94096a34af2f8eb15a73bc98341"
       }
     }
   ]

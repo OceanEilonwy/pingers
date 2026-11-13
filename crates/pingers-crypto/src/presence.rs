@@ -10,11 +10,10 @@ use rand_core::CryptoRng;
 
 use pingers_proto::WireEncode as _;
 use subtle::ConstantTimeEq as _;
-use zeroize::Zeroizing;
 
-use crate::primitives::{self, TAG_LENGTH, XNONCE_LENGTH};
+use crate::primitives::{self, XNONCE_LENGTH};
 use crate::secret::secret_key;
-use crate::{AccountPublicKey, AccountSigningKey, CryptoError, labels};
+use crate::{AccountPublicKey, AccountSigningKey, CryptoError, labels, padded};
 
 secret_key!(
     /// `PR_e = MLS-Exporter("pingers/v1/presence", party_id, 32)`: the root of every Spot key
@@ -264,35 +263,12 @@ pub fn seal_knock(
     seal_knock_with_nonce(knock_key, knock, &nonce)
 }
 
-/// The bytes sealing adds around the padded plaintext: nonce and tag.
-const KNOCK_OVERHEAD: usize = XNONCE_LENGTH + TAG_LENGTH;
-/// The big-endian length prefix inside the padded plaintext.
-const KNOCK_LENGTH_PREFIX: usize = 2;
-
 fn seal_knock_with_nonce(
     knock_key: &KnockKey,
     knock: &KnockPlaintext<'_>,
     nonce: &[u8; XNONCE_LENGTH],
 ) -> Result<Vec<u8>, CryptoError> {
-    let padded_length = knock.class.size().saturating_sub(KNOCK_OVERHEAD);
-    let capacity = padded_length.saturating_sub(KNOCK_LENGTH_PREFIX);
-    let too_long = CryptoError::WrongLength {
-        expected: capacity,
-        actual: knock.encoded.len(),
-    };
-    if knock.encoded.len() > capacity {
-        return Err(too_long);
-    }
-    let length = u16::try_from(knock.encoded.len()).map_err(|_overflow| too_long)?;
-    let mut padded = Zeroizing::new(Vec::with_capacity(padded_length));
-    padded.extend_from_slice(&length.to_be_bytes());
-    padded.extend_from_slice(knock.encoded);
-    padded.resize(padded_length, 0);
-    let ciphertext = primitives::xchacha_seal(knock_key.expose_bytes(), nonce, &[], &padded)?;
-    let mut post = Vec::with_capacity(knock.class.size());
-    post.extend_from_slice(nonce);
-    post.extend_from_slice(&ciphertext);
-    Ok(post)
+    padded::seal(knock_key.expose_bytes(), nonce, knock.encoded, knock.class)
 }
 
 /// An encoded knock and the size class its sealed form must fill.
@@ -311,31 +287,7 @@ pub struct KnockPlaintext<'knock> {
 /// [`CryptoError::OpenFailed`] if it was not sealed under this key (including posts that are
 /// not knocks at all); [`CryptoError::WrongLength`] if the padding is malformed.
 pub fn open_knock(knock_key: &KnockKey, post: &[u8]) -> Result<Vec<u8>, CryptoError> {
-    let (nonce, ciphertext) = post
-        .split_first_chunk::<XNONCE_LENGTH>()
-        .ok_or(CryptoError::OpenFailed)?;
-    let padded = primitives::xchacha_open(knock_key.expose_bytes(), nonce, &[], ciphertext)?;
-    let (length, rest) =
-        padded
-            .split_first_chunk::<KNOCK_LENGTH_PREFIX>()
-            .ok_or(CryptoError::WrongLength {
-                expected: KNOCK_LENGTH_PREFIX,
-                actual: padded.len(),
-            })?;
-    let length = usize::from(u16::from_be_bytes(*length));
-    let (knock, padding) = rest
-        .split_at_checked(length)
-        .ok_or(CryptoError::WrongLength {
-            expected: length,
-            actual: rest.len(),
-        })?;
-    if padding.iter().any(|byte| *byte != 0) {
-        return Err(CryptoError::WrongLength {
-            expected: length,
-            actual: rest.len(),
-        });
-    }
-    Ok(knock.to_vec())
+    padded::open(knock_key.expose_bytes(), post).map(|knock| knock.to_vec())
 }
 
 /// The fields a knock signature covers (design B.4.2):

@@ -3609,7 +3609,9 @@ dependencies = [
  "pingers-time",
  "proptest",
  "serde_json",
+ "subtle",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]

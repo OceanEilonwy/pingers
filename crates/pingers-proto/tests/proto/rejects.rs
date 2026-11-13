@@ -85,7 +85,13 @@ fn location(latitude: Vec<u8>, heading: Vec<u8>) -> Vec<u8> {
 }
 
 fn sealed_push(relay: Vec<u8>, urgency: usize) -> Vec<u8> {
-    array(&[relay, bstr(&[0; 320]), uint(urgency), bstr(&[0; 8])])
+    array(&[
+        relay,
+        uint(1),
+        bstr(&[0; 320]),
+        uint(urgency),
+        bstr(&[0; 8]),
+    ])
 }
 
 fn mailbox_spec(ttl: usize, push: Vec<u8>) -> Vec<u8> {
@@ -402,6 +408,7 @@ fn unknown_urgency_is_rejected() {
 fn short_sealed_push_blob_is_rejected() {
     let push = array(&[
         array(&[uint(0), uint(3)]),
+        uint(1),
         bstr(&[0; 319]),
         uint(0),
         bstr(&[0; 8]),

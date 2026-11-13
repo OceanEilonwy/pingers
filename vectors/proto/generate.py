@@ -384,9 +384,10 @@ write(
 mbox = ramp(0x11, 16)
 blob = ramp(0, 256) + ramp(0, 64)
 handle = ramp(0xf0, 8)
-listed = a(a(u(0), u(2)), b(blob), u(1), b(handle))
+# SealedPush: [relay, relay key id, blob, urgency, handle].
+listed = a(a(u(0), u(2)), u(1), b(blob), u(1), b(handle))
 custom_hash = fill(0x77, 32)
-custom = a(a(u(1), t("https://push.example"), b(custom_hash)), b(blob), u(0), b(handle))
+custom = a(a(u(1), t("https://push.example"), b(custom_hash)), u(7), b(blob), u(0), b(handle))
 write(
     "mailbox-spec-encoding",
     "POST /v1/mailboxes body as canonical CBOR (design B.4.9, D)",
@@ -399,6 +400,7 @@ write(
                 "relay_id": 2,
                 "relay_url": "",
                 "key_config_hash": "",
+                "key_id": 1,
                 "blob": h(blob),
                 "urgency": "quiet",
                 "handle": h(handle),
@@ -413,6 +415,7 @@ write(
                 "relay_id": "",
                 "relay_url": "https://push.example",
                 "key_config_hash": h(custom_hash),
+                "key_id": 7,
                 "blob": h(blob),
                 "urgency": "alert",
                 "handle": h(handle),
@@ -427,6 +430,7 @@ write(
                 "relay_id": "",
                 "relay_url": "",
                 "key_config_hash": "",
+                "key_id": "",
                 "blob": "",
                 "urgency": "",
                 "handle": "",
@@ -437,6 +441,24 @@ write(
             "name": "zero-ttl",
             "inputs": {"encoding": h(versioned(a(b(mbox), u(0), NULL)))},
             "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "relay-key-id-over-255",
+            "inputs": {
+                "encoding": h(
+                    versioned(
+                        a(b(mbox), u(60), a(a(u(0), u(2)), u(256), b(blob), u(1), b(handle)))
+                    )
+                )
+            },
+            "expected": {"error": "Cbor"},
+        },
+        {
+            "name": "sealed-push-without-key-id",
+            "inputs": {
+                "encoding": h(versioned(a(b(mbox), u(60), a(a(u(0), u(2)), b(blob), u(1), b(handle)))))
+            },
+            "expected": {"error": "Cbor"},
         },
     ],
 )
@@ -565,6 +587,364 @@ write(
             "name": "unknown-delivery",
             "inputs": {"encoding": h(versioned(a(u(7), b(body), u(2), NULL)))},
             "expected": {"error": "OutOfRange"},
+        },
+    ],
+)
+
+# --- push relay request ---
+relay_bind = ramp(0xb0, 32)
+write(
+    "push-request-encoding",
+    "POST /v1/push body (push relay API) as canonical CBOR: [key id, blob, bind, urgency, handle] (design D, PushReq)",
+    [
+        {
+            "name": "alert",
+            "inputs": {
+                "key_id": 1,
+                "blob": h(blob),
+                "bind": h(relay_bind),
+                "urgency": "alert",
+                "handle": h(handle),
+            },
+            "expected": {
+                "encoding": h(versioned(a(u(1), b(blob), b(relay_bind), u(0), b(handle))))
+            },
+        },
+        {
+            "name": "quiet-key-200",
+            "inputs": {
+                "key_id": 200,
+                "blob": h(blob),
+                "bind": h(relay_bind),
+                "urgency": "quiet",
+                "handle": h(handle),
+            },
+            "expected": {
+                "encoding": h(versioned(a(u(200), b(blob), b(relay_bind), u(1), b(handle))))
+            },
+        },
+        {
+            "name": "short-bind",
+            "inputs": {
+                "encoding": h(versioned(a(u(1), b(blob), b(relay_bind[:31]), u(0), b(handle))))
+            },
+            "expected": {"error": "WrongLength"},
+        },
+        {
+            "name": "key-id-over-255",
+            "inputs": {
+                "encoding": h(versioned(a(u(256), b(blob), b(relay_bind), u(0), b(handle))))
+            },
+            "expected": {"error": "Cbor"},
+        },
+    ],
+)
+
+# --- push relay config ---
+relay_public = ramp(0x60, 32)
+
+
+def key_config(key_id, public, kem=b"\x00\x20", suites=b"\x00\x04\x00\x01\x00\x01"):
+    return bytes([key_id]) + kem + public + suites
+
+
+write(
+    "push-relay-config-encoding",
+    "GET /v1/config body (push relay API) as canonical CBOR: [key config (RFC 9458, 41 bytes), [platform...], max ttl seconds, operator] (design D, RelayConfig)",
+    [
+        {
+            "name": "both-platforms",
+            "inputs": {
+                "key_id": 2,
+                "public_key": h(relay_public),
+                "platforms": "fcm,unifiedpush",
+                "max_ttl_seconds": 2_592_000,
+                "operator": "Example Relay Ltd",
+            },
+            "expected": {
+                "key_config": h(key_config(2, relay_public)),
+                "encoding": h(
+                    versioned(
+                        a(
+                            b(key_config(2, relay_public)),
+                            a(u(1), u(2)),
+                            u(2_592_000),
+                            t("Example Relay Ltd"),
+                        )
+                    )
+                ),
+            },
+        },
+        {
+            "name": "unifiedpush-only",
+            "inputs": {
+                "key_id": 1,
+                "public_key": h(relay_public),
+                "platforms": "unifiedpush",
+                "max_ttl_seconds": 3600,
+                "operator": "Ünïcode Relay",
+            },
+            "expected": {
+                "key_config": h(key_config(1, relay_public)),
+                "encoding": h(
+                    versioned(
+                        a(b(key_config(1, relay_public)), a(u(2)), u(3600), t("Ünïcode Relay"))
+                    )
+                ),
+            },
+        },
+        {
+            "name": "chacha-suite",
+            "inputs": {
+                "encoding": h(
+                    versioned(
+                        a(
+                            b(key_config(1, relay_public, suites=b"\x00\x04\x00\x01\x00\x03")),
+                            a(u(2)),
+                            u(3600),
+                            t("x"),
+                        )
+                    )
+                )
+            },
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "unknown-platform",
+            "inputs": {
+                "encoding": h(
+                    versioned(a(b(key_config(1, relay_public)), a(u(3)), u(3600), t("x")))
+                )
+            },
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "zero-ttl",
+            "inputs": {
+                "encoding": h(
+                    versioned(a(b(key_config(1, relay_public)), a(u(2)), u(0), t("x")))
+                )
+            },
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "short-key-config",
+            "inputs": {
+                "encoding": h(
+                    versioned(a(b(key_config(1, relay_public)[:40]), a(u(2)), u(3600), t("x")))
+                )
+            },
+            "expected": {"error": "WrongLength"},
+        },
+    ],
+)
+
+# --- Privacy Pass issuance ---
+PP_TOKEN_TYPE = b"\x00\x01"
+
+
+def pp_request(truncated_key_id, count):
+    elements = b"".join(ramp(0x02 + k, 49) for k in range(count))
+    return PP_TOKEN_TYPE + bytes([truncated_key_id]) + struct.pack(">H", len(elements)) + elements
+
+
+def pp_response(count):
+    elements = b"".join(ramp(0x30 + k, 49) for k in range(count))
+    return struct.pack(">H", len(elements)) + elements + ramp(0x90, 96)
+
+
+PP_MAX_REQUEST = 2 + 1 + 2 + 300 * 49
+PP_MAX_RESPONSE = 2 + 300 * 49 + 96
+write(
+    "privacy-pass-issue-request-encoding",
+    "POST /v1/pp/issue body as canonical CBOR: [token request], the token request being pingers-anon's RFC 9578 batched request (token_type || truncated_key_id || blinded_elements<2-byte length>), opaque here and at most 5 + 300 * 49 bytes (design B.4.8, D)",
+    [
+        {
+            "name": "two-tokens",
+            "inputs": {"token_request": h(pp_request(0x7F, 2))},
+            "expected": {"encoding": h(versioned(a(b(pp_request(0x7F, 2)))))},
+        },
+        {
+            "name": "full-batch",
+            "inputs": {"token_request": h(fill(0x01, PP_MAX_REQUEST))},
+            "expected": {"encoding": h(versioned(a(b(fill(0x01, PP_MAX_REQUEST)))))},
+        },
+        {
+            "name": "over-a-batch",
+            "inputs": {"encoding": h(versioned(a(b(fill(0x01, PP_MAX_REQUEST + 1)))))},
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "empty",
+            "inputs": {"encoding": h(versioned(a(b(b""))))},
+            "expected": {"error": "OutOfRange"},
+        },
+    ],
+)
+write(
+    "privacy-pass-issue-response-encoding",
+    "POST /v1/pp/issue answer as canonical CBOR: [token response], the token response being pingers-anon's RFC 9578 batched response (evaluated_elements<2-byte length> || proof(96)), opaque here and at most 2 + 300 * 49 + 96 bytes (design B.4.8, D)",
+    [
+        {
+            "name": "two-tokens",
+            "inputs": {"token_response": h(pp_response(2))},
+            "expected": {"encoding": h(versioned(a(b(pp_response(2)))))},
+        },
+        {
+            "name": "full-batch",
+            "inputs": {"token_response": h(fill(0x02, PP_MAX_RESPONSE))},
+            "expected": {"encoding": h(versioned(a(b(fill(0x02, PP_MAX_RESPONSE)))))},
+        },
+        {
+            "name": "over-a-batch",
+            "inputs": {"encoding": h(versioned(a(b(fill(0x02, PP_MAX_RESPONSE + 1)))))},
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "text-instead-of-bytes",
+            "inputs": {"encoding": h(versioned(a(t("token"))))},
+            "expected": {"error": "Cbor"},
+        },
+    ],
+)
+
+# --- invites ---
+inv_server = "https://pingers.example"
+inv_mailbox = ramp(0x21, 16)
+inv_secret = ramp(0xa0, 32)
+inv_fpr = ramp(0x08, 8)
+write(
+    "invite-payload-encoding",
+    "Invite link fragment payload (https://<host>/j#v1.<base64url(this)>) as canonical CBOR: [server, invite mailbox, invite secret, inviter fingerprint, expires, uses (0 multiple, 1 single)] (design D, invite flow)",
+    [
+        {
+            "name": "single-use",
+            "inputs": {
+                "server": inv_server,
+                "invite_mailbox": h(inv_mailbox),
+                "invite_secret": h(inv_secret),
+                "inviter_fingerprint": h(inv_fpr),
+                "expires": 1_800_604_800,
+                "uses": "single",
+            },
+            "expected": {
+                "encoding": h(
+                    versioned(
+                        a(t(inv_server), b(inv_mailbox), b(inv_secret), b(inv_fpr), u(1_800_604_800), u(1))
+                    )
+                )
+            },
+        },
+        {
+            "name": "multiple-use",
+            "inputs": {
+                "server": inv_server,
+                "invite_mailbox": h(inv_mailbox),
+                "invite_secret": h(inv_secret),
+                "inviter_fingerprint": h(inv_fpr),
+                "expires": 1_800_000_000,
+                "uses": "multiple",
+            },
+            "expected": {
+                "encoding": h(
+                    versioned(
+                        a(t(inv_server), b(inv_mailbox), b(inv_secret), b(inv_fpr), u(1_800_000_000), u(0))
+                    )
+                )
+            },
+        },
+        {
+            "name": "http-server",
+            "inputs": {
+                "encoding": h(
+                    versioned(
+                        a(t("http://pingers.example"), b(inv_mailbox), b(inv_secret), b(inv_fpr), u(1), u(0))
+                    )
+                )
+            },
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "short-secret",
+            "inputs": {
+                "encoding": h(
+                    versioned(
+                        a(t(inv_server), b(inv_mailbox), b(inv_secret[:31]), b(inv_fpr), u(1), u(0))
+                    )
+                )
+            },
+            "expected": {"error": "WrongLength"},
+        },
+        {
+            "name": "unknown-uses",
+            "inputs": {
+                "encoding": h(
+                    versioned(
+                        a(t(inv_server), b(inv_mailbox), b(inv_secret), b(inv_fpr), u(1), u(2))
+                    )
+                )
+            },
+            "expected": {"error": "OutOfRange"},
+        },
+    ],
+)
+
+join_kp = ramp(0x40, 40)
+join_reply = ramp(0x51, 16)
+join_sub_id = ramp(0x61, 16)
+join_subscription = a(b(join_sub_id), listed, u(2_592_000))
+write(
+    "join-request-encoding",
+    "Join request plaintext (sealed with seal_join_request, posted to the invite mailbox) as canonical CBOR: [key package, display name, reply mailbox, party subscription] (design D, invite flow)",
+    [
+        {
+            "name": "bob",
+            "inputs": {
+                "key_package": h(join_kp),
+                "display_name": "Bob",
+                "reply_mailbox": h(join_reply),
+                "subscription_id": h(join_sub_id),
+                "subscription_ttl_seconds": 2_592_000,
+            },
+            "expected": {
+                "encoding": h(versioned(a(b(join_kp), t("Bob"), b(join_reply), join_subscription)))
+            },
+        },
+        {
+            "name": "longest-name",
+            "inputs": {
+                "key_package": h(join_kp),
+                "display_name": "é" * 100,
+                "reply_mailbox": h(join_reply),
+                "subscription_id": h(join_sub_id),
+                "subscription_ttl_seconds": 2_592_000,
+            },
+            "expected": {
+                "encoding": h(
+                    versioned(a(b(join_kp), t("é" * 100), b(join_reply), join_subscription))
+                )
+            },
+        },
+        {
+            "name": "name-too-long",
+            "inputs": {
+                "encoding": h(
+                    versioned(a(b(join_kp), t("a" * 201), b(join_reply), join_subscription))
+                )
+            },
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "empty-name",
+            "inputs": {
+                "encoding": h(versioned(a(b(join_kp), t(""), b(join_reply), join_subscription)))
+            },
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "no-subscription",
+            "inputs": {"encoding": h(versioned(a(b(join_kp), t("Bob"), b(join_reply), NULL)))},
+            "expected": {"error": "Cbor"},
         },
     ],
 )

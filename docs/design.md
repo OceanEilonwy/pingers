@@ -570,6 +570,7 @@ enum MeetPoint { Fixed { lat_e7: i32, lon_e7: i32, label: Option<String>, lampor
 - `Chat` and `MeetPoint` are stored in the group log until the Meetup ends. They reach members over the live stream, which every Meetup member holds while the app runs its background location session. A member whose stream is not connected is woken through its sealed subscription (B.4.9).
 - Threads are one level deep (`parent` points to a root message).
 - Compass: computed on device from own fix and heading plus the target's last `Location` or the meet point. Optional later: UWB (Nearby Interaction / Jetpack UWB) discovery tokens exchanged over this channel for close-range bearing.
+- Compass update rate (decided 2026-11-13): each member's own app sets its cadence (60 s in the background, 2 s while its meetup screen or compass is open); a viewer opening the compass does not ask others to go live. To make staleness obvious, the compass and the member rows show how old the target's position is ("Updated 40 s ago", "Updated just now"), from `CompassReading.age`.
 - OpenMLS sender ratchets give per-message forward secrecy; out-of-order tolerance set to 50 for ephemeral traffic.
 
 ```rust

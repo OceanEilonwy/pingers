@@ -8,6 +8,8 @@ use std::time::Duration;
 use pingers_testkit::ManualClock;
 use pingers_time::{Timer as _, UnixSeconds};
 
+use pingers_proto::{WireDecode as _, WireEncode as _};
+
 use super::*;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -17,16 +19,16 @@ fn config_text(listen: &str, activated_at: u64) -> String {
         r#"
 listen = "{listen}"
 operator = "Start-up Test"
+hash_key = "4242424242424242424242424242424242424242424242424242424242424242"
 
 [[keys]]
 key_id = 1
 private_key = "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"
-public_key = "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"
 activated_at = {activated_at}
 
 [[servers]]
 server_id = "s"
-credential = "0123456789abcdef0123456789abcdef"
+credential_hash = "11e91a598f0cdd95086a51f58961207c05755742f65f5e2a4885bbe8721c3985"
 pushes_per_minute = 1
 
 [unifiedpush]
@@ -128,18 +130,15 @@ async fn serve_publishes_the_key_config_until_shutdown() -> TestResult {
     let mut published = None;
     for _ in 0..100 {
         if let Ok(response) = reqwest::get(&url).await {
-            published = Some(response.json::<serde_json::Value>().await?);
+            published = Some(pingers_proto::PushRelayConfig::decode(
+                &response.bytes().await?,
+            )?);
             break;
         }
         timer.sleep(Duration::from_millis(20)).await;
     }
     let published = published.ok_or("the relay never answered")?;
-    assert_eq!(
-        published
-            .get("operator")
-            .and_then(serde_json::Value::as_str),
-        Some("Start-up Test")
-    );
+    assert_eq!(published.operator, "Start-up Test");
     stop.send(()).map_err(|()| "the server stopped early")?;
     let result = server.await?;
     assert!(result.is_ok());
@@ -214,14 +213,14 @@ async fn serve_with_uses_the_injected_sender_and_clock() -> TestResult {
     // The real opener refuses this garbage blob (422), so nothing reaches the sender; the
     // injected clock made key 1 (active from 2096) usable, or serve_with would have
     // refused to start.
-    let body = request::PushRequest {
-        key_id: keys::KeyId::new(1),
+    let body = pingers_proto::PushRequest {
+        key_id: pingers_proto::PushRelayKeyId::new(1),
         blob: pingers_proto::SealedPushBlob::from_bytes([0; 320]),
         bind: pingers_crypto::PushBind::from_bytes([0; 32]),
         urgency: pingers_proto::Urgency::Alert,
         handle: pingers_proto::PushHandle::from_bytes([0; 8]),
     }
-    .encode_json();
+    .encode()?;
     let response = reqwest::Client::new()
         .post(format!("http://{address}/v1/push"))
         .bearer_auth("0123456789abcdef0123456789abcdef")

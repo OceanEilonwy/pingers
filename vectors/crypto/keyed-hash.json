@@ -1,0 +1,39 @@
+{
+  "name": "keyed-hash",
+  "description": "keyed_hash = HMAC-SHA-256(key, label || input); label \"pingers/v1/relay-token\" for PushTokenRateLimit, \"pingers/v1/relay-credential\" for ServerCredential (design C.1a; both labels are decisions). Computed with Python's hmac module.",
+  "vectors": [
+    {
+      "name": "credential",
+      "inputs": {
+        "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "purpose": "ServerCredential",
+        "input": "696e746567726174696f6e2d746573742d63726564656e7469616c2d30313233343536373839"
+      },
+      "expected": {
+        "keyed_hash": "4bdc1327d7fb836f1178c50d8fc7c3bd66e59a7bab3c828f0b933a5e4388421f"
+      }
+    },
+    {
+      "name": "token",
+      "inputs": {
+        "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "purpose": "PushTokenRateLimit",
+        "input": "68747470733a2f2f6e7466792e6578616d706c652f7570416263313233"
+      },
+      "expected": {
+        "keyed_hash": "10d864a98d11af0194d55bb75dee11591adbdca93a53c321ac3869cf0abb60ec"
+      }
+    },
+    {
+      "name": "empty-input",
+      "inputs": {
+        "key": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+        "purpose": "ServerCredential",
+        "input": ""
+      },
+      "expected": {
+        "keyed_hash": "8cb259d2ed9444655bb5d0cdc931a0e59aa4af1086c29d3bd8f2e228245b9da4"
+      }
+    }
+  ]
+}

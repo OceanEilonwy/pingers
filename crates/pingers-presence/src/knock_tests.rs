@@ -76,6 +76,7 @@ fn subscription(rng: &mut TestRng) -> Result<Subscription, TestError> {
         id: SubscriptionId::from_bytes(random_array(rng)),
         push: SealedPush {
             relay: RelayRef::Listed(RelayId::new(1)),
+            key_id: pingers_proto::PushRelayKeyId::new(1),
             blob: SealedPushBlob::from_bytes(random_array(rng)),
             urgency: Urgency::Alert,
             handle: PushHandle::from_bytes(random_array(rng)),
