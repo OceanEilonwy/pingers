@@ -839,6 +839,14 @@ for_each_store!(
     unknown_group_is_reported_everywhere,
 );
 
+/// The limits are the design's absolute numbers, not just consistent with each other.
+#[test]
+fn limits_are_thirty_days_two_hours_and_thirty_seconds() {
+    assert_eq!(MAX_SUBSCRIPTION_LIFETIME, Duration::from_hours(720));
+    assert_eq!(IDLE_LIFETIME, Duration::from_hours(2));
+    assert_eq!(MAX_QUIET_DELAY, Duration::from_secs(30));
+}
+
 /// A file-backed store keeps everything across a restart.
 #[cfg(feature = "sqlite")]
 #[test]

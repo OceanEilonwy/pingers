@@ -15,7 +15,7 @@ use pingers_anon::{
     NullifierOutcome, NullifierRecord, RequestDigest, VerificationContext, classify_nullifier,
     verify,
 };
-use pingers_proto::{RlnAuth, RlnScope, ServerId};
+use pingers_proto::{RlnAuth, ServerId};
 use pingers_time::{Bucket, Clock};
 
 use crate::QuotaError;
@@ -37,7 +37,9 @@ pub enum Admission {
     Replay,
 }
 
-type Sets = BTreeMap<(Bucket, u8), HashMap<[u8; 32], NullifierRecord>>;
+/// Keyed by bucket only: the external nullifier already commits to the scope, so the same
+/// nullifier cannot arise in two scopes.
+type Sets = BTreeMap<Bucket, HashMap<[u8; 32], NullifierRecord>>;
 
 /// The nullifier sets of the current and previous bucket, per scope.
 pub struct Nullifiers {
@@ -89,10 +91,8 @@ impl Nullifiers {
         )?;
         let mut sets = self.sets.lock().map_err(|_| QuotaError::Poisoned)?;
         let oldest = current.previous().unwrap_or(current);
-        sets.retain(|(bucket, _), _| *bucket >= oldest);
-        let set = sets
-            .entry((proof.bucket, scope_key(proof.scope)))
-            .or_default();
+        sets.retain(|bucket, _| *bucket >= oldest);
+        let set = sets.entry(proof.bucket).or_default();
         let key = *proof.nullifier.as_bytes();
         match classify_nullifier(set.get(&key), &proof) {
             NullifierOutcome::Fresh => {
@@ -113,8 +113,4 @@ impl Nullifiers {
         let sets = self.sets.lock().map_err(|_| QuotaError::Poisoned)?;
         Ok(sets.values().map(HashMap::len).sum())
     }
-}
-
-const fn scope_key(scope: RlnScope) -> u8 {
-    scope.to_wire()
 }

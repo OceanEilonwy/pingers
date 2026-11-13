@@ -16,14 +16,6 @@ use crate::DeliveryError;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ChannelId(u64);
 
-impl ChannelId {
-    /// The number, for metrics and logs that need to tell channels apart.
-    #[must_use]
-    pub const fn get(self) -> u64 {
-        self.0
-    }
-}
-
 #[derive(Debug)]
 struct Channel<T> {
     subscription: Option<SubscriptionId>,

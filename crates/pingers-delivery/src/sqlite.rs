@@ -477,3 +477,25 @@ fn delete_children(transaction: &Transaction<'_>, id: &[u8]) -> Result<(), Deliv
     transaction.execute("DELETE FROM grp_state WHERE group_id = ?1", [id])?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use super::*;
+
+    #[test]
+    fn every_content_type_survives_its_column() -> Result<(), DeliveryError> {
+        for content_type in [
+            ContentType::Application,
+            ContentType::Proposal,
+            ContentType::Commit,
+        ] {
+            let column = content_type_to_column(content_type);
+            assert_eq!(content_type_from_column(column)?, content_type);
+        }
+        assert!(content_type_from_column(0).is_err());
+        assert!(content_type_from_column(4).is_err());
+        Ok(())
+    }
+}

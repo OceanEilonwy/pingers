@@ -93,7 +93,7 @@ impl<S: PrivacyPassStore> PrivacyPass<S> {
         rng: &mut impl CryptoRng,
     ) -> Result<(), QuotaError> {
         self.store.prune(now)?;
-        keys.retain(|record| record.redeem_until > now);
+        keys.retain(|record| redeemable(record, now));
         if keys.iter().any(|record| issues_at(record, now)) {
             return Ok(());
         }
@@ -123,7 +123,7 @@ impl<S: PrivacyPassStore> PrivacyPass<S> {
         Ok(self
             .lock()?
             .iter()
-            .filter(|record| record.redeem_until > now)
+            .filter(|record| redeemable(record, now))
             .map(|record| IssuerPublicKey {
                 key_id: record.key.key_id(),
                 public_key: record.key.public_key(),
@@ -182,7 +182,7 @@ impl<S: PrivacyPassStore> PrivacyPass<S> {
         let keys = self.lock()?;
         let verified = keys
             .iter()
-            .filter(|record| record.redeem_until > now)
+            .filter(|record| redeemable(record, now))
             .find_map(|record| {
                 check_redemption(&record.key, token)
                     .ok()
@@ -194,6 +194,10 @@ impl<S: PrivacyPassStore> PrivacyPass<S> {
             Spend::AlreadySpent => Err(QuotaError::DoubleSpend),
         }
     }
+}
+
+fn redeemable(record: &IssuerKeyRecord, now: UnixSeconds) -> bool {
+    record.redeem_until > now
 }
 
 fn issues_at(record: &IssuerKeyRecord, now: UnixSeconds) -> bool {
