@@ -349,7 +349,7 @@ fn grant_plaintext(grant: &LocationGrant<'_>) -> Zeroizing<Vec<u8>> {
     plaintext
 }
 
-fn parse_grant(plaintext: &[u8]) -> Result<OpenedGrant, CryptoError> {
+pub(crate) fn parse_grant(plaintext: &[u8]) -> Result<OpenedGrant, CryptoError> {
     let wrong_length = || CryptoError::WrongLength {
         expected: GRANT_PLAINTEXT_LENGTH,
         actual: plaintext.len(),

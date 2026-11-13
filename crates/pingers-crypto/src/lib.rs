@@ -27,6 +27,8 @@ mod invite;
 mod labels;
 mod location;
 mod mailbox;
+#[cfg(test)]
+mod negative_tests;
 mod presence;
 mod primitives;
 mod secret;
