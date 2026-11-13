@@ -318,7 +318,7 @@ class CoreRepository(
         call("create party", onError = { createError = it; publishNewParty() }) { core ->
             val created = uniffi.pingers.NewPartyDraft(
                 name = draft.name,
-                myName = res.getString(R.string.core_my_name),
+                myName = myName(),
                 colour = draft.colour,
                 postQuantum = draft.postQuantum,
             )
@@ -357,12 +357,19 @@ class CoreRepository(
         publishNewParty()
     }
 
-    // WAITING(pingers-client): verifying and cancelling an invite have no client call yet.
+    /** The Party Invite people is showing (publishParty's choice). */
+    private fun invitingParty(): PartyId? = currentParty ?: _home.value.parties.firstOrNull()?.id
+
+    // Verifying admits whoever opened the invite. The core answers Unavailable until
+    // pingers-sync delivers join requests, so no invite shows as opened before then.
     override fun verifyInvite(invitationId: InviteId) {
-        Log.i(TAG, "verify invite: not in the client API yet")
+        val party = invitingParty() ?: return
+        call("verify invite") { it.verifyInvite(party.toFfi(), invitationId.toFfi()) }
     }
+
     override fun cancelInvite(invitationId: InviteId) {
-        Log.i(TAG, "cancel invite: not in the client API yet")
+        val party = invitingParty() ?: return
+        call("cancel invite") { it.cancelInvite(party.toFfi(), invitationId.toFfi()) }
     }
 
     override fun acceptInvite() = call("accept invite") { core ->
@@ -372,7 +379,11 @@ class CoreRepository(
     override fun declineInvite() = Unit
 
     /** Opens an invite link: Accept invite then shows its preview. */
-    fun openInvite(link: String) = call("open invite") { it.openInvite(link, res.getString(R.string.core_my_name)) }
+    fun openInvite(link: String) = call("open invite") { it.openInvite(link, myName()) }
+
+    /** The name set on this phone, or the default until one is (no screen sets it yet). */
+    private fun myName(): String =
+        read("your name") { it.yourName().name } ?: res.getString(R.string.core_my_name)
 
     // ------------------------------------------------------------ Spots
 
@@ -474,6 +485,11 @@ class CoreRepository(
     override fun setPauseInFocus(on: Boolean) = change(SettingChange.PauseInFocus(on))
     override fun setQuietHours(on: Boolean) = change(SettingChange.QuietHours(on))
     override fun setNoWakePushes(on: Boolean) = call("wake pushes") { it.setWakePushes(!on) }
+
+    // The answer lands in the snapshot's relay status, which What your server sees shows as a
+    // note; until pingers-sync merges the core answers Unavailable and the call only logs it.
+    override fun checkReachability() = call("reachability") { it.checkReachability() }
+
     override fun setVisibility(visibility: Visibility) = change(
         SettingChange.Visibility(
             when (visibility) {

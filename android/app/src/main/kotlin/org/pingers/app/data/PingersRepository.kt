@@ -70,6 +70,8 @@ interface PingersRepository {
     fun setQuietHours(on: Boolean)
     fun setVisibility(visibility: Visibility)
     fun setNoWakePushes(on: Boolean)
+    /** What your server sees was opened: check this phone reaches its server through the relay. */
+    fun checkReachability()
 
     // Meetup
     fun hideMeHere()

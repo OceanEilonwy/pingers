@@ -22,6 +22,7 @@ internal fun uniffi.pingers.MemberId.toUi() = MemberId(leaf.toLong())
 internal fun uniffi.pingers.ZoneId.toUi() = ZoneId(row.toLong())
 
 internal fun PartyId.toFfi() = uniffi.pingers.PartyId(hex)
+internal fun InviteId.toFfi() = uniffi.pingers.InviteId(hex)
 internal fun SpotId.toFfi() = uniffi.pingers.SpotId(hex)
 internal fun MeetupId.toFfi() = uniffi.pingers.MeetupId(hex)
 internal fun MessageId.toFfi() = uniffi.pingers.MessageId(hex)
