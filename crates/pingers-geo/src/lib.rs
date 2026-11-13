@@ -26,7 +26,8 @@ mod testing;
 pub use error::GeoError;
 pub use exclusion::{ExclusionTrail, ZoneStatus};
 pub use fence::{
-    Circle, Fence, MAXIMUM_POLYGON_EXTENT, MINIMUM_SPOT_RADIUS, Polygon, RECOMMENDED_SPOT_RADIUS,
+    Circle, Fence, MAXIMUM_POLYGON_EXTENT, MAXIMUM_POLYGON_VERTICES, MINIMUM_SPOT_RADIUS, Polygon,
+    RECOMMENDED_SPOT_RADIUS,
 };
 pub use geofence::{
     GeofenceCandidate, GeofenceCapacity, GeofenceSelection, OsGeofence, select_os_geofences,

@@ -29,7 +29,9 @@ Implemented in full.
   radius 6,371,008.8 m), within about 0.5 % of the ellipsoid.
 - **Polygons:** any latitude, including polygons that surround a pole, and polygons that
   straddle the antimeridian. Every vertex must be within `MAXIMUM_POLYGON_EXTENT` (100 km) of
-  the first. Geometry is computed in an azimuthal equidistant projection about the polygon's
+  the first, and a polygon has at most `MAXIMUM_POLYGON_VERTICES` (100) vertices, because
+  polygons come from other Party members and validation is cubic in the count. Geometry is
+  computed in an azimuthal equidistant projection about the polygon's
   enclosing-circle centre, so there is no seam anywhere; edges are straight lines in that
   projection (not great circles), which differ by millimetres at Spot scale. Distances to a
   polygon from points far away are approximate (within 2 % at 2,000 km),
