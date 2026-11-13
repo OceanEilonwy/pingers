@@ -458,22 +458,11 @@ impl<'context, S: MlsStorage> MlsContext<'context, S> {
     ///
     /// [`MlsError::Storage`].
     pub fn delete_group(&self, group_id: &GroupId) -> Result<(), MlsError> {
-        let adapter = crate::adapter::StorageAdapter::new(self.storage);
-        let id = openmls::prelude::GroupId::from_slice(group_id.as_bytes());
-        if let Some(mut inner) = MlsGroup::load(&adapter, &id)? {
-            // `MlsGroup::delete` removes the current epoch's key pairs. A member that merged its
-            // own removal has moved to the next epoch without key pairs, so its last ones are
-            // the previous epoch's.
-            let previous =
-                openmls::prelude::GroupEpoch::from(inner.epoch().as_u64().saturating_sub(1));
-            adapter.delete_encryption_epoch_key_pairs(
-                &id,
-                &previous,
-                inner.own_leaf_index().u32(),
-            )?;
-            inner.delete(&adapter)?;
-        }
-        policy::delete_party_roster(self.storage, group_id)
+        // Every row of the group, OpenMLS's (including key pairs of epochs the group has moved
+        // past) and the wrapper's own, is under its prefix.
+        self.storage
+            .delete_prefix(&crate::group_storage_prefix(group_id)?)?;
+        Ok(())
     }
 
     fn wrap<Kind>(&self, inner: MlsGroup) -> Group<'context, S, Kind> {

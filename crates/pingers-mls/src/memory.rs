@@ -102,6 +102,10 @@ impl MlsStorage for MemoryStorage {
             state.values.remove(key);
         })
     }
+
+    fn delete_prefix(&self, prefix: &[u8]) -> Result<(), StorageError> {
+        self.with_state(|state| state.values.retain(|key, _| !key.starts_with(prefix)))
+    }
 }
 
 #[cfg(test)]
@@ -128,6 +132,25 @@ mod tests {
         storage.delete(b"missing")?;
         assert_eq!(storage.read(b"key")?, None);
         assert!(storage.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn delete_prefix_removes_exactly_the_keys_under_it() -> Result<(), StorageError> {
+        let storage = MemoryStorage::new();
+        for key in [
+            &b"group/a/1"[..],
+            b"group/a/2",
+            b"group/ab",
+            b"group/",
+            b"other",
+        ] {
+            storage.write(key, b"value")?;
+        }
+        storage.delete_prefix(b"group/a/")?;
+        assert_eq!(storage.key_names(), vec!["group/", "group/ab", "other"]);
+        storage.delete_prefix(b"nothing")?;
+        assert_eq!(storage.len(), 3);
         Ok(())
     }
 

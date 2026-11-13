@@ -137,11 +137,13 @@ pub(crate) fn psk_id_bytes(id: &MeetupPskId) -> Vec<u8> {
     bytes
 }
 
-/// Storage key of the Party roster a Meetup group checks adds against.
-fn roster_key(group: &GroupId) -> Vec<u8> {
-    let mut key = b"pingers/v1/meetup-roster/".to_vec();
-    key.extend_from_slice(group.as_bytes());
-    key
+/// Storage key of the Party roster a Meetup group checks adds against: under the group's
+/// prefix, so deleting the group deletes it. The label cannot clash with OpenMLS's, which have
+/// no `-`.
+fn roster_key(group: &GroupId) -> Result<Vec<u8>, MlsError> {
+    let mut key = crate::group_storage_prefix(group)?;
+    key.extend_from_slice(b"pingers-meetup-roster");
+    Ok(key)
 }
 
 /// One roster entry on disk: `be32(leaf) || signature key (32)`.
@@ -158,7 +160,7 @@ pub(crate) fn store_party_roster(
         bytes.extend_from_slice(&entry.leaf.get().to_be_bytes());
         bytes.extend_from_slice(entry.signature_key.as_bytes());
     }
-    storage.write(&roster_key(group), &bytes)?;
+    storage.write(&roster_key(group)?, &bytes)?;
     Ok(())
 }
 
@@ -168,7 +170,7 @@ pub(crate) fn load_party_roster(
     group: &GroupId,
 ) -> Result<Roster, MlsError> {
     let bytes = storage
-        .read(&roster_key(group))?
+        .read(&roster_key(group)?)?
         .ok_or(crate::StorageError::Corrupt)?;
     let (chunks, remainder) = bytes.as_chunks::<ROSTER_ENTRY_LENGTH>();
     if !remainder.is_empty() {
@@ -186,13 +188,4 @@ pub(crate) fn load_party_roster(
         });
     }
     Ok(Roster::new(entries))
-}
-
-/// Deletes the stored Party roster of a Meetup group.
-pub(crate) fn delete_party_roster(
-    storage: &impl MlsStorage,
-    group: &GroupId,
-) -> Result<(), MlsError> {
-    storage.delete(&roster_key(group))?;
-    Ok(())
 }

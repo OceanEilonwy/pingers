@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     CipherSuitePolicy, Group, MeetupCreation, MeetupPskBinding, MemberGrantKey, MemoryStorage,
-    MlsError, ProcessedMessage, Roster, SelfRemoval,
+    MlsError, MlsStorage as _, ProcessedMessage, Roster, SelfRemoval,
 };
 
 type MeetupGroup<'device> = Group<'device, MemoryStorage, crate::Meetup>;
@@ -478,6 +478,34 @@ fn ending_the_meetup_deletes_everything() -> TestResult {
         a.context().meetup_group(&group_id(0xA0)),
         Err(MlsError::NotAMember)
     ));
+    Ok(())
+}
+
+#[test]
+fn store_can_wipe_one_group_by_its_prefix() -> TestResult {
+    let mut rng = rng(48);
+    let (a, b) = (Device::new(&mut rng), Device::new(&mut rng));
+    let party = roster_of(&[&a, &b]);
+    let first_knock = Knock {
+        knocker: &b,
+        party_roster: &party,
+    };
+    let (first, _) = create_with_id(&a, first_knock, 0xA1, &mut rng)?;
+    let (second, _) = create_with_id(&a, first_knock, 0xA2, &mut rng)?;
+    drop((first, second));
+    // What pingers-store does when a Meetup ends, without going through MlsContext.
+    a.storage
+        .delete_prefix(&crate::group_storage_prefix(&group_id(0xA1))?)
+        .map_err(MlsError::from)?;
+    assert!(matches!(
+        a.context().meetup_group(&group_id(0xA1)),
+        Err(MlsError::NotAMember)
+    ));
+    // The other Meetup is untouched, roster included.
+    let mut second = a.context().meetup_group(&group_id(0xA2))?;
+    second.seal_application(&padded(b"still here")?, &mut rng)?;
+    let roster = crate::policy::load_party_roster(&a.storage, &group_id(0xA2))?;
+    assert_eq!(roster, party);
     Ok(())
 }
 

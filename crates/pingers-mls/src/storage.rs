@@ -4,13 +4,20 @@
 use zeroize::Zeroizing;
 
 /// Why the storage backend failed. A kind, not the backend's own error: the backend keeps its
-/// detailed errors at its own API, and nothing here may carry stored bytes.
+/// detailed errors (and logs them, if at all) at its own API, and nothing here may carry stored
+/// bytes or a backend's message. A missing key is not an error: [`MlsStorage::read`] returns
+/// `Ok(None)`, and a missing group surfaces as `MlsError::NotAMember`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum StorageError {
-    /// The database could not be reached or is locked by another process.
+    /// The database could not be reached or is locked by another process; retrying later may
+    /// succeed.
     #[error("storage unavailable")]
     Unavailable,
+    /// The database was reached but the operation failed (I/O error, full disk, constraint
+    /// violation, aborted transaction).
+    #[error("storage operation failed")]
+    Failed,
     /// Stored bytes could not be decoded.
     #[error("stored MLS state is corrupt")]
     Corrupt,
@@ -19,7 +26,9 @@ pub enum StorageError {
 /// A key-value store for OpenMLS state (Party and Meetup groups alike, design C.2 `mls_*`).
 ///
 /// pingers-mls adapts this to OpenMLS's `StorageProvider`, choosing the key layout; the store
-/// only persists opaque bytes. Values contain secrets and come back zeroised on drop.
+/// only persists opaque bytes. Values contain secrets and come back zeroised on drop. Every row
+/// of one group starts with that group's prefix ([`crate::group_storage_prefix`]), so
+/// [`MlsStorage::delete_prefix`] wipes a group.
 ///
 /// Methods take `&self` because OpenMLS calls its provider through shared references; the
 /// implementation uses interior mutability and must make each call atomic. Callers group a
@@ -46,4 +55,13 @@ pub trait MlsStorage: Send + Sync {
     ///
     /// [`StorageError`] if the backend fails.
     fn delete(&self, key: &[u8]) -> Result<(), StorageError>;
+
+    /// Removes every value whose key starts with `prefix` (byte-wise); matching nothing is not
+    /// an error. `MlsContext::delete_group` calls it with the group's prefix, and the store may
+    /// call it itself with [`crate::group_storage_prefix`] when a Meetup ends (design B.5).
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError`] if the backend fails.
+    fn delete_prefix(&self, prefix: &[u8]) -> Result<(), StorageError>;
 }

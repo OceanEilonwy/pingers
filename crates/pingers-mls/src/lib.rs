@@ -26,6 +26,7 @@ mod storage;
 #[cfg(test)]
 mod tests;
 
+pub use adapter::group_storage_prefix;
 pub use group::{
     CipherSuitePolicy, Commit, CommitSummary, CreatedMeetup, Group, KeyPackagePurpose, Meetup,
     MeetupCreation, MeetupPskBinding, MeetupPskId, MemberGrantKey, MlsContext, MlsError, Party,

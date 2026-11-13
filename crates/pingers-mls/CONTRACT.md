@@ -4,9 +4,10 @@ A narrow wrapper over OpenMLS 0.9. No other crate touches OpenMLS types.
 
 ## Fixed (other crates build against these)
 
-- `trait MlsStorage: Send + Sync { read, write, delete }` over opaque byte keys and values
-  (`Zeroizing<Vec<u8>>` on read), with `StorageError::{Unavailable, Corrupt}`.
-  pingers-store implements it.
+- `trait MlsStorage: Send + Sync { read, write, delete, delete_prefix }` over opaque byte keys
+  and values (`Zeroizing<Vec<u8>>` on read), with `StorageError::{Unavailable, Failed,
+  Corrupt}`, and `group_storage_prefix(&GroupId)`. pingers-store implements it. (Changed
+  2026-11-13 on pingers-store's feedback; see Decisions.)
 - `MlsContext::new(&storage, &AccountSigningKey)` and its methods: `create_key_package`
   (`KeyPackagePurpose::Party` or `::Meetup { grant_key }`), `create_party_group`,
   `join_party_group`, `party_group`, `create_meetup_group(&MeetupCreation) -> CreatedMeetup`,
@@ -44,12 +45,30 @@ A narrow wrapper over OpenMLS 0.9. No other crate touches OpenMLS types.
   until the server accepts it (merge) or rejects it with 409 (discard).
 - **The account key is the leaf signature key** in every group (design B.1). The leaf
   credential is a `BasicCredential` whose identity is the same 32-byte key.
-- **Storage key layout** (adapter, `src/adapter.rs`): `"openmls/v1/" || label || "/" ||
-  JSON(key)`, values JSON, as in OpenMLS's memory storage (labels such as `Tree`,
-  `EpochSecrets`, `Psk`). The wrapper's own rows: `"pingers/v1/meetup-roster/" || group_id`
-  holding the Party roster a Meetup checks adds against, as `be32(leaf) || key (32)` per entry.
-  OpenMLS hides provider errors inside its own; the adapter records the first storage failure
-  of an operation and the wrapper reports it as `MlsError::Storage` whatever OpenMLS made of it.
+- **Storage key layout** (adapter, `src/adapter.rs`): every row of a group starts with
+  `group_storage_prefix(group_id)` = `"openmls/v1/group/" || JSON(OpenMLS GroupId) || "/"`,
+  then `label` (one row per group: `Tree`, `EpochSecrets`, ...) or `label || "/" || JSON(item)`
+  (per proposal, per epoch and leaf). Rows of no group (KeyPackages, PSKs, standalone key
+  pairs) are `"openmls/v1/" || label || "/" || JSON(key)`. Values are JSON, as in OpenMLS's
+  memory storage. The wrapper's own row `prefix || "pingers-meetup-roster"` holds the Party
+  roster a Meetup checks adds against, as `be32(leaf) || key (32)` per entry. OpenMLS hides
+  provider errors inside its own; the adapter records the first storage failure of an
+  operation and the wrapper reports it as `MlsError::Storage` whatever OpenMLS made of it.
+- **Trait change: `MlsStorage::delete_prefix(prefix)`** (pingers-store feedback 1). Keys are
+  still opaque to the store, but all of a group's rows share `group_storage_prefix`, so
+  `MlsContext::delete_group` is one `delete_prefix` (it also catches key pairs of epochs the
+  group moved past), and the store can wipe an ended Meetup itself with
+  `delete_prefix(&group_storage_prefix(&group_id)?)` in the same transaction (design B.5). It
+  is a required method: a default that silently kept rows would defeat B.5. The store
+  implements it as a range delete (`key >= prefix AND key < successor(prefix)`) or a
+  byte-wise `starts_with`.
+- **Trait change: `StorageError::Failed`** (pingers-store feedback 2): `Unavailable` (cannot
+  reach or locked, retry later), `Failed` (reached, but the operation failed: I/O, full disk,
+  constraint, aborted transaction), `Corrupt` (bytes do not decode). "Not found" is not an
+  error: `read` returns `Ok(None)`, and a missing group is `MlsError::NotAMember`. No source
+  error is attached on purpose: it would carry backend messages (possibly stored bytes or
+  paths) into errors that reach the UI, against style guide 9; the store keeps details at its
+  own API.
 - **`pingers_grant_key` extension**: leaf-node extension type `0xF0A1` (RFC 9420 private-use
   range, not a GREASE value); `extension_data` is the raw grant public key. Meetup leaves list
   the type in their capabilities, and a Meetup's group context requires it
