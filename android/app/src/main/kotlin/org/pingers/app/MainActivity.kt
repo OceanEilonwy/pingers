@@ -24,6 +24,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -169,7 +170,7 @@ private fun Screen(route: Route, repo: PingersRepository, nav: Navigator, simula
         Route.ExclusionZones -> ExclusionZonesScreen(repo.exclusionZones.collectAsStateWithLifecycle().value, repo, nav)
         Route.Privacy -> PrivacyScreen(repo.privacy.collectAsStateWithLifecycle().value, repo, nav)
         Route.ServerView -> ServerViewScreen(repo.serverView.collectAsStateWithLifecycle().value, nav)
-        Route.Security -> SecurityScreen(nav)
+        Route.Security -> SecurityScreen(remember { CoreInfo.read() }, nav)
         Route.Alert -> AlertScreen(repo.home.collectAsStateWithLifecycle().value.alert, repo, nav)
         Route.Meetup -> MeetupScreen(repo.meetup.collectAsStateWithLifecycle().value, repo, nav)
         Route.Chat -> ChatScreen(repo.chat.collectAsStateWithLifecycle().value, repo, nav)
