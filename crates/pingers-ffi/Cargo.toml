@@ -10,10 +10,27 @@ publish.workspace = true
 [package.metadata.pingers]
 layer = 5
 
+# The Android app loads the cdylib; `lib` keeps `cargo test` and the bindgen binary working.
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "pingers_ffi"
+
+# Generates the Kotlin bindings from the built library (android/app/build.gradle.kts):
+# cargo run -p pingers-ffi --features bindgen --bin uniffi-bindgen -- generate --library ...
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
 [dependencies]
 pingers-client = { workspace = true }
 pingers-screens = { workspace = true }
+pingers-time = { workspace = true }
 pingers-words = { workspace = true }
+thiserror = { workspace = true }
 uniffi = { workspace = true }
 
 [lints]
