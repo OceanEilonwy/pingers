@@ -1123,10 +1123,7 @@ pub(crate) fn parse_key_package<S: MlsStorage, R: openmls_traits::random::OpenMl
     // `validate` checks the leaf signature with whatever suite the KeyPackage names, so an
     // untrusted KeyPackage could otherwise reach ECDSA P-256 code (deny.toml,
     // RUSTSEC-2026-0387). The suite is the second field: version (u16), then suite (u16).
-    let suite = bytes
-        .as_bytes()
-        .get(2..4)
-        .ok_or(MlsError::InvalidMessage)?;
+    let suite = bytes.as_bytes().get(2..4).ok_or(MlsError::InvalidMessage)?;
     if !policy::is_supported_suite_code(suite) {
         return Err(MlsError::InvalidMessage);
     }

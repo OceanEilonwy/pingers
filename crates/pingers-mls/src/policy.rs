@@ -42,10 +42,13 @@ pub(crate) fn ciphersuite(policy: CipherSuitePolicy) -> Result<Ciphersuite, MlsE
 
 /// Whether a big-endian suite code from the wire is one of the suites this build can run.
 pub(crate) fn is_supported_suite_code(code: &[u8]) -> bool {
-    [CipherSuitePolicy::Classical, CipherSuitePolicy::QuantumResistant]
-        .into_iter()
-        .filter_map(|policy| ciphersuite(policy).ok())
-        .any(|suite| u16::from(suite).to_be_bytes() == code)
+    [
+        CipherSuitePolicy::Classical,
+        CipherSuitePolicy::QuantumResistant,
+    ]
+    .into_iter()
+    .filter_map(|policy| ciphersuite(policy).ok())
+    .any(|suite| u16::from(suite).to_be_bytes() == code)
 }
 
 /// Leaf capabilities: the group's suite, basic credentials and, in Meetups, the grant-key

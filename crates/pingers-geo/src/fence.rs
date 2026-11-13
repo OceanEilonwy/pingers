@@ -148,8 +148,7 @@ impl Polygon {
         if plane::is_collinear(&provisional) {
             return Err(GeoError::Degenerate);
         }
-        let minimal =
-            plane::minimal_enclosing_circle(&provisional).ok_or(GeoError::Internal)?;
+        let minimal = plane::minimal_enclosing_circle(&provisional).ok_or(GeoError::Internal)?;
         let center = plane::unproject(first, minimal.center)?;
         let ring: Vec<Planar> = vertices
             .iter()

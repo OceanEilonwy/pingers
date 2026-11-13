@@ -267,7 +267,13 @@ fn check_transitive_io(
         .current_dir(root)
         // Every feature: a crate's optional sides (pingers-anon's prover, verifier, issuer)
         // must be pure too.
-        .args(["tree", "--quiet", "--all-features", "--package", &manifest.name])
+        .args([
+            "tree",
+            "--quiet",
+            "--all-features",
+            "--package",
+            &manifest.name,
+        ])
         .args([
             "--edges",
             "normal,build",
