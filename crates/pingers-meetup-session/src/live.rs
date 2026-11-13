@@ -1104,9 +1104,18 @@ async fn within<T, E: Into<SessionError>>(
 }
 
 /// Sleeps until wall time `at`; never completes for `None`.
-async fn sleep_until(clock: &dyn Clock, timer: &dyn Timer, at: Option<UnixSeconds>) {
+///
+/// The monotonic reading is taken before the wall reading. Time that passes between the two
+/// (a wall-clock jump, or a test's manual clock advancing) then ends the sleep early, which
+/// costs one tick that finds nothing due; read the other way round, it would push the deadline
+/// back by that much and the timer could be missed.
+pub(crate) async fn sleep_until(clock: &dyn Clock, timer: &dyn Timer, at: Option<UnixSeconds>) {
     match at {
-        Some(at) => timer.sleep(at.saturating_duration_since(clock.now())).await,
+        Some(at) => {
+            let start = timer.now();
+            let wait = at.saturating_duration_since(clock.now());
+            timer.sleep_until(start.saturating_add(wait)).await;
+        }
         None => core::future::pending().await,
     }
 }

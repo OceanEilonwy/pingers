@@ -195,6 +195,8 @@ pub struct PartiesSection {
     pub parties: Vec<Party>,
     /// An opened invite waiting for the codes to be compared.
     pub join_preview: Option<JoinPreview>,
+    /// The name this device's user goes by in Parties they create or join, once set.
+    pub display_name: Option<Name>,
 }
 
 /// pingers-wake's part of the snapshot: the gate's inputs and answer.
@@ -250,6 +252,11 @@ pub trait PartiesPort: Send + Sync {
         invite: MailboxId,
         decision: JoinDecision,
     ) -> Result<(), ClientError>;
+    /// Cancels an invite this device made: it takes no more join requests, and its mailbox is
+    /// deleted on the server.
+    async fn cancel_invite(&self, party: PartyId, invite: MailboxId) -> Result<(), ClientError>;
+    /// Sets the name this device's user goes by in Parties they create or join from now on.
+    async fn set_display_name(&self, name: Name) -> Result<(), ClientError>;
     /// Removes a member.
     async fn remove_member(&self, party: PartyId, member: LeafIndex) -> Result<(), ClientError>;
     /// Leaves a Party.
@@ -280,6 +287,15 @@ pub trait SyncPort: Send + Sync {
         setting: WakePushes,
         tokens: Option<PushTokens>,
     ) -> Result<(), ClientError>;
+    /// Checks whether this device reaches its server through the privacy relay, and records
+    /// the answer as the section's [`RelayStatus`].
+    ///
+    /// It must leak nothing new: the check is a request of the anonymous class that the core
+    /// already makes (the gateway key config fetched through the relay, checked against its
+    /// pin), never sent direct and carrying no account, Party or mailbox. With no relay
+    /// configured it answers [`RelayStatus::Unreachable`] without sending anything. The answer
+    /// is only the status, with no host, address, timing or server text in it.
+    async fn check_reachability(&self) -> Result<RelayStatus, ClientError>;
     /// The server status.
     async fn section(&self) -> Result<ServerSection, ClientError>;
 }

@@ -42,6 +42,12 @@ pub enum ScreenError {
     /// A daily window that starts where it ends.
     #[error("window is empty")]
     EmptyWindow,
+    /// A time of day that is not on a 24-hour clock.
+    #[error("not a time of day")]
+    InvalidTime,
+    /// The snapshot has no exclusion zone with this id.
+    #[error("no such exclusion zone")]
+    UnknownZone,
     /// A UTC offset outside ±18 hours.
     #[error("UTC offset out of range")]
     InvalidUtcOffset,

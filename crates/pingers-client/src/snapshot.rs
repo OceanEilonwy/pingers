@@ -9,7 +9,7 @@
 
 use core::fmt;
 
-use pingers_gate::{FocusState, GateDecision, LocationSharing};
+use pingers_gate::{FocusState, GateDecision, LocationSharing, MinuteOfDay};
 use pingers_geo::{Bearing, Coordinate, Fence, Fix};
 use pingers_meetup::{LocationVisibility, TargetPosition};
 use pingers_proto::{
@@ -202,6 +202,9 @@ pub struct ClientSnapshot {
     pub ended_meetup: Option<EndedMeetup>,
     /// An invite link opened on this device, waiting for the user to compare codes.
     pub join_preview: Option<JoinPreview>,
+    /// The name this device's user goes by in Parties they create or join from now on, once
+    /// they set one.
+    pub display_name: Option<Name>,
     /// The device's latest fix and heading, in memory only.
     pub own_position: Option<OwnPosition>,
     /// Runtime fallbacks in effect (design §0).
@@ -259,8 +262,18 @@ pub struct QuietHoursPreference {
 /// A daily window from a start minute (inside) to an end minute (outside), which may wrap past
 /// midnight: pingers-gate's `QuietHours`, which exposes its ends, under the name the screens
 /// use for quiet hours and zone times alike. `DailyWindow::new` reports an empty window as
-/// `GateError::EmptyQuietHours`.
+/// `GateError::EmptyQuietHours`; [`daily_window`] reports it in the screens' terms.
 pub type DailyWindow = pingers_gate::QuietHours;
+
+/// The daily window from `start` (inside) to `end` (outside), as the screens take it.
+///
+/// # Errors
+///
+/// [`SnapshotError::EmptyWindow`] if they are the same minute (pingers-gate's
+/// `GateError::EmptyQuietHours`, the only way `QuietHours::new` fails).
+pub fn daily_window(start: MinuteOfDay, end: MinuteOfDay) -> Result<DailyWindow, SnapshotError> {
+    DailyWindow::new(start, end).map_err(|_empty_quiet_hours| SnapshotError::EmptyWindow)
+}
 
 /// "No wake-up pushes (maximum privacy)" (design §0, B.4.9).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -822,8 +835,6 @@ impl Meetup {
 mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
-    use pingers_gate::MinuteOfDay;
-
     use super::*;
 
     #[derive(Debug, thiserror::Error)]
@@ -923,6 +934,7 @@ mod tests {
             location_requests: Vec::new(),
             ended_meetup: None,
             join_preview: None,
+            display_name: None,
             own_position: None,
             fallbacks: Vec::new(),
             relay: RelayStatus::Reachable,
@@ -985,6 +997,16 @@ mod tests {
             heading: None,
         });
         assert_eq!(snapshot.own_coordinate(), Some(coordinate));
+        Ok(())
+    }
+
+    #[test]
+    fn a_window_that_starts_where_it_ends_is_empty() -> Result<(), TestError> {
+        let eleven = MinuteOfDay::new(23 * 60)?;
+        let seven = MinuteOfDay::new(7 * 60)?;
+        let night = daily_window(eleven, seven)?;
+        assert_eq!((night.start(), night.end()), (eleven, seven));
+        assert_eq!(daily_window(seven, seven), Err(SnapshotError::EmptyWindow));
         Ok(())
     }
 

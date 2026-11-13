@@ -2,10 +2,11 @@
 //! The client's own records, kept in the store's encrypted key-value table.
 //!
 //! Interim, as pingers-parties does (its `records.rs`): pingers-store has no table for a
-//! Party's colour, the device settings the gate reads, exclusion-zone schedules or pingers-wake's
-//! `WakeSnapshot`. Until it does, they are written through the store's `MlsStorage`
-//! implementation on `Session` under `pingers-client/v1/`, disjoint from `openmls/v1/` and
-//! `pingers-parties/v1/`, so they join the session's transaction like any other row.
+//! Party's colour, the device settings the gate reads, exclusion-zone schedules, the display
+//! name or pingers-wake's `WakeSnapshot`. Until it does, they are written through the store's
+//! `MlsStorage` implementation on `Session` under `pingers-client/v1/`, disjoint from
+//! `openmls/v1/` and `pingers-parties/v1/`, so they join the session's transaction like any
+//! other row.
 
 use pingers_geo::{Circle, Coordinate, Fence, Meters, Polygon};
 use pingers_mls::MlsStorage as _;
@@ -28,6 +29,8 @@ pub(crate) enum Key<'id> {
     WakeSnapshot,
     /// How far a Party group's log has been applied.
     AppliedThrough(&'id pingers_proto::GroupId),
+    /// The name this device's user goes by in new Parties and joins.
+    DisplayName,
 }
 
 impl Key<'_> {
@@ -45,6 +48,7 @@ impl Key<'_> {
                 key.extend_from_slice(b"applied-through/");
                 key.extend_from_slice(group.as_bytes());
             }
+            Self::DisplayName => key.extend_from_slice(b"display-name"),
         }
         key
     }

@@ -18,7 +18,7 @@ use crate::ports::{
     AllowListChange, ClientEvent, Crates, Foreground, GeofenceTransition, JoinDecision, PartyDraft,
     SettingChange, SpotDraft, WakeInput, WakeOutcome,
 };
-use crate::snapshot::{ClientSnapshot, InviteLink, InviteUrl, Name, WakePushes};
+use crate::snapshot::{ClientSnapshot, InviteLink, InviteUrl, Name, RelayStatus, WakePushes};
 use crate::{ClientError, Events, Instance, Outside, Platform, SecureStoreKey};
 
 /// Where the client keeps its data.
@@ -179,6 +179,30 @@ impl Client {
         self.published(result.await).await
     }
 
+    /// Cancels an invite this device made (Invite people's ✕ on a pending invite).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Parties`].
+    pub async fn cancel_invite(
+        &self,
+        party: PartyId,
+        invite: MailboxId,
+    ) -> Result<(), ClientError> {
+        self.published(self.crates.parties.cancel_invite(party, invite).await)
+            .await
+    }
+
+    /// Sets the name this device's user goes by in Parties they create or join from now on.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Records`] or [`ClientError::Store`] if it cannot be stored.
+    pub async fn set_display_name(&self, name: Name) -> Result<(), ClientError> {
+        self.published(self.crates.parties.set_display_name(name).await)
+            .await
+    }
+
     /// Removes a member from a Party.
     ///
     /// # Errors
@@ -254,6 +278,17 @@ impl Client {
     pub async fn push_tokens_changed(&self) -> Result<(), ClientError> {
         let tokens = self.platform.push_tokens();
         self.published(self.crates.sync.push_tokens_changed(tokens).await)
+            .await
+    }
+
+    /// Checks whether this device reaches its server through the privacy relay ("What your
+    /// server sees"); the snapshot's relay status then shows the answer.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Unavailable`] until pingers-sync merges.
+    pub async fn check_reachability(&self) -> Result<RelayStatus, ClientError> {
+        self.published(self.crates.sync.check_reachability().await)
             .await
     }
 
@@ -490,6 +525,7 @@ async fn assemble(crates: &Crates) -> Result<ClientSnapshot, ClientError> {
         location_requests: meetups.location_requests,
         ended_meetup: meetups.ended_meetup,
         join_preview: parties.join_preview,
+        display_name: parties.display_name,
         own_position: pipeline.own_position,
         fallbacks: server.fallbacks,
         relay: server.relay,

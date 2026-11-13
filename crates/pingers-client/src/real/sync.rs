@@ -500,6 +500,13 @@ impl SyncPort for Sync {
         }
     }
 
+    /// WAITING(pingers-sync): the check is sync's gateway key-config fetch through the relay,
+    /// which the engine does not expose as a standalone call yet. Answering `Unreachable` would
+    /// claim a check that never ran.
+    async fn check_reachability(&self) -> Result<RelayStatus, ClientError> {
+        Err(Unavailable::Sync.into())
+    }
+
     async fn section(&self) -> Result<ServerSection, ClientError> {
         Ok(ServerSection {
             fallbacks: Vec::new(),

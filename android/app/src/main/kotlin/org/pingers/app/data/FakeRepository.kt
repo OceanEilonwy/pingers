@@ -426,6 +426,9 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
 
     override fun setNoWakePushes(on: Boolean) = _privacy.update { it.copy(noWakePushes = on) }
 
+    // The fake server is always reachable; What your server sees has nothing to update.
+    override fun checkReachability() = Unit
+
     // ------------------------------------------------------------ Meetup
 
     override fun hideMeHere() = dismissAlert()

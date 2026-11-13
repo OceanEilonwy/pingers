@@ -102,6 +102,12 @@ impl From<pingers_screens::snapshot::ZoneId> for ZoneId {
     }
 }
 
+impl From<ZoneId> for pingers_screens::snapshot::ZoneId {
+    fn from(id: ZoneId) -> Self {
+        Self::new(id.row)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]

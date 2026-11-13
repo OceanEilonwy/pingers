@@ -3,7 +3,7 @@
 
 use pingers_gate::SuppressReason;
 use pingers_meetup::LocationVisibility;
-use pingers_screens::settings::Privacy;
+use pingers_screens::settings::{Privacy, YourName};
 
 use crate::Language;
 use crate::common::time_range;
@@ -137,6 +137,33 @@ pub fn privacy(language: Language, view: &Privacy) -> PrivacyText {
     }
 }
 
+/// The name this device's user goes by, in words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct YourNameText {
+    /// "Your name".
+    pub title: String,
+    /// The name set, if any.
+    pub name: Option<String>,
+    /// "First name or nickname", for an empty field.
+    pub placeholder: String,
+    /// Who sees it, and that Parties already joined keep the old name.
+    pub help: String,
+}
+
+/// The name this device's user goes by, in words.
+#[must_use]
+pub fn your_name(language: Language, view: &YourName) -> YourNameText {
+    let Language::English = language;
+    YourNameText {
+        title: "Your name".into(),
+        name: view.name.as_ref().map(|name| name.as_str().to_owned()),
+        placeholder: "First name or nickname".into(),
+        help: "Members see this name in parties you create or join from now on. Parties you're \
+               already in keep the name you joined with."
+            .into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
@@ -236,5 +263,19 @@ mod tests {
                 "Resumes after you leave the zone."
             ]
         );
+    }
+
+    #[test]
+    fn your_name_shows_the_name_or_a_placeholder() -> Result<(), FixtureError> {
+        let mut snapshot = fixtures::snapshot()?;
+        let text = your_name(EN, &pingers_screens::settings::your_name(&snapshot));
+        assert_eq!(text.title, "Your name");
+        assert_eq!(text.name.as_deref(), Some("Sam"));
+        assert!(text.help.contains("keep the name you joined with"));
+        snapshot.display_name = None;
+        let unset = your_name(EN, &pingers_screens::settings::your_name(&snapshot));
+        assert_eq!(unset.name, None);
+        assert_eq!(unset.placeholder, "First name or nickname");
+        Ok(())
     }
 }

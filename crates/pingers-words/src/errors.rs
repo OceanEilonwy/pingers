@@ -21,6 +21,8 @@ pub fn screen_error(language: Language, error: &ScreenError) -> String {
         ScreenError::InvalidSafetyCode => "That isn't a safety code.",
         ScreenError::InvalidInviteLink => "That isn't an invite link.",
         ScreenError::EmptyWindow => "The start and end times must differ.",
+        ScreenError::InvalidTime => "Pick a time between 00:00 and 23:59.",
+        ScreenError::UnknownZone => "This zone is no longer on this phone.",
         ScreenError::InvalidUtcOffset => "Your phone's time zone looks wrong.",
         ScreenError::ShapeOpen => "Close the shape to continue",
         ScreenError::Shape(_) => "This area can't be used. Drag a point to fix it.",
@@ -41,6 +43,10 @@ mod tests {
         assert_eq!(say(ScreenError::UnknownMeetup), "This meetup has ended.");
         assert_eq!(say(ScreenError::ShapeOpen), "Close the shape to continue");
         assert_eq!(
+            say(ScreenError::EmptyWindow),
+            "The start and end times must differ."
+        );
+        assert_eq!(
             say(ScreenError::Shape(GeoError::SelfIntersecting)),
             "This area can't be used. Drag a point to fix it."
         );
@@ -55,6 +61,8 @@ mod tests {
             ScreenError::InvalidSafetyCode,
             ScreenError::InvalidInviteLink,
             ScreenError::EmptyWindow,
+            ScreenError::InvalidTime,
+            ScreenError::UnknownZone,
             ScreenError::InvalidUtcOffset,
         ]
         .map(say);

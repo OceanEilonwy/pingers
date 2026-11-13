@@ -973,6 +973,91 @@ pub struct ZoneRow {
     pub detail: String,
     /// Where its label sits.
     pub label_at: Coordinate,
+    /// When it applies, for an editor to start from.
+    pub times: ZoneTimes,
+}
+
+/// A time of day on a 24-hour clock, as a picker shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, uniffi::Record)]
+pub struct TimeOfDay {
+    /// 0 to 23.
+    pub hour: u8,
+    /// 0 to 59.
+    pub minute: u8,
+}
+
+impl From<screens::clock::LocalTime> for TimeOfDay {
+    fn from(time: screens::clock::LocalTime) -> Self {
+        // A LocalTime's hour is below 24 and its minute below 60.
+        Self {
+            hour: u8::try_from(time.hour()).unwrap_or(0),
+            minute: u8::try_from(time.minute()).unwrap_or(0),
+        }
+    }
+}
+
+impl TryFrom<TimeOfDay> for screens::clock::LocalTime {
+    type Error = crate::CoreError;
+
+    fn try_from(time: TimeOfDay) -> Result<Self, crate::CoreError> {
+        Ok(Self::new(time.hour, time.minute)?)
+    }
+}
+
+mirror_enum!(
+    /// Days of the week a zone applies.
+    ZoneDays from screens::snapshot::Days {
+        /// Every day.
+        EveryDay,
+        /// Monday to Friday.
+        Weekdays,
+        /// Saturday and Sunday.
+        Weekends,
+    }
+);
+
+/// When an exclusion zone applies: shown on its row, and sent back to change it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum ZoneTimes {
+    /// All the time.
+    Always,
+    /// On these days, from one time to another (past midnight if `to` is earlier).
+    Window {
+        /// Which days.
+        days: ZoneDays,
+        /// Where the window starts.
+        from: TimeOfDay,
+        /// Where it ends.
+        to: TimeOfDay,
+    },
+}
+
+impl From<screens::snapshot::ZoneTimes> for ZoneTimes {
+    fn from(times: screens::snapshot::ZoneTimes) -> Self {
+        match times {
+            screens::snapshot::ZoneTimes::Always => Self::Always,
+            screens::snapshot::ZoneTimes::Window { days, window } => Self::Window {
+                days: days.into(),
+                from: screens::clock::LocalTime::from_minute_of_day(window.start()).into(),
+                to: screens::clock::LocalTime::from_minute_of_day(window.end()).into(),
+            },
+        }
+    }
+}
+
+impl TryFrom<ZoneTimes> for screens::zones::ZoneTimesDraft {
+    type Error = crate::CoreError;
+
+    fn try_from(times: ZoneTimes) -> Result<Self, crate::CoreError> {
+        Ok(match times {
+            ZoneTimes::Always => Self::Always,
+            ZoneTimes::Window { days, from, to } => Self::Window {
+                days: days.into(),
+                from: from.try_into()?,
+                to: to.try_into()?,
+            },
+        })
+    }
 }
 
 /// Exclusion zones.
@@ -1006,6 +1091,7 @@ impl From<screens::zones::ExclusionZones> for ExclusionZonesView {
                     fence: (&zone.fence).into(),
                     detail: text.detail,
                     label_at: zone.label_at.into(),
+                    times: zone.times.into(),
                 })
                 .collect(),
             hide_trail: view.hide_trail == screens::snapshot::HideTrail::On,
@@ -1047,6 +1133,10 @@ pub struct PrivacyView {
     pub quiet_hours: bool,
     /// The window, in words ("23:00–07:00").
     pub quiet_hours_range: String,
+    /// Where the window starts, for a picker to start from.
+    pub quiet_hours_from: TimeOfDay,
+    /// Where it ends.
+    pub quiet_hours_to: TimeOfDay,
     /// How many exclusion zones.
     pub exclusion_zones: u32,
     /// Who sees the exact spot.
@@ -1065,9 +1155,66 @@ impl From<screens::settings::Privacy> for PrivacyView {
             pause_in_focus: view.pause_in_focus == screens::snapshot::PauseInFocus::On,
             quiet_hours: view.quiet_hours.state == screens::snapshot::Toggle::On,
             quiet_hours_range: text.quiet_hours_range,
+            quiet_hours_from: view.quiet_hours.from.into(),
+            quiet_hours_to: view.quiet_hours.to.into(),
             exclusion_zones: count(view.exclusion_zones),
             visibility: view.visibility.into(),
             no_wake_pushes: view.wake_pushes == screens::snapshot::WakePushes::NoWakePushes,
+        }
+    }
+}
+
+/// The name this device's user goes by in Parties they create or join.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct YourNameView {
+    /// The name set, if any.
+    pub name: Option<String>,
+    /// "Your name".
+    pub title: String,
+    /// The empty field's hint.
+    pub placeholder: String,
+    /// Who sees it.
+    pub help: String,
+}
+
+impl From<screens::settings::YourName> for YourNameView {
+    fn from(view: screens::settings::YourName) -> Self {
+        let text = pingers_words::settings::your_name(LANGUAGE, &view);
+        Self {
+            name: text.name,
+            title: text.title,
+            placeholder: text.placeholder,
+            help: text.help,
+        }
+    }
+}
+
+mirror_enum!(
+    /// Whether this device reaches its server through the privacy relay.
+    RelayStatus from screens::snapshot::RelayStatus {
+        /// The server answered through the relay.
+        Reachable,
+        /// It did not: anonymous requests wait.
+        Unreachable,
+        /// The relay's key does not match its pin: anonymous traffic stopped.
+        KeyMismatch,
+    }
+);
+
+/// What a reachability check found: the outcome and the sentence to show, nothing more.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct RelayCheck {
+    /// The outcome.
+    pub status: RelayStatus,
+    /// It, in words.
+    pub text: String,
+}
+
+impl From<screens::snapshot::RelayStatus> for RelayCheck {
+    fn from(status: screens::snapshot::RelayStatus) -> Self {
+        Self {
+            status: status.into(),
+            text: pingers_words::server::relay_check(LANGUAGE, status),
         }
     }
 }

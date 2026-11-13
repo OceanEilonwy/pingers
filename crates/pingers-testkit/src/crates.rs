@@ -63,6 +63,8 @@ pub enum CrateCall {
     OpenInvite(InviteUrl, Name),
     AcceptInvite,
     DecideJoin(PartyId, MailboxId, JoinDecision),
+    CancelInvite(PartyId, MailboxId),
+    SetDisplayName(Name),
     RemoveMember(PartyId, LeafIndex),
     LeaveParty(PartyId),
     SaveSpot(PartyId, SpotDraft),
@@ -70,6 +72,7 @@ pub enum CrateCall {
     SetAlwaysAllow(PartyId, LeafIndex, AllowListChange),
     PushTokensChanged(Option<PushTokens>),
     SetWakePushes(WakePushes, Option<PushTokens>),
+    CheckReachability,
     Wake(WakeInput),
     ChangeSetting(SettingChange),
     SendChat(GroupId, ChatBody, Option<ChatMessageId>),
@@ -290,6 +293,19 @@ impl PartiesPort for FakeCrates {
         self.answer(CrateName::Parties, call, ())
     }
 
+    async fn cancel_invite(&self, party: PartyId, invite: MailboxId) -> Result<(), ClientError> {
+        let call = CrateCall::CancelInvite(party, invite);
+        self.answer(CrateName::Parties, call, ())
+    }
+
+    /// Records the call and shows the name in the section, as pingers-parties would.
+    async fn set_display_name(&self, name: Name) -> Result<(), ClientError> {
+        let call = CrateCall::SetDisplayName(name.clone());
+        self.answer(CrateName::Parties, call, ())?;
+        self.lock().parties.display_name = Some(name);
+        Ok(())
+    }
+
     async fn remove_member(&self, party: PartyId, member: LeafIndex) -> Result<(), ClientError> {
         self.answer(
             CrateName::Parties,
@@ -342,6 +358,12 @@ impl SyncPort for FakeCrates {
     ) -> Result<(), ClientError> {
         let call = CrateCall::SetWakePushes(setting, tokens);
         self.answer(CrateName::Sync, call, ())
+    }
+
+    /// Answers the relay status of the section [`FakeCrates::set_server`] last set.
+    async fn check_reachability(&self) -> Result<RelayStatus, ClientError> {
+        let relay = self.lock().server.relay;
+        self.answer(CrateName::Sync, CrateCall::CheckReachability, relay)
     }
 
     async fn section(&self) -> Result<ServerSection, ClientError> {

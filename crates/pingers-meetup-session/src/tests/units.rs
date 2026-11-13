@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Pure helpers: reconnect backoff, error classes, the view's compass and ages.
 
+use core::future::Future as _;
+use core::task::{Context, Waker};
 use core::time::Duration;
 
 use pingers_crypto::AccountPublicKey;
@@ -12,10 +14,10 @@ use pingers_meetup::{
 use pingers_mls::{MlsError, StorageError};
 use pingers_proto::{GroupId, Lamport, LeafIndex, MeetPoint};
 use pingers_store::StoreError;
-use pingers_time::UnixSeconds;
+use pingers_time::{Clock, ManualClock, UnixSeconds};
 
 use super::{TestError, TestResult};
-use crate::live::Reconnect;
+use crate::live::{Reconnect, sleep_until};
 use crate::{ChannelState, MAX_RECONNECT_DELAY, MeetupView, NetworkError, PeerView, SessionError};
 
 #[test]
@@ -24,6 +26,48 @@ fn reconnect_is_immediate_once_then_backs_off_to_a_minute() {
     let seconds: Vec<u64> = delays.iter().map(Duration::as_secs).collect();
     assert_eq!(seconds, vec![0, 1, 2, 4, 8, 16, 32, 60, 60]);
     assert_eq!(Reconnect::delay(u32::MAX), MAX_RECONNECT_DELAY);
+}
+
+/// A wall clock that moves the shared manual clock on by `jump` each time it is read, as if
+/// that much time passed just after the reading.
+struct JumpingClock {
+    clock: ManualClock,
+    jump: Duration,
+}
+
+impl Clock for JumpingClock {
+    fn now(&self) -> UnixSeconds {
+        let now = self.clock.now();
+        self.clock.advance(self.jump);
+        now
+    }
+}
+
+#[test]
+fn time_passing_while_a_sleep_starts_does_not_push_its_deadline_back() {
+    let clock = ManualClock::new(NOW);
+    let jumping = JumpingClock {
+        clock: clock.clone(),
+        jump: Duration::from_secs(5),
+    };
+    let due = NOW.checked_add(Duration::from_secs(10));
+    let mut sleep = core::pin::pin!(sleep_until(&jumping, &clock, due));
+    let mut context = Context::from_waker(Waker::noop());
+    // Reading the wall clock moved time to 5 s: not due yet.
+    assert!(sleep.as_mut().poll(&mut context).is_pending());
+    // At 10 s it is due. Had the timer been read after the wall clock, the 5 s that passed in
+    // between would have moved the deadline to 15 s.
+    clock.advance(Duration::from_secs(5));
+    assert!(sleep.as_mut().poll(&mut context).is_ready());
+}
+
+#[test]
+fn a_sleep_without_a_deadline_never_ends() {
+    let clock = ManualClock::new(NOW);
+    let mut sleep = core::pin::pin!(sleep_until(&clock, &clock, None));
+    let mut context = Context::from_waker(Waker::noop());
+    clock.advance(Duration::from_hours(24));
+    assert!(sleep.as_mut().poll(&mut context).is_pending());
 }
 
 /// Creating and joining run inside pingers-wake's hand-off, whose futures must be `Send`; a

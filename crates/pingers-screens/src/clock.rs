@@ -73,6 +73,32 @@ impl LocalTime {
         }
     }
 
+    /// A time picked on a 24-hour clock.
+    ///
+    /// # Errors
+    ///
+    /// [`ScreenError::InvalidTime`] unless `hour` is below 24 and `minute` below 60.
+    pub fn new(hour: u8, minute: u8) -> Result<Self, ScreenError> {
+        if hour >= 24 || minute >= 60 {
+            return Err(ScreenError::InvalidTime);
+        }
+        let minute = u16::from(hour)
+            .checked_mul(60)
+            .and_then(|start| start.checked_add(u16::from(minute)))
+            .ok_or(ScreenError::InvalidTime)?;
+        Ok(Self { minute })
+    }
+
+    /// The minute of the day, as pingers-gate takes it.
+    ///
+    /// # Errors
+    ///
+    /// None in practice: a `LocalTime` is always within the day. Reported as
+    /// [`ScreenError::InvalidTime`] rather than assumed.
+    pub fn minute_of_day(self) -> Result<MinuteOfDay, ScreenError> {
+        MinuteOfDay::new(self.minute).map_err(|_out_of_range| ScreenError::InvalidTime)
+    }
+
     /// The hour, 0 to 23.
     #[must_use]
     pub const fn hour(self) -> u16 {
@@ -169,6 +195,23 @@ mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
     use super::*;
+
+    #[test]
+    fn a_picked_time_is_a_minute_of_the_day() -> Result<(), ScreenError> {
+        let late = LocalTime::new(23, 59)?;
+        assert_eq!((late.hour(), late.minute()), (23, 59));
+        assert_eq!(late.minute_of_day()?.get(), 1_439);
+        assert_eq!(LocalTime::new(0, 0)?.minute_of_day()?.get(), 0);
+        assert_eq!(LocalTime::new(7, 30)?.minute_of_day()?.get(), 450);
+        for (hour, minute) in [(24, 0), (0, 60), (255, 255)] {
+            assert_eq!(
+                LocalTime::new(hour, minute),
+                Err(ScreenError::InvalidTime),
+                "{hour}:{minute}"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn local_time_follows_the_offset_and_wraps_at_midnight() -> Result<(), ScreenError> {

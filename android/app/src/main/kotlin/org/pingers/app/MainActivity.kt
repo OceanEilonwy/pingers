@@ -224,7 +224,11 @@ private fun Screen(route: Route, repo: PingersRepository, nav: Navigator, simula
         Route.DrawArea -> DrawAreaScreen(repo.drawArea.collectAsStateWithLifecycle().value, repo, nav)
         Route.ExclusionZones -> ExclusionZonesScreen(repo.exclusionZones.collectAsStateWithLifecycle().value, repo, nav)
         Route.Privacy -> PrivacyScreen(repo.privacy.collectAsStateWithLifecycle().value, repo, nav)
-        Route.ServerView -> ServerViewScreen(repo.serverView.collectAsStateWithLifecycle().value, nav)
+        Route.ServerView -> {
+            // One check each time the screen opens; its notes then say whether the relay answered.
+            LaunchedEffect(Unit) { repo.checkReachability() }
+            ServerViewScreen(repo.serverView.collectAsStateWithLifecycle().value, nav)
+        }
         Route.Security -> SecurityScreen(remember { CoreInfo.read() }, nav)
         Route.Alert -> AlertScreen(repo.home.collectAsStateWithLifecycle().value.alert, repo, nav)
         Route.Meetup -> MeetupScreen(repo.meetup.collectAsStateWithLifecycle().value, repo, nav)

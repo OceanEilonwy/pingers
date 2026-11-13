@@ -18,7 +18,7 @@ use crate::views::{
     AcceptInviteView, AdvancedView, AnswerDraft, ChatView, CoPresenceAlert, CompassSelection,
     CompassView, DrawAreaView, ExclusionZonesView, HomeView, InviteView, LocationRequestView,
     MeetPointDraft, MeetPointView, MeetupEndedView, MeetupView, NewPartyView, PartyDraft,
-    PartyView, PrivacyView, ServerSeesView, SpotDraft, SpotEditorView,
+    PartyView, PrivacyView, ServerSeesView, SpotDraft, SpotEditorView, YourNameView,
 };
 
 /// The device's clock, for screens that print times or count down.
@@ -136,6 +136,12 @@ impl Snapshot {
     #[must_use]
     pub fn privacy(&self) -> PrivacyView {
         screens::settings::privacy(&self.0).into()
+    }
+
+    /// The name this device's user goes by in Parties they create or join.
+    #[must_use]
+    pub fn your_name(&self) -> YourNameView {
+        screens::settings::your_name(&self.0).into()
     }
 
     /// What a Party's server sees.
@@ -369,7 +375,7 @@ mod tests {
 
     use super::{AreaEditor, Snapshot};
     use crate::CoreError;
-    use crate::views::{CompassSelection, PeerLocation, Sharing};
+    use crate::views::{CompassSelection, PeerLocation, Sharing, TimeOfDay, ZoneDays, ZoneTimes};
     use pingers_screens::fixtures;
 
     fn snapshot() -> Result<std::sync::Arc<Snapshot>, CoreError> {
@@ -411,6 +417,42 @@ mod tests {
             },
         )?;
         assert!(compass.reading.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn settings_carry_the_times_and_name_an_editor_starts_from() -> Result<(), CoreError> {
+        let snapshot = snapshot()?;
+        let privacy = snapshot.privacy();
+        assert_eq!(
+            (privacy.quiet_hours_from, privacy.quiet_hours_to),
+            (
+                TimeOfDay {
+                    hour: 23,
+                    minute: 0
+                },
+                TimeOfDay { hour: 7, minute: 0 }
+            )
+        );
+        let zones = snapshot.exclusion_zones().zones;
+        let [home, work] = zones.as_slice() else {
+            return Err(CoreError::invalid("two zones"));
+        };
+        assert_eq!(home.times, ZoneTimes::Always);
+        assert_eq!(
+            work.times,
+            ZoneTimes::Window {
+                days: ZoneDays::Weekdays,
+                from: TimeOfDay { hour: 8, minute: 0 },
+                to: TimeOfDay {
+                    hour: 18,
+                    minute: 0
+                },
+            }
+        );
+        let name = snapshot.your_name();
+        assert_eq!(name.name.as_deref(), Some("Sam"));
+        assert_eq!(name.title, "Your name");
         Ok(())
     }
 
