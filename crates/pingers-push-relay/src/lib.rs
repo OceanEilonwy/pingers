@@ -18,6 +18,7 @@
 #![forbid(unsafe_code)]
 
 pub mod address;
+pub mod command;
 pub mod config;
 pub mod counts;
 pub mod credentials;
@@ -41,7 +42,7 @@ use pingers_time::Clock;
 use pingers_transport::TokioTimer;
 use zeroize::Zeroizing;
 
-use crate::config::{Logging, RelayConfig};
+use crate::config::{Logging, RelayConfig, ServiceAccountSource};
 use crate::counts::{CountsSnapshot, report_counts};
 use crate::delivery::{Dispatcher, DispatcherSettings, EndpointPolicy, FcmSettings, PushSender};
 use crate::error::{ConfigError, RelayError};
@@ -119,21 +120,27 @@ pub async fn listen(config: &RelayConfig) -> Result<tokio::net::TcpListener, Rel
 /// # Errors
 ///
 /// [`RelayError::ReadFile`] if the FCM service-account file cannot be read,
-/// [`RelayError::ServiceAccount`] if it is not a usable key, [`RelayError::HttpClient`] if the
-/// client cannot be built.
+/// [`RelayError::ServiceAccount`] if it is not a usable key (or [`RelayError::Config`] for
+/// `service_account_json`), [`RelayError::HttpClient`] if the client cannot be built.
 pub fn dispatcher(
     config: &RelayConfig,
     clock: Arc<dyn Clock>,
 ) -> Result<Dispatcher<TokioTimer>, RelayError> {
     let fcm = match &config.fcm {
         Some(fcm) => {
-            let path = &fcm.service_account_file;
-            let text = read_secret(path)?;
-            let account =
-                ServiceAccount::from_json(&text).map_err(|source| RelayError::ServiceAccount {
-                    path: path.clone(),
-                    source,
-                })?;
+            let account = match &fcm.service_account {
+                ServiceAccountSource::File(path) => {
+                    let text = read_secret(path)?;
+                    ServiceAccount::from_json(&text).map_err(|source| {
+                        RelayError::ServiceAccount {
+                            path: path.clone(),
+                            source,
+                        }
+                    })?
+                }
+                ServiceAccountSource::Inline(json) => ServiceAccount::from_json(json.expose())
+                    .map_err(|source| RelayError::Config(ConfigError::ServiceAccount(source)))?,
+            };
             Some(
                 FcmSettings::new(&fcm.project_id, &fcm.endpoint, FcmAuth::new(account, clock))
                     .ok_or(RelayError::Config(ConfigError::BadFcmEndpoint))?,

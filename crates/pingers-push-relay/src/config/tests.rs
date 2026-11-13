@@ -2,6 +2,7 @@
 #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
 use super::*;
+use crate::error::ServiceAccountError;
 use pingers_proto::PushRelayKeyId;
 
 const PRIVATE: &str = "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";
@@ -50,7 +51,7 @@ fn a_minimal_file_gets_private_defaults() -> Result<(), ConfigError> {
     assert_eq!(config.max_ttl.duration(), Duration::from_hours(30 * 24));
     assert_eq!(config.token_limit, rate("t", 30)?);
     assert_eq!(config.unifiedpush, Some(EndpointPolicy::PublicHttpsOnly));
-    assert_eq!(config.fcm, None);
+    assert!(config.fcm.is_none());
     assert_eq!(config.operator, "Test Relay Ltd");
     let key = config
         .keys
@@ -100,15 +101,158 @@ fn every_setting_is_read() -> Result<(), ConfigError> {
     assert_eq!(config.token_limit, rate("t", 5)?);
     assert_eq!(config.max_ttl.duration(), Duration::from_secs(3600));
     assert_eq!(config.unifiedpush, Some(EndpointPolicy::AllowInsecureLocal));
+    let fcm = config.fcm.ok_or(ConfigError::NoPlatform)?;
+    assert_eq!(fcm.project_id, "p-1");
     assert_eq!(
-        config.fcm,
-        Some(FcmConfig {
-            project_id: "p-1".to_owned(),
-            endpoint: Url::parse("http://127.0.0.1:9/").map_err(|_| ConfigError::BadFcmEndpoint)?,
-            service_account_file: PathBuf::from("/run/sa.json"),
-        })
+        fcm.endpoint,
+        Url::parse("http://127.0.0.1:9/").map_err(|_| ConfigError::BadFcmEndpoint)?
+    );
+    assert!(matches!(
+        fcm.service_account,
+        ServiceAccountSource::File(path) if path.as_os_str() == "/run/sa.json"
+    ));
+    Ok(())
+}
+
+/// [`minimal`] with its server entry's `credential_hash` line replaced by `line`.
+fn with_server_secret(line: &str) -> String {
+    minimal().replace(&format!("credential_hash = \"{H0}\""), line)
+}
+
+#[test]
+fn a_plain_credential_is_hashed_at_load() -> Result<(), ConfigError> {
+    let config = RelayConfig::parse(&with_server_secret(
+        "credential = \"0123456789abcdef0123456789abcdef\"",
+    ))?;
+    assert!(
+        config
+            .servers
+            .authenticate(b"0123456789abcdef0123456789abcdef")
+            .is_ok_and(|server| server.is_some())
+    );
+    assert_eq!(
+        hash_credential(
+            &KeyedHashKey::from_bytes(hex_32("hash_key", HASH_KEY)?),
+            b"0123456789abcdef0123456789abcdef"
+        )
+        .map(|hash| hex::encode(hash.as_bytes()))?,
+        H0
     );
     Ok(())
+}
+
+#[test]
+fn a_server_needs_exactly_one_of_credential_and_hash() {
+    let both = with_server_secret(&format!(
+        "credential_hash = \"{H0}\"\ncredential = \"0123456789abcdef0123456789abcdef\""
+    ));
+    let neither = with_server_secret("");
+    for text in [both, neither] {
+        assert_eq!(
+            error_of(&text),
+            Some(ConfigError::CredentialSource {
+                server_id: "pingers.example".to_owned()
+            })
+        );
+    }
+}
+
+#[test]
+fn a_plain_credential_too_short_to_authenticate_is_refused() {
+    let error = error_of(&with_server_secret(
+        "credential = \"0123456789abcdef0123456789abcde\"",
+    ));
+    assert_eq!(error, Some(ConfigError::CredentialTooShort));
+    let message = error.map(|error| error.to_string()).unwrap_or_default();
+    assert!(!message.contains("0123456789abcdef"));
+}
+
+#[test]
+fn retired_at_zero_means_not_scheduled() -> Result<(), ConfigError> {
+    // A real retirement with no successor is refused (OverlapTooShort); 0 must not be one.
+    let config = RelayConfig::parse(
+        &minimal().replace("activated_at = 1000", "activated_at = 1000\nretired_at = 0"),
+    )?;
+    assert!(config.keys.published(UnixSeconds::new(u64::MAX)).is_some());
+    Ok(())
+}
+
+#[test]
+fn the_next_key_is_configured_before_it_activates() -> Result<(), ConfigError> {
+    let next = format!(
+        "[[keys]]\nkey_id = 2\nprivate_key = \"{}\"\nactivated_at = 4102444800\nretired_at = 0\n\n[[servers]]",
+        "11".repeat(32)
+    );
+    let config = RelayConfig::parse(&minimal().replacen("[[servers]]", &next, 1))?;
+    let now = UnixSeconds::new(2000);
+    assert_eq!(
+        config.keys.published(now).map(RelayKey::key_id),
+        Some(PushRelayKeyId::new(1))
+    );
+    assert_eq!(
+        config.keys.next(now).map(RelayKey::key_id),
+        Some(PushRelayKeyId::new(2))
+    );
+    Ok(())
+}
+
+fn with_fcm(service_account: &str) -> String {
+    minimal().replace(
+        "[unifiedpush]",
+        &format!("[fcm]\nproject_id = \"p\"\n{service_account}"),
+    )
+}
+
+#[test]
+fn an_inline_service_account_is_checked_at_load_and_kept_out_of_debug()
+-> Result<(), Box<dyn std::error::Error>> {
+    let json = crate::fcm_auth::tests::account_json("https://oauth2.googleapis.com/token")?;
+    // A TOML literal string holds the JSON (quotes and its \n escapes) unchanged.
+    let config = RelayConfig::parse(&with_fcm(&format!("service_account_json = '{json}'")))?;
+    let fcm = config.fcm.ok_or(ConfigError::NoPlatform)?;
+    let ServiceAccountSource::Inline(inline) = &fcm.service_account else {
+        return Err("not inline".into());
+    };
+    assert_eq!(inline.expose(), json);
+    let debug = format!("{fcm:?}");
+    assert!(debug.contains("ServiceAccountJson(redacted)"));
+    assert!(!debug.contains("PRIVATE KEY"));
+    assert!(!debug.contains(crate::fcm_auth::tests::CLIENT_EMAIL));
+    Ok(())
+}
+
+#[test]
+fn an_inline_service_account_survives_toml_string_escaping()
+-> Result<(), Box<dyn std::error::Error>> {
+    // nodo renders templates by substituting into the parsed TOML tree and writing it back with
+    // the toml crate, so the setting arrives in whatever string form that encoder picks.
+    let json = crate::fcm_auth::tests::account_json("https://oauth2.googleapis.com/token")?;
+    let encoded = toml::Value::String(json.clone()).to_string();
+    let config = RelayConfig::parse(&with_fcm(&format!("service_account_json = {encoded}")))?;
+    let fcm = config.fcm.ok_or(ConfigError::NoPlatform)?;
+    assert!(
+        matches!(&fcm.service_account, ServiceAccountSource::Inline(inline) if inline.expose() == json)
+    );
+    Ok(())
+}
+
+#[test]
+fn a_bad_inline_service_account_is_refused_by_field() {
+    let json = r#"{"client_email":"","private_key":"x","token_uri":"https://oauth2.googleapis.com/token"}"#;
+    assert_eq!(
+        error_of(&with_fcm(&format!("service_account_json = '{json}'"))),
+        Some(ConfigError::ServiceAccount(
+            ServiceAccountError::NoClientEmail
+        ))
+    );
+}
+
+#[test]
+fn fcm_needs_exactly_one_service_account_source() {
+    let both = with_fcm("service_account_file = \"/t\"\nservice_account_json = '{}'");
+    for text in [both, with_fcm("")] {
+        assert_eq!(error_of(&text), Some(ConfigError::ServiceAccountSource));
+    }
 }
 
 #[test]

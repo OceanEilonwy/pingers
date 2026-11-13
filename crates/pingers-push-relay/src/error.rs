@@ -32,9 +32,22 @@ pub enum RelayError {
         #[source]
         source: ServiceAccountError,
     },
-    /// The command line is not `pingers-push-relay <config.toml>`.
-    #[error("usage: pingers-push-relay <config.toml>")]
+    /// The command line is not one of the forms in [`crate::command::USAGE`].
+    #[error("{usage}", usage = crate::command::USAGE)]
     Usage,
+    /// The operating system's random number generator failed (`keygen`).
+    #[error("cannot read the operating system's random number generator")]
+    Entropy,
+    /// Standard input could not be read (`credential-hash`).
+    #[error("cannot read standard input")]
+    ReadInput(#[source] io::Error),
+    /// Standard input is not the hash key and the credential, one per line
+    /// (`credential-hash`).
+    #[error("standard input must hold the hash key (64 hex) and the credential, one per line")]
+    CredentialInput,
+    /// Standard output could not be written.
+    #[error("cannot write standard output")]
+    WriteOutput(#[source] io::Error),
     /// No key is published at the current time: every key is retired or not yet active.
     #[error("no relay key is active now; check activated_at and retired_at")]
     NoActiveKey,
@@ -124,6 +137,26 @@ pub enum ConfigError {
     /// Two servers share a credential hash.
     #[error("two servers share a credential")]
     DuplicateCredential,
+    /// A `[[servers]]` entry has both or neither of `credential` and `credential_hash`.
+    #[error("server {server_id}: give exactly one of credential and credential_hash")]
+    CredentialSource {
+        /// The entry's id (an operator-chosen label, not a secret).
+        server_id: String,
+    },
+    /// A plain credential is shorter than
+    /// [`MIN_CREDENTIAL_LENGTH`](crate::credentials::MIN_CREDENTIAL_LENGTH), so it could never
+    /// authenticate.
+    #[error("a server credential is shorter than 32 characters")]
+    CredentialTooShort,
+    /// A credential could not be hashed (it always can with a 32-byte key).
+    #[error("cannot hash a server credential")]
+    CredentialHash,
+    /// `[fcm]` has both or neither of `service_account_file` and `service_account_json`.
+    #[error("[fcm]: give exactly one of service_account_file and service_account_json")]
+    ServiceAccountSource,
+    /// `fcm.service_account_json` is not a usable service account key.
+    #[error("fcm.service_account_json is not a usable service account key")]
+    ServiceAccount(#[source] ServiceAccountError),
     /// The FCM endpoint is not a valid URL.
     #[error("fcm.endpoint is not a valid http(s) URL")]
     BadFcmEndpoint,
