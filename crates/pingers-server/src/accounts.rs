@@ -228,6 +228,19 @@ mod tests {
             gated.register(&registration(&key(1), Some("beta"))?),
             Ok(account_id(&key(1).public_key()))
         );
+        // A code listed twice still matches.
+        let doubled = Accounts::new(
+            server()?,
+            vec![
+                SecretText::new("alpha".to_owned()),
+                SecretText::new("alpha".to_owned()),
+            ],
+        );
+        assert!(
+            doubled
+                .register(&registration(&key(3), Some("alpha"))?)
+                .is_ok()
+        );
         assert!(
             gated
                 .register(&registration(&key(2), Some("alpha"))?)
@@ -280,6 +293,8 @@ mod tests {
         assert_eq!(accounts.account_of(&header, almost), Some(id));
         let expired = START.checked_add(BEARER_LIFETIME).ok_or("time")?;
         assert_eq!(accounts.account_of(&header, expired), None);
+        accounts.expire(almost);
+        assert_eq!(accounts.lock().bearers.len(), 1);
         accounts.expire(expired);
         assert!(accounts.lock().bearers.is_empty());
         Ok(())

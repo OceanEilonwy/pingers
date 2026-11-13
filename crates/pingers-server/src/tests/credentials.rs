@@ -440,7 +440,7 @@ fn commit_body(epoch: u64, next_key: &LogAuthKeyPair) -> Result<Vec<u8>, TestErr
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn group_creation_needs_a_lifetime_class_and_a_credential() -> TestResult {
     let server = started(DeliveryLive).await?;
-    let wallet = Wallet::fetch(&server, 1, 3).await?;
+    let wallet = Wallet::fetch(&server, 1, 5).await?;
     let body = CreateGroup {
         group_id: GroupId::from_bytes([4; 32]),
         auth_key: LogAuthKeyPair::from_bytes(Zeroizing::new([4; 32])).public_key(),
@@ -448,7 +448,11 @@ async fn group_creation_needs_a_lifetime_class_and_a_credential() -> TestResult 
         state: None,
     }
     .encode()?;
-    for path in ["/v1/groups", "/v1/groups?lifetime=forever"] {
+    for path in [
+        "/v1/groups",
+        "/v1/groups?lifetime=forever",
+        "/v1/groups?lifetime=meetup&epoch=x",
+    ] {
         let refused = call(
             &server,
             &wallet.pay(inner("POST", path, Vec::new(), body.clone()))?,
@@ -463,6 +467,40 @@ async fn group_creation_needs_a_lifetime_class_and_a_credential() -> TestResult 
     .await?;
     assert_eq!(party.status.get(), 201);
     assert!(response_header(&party, "pingers-group-session").is_some());
+    // A Meetup uploaded after its first commit starts its log at that epoch.
+    let key = LogAuthKeyPair::from_bytes(Zeroizing::new([15; 32]));
+    let meetup = GroupId::from_bytes([15; 32]);
+    let body = CreateGroup {
+        group_id: meetup,
+        auth_key: key.public_key(),
+        subscriptions: Vec::new(),
+        state: None,
+    }
+    .encode()?;
+    let created = call(
+        &server,
+        &wallet.pay(inner(
+            "POST",
+            "/v1/groups?lifetime=meetup&epoch=1",
+            Vec::new(),
+            body,
+        ))?,
+    )
+    .await?;
+    assert_eq!(created.status.get(), 201);
+    let creator = Creator {
+        group: meetup,
+        key,
+        session: response_header(&created, "pingers-group-session").map(str::to_owned),
+        clock: server.clock.clone(),
+    };
+    let next = LogAuthKeyPair::from_bytes(Zeroizing::new([16; 32]));
+    let committed = call(
+        &server,
+        &creator.request("POST", "/commit", commit_body(1, &next)?)?,
+    )
+    .await?;
+    assert_eq!(committed.status.get(), 200);
     server.stop().await
 }
 
@@ -709,6 +747,26 @@ async fn live_channels_fan_out_frames_and_commits_to_the_other_members() -> Test
         assert_eq!(frame.delivery, Mode::Stored);
         assert_eq!(frame.body, MlsMessageBytes::from_bytes(vec![0xC0; 4]));
     }
+
+    // A split channel's uplink: a one-shot request naming A's `sub` reaches B as A's frame.
+    // The commit rotated the key, so requests are now signed with the next one.
+    let creator = Creator {
+        key: next,
+        ..creator
+    };
+    let uplink = LiveFrame {
+        epoch: Epoch::new(1),
+        body: MlsMessageBytes::from_bytes(vec![0x66; 40]),
+        delivery: Mode::Ephemeral,
+    }
+    .encode()?;
+    let path = |sub: u8| format!("/live?sub={}", hex::encode([sub; 16]));
+    let sent = call(&server, &creator.request("POST", &path(1), uplink.clone())?).await?;
+    assert_eq!(sent.status.get(), 202);
+    assert_eq!(next_payload(&mut b_body, &mut b_decoder).await?, uplink);
+    let unknown = call(&server, &creator.request("POST", &path(9), uplink)?).await?;
+    assert_eq!(unknown.status.get(), 404);
+    drop(a_sender);
     server.stop().await
 }
 
@@ -766,5 +824,29 @@ async fn accounts_register_authenticate_and_delete() -> TestResult {
     let params = Params::decode(&params.body)?;
     assert_eq!(params.server_time, server.clock.now());
     assert_eq!(params.server_operator, "https://pingers.test");
+    server.stop().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_sweep_deletes_idle_meetup_groups() -> TestResult {
+    let server = started(DeliveryLive).await?;
+    let wallet = Wallet::fetch(&server, 1, 1).await?;
+    let creator = create_group(&server, &wallet, 14).await?;
+    // Past the Meetup idle lifetime and one sweep interval: the sweep runs on the clock.
+    server
+        .clock
+        .advance(pingers_delivery::MEETUP_IDLE_LIFETIME.saturating_add(Duration::from_secs(61)));
+    let deleted = tokio::time::timeout(STEP, async {
+        loop {
+            let request = creator.request("GET", "/state", Vec::new())?;
+            // Once the group is gone, so is its auth key: 404 before any session check.
+            if call(&server, &request).await?.status.get() == 404 {
+                return Ok::<(), TestError>(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(matches!(deleted, Ok(Ok(()))));
     server.stop().await
 }

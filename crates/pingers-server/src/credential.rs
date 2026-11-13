@@ -245,3 +245,28 @@ pub(crate) fn admit_group(
     let _admission = admit(shared, request, RlnScope::Group)?;
     Ok(GroupAnon::NewSession(start_session(shared, group)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sessions_are_for_one_group_until_their_expiry() {
+        let sessions = Sessions::default();
+        let group = GroupId::from_bytes([1; 32]);
+        let other = GroupId::from_bytes([2; 32]);
+        let expires_at = UnixSeconds::new(1_000);
+        sessions
+            .lock()
+            .insert([7; 32], Session { group, expires_at });
+        let before = UnixSeconds::new(999);
+        assert!(sessions.valid(&[7; 32], &group, before));
+        assert!(!sessions.valid(&[7; 32], &other, before));
+        assert!(!sessions.valid(&[8; 32], &group, before));
+        assert!(!sessions.valid(&[7; 32], &group, expires_at));
+        sessions.expire(before);
+        assert_eq!(sessions.lock().len(), 1);
+        sessions.expire(expires_at);
+        assert!(sessions.lock().is_empty());
+    }
+}

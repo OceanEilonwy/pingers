@@ -6,20 +6,23 @@
 //! Every route handler here may block (SQLite, proof verification): `dispatch.rs` runs them on
 //! the blocking pool.
 //!
-//! Wire encodings: `POST /v1/groups?lifetime=meetup|party` (required: the lifetime class,
-//! design A.2); `{id}` is the group id in hex, `{sub_id}` the subscription id; `?after=` is a
+//! Wire encodings: `POST /v1/groups?lifetime=meetup|party&epoch=n` (`lifetime` required: the
+//! lifetime class, design A.2; `epoch` the MLS epoch the members are in at upload, decimal,
+//! 0 when absent: a Meetup group is uploaded at epoch 1, after the commit its Welcome
+//! carries, design G.4); `{id}` is the group id in hex, `{sub_id}` the subscription id; `?after=` is a
 //! decimal sequence number (0 when absent). Messages forwarded on live channels are
 //! pingers-proto `LiveFrame`s: commits and stored posts as `Stored`, ephemeral posts as
 //! `Ephemeral`.
 
 use axum::http::StatusCode;
 use pingers_delivery::{
-    CommitOutcome, Delivery, DeliveryError, GroupLifetime, SqliteDeliveryStore, Wake,
+    CommitOutcome, Delivery, DeliveryError, GroupLifetime, GroupStart, SqliteDeliveryStore, Wake,
 };
 use pingers_ohttp::BinaryRequest;
 use pingers_proto::{
-    AppMessage, CommitRequest, CreateGroup, Delivery as Mode, GroupId, LiveFrame, MessageAccepted,
-    RlnScope, SequenceNumber, Subscription, SubscriptionId, WireDecode as _, WireEncode as _,
+    AppMessage, CommitRequest, CreateGroup, Delivery as Mode, Epoch, GroupId, LiveFrame,
+    MessageAccepted, RlnScope, SequenceNumber, Subscription, SubscriptionId, WireDecode as _,
+    WireEncode as _,
 };
 use tokio::sync::mpsc;
 
@@ -75,6 +78,14 @@ fn lifetime(path: &str) -> Option<GroupLifetime> {
     }
 }
 
+/// The starting epoch named by `?epoch=` (0 when absent).
+fn start_epoch(path: &str) -> Option<Epoch> {
+    match query(path, "epoch") {
+        None => Some(Epoch::new(0)),
+        Some(text) => text.parse().ok().map(Epoch::new),
+    }
+}
+
 /// Checks a Grp request to the group in its path (signature first, so a bad signature spends
 /// no credential), and returns the group and what the Anon half came to.
 pub(crate) fn authorise(
@@ -125,11 +136,12 @@ fn wake(shared: &Shared, group: GroupId, wakes: &[Wake]) {
 pub(crate) fn create(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
     let _admission = admit(shared, request, RlnScope::Group)?;
     let lifetime = lifetime(&request.path).ok_or_else(bad_request)?;
+    let epoch = start_epoch(&request.path).ok_or_else(bad_request)?;
     let create = decode::<CreateGroup>(&request.body)?;
     let group = create.group_id;
     shared
         .groups
-        .create_group(create, lifetime)
+        .create_group(create, GroupStart { lifetime, epoch })
         .map_err(|error| refused(&error))?;
     let (name, value) = start_session(shared, group);
     Ok(Reply::status(StatusCode::CREATED).with_header(name, value))

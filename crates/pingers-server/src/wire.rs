@@ -191,8 +191,9 @@ mod tests {
 
     #[test]
     fn base64url_refuses_other_alphabets_and_stray_bits() {
-        // `+` and `/` are standard base64, not base64url; `Zh` has a set bit past the byte.
-        for text in ["+/8=", "Zh", "Z", "Zg===", "Zm 9v"] {
+        // `+` and `/` are standard base64, not base64url; `Zh` has a set bit past the byte;
+        // one symbol left over after whole groups is never a byte, even an `A`.
+        for text in ["+/8=", "Zh", "Z", "Zg===", "Zm 9v", "QUFBA"] {
             assert_eq!(base64url_decode(text), None, "{text}");
         }
     }
