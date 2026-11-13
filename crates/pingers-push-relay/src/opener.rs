@@ -74,7 +74,7 @@ mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
     use pingers_crypto::{CryptoError, PushRelayPrivateKey, PushTokenToSeal};
-    use pingers_proto::{PushClass, PushPlatform, PushToken};
+    use pingers_proto::{PushClass, PushPlatform, PushRelayKeyId, PushToken};
     use pingers_testkit::seeded_rng;
     use pingers_time::UnixSeconds;
     use zeroize::Zeroizing;
@@ -84,16 +84,14 @@ mod tests {
     use crate::keys::tests::RFC7748_PRIVATE;
 
     fn relay_key(key_id: u8) -> Result<RelayKey, CryptoError> {
-        let private_key = PushRelayPrivateKey::from_bytes(Zeroizing::new(RFC7748_PRIVATE));
-        let public_key = private_key.public_key(key_id)?;
-        Ok(RelayKey::new(
-            private_key,
-            public_key,
+        RelayKey::new(
+            PushRelayKeyId::new(key_id),
+            PushRelayPrivateKey::from_bytes(Zeroizing::new(RFC7748_PRIVATE)),
             KeyLifetime {
                 activated_at: UnixSeconds::EPOCH,
                 retired_at: None,
             },
-        ))
+        )
     }
 
     #[test]

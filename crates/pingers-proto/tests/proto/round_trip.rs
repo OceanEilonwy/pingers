@@ -10,8 +10,8 @@ use pingers_proto::{
     CommitRequest, CommitResponse, CreateGroup, GroupLogEntry, GroupMessages, GroupState, Knock,
     Lease, LiveFrame, LocationPlaintext, MailboxMessages, MailboxSpec, MeetupMessage,
     MembershipLeafRequest, MembershipLeafResponse, MembershipLeaves, MessageAccepted, Params,
-    PushTokenPlaintext, Record, RegisterRequest, RegisterResponse, RlnAuth, Subscription,
-    WireDecode, WireEncode,
+    PushRelayConfig, PushRequest, PushTokenPlaintext, Record, RegisterRequest, RegisterResponse,
+    RlnAuth, Subscription, WireDecode, WireEncode,
 };
 use proptest::prelude::*;
 use proptest::sample::Index;
@@ -133,6 +133,8 @@ wire_properties! {
     knock: Knock = strategies::knock();
     mailbox_spec: MailboxSpec = strategies::mailbox_spec();
     subscription: Subscription = strategies::subscription();
+    push_request: PushRequest = strategies::push_request();
+    push_relay_config: PushRelayConfig = strategies::push_relay_config();
     create_group: CreateGroup = strategies::create_group();
     commit_request: CommitRequest = strategies::commit_request();
     commit_response: CommitResponse = strategies::commit_response();

@@ -5,10 +5,12 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::Duration;
 
 use pingers_crypto::PushBind;
 use pingers_proto::{
-    PushClass, PushHandle, PushToken, PushTokenPlaintext, SealedPushBlob, Urgency,
+    PushClass, PushHandle, PushRelayKeyId, PushToken, PushTokenPlaintext, SealedPushBlob,
+    TimeToLive, Urgency, WireEncode as _,
 };
 use pingers_testkit::ManualClock;
 use pingers_time::UnixSeconds;
@@ -16,7 +18,6 @@ use pingers_time::UnixSeconds;
 use super::*;
 use crate::credentials::tests::{CREDENTIAL_A, CREDENTIAL_B, entry, hash_key};
 use crate::delivery::Priority;
-use crate::keys::KeyId;
 use crate::keys::tests::key;
 
 const NOW: u64 = 1_800_000_000;
@@ -135,7 +136,7 @@ impl Setup {
         }
     }
 
-    fn build(self) -> Result<Harness, crate::error::ConfigError> {
+    fn build(self) -> Result<Harness, Box<dyn std::error::Error>> {
         let clock = ManualClock::new(UnixSeconds::new(NOW));
         let sent = Arc::new(Mutex::new(Vec::new()));
         let relay = Relay::new(RelayParts {
@@ -160,7 +161,7 @@ impl Setup {
             )?,
             token_hash_key: hash_key(),
             token_limit: per_minute(self.token_per_minute),
-            max_ttl: Duration::from_secs(30 * DAY),
+            max_ttl: TimeToLive::new(Duration::from_secs(30 * DAY))?,
             operator: "Test Relay Ltd".to_owned(),
         });
         Ok(Harness { relay, clock, sent })
@@ -169,13 +170,14 @@ impl Setup {
 
 fn body(key_id: u8, blob: &SealedPushBlob, bind: [u8; 32], urgency: Urgency) -> Vec<u8> {
     PushRequest {
-        key_id: KeyId::new(key_id),
+        key_id: PushRelayKeyId::new(key_id),
         blob: *blob,
         bind: PushBind::from_bytes(bind),
         urgency,
         handle: PushHandle::from_bytes(HANDLE),
     }
-    .encode_json()
+    .encode()
+    .unwrap_or_default()
 }
 
 impl Harness {
@@ -519,9 +521,12 @@ fn the_published_config_follows_rotation_and_lists_served_platforms() -> TestRes
         .relay
         .published_config()
         .ok_or("nothing published")?;
-    assert_eq!(config.key_config.as_bytes().first(), Some(&2));
+    assert_eq!(config.key_config.key_id, PushRelayKeyId::new(2));
     assert_eq!(config.platforms, vec![PushPlatform::Fcm]);
-    assert_eq!(config.max_ttl, Duration::from_secs(30 * DAY));
+    assert_eq!(
+        config.max_time_to_live.duration(),
+        Duration::from_secs(30 * DAY)
+    );
     assert_eq!(config.operator, "Test Relay Ltd");
     Ok(())
 }

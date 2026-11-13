@@ -5,13 +5,12 @@
 use std::time::Duration;
 
 use axum::http::StatusCode;
-use pingers_crypto::PushBind;
 use pingers_proto::{
-    PushClass, PushHandle, PushPlatform, PushToken, PushTokenPlaintext, SealedPushBlob, Urgency,
+    PushBind, PushClass, PushHandle, PushPlatform, PushRelayConfig, PushRelayKeyConfig,
+    PushRelayKeyId, PushRequest, PushToken, PushTokenPlaintext, SealedPushBlob, Urgency,
+    WireDecode as _, WireEncode as _,
 };
 use pingers_push_relay::delivery::{Dispatcher, DispatcherSettings, EndpointPolicy};
-use pingers_push_relay::keys::KeyId;
-use pingers_push_relay::request::PushRequest;
 use pingers_testkit::ManualClock;
 use pingers_time::UnixSeconds;
 
@@ -32,13 +31,14 @@ fn plaintext(endpoint: &str) -> PushTokenPlaintext {
 
 fn request(blob: &SealedPushBlob, bind: [u8; 32]) -> Vec<u8> {
     PushRequest {
-        key_id: KeyId::new(KEY_ID),
+        key_id: PushRelayKeyId::new(KEY_ID),
         blob: *blob,
         bind: PushBind::from_bytes(bind),
         urgency: Urgency::Alert,
         handle: PushHandle::from_bytes(HANDLE),
     }
-    .encode_json()
+    .encode()
+    .unwrap_or_default()
 }
 
 async fn relay_with(opener: FakeOpener) -> Result<RunningRelay, Box<dyn std::error::Error>> {
@@ -154,6 +154,13 @@ async fn a_malformed_body_answers_400_and_an_oversized_one_413() -> TestResult {
     let relay = relay_with(FakeOpener::default()).await?;
     let response = post(&relay, Some(CREDENTIAL), b"{\"key_id\":1}".to_vec()).await?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    // A push request whose bind is one byte short.
+    let mut short_bind = request(&SealedPushBlob::from_bytes([1; 320]), BIND);
+    if let Some(position) = short_bind.windows(2).position(|pair| pair == [0x58, 0x20]) {
+        short_bind.splice(position..position.saturating_add(3), [0x58, 0x1f]);
+    }
+    let response = post(&relay, Some(CREDENTIAL), short_bind).await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let response = post(&relay, Some(CREDENTIAL), vec![b' '; 5000]).await?;
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     Ok(())
@@ -171,26 +178,32 @@ async fn the_key_config_is_public_cacheable_and_pinnable() -> TestResult {
             .map(reqwest::header::HeaderValue::as_bytes),
         Some(&b"public, max-age=3600"[..])
     );
-    let body: serde_json::Value = response.json().await?;
-    let public_key = hex::encode(crate::common::RELAY_PUBLIC);
-    let key_config = format!("010020{public_key}000400010001");
-    let key_config_bytes = hex::decode(&key_config)?;
-    let expected_hash = hex::encode(pingers_crypto::key_config_hash(&key_config_bytes).as_bytes());
     assert_eq!(
-        body,
-        serde_json::json!({
-            "key_id": 1,
-            "kem": "X25519",
-            "kdf": "HkdfSha256",
-            "aead": "Aes128Gcm",
-            "public_key": public_key,
-            "key_config": key_config,
-            "key_config_hash": expected_hash,
-            "platforms": ["UnifiedPush"],
-            "max_ttl_s": 2_592_000,
-            "operator": "Integration Test Relay",
-        })
+        response
+            .headers()
+            .get("content-type")
+            .map(reqwest::header::HeaderValue::as_bytes),
+        Some(&b"application/cbor"[..])
     );
+    let config = PushRelayConfig::decode(&response.bytes().await?)?;
+    assert_eq!(
+        config.key_config,
+        PushRelayKeyConfig {
+            key_id: PushRelayKeyId::new(KEY_ID),
+            public_key: crate::common::RELAY_PUBLIC,
+        }
+    );
+    // What devices pin: SHA-256 of the RFC 9458 encoding.
+    let mut encoded = vec![KEY_ID, 0x00, 0x20];
+    encoded.extend_from_slice(&crate::common::RELAY_PUBLIC);
+    encoded.extend_from_slice(&[0x00, 0x04, 0x00, 0x01, 0x00, 0x01]);
+    assert_eq!(config.key_config.to_bytes().as_slice(), encoded.as_slice());
+    assert_eq!(config.platforms, vec![PushPlatform::UnifiedPush]);
+    assert_eq!(
+        config.max_time_to_live.duration(),
+        Duration::from_hours(30 * 24)
+    );
+    assert_eq!(config.operator, "Integration Test Relay");
     Ok(())
 }
 

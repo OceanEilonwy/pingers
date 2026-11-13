@@ -70,6 +70,12 @@ pub enum ConfigError {
         /// The required length in bytes.
         bytes: usize,
     },
+    /// A private key from which no public key can be derived.
+    #[error("key {key_id} is not a valid X25519 private key")]
+    InvalidKey {
+        /// The key.
+        key_id: u8,
+    },
     /// No `[[keys]]` entry.
     #[error("at least one [[keys]] entry is required")]
     NoKeys,

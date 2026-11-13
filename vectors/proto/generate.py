@@ -568,3 +568,151 @@ write(
         },
     ],
 )
+
+# --- push relay request ---
+relay_bind = ramp(0xb0, 32)
+write(
+    "push-request-encoding",
+    "POST /v1/push body (push relay API) as canonical CBOR: [key id, blob, bind, urgency, handle] (design D, PushReq)",
+    [
+        {
+            "name": "alert",
+            "inputs": {
+                "key_id": 1,
+                "blob": h(blob),
+                "bind": h(relay_bind),
+                "urgency": "alert",
+                "handle": h(handle),
+            },
+            "expected": {
+                "encoding": h(versioned(a(u(1), b(blob), b(relay_bind), u(0), b(handle))))
+            },
+        },
+        {
+            "name": "quiet-key-200",
+            "inputs": {
+                "key_id": 200,
+                "blob": h(blob),
+                "bind": h(relay_bind),
+                "urgency": "quiet",
+                "handle": h(handle),
+            },
+            "expected": {
+                "encoding": h(versioned(a(u(200), b(blob), b(relay_bind), u(1), b(handle))))
+            },
+        },
+        {
+            "name": "short-bind",
+            "inputs": {
+                "encoding": h(versioned(a(u(1), b(blob), b(relay_bind[:31]), u(0), b(handle))))
+            },
+            "expected": {"error": "WrongLength"},
+        },
+        {
+            "name": "key-id-over-255",
+            "inputs": {
+                "encoding": h(versioned(a(u(256), b(blob), b(relay_bind), u(0), b(handle))))
+            },
+            "expected": {"error": "Cbor"},
+        },
+    ],
+)
+
+# --- push relay config ---
+relay_public = ramp(0x60, 32)
+
+
+def key_config(key_id, public, kem=b"\x00\x20", suites=b"\x00\x04\x00\x01\x00\x01"):
+    return bytes([key_id]) + kem + public + suites
+
+
+write(
+    "push-relay-config-encoding",
+    "GET /v1/config body (push relay API) as canonical CBOR: [key config (RFC 9458, 41 bytes), [platform...], max ttl seconds, operator] (design D, RelayConfig)",
+    [
+        {
+            "name": "both-platforms",
+            "inputs": {
+                "key_id": 2,
+                "public_key": h(relay_public),
+                "platforms": "fcm,unifiedpush",
+                "max_ttl_seconds": 2_592_000,
+                "operator": "Example Relay Ltd",
+            },
+            "expected": {
+                "key_config": h(key_config(2, relay_public)),
+                "encoding": h(
+                    versioned(
+                        a(
+                            b(key_config(2, relay_public)),
+                            a(u(1), u(2)),
+                            u(2_592_000),
+                            t("Example Relay Ltd"),
+                        )
+                    )
+                ),
+            },
+        },
+        {
+            "name": "unifiedpush-only",
+            "inputs": {
+                "key_id": 1,
+                "public_key": h(relay_public),
+                "platforms": "unifiedpush",
+                "max_ttl_seconds": 3600,
+                "operator": "Ünïcode Relay",
+            },
+            "expected": {
+                "key_config": h(key_config(1, relay_public)),
+                "encoding": h(
+                    versioned(
+                        a(b(key_config(1, relay_public)), a(u(2)), u(3600), t("Ünïcode Relay"))
+                    )
+                ),
+            },
+        },
+        {
+            "name": "chacha-suite",
+            "inputs": {
+                "encoding": h(
+                    versioned(
+                        a(
+                            b(key_config(1, relay_public, suites=b"\x00\x04\x00\x01\x00\x03")),
+                            a(u(2)),
+                            u(3600),
+                            t("x"),
+                        )
+                    )
+                )
+            },
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "unknown-platform",
+            "inputs": {
+                "encoding": h(
+                    versioned(a(b(key_config(1, relay_public)), a(u(3)), u(3600), t("x")))
+                )
+            },
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "zero-ttl",
+            "inputs": {
+                "encoding": h(
+                    versioned(a(b(key_config(1, relay_public)), a(u(2)), u(0), t("x")))
+                )
+            },
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "short-key-config",
+            "inputs": {
+                "encoding": h(
+                    versioned(a(b(key_config(1, relay_public)[:40]), a(u(2)), u(3600), t("x")))
+                )
+            },
+            "expected": {"error": "WrongLength"},
+        },
+    ],
+)

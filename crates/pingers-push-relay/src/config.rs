@@ -13,8 +13,7 @@
 //!
 //! [[keys]]
 //! key_id = 1
-//! private_key = "<64 hex>"
-//! public_key = "<64 hex>"
+//! private_key = "<64 hex>"            # the public key is derived from it
 //! activated_at = 1790000000        # Unix seconds
 //! retired_at = 1795000000          # optional; at least 30 days after the next key activates
 //!
@@ -54,7 +53,8 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use pingers_crypto::{KeyedHash, KeyedHashKey, PushRelayPrivateKey, PushRelayPublicKey};
+use pingers_crypto::{KeyedHash, KeyedHashKey, PushRelayPrivateKey};
+use pingers_proto::{PushRelayKeyId, TimeToLive};
 use pingers_time::UnixSeconds;
 use reqwest::Url;
 use serde::Deserialize;
@@ -102,7 +102,7 @@ pub struct RelayConfig {
     /// Per-token limit.
     pub token_limit: RateLimit,
     /// Published: the longest lifetime a device should seal.
-    pub max_ttl: Duration,
+    pub max_ttl: TimeToLive,
     /// Keys and their rotation schedule.
     pub keys: KeyRing,
     /// Servers allowed to use the relay.
@@ -171,7 +171,6 @@ struct FileConfig {
 struct FileKey {
     key_id: u8,
     private_key: String,
-    public_key: String,
     activated_at: u64,
     retired_at: Option<u64>,
 }
@@ -239,7 +238,8 @@ impl RelayConfig {
             logging,
             upstream_timeout,
             token_limit: rate("token_pushes_per_minute", file.token_pushes_per_minute)?,
-            max_ttl: positive_seconds("max_ttl_s", file.max_ttl_s)?,
+            max_ttl: TimeToLive::new(Duration::from_secs(file.max_ttl_s))
+                .map_err(|_range| ConfigError::OutOfRange { field: "max_ttl_s" })?,
             keys: KeyRing::new(
                 file.keys
                     .into_iter()
@@ -297,15 +297,15 @@ fn hex_32(field: &'static str, text: &str) -> Result<Zeroizing<[u8; 32]>, Config
 fn relay_key(mut key: FileKey) -> Result<RelayKey, ConfigError> {
     let private_key = hex_32("keys.private_key", &key.private_key);
     key.private_key.zeroize();
-    let public_key = hex_32("keys.public_key", &key.public_key)?;
-    Ok(RelayKey::new(
+    RelayKey::new(
+        PushRelayKeyId::new(key.key_id),
         PushRelayPrivateKey::from_bytes(private_key?),
-        PushRelayPublicKey::new(key.key_id, *public_key),
         KeyLifetime {
             activated_at: UnixSeconds::new(key.activated_at),
             retired_at: key.retired_at.map(UnixSeconds::new),
         },
-    ))
+    )
+    .map_err(|_error| ConfigError::InvalidKey { key_id: key.key_id })
 }
 
 fn server_entry(server: FileServer) -> Result<ServerEntry, ConfigError> {

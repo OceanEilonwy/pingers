@@ -27,6 +27,7 @@ mod meetup;
 mod padding;
 mod push;
 mod redacted;
+mod relay;
 
 pub use api::{
     AnonymousCredential, AuthRequest, AuthResponse, BoardSyncRequest, BoardSyncResponse,
@@ -59,7 +60,8 @@ pub use meetup::{
 };
 pub use padding::{Padded, SizeClass};
 pub use push::{
-    KeyConfigHash, MailboxSpec, PushClass, PushPlatform, PushToken, PushTokenPlaintext, RelayRef,
-    RelayUrl, SealedPush, SealedPushBlob, Subscription, TimeToLive, Urgency,
+    KeyConfigHash, MailboxSpec, PushBind, PushClass, PushPlatform, PushToken, PushTokenPlaintext,
+    RelayRef, RelayUrl, SealedPush, SealedPushBlob, Subscription, TimeToLive, Urgency,
 };
 pub use redacted::Redacted;
+pub use relay::{PushRelayConfig, PushRelayKeyConfig, PushRelayKeyId, PushRequest};

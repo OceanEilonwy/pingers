@@ -3,7 +3,8 @@
 //!
 //! The publisher-run push relay (design B.4.9, B.7, C.1a, D). Stateless: open the sealed token
 //! with the relay's HPKE key under the mailbox bind, check expiry, and send one content-free
-//! push (`{"v":1,"h":"<handle>"}`) by UnifiedPush or FCM HTTP v1. Per-token and per-server
+//! push (`{"v":1,"h":"<handle>"}`) by UnifiedPush or FCM HTTP v1. Request and config bodies
+//! are pingers-proto's `PushRequest` and `PushRelayConfig`, in CBOR. Per-token and per-server
 //! rate limits, a bearer credential per Pingers server, a key config endpoint, key rotation
 //! with an overlap window, and logging off by default (counts only when on). No database.
 //!
@@ -21,7 +22,6 @@ pub mod http;
 pub mod keys;
 pub mod opener;
 pub mod rate;
-pub mod request;
 pub mod service;
 
 #[cfg(test)]

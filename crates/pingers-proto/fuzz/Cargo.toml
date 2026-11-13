@@ -243,3 +243,17 @@ path = "fuzz_targets/padded.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "push_request"
+path = "fuzz_targets/push_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "push_relay_config"
+path = "fuzz_targets/push_relay_config.rs"
+test = false
+doc = false
+bench = false

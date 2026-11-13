@@ -107,3 +107,20 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
   issuance and invite payloads are not added yet: their contents belong to pingers-anon and
   pingers-parties and are opaque to this crate until those are fixed.
 - The unused `serde` dependency is removed.
+
+### Push relay API (added 2026-11-13, wave 2)
+
+- **`PushRequest`** (`POST /v1/push`) and **`PushRelayConfig`** (`GET /v1/config`) moved here
+  from pingers-push-relay, which had them as JSON. They are CBOR now like every other body
+  (design D: "bodies in CBOR unless noted"): `PushRequest` is `[key id, blob (320), bind (32),
+  urgency, handle (8)]`; `PushRelayConfig` is `[key config (41 bytes), [platform...], max ttl
+  seconds, operator]`. The design's `kem`/`kdf`/`aead`/`public_key` fields are carried as the
+  RFC 9458 key config bytes (`PushRelayKeyConfig`, fixed suite X25519 / HKDF-SHA256 /
+  AES-128-GCM, other suites `OutOfRange`), because SHA-256 of exactly those bytes is what
+  members pin. `max_ttl_s` is a `TimeToLive`.
+- **`PushRelayKeyId`** (`u8`, `new`/`get`) replaces the relay's own `KeyId`.
+- **`PushBind`** moved here from pingers-crypto so `PushRequest` can carry it; pingers-crypto
+  re-exports it, so `pingers_crypto::PushBind` still works and the derivations stay there.
+- `PushPlatform`'s wire values and `TimeToLive`'s CBOR helpers became `pub(crate)` for reuse.
+- Vectors `push-request-encoding` and `push-relay-config-encoding`; fuzz targets
+  `push_request` and `push_relay_config`.

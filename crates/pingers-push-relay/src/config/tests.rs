@@ -2,9 +2,10 @@
 #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
 use super::*;
-use crate::keys::KeyId;
+use pingers_proto::PushRelayKeyId;
 
 const PRIVATE: &str = "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";
+/// The public key of [`PRIVATE`] (RFC 7748 §6.1), which the relay derives.
 const PUBLIC: &str = "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a";
 const HASH_KEY: &str = "4242424242424242424242424242424242424242424242424242424242424242";
 /// `credential_hash` of `0123456789abcdef0123456789abcdef` under [`HASH_KEY`].
@@ -20,7 +21,6 @@ hash_key = "4242424242424242424242424242424242424242424242424242424242424242"
 [[keys]]
 key_id = 1
 private_key = "{PRIVATE}"
-public_key = "{PUBLIC}"
 activated_at = 1000
 
 [[servers]]
@@ -47,7 +47,7 @@ fn a_minimal_file_gets_private_defaults() -> Result<(), ConfigError> {
     let config = RelayConfig::parse(&minimal())?;
     assert_eq!(config.logging, Logging::Off);
     assert_eq!(config.upstream_timeout, Duration::from_secs(10));
-    assert_eq!(config.max_ttl, Duration::from_hours(30 * 24));
+    assert_eq!(config.max_ttl.duration(), Duration::from_hours(30 * 24));
     assert_eq!(config.token_limit, rate("t", 30)?);
     assert_eq!(config.unifiedpush, Some(EndpointPolicy::PublicHttpsOnly));
     assert_eq!(config.fcm, None);
@@ -56,7 +56,7 @@ fn a_minimal_file_gets_private_defaults() -> Result<(), ConfigError> {
         .keys
         .published(UnixSeconds::new(1000))
         .ok_or(ConfigError::NoKeys)?;
-    assert_eq!(key.key_id(), KeyId::new(1));
+    assert_eq!(key.key_id(), PushRelayKeyId::new(1));
     assert_eq!(hex::encode(key.public_key().public_key()), PUBLIC);
     assert_eq!(hex::encode(key.private_key().expose_bytes()), PRIVATE);
     assert!(
@@ -98,7 +98,7 @@ fn every_setting_is_read() -> Result<(), ConfigError> {
     );
     assert_eq!(config.upstream_timeout, Duration::from_millis(1500));
     assert_eq!(config.token_limit, rate("t", 5)?);
-    assert_eq!(config.max_ttl, Duration::from_secs(3600));
+    assert_eq!(config.max_ttl.duration(), Duration::from_secs(3600));
     assert_eq!(config.unifiedpush, Some(EndpointPolicy::AllowInsecureLocal));
     assert_eq!(
         config.fcm,
@@ -141,7 +141,7 @@ fn syntax_errors_give_the_line_but_not_the_text() {
         "credential_hash = \"11e91a598f0cdd95086a51f58961207c05755742f65f5e2a4885bbe8721c3985",
     );
     let error = error_of(&text);
-    assert_eq!(error, Some(ConfigError::Syntax { line: 14 }));
+    assert_eq!(error, Some(ConfigError::Syntax { line: 13 }));
     let message = error.map(|error| error.to_string()).unwrap_or_default();
     assert!(!message.contains("11e91a598f0cdd95"));
 }
@@ -160,6 +160,7 @@ fn zero_values_are_refused() {
         ("upstream_timeout_ms = 0", "upstream_timeout_ms"),
         ("token_pushes_per_minute = 0", "token_pushes_per_minute"),
         ("max_ttl_s = 0", "max_ttl_s"),
+        ("max_ttl_s = 4294967296", "max_ttl_s"),
         (
             "logging = \"counts\"\ncounts_interval_s = 0",
             "counts_interval_s",
@@ -194,14 +195,14 @@ fn bad_key_hex_names_the_field() {
             bytes: 32
         })
     );
-    let bad_public = minimal().replace(PUBLIC, &PUBLIC.replace('8', "g"));
-    assert_eq!(
-        error_of(&bad_public),
-        Some(ConfigError::BadHex {
-            field: "keys.public_key",
-            bytes: 32
-        })
+    let with_public = minimal().replace(
+        "activated_at = 1000",
+        &format!("public_key = \"{PUBLIC}\"\nactivated_at = 1000"),
     );
+    assert!(matches!(
+        error_of(&with_public),
+        Some(ConfigError::Syntax { .. })
+    ));
 }
 
 #[test]
@@ -238,7 +239,7 @@ fn a_file_without_keys_or_servers_is_refused() {
     assert_eq!(error_of(&no_keys), Some(ConfigError::NoKeys));
     let no_servers = format!(
         "listen = \"127.0.0.1:1\"\noperator = \"x\"\nhash_key = \"{HASH_KEY}\"\n[[keys]]\nkey_id = 1\n\
-         private_key = \"{PRIVATE}\"\npublic_key = \"{PUBLIC}\"\nactivated_at = 0\n[unifiedpush]\n"
+         private_key = \"{PRIVATE}\"\nactivated_at = 0\n[unifiedpush]\n"
     );
     assert_eq!(error_of(&no_servers), Some(ConfigError::NoServers));
 }

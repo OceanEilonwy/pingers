@@ -35,14 +35,14 @@ impl TimeToLive {
     }
 
     /// Writes `ttl_s: u32`; the constructor guarantees it fits.
-    fn encode_cbor(self, writer: &mut Writer) -> Result<(), ProtoError> {
+    pub(crate) fn encode_cbor(self, writer: &mut Writer) -> Result<(), ProtoError> {
         let seconds = u32::try_from(self.0.as_secs())
             .map_err(|_overflow| ProtoError::OutOfRange { field: "ttl" })?;
         writer.unsigned(seconds);
         Ok(())
     }
 
-    fn decode_cbor(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+    pub(crate) fn decode_cbor(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
         Self::new(Duration::from_secs(u64::from(decoder.u32()?)))
     }
 }
@@ -86,14 +86,14 @@ pub enum PushPlatform {
 }
 
 impl PushPlatform {
-    const fn to_wire(self) -> u8 {
+    pub(crate) const fn to_wire(self) -> u8 {
         match self {
             Self::Fcm => 1,
             Self::UnifiedPush => 2,
         }
     }
 
-    const fn from_wire(value: u8) -> Result<Self, ProtoError> {
+    pub(crate) const fn from_wire(value: u8) -> Result<Self, ProtoError> {
         match value {
             1 => Ok(Self::Fcm),
             2 => Ok(Self::UnifiedPush),
@@ -280,6 +280,25 @@ impl SealedPushBlob {
 impl core::fmt::Debug for SealedPushBlob {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("SealedPushBlob(..)")
+    }
+}
+
+/// `bind`: ties a sealed push to one mailbox or subscription, so the server cannot move it
+/// (design B.4.9). pingers-crypto derives it; the relay is given this hash, never the id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PushBind([u8; 32]);
+
+impl PushBind {
+    /// Wraps bind bytes received by the push relay.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// The bind bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
     }
 }
 

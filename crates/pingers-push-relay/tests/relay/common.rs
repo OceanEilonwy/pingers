@@ -8,10 +8,8 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
-use pingers_crypto::{
-    KeyedHashKey, KeyedHashPurpose, PushBind, PushRelayPrivateKey, PushRelayPublicKey, keyed_hash,
-};
-use pingers_proto::{PushTokenPlaintext, SealedPushBlob};
+use pingers_crypto::{KeyedHashKey, KeyedHashPurpose, PushBind, PushRelayPrivateKey, keyed_hash};
+use pingers_proto::{PushRelayKeyId, PushTokenPlaintext, SealedPushBlob, TimeToLive};
 use pingers_push_relay::credentials::{ServerEntry, ServerRegistry};
 use pingers_push_relay::delivery::PushSender;
 use pingers_push_relay::keys::{KeyLifetime, KeyRing, RelayKey};
@@ -77,13 +75,13 @@ impl TokenOpener for FakeOpener {
 
 pub(crate) fn key_ring() -> Result<KeyRing, Box<dyn std::error::Error>> {
     Ok(KeyRing::new(vec![RelayKey::new(
+        PushRelayKeyId::new(KEY_ID),
         PushRelayPrivateKey::from_bytes(Zeroizing::new(RELAY_PRIVATE)),
-        PushRelayPublicKey::new(KEY_ID, RELAY_PUBLIC),
         KeyLifetime {
             activated_at: UnixSeconds::EPOCH,
             retired_at: None,
         },
-    )])?)
+    )?])?)
 }
 
 pub(crate) fn per_minute(count: u32) -> RateLimit {
@@ -126,7 +124,7 @@ impl RunningRelay {
             servers: servers(1000)?,
             token_hash_key: hash_key(),
             token_limit: per_minute(2),
-            max_ttl: Duration::from_hours(24 * 30),
+            max_ttl: TimeToLive::new(Duration::from_hours(24 * 30))?,
             operator: "Integration Test Relay".to_owned(),
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;

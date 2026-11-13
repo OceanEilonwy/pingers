@@ -3,19 +3,17 @@
 //! its bind, check expiry, rate-limit the token, send one content-free push (design B.4.9, D).
 
 use std::sync::{Mutex, PoisonError};
-use std::time::Duration;
 
 use pingers_crypto::{KeyedHash, KeyedHashKey, KeyedHashPurpose, keyed_hash};
-use pingers_proto::PushPlatform;
+use pingers_proto::{PushPlatform, PushRelayConfig, PushRequest, TimeToLive, WireDecode as _};
 use pingers_time::Clock;
 
 use crate::counts::Counts;
 use crate::credentials::{ServerIndex, ServerRegistry};
 use crate::delivery::{DeliveryOutcome, MAX_PUSH_TTL, PushMessage, PushSender, WakeClass};
-use crate::keys::{KeyConfig, KeyRing};
+use crate::keys::KeyRing;
 use crate::opener::{OpenError, TokenOpener};
 use crate::rate::{Decision, Limiter, RateLimit};
-use crate::request::PushRequest;
 
 /// How many partly drained per-token buckets are kept before new tokens are refused. At the
 /// default 30 pushes per minute a bucket refills within two minutes, so this is far above any
@@ -71,7 +69,7 @@ pub struct RelayParts<O, S, C> {
     /// Per-token limit.
     pub token_limit: RateLimit,
     /// Published in the key config: the longest lifetime a device should seal.
-    pub max_ttl: Duration,
+    pub max_ttl: TimeToLive,
     /// Published in the key config: who runs this relay.
     pub operator: String,
 }
@@ -84,25 +82,12 @@ pub struct Relay<O, S, C> {
     keys: KeyRing,
     servers: ServerRegistry,
     token_limit: RateLimit,
-    max_ttl: Duration,
+    max_ttl: TimeToLive,
     operator: String,
     server_limiter: Mutex<Limiter<ServerIndex>>,
     token_limiter: Mutex<Limiter<TokenFingerprint>>,
     token_hash_key: KeyedHashKey,
     counts: Counts,
-}
-
-/// What `GET /v1/config` publishes.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PublishedConfig {
-    /// The current key, encoded as an OHTTP key config.
-    pub key_config: KeyConfig,
-    /// The platforms this relay delivers on.
-    pub platforms: Vec<PushPlatform>,
-    /// The longest lifetime a device should seal into a token.
-    pub max_ttl: Duration,
-    /// Who runs the relay.
-    pub operator: String,
 }
 
 impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
@@ -131,17 +116,17 @@ impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
         &self.counts
     }
 
-    /// The key config to publish now, or `None` if no key is active.
-    pub fn published_config(&self) -> Option<PublishedConfig> {
+    /// The `GET /v1/config` body to publish now, or `None` if no key is active.
+    pub fn published_config(&self) -> Option<PushRelayConfig> {
         let key = self.keys.published(self.clock.now())?;
         let platforms = [PushPlatform::UnifiedPush, PushPlatform::Fcm]
             .into_iter()
             .filter(|platform| self.sender.supports(*platform))
             .collect();
-        Some(PublishedConfig {
-            key_config: KeyConfig::new(key.public_key()),
+        Some(PushRelayConfig {
+            key_config: key.key_config(),
             platforms,
-            max_ttl: self.max_ttl,
+            max_time_to_live: self.max_ttl,
             operator: self.operator.clone(),
         })
     }
@@ -174,7 +159,7 @@ impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
         if server_decision == Decision::Limited {
             return PushOutcome::RateLimited;
         }
-        let Ok(request) = PushRequest::decode_json(body) else {
+        let Ok(request) = PushRequest::decode(body) else {
             return PushOutcome::BadRequest;
         };
         self.open_and_send(&request).await

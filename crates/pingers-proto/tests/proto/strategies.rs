@@ -12,13 +12,14 @@ use pingers_proto::{
     Lease, LeaseId, LeaseReplacement, LiveFrame, LocationGeneration, LocationPlaintext, MailboxId,
     MailboxMessage, MailboxMessages, MailboxSpec, MeetPoint, MeetPointLabel, MeetupMessage,
     MembershipIndex, MembershipLeafRequest, MembershipLeafResponse, MembershipLeaves,
-    MembershipRoot, MessageAccepted, MlsMessageBytes, Padded, Params, PushClass, PushHandle,
-    PushPlatform, PushRelayInfo, PushToken, PushTokenPlaintext, ReadBoard, Record,
-    RecordRandomness, RecordTag, Redacted, RegisterRequest, RegisterResponse, RelayId, RelayRef,
-    RelayUrl, RevokeCommitment, RlnAuth, RlnScope, RootEpoch, SealedAsk, SealedBeacon, SealedGrant,
-    SealedLocationFrame, SealedPush, SealedPushBlob, SealedSnapshot, SeenSegment, SegmentHash,
-    SegmentInfo, SequenceNumber, SizeClass, Slashing, SpeedCentimetresPerSecond, Subscription,
-    SubscriptionId, TimeToLive, Urgency,
+    MembershipRoot, MessageAccepted, MlsMessageBytes, Padded, Params, PushBind, PushClass,
+    PushHandle, PushPlatform, PushRelayConfig, PushRelayInfo, PushRelayKeyConfig, PushRelayKeyId,
+    PushRequest, PushToken, PushTokenPlaintext, ReadBoard, Record, RecordRandomness, RecordTag,
+    Redacted, RegisterRequest, RegisterResponse, RelayId, RelayRef, RelayUrl, RevokeCommitment,
+    RlnAuth, RlnScope, RootEpoch, SealedAsk, SealedBeacon, SealedGrant, SealedLocationFrame,
+    SealedPush, SealedPushBlob, SealedSnapshot, SeenSegment, SegmentHash, SegmentInfo,
+    SequenceNumber, SizeClass, Slashing, SpeedCentimetresPerSecond, Subscription, SubscriptionId,
+    TimeToLive, Urgency,
 };
 use pingers_time::{Bucket, UnixSeconds};
 use proptest::array::uniform;
@@ -134,6 +135,47 @@ pub(crate) fn sealed_push() -> impl Strategy<Value = SealedPush> {
             urgency,
             handle: PushHandle::from_bytes(handle),
         })
+}
+
+pub(crate) fn push_request() -> impl Strategy<Value = PushRequest> {
+    (
+        any::<u8>(),
+        uniform::<_, 320>(any::<u8>()),
+        bytes32(),
+        urgency(),
+        uniform::<_, 8>(any::<u8>()),
+    )
+        .prop_map(|(key_id, blob, bind, urgency, handle)| PushRequest {
+            key_id: PushRelayKeyId::new(key_id),
+            blob: SealedPushBlob::from_bytes(blob),
+            bind: PushBind::from_bytes(bind),
+            urgency,
+            handle: PushHandle::from_bytes(handle),
+        })
+}
+
+pub(crate) fn push_relay_config() -> impl Strategy<Value = PushRelayConfig> {
+    (
+        any::<u8>(),
+        bytes32(),
+        vec(
+            prop_oneof![Just(PushPlatform::Fcm), Just(PushPlatform::UnifiedPush)],
+            0..4,
+        ),
+        time_to_live(),
+        text(40),
+    )
+        .prop_map(
+            |(key_id, public_key, platforms, max_time_to_live, operator)| PushRelayConfig {
+                key_config: PushRelayKeyConfig {
+                    key_id: PushRelayKeyId::new(key_id),
+                    public_key,
+                },
+                platforms,
+                max_time_to_live,
+                operator,
+            },
+        )
 }
 
 pub(crate) fn mailbox_spec() -> impl Strategy<Value = MailboxSpec> {

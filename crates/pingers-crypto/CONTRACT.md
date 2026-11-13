@@ -79,6 +79,8 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
   of `ikmE` per X25519 seal, 64 per X-Wing seal), checked against RFC 9180 A.1.1. This needs
   two new workspace dependencies, `hpke-rs-crypto` (the provider trait) and `x-wing`
   (optional), and hpke-rs's `hazmat` feature (to read derived private-key bytes).
+- **`PushBind` is defined in pingers-proto** (the push request carries it) and re-exported
+  here unchanged; `push_bind_for_mailbox` and `push_bind_for_subscription` stay here.
 - **Push relay `key_id` is bound in the HPKE `info`**: `info = "pingers/v1/push" || bind ||
   key_id` (one byte), which costs no blob space. The design puts only `bind` in `info`; without
   the key id, a blob sealed for one key would open when presented under another key id that

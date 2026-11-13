@@ -10,11 +10,12 @@ use pingers_proto::{
     AppMessage, BoardBeacon, BoardCursor, BoardPage, ChatBody, ChatMessageId, Delivery,
     E7Coordinate, Epoch, HeadingDegrees, KeyConfigHash, KeyPackageBytes, Knock, KnockSignature,
     Lamport, LeafIndex, Lease, LocationGeneration, LocationPlaintext, MailboxId, MailboxSpec,
-    MeetPoint, MeetPointLabel, MeetupHint, MeetupMessage, MlsMessageBytes, ProtoError, PushClass,
-    PushHandle, PushPlatform, PushToken, PushTokenPlaintext, Record, RecordRandomness, RecordTag,
-    RelayId, RelayRef, RelayUrl, RevokeCommitment, RlnAuth, RlnScope, SealedBeacon,
-    SealedLocationFrame, SealedPush, SealedPushBlob, SeenSegment, SegmentHash, SegmentInfo,
-    Subscription, SubscriptionId, TimeToLive, Urgency, WireDecode, WireEncode,
+    MeetPoint, MeetPointLabel, MeetupHint, MeetupMessage, MlsMessageBytes, ProtoError, PushBind,
+    PushClass, PushHandle, PushPlatform, PushRelayConfig, PushRelayKeyConfig, PushRelayKeyId,
+    PushRequest, PushToken, PushTokenPlaintext, Record, RecordRandomness, RecordTag, RelayId,
+    RelayRef, RelayUrl, RevokeCommitment, RlnAuth, RlnScope, SealedBeacon, SealedLocationFrame,
+    SealedPush, SealedPushBlob, SeenSegment, SegmentHash, SegmentInfo, Subscription,
+    SubscriptionId, TimeToLive, Urgency, WireDecode, WireEncode,
 };
 use pingers_testkit::{Vector, VectorError, load_vectors};
 use pingers_time::{Bucket, UnixSeconds};
@@ -389,6 +390,63 @@ fn mailbox_spec_vectors() -> Result<(), TestError> {
         },
         encode: MailboxSpec::encode,
         decode: MailboxSpec::decode,
+    })
+}
+
+#[test]
+fn push_request_vectors() -> Result<(), TestError> {
+    check(&Format {
+        file: "push-request-encoding",
+        bytes_field: "encoding",
+        build: |vector| {
+            Ok(PushRequest {
+                key_id: PushRelayKeyId::new(small(vector, "key_id")?),
+                blob: SealedPushBlob::from_bytes(bytes(vector, "blob")?),
+                bind: PushBind::from_bytes(bytes(vector, "bind")?),
+                urgency: urgency(vector, "urgency")?,
+                handle: PushHandle::from_bytes(bytes(vector, "handle")?),
+            })
+        },
+        encode: PushRequest::encode,
+        decode: PushRequest::decode,
+    })
+}
+
+fn push_relay_config(vector: &Vector) -> Result<PushRelayConfig, TestError> {
+    let platforms = text(vector, "platforms")?
+        .split(',')
+        .map(|name| match name {
+            "fcm" => Ok(PushPlatform::Fcm),
+            "unifiedpush" => Ok(PushPlatform::UnifiedPush),
+            _ => Err(field_error(vector, "platforms")),
+        })
+        .collect::<Result<_, _>>()?;
+    let config = PushRelayConfig {
+        key_config: PushRelayKeyConfig {
+            key_id: PushRelayKeyId::new(small(vector, "key_id")?),
+            public_key: bytes(vector, "public_key")?,
+        },
+        platforms,
+        max_time_to_live: time_to_live(vector, "max_ttl_seconds")?,
+        operator: text(vector, "operator")?,
+    };
+    assert_eq!(
+        config.key_config.to_bytes().as_slice(),
+        vector.expected_bytes("key_config")?,
+        "{}: key config",
+        vector.name
+    );
+    Ok(config)
+}
+
+#[test]
+fn push_relay_config_vectors() -> Result<(), TestError> {
+    check(&Format {
+        file: "push-relay-config-encoding",
+        bytes_field: "encoding",
+        build: push_relay_config,
+        encode: PushRelayConfig::encode,
+        decode: PushRelayConfig::decode,
     })
 }
 

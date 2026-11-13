@@ -1,0 +1,70 @@
+{
+  "name": "push-relay-config-encoding",
+  "description": "GET /v1/config body (push relay API) as canonical CBOR: [key config (RFC 9458, 41 bytes), [platform...], max ttl seconds, operator] (design D, RelayConfig)",
+  "vectors": [
+    {
+      "name": "both-platforms",
+      "inputs": {
+        "key_id": 2,
+        "public_key": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+        "platforms": "fcm,unifiedpush",
+        "max_ttl_seconds": 2592000,
+        "operator": "Example Relay Ltd"
+      },
+      "expected": {
+        "key_config": "020020606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f000400010001",
+        "encoding": "8201845829020020606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f0004000100018201021a00278d00714578616d706c652052656c6179204c7464"
+      }
+    },
+    {
+      "name": "unifiedpush-only",
+      "inputs": {
+        "key_id": 1,
+        "public_key": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+        "platforms": "unifiedpush",
+        "max_ttl_seconds": 3600,
+        "operator": "Ünïcode Relay"
+      },
+      "expected": {
+        "key_config": "010020606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f000400010001",
+        "encoding": "8201845829010020606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f0004000100018102190e106fc39c6ec3af636f64652052656c6179"
+      }
+    },
+    {
+      "name": "chacha-suite",
+      "inputs": {
+        "encoding": "8201845829010020606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f0004000100038102190e106178"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    },
+    {
+      "name": "unknown-platform",
+      "inputs": {
+        "encoding": "8201845829010020606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f0004000100018103190e106178"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    },
+    {
+      "name": "zero-ttl",
+      "inputs": {
+        "encoding": "8201845829010020606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f0004000100018102006178"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    },
+    {
+      "name": "short-key-config",
+      "inputs": {
+        "encoding": "8201845828010020606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f00040001008102190e106178"
+      },
+      "expected": {
+        "error": "WrongLength"
+      }
+    }
+  ]
+}

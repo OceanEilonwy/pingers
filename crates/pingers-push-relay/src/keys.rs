@@ -8,8 +8,8 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use pingers_crypto::{PushRelayPrivateKey, PushRelayPublicKey};
-use pingers_proto::KeyConfigHash;
+use pingers_crypto::{CryptoError, PushRelayPrivateKey, PushRelayPublicKey};
+use pingers_proto::{KeyConfigHash, PushRelayKeyConfig, PushRelayKeyId};
 use pingers_time::UnixSeconds;
 
 use crate::error::ConfigError;
@@ -17,24 +17,6 @@ use crate::error::ConfigError;
 /// How long a replaced key keeps opening blobs: the longest a sealed token lives (30 days,
 /// design B.4.9), so every blob sealed before the rotation can still be used.
 pub const KEY_OVERLAP: Duration = Duration::from_hours(30 * 24);
-
-/// The one-byte key id a push request names, as in an OHTTP key config.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct KeyId(u8);
-
-impl KeyId {
-    /// Wraps a key id from configuration or a request.
-    #[must_use]
-    pub const fn new(id: u8) -> Self {
-        Self(id)
-    }
-
-    /// The id byte.
-    #[must_use]
-    pub const fn get(self) -> u8 {
-        self.0
-    }
-}
 
 /// When a key may be used.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,12 +41,28 @@ pub struct RelayKey {
 }
 
 impl RelayKey {
-    /// A key pair from configuration. The key id is taken from `public_key`.
+    /// A key from configuration; the public key is derived from the private one.
     ///
-    /// pingers-crypto cannot derive the public key from the private one yet, so both are
-    /// configured; a pair that does not match makes every push answer 422.
-    #[must_use]
-    pub const fn new(
+    /// # Errors
+    ///
+    /// [`CryptoError::Internal`] if the public key cannot be derived (it always can for 32
+    /// bytes).
+    pub fn new(
+        key_id: PushRelayKeyId,
+        private_key: PushRelayPrivateKey,
+        lifetime: KeyLifetime,
+    ) -> Result<Self, CryptoError> {
+        let public_key = private_key.public_key(key_id.get())?;
+        Ok(Self {
+            private_key,
+            public_key,
+            lifetime,
+        })
+    }
+
+    /// A key with a given public key, so tests can tell keys apart without deriving them.
+    #[cfg(test)]
+    pub(crate) const fn from_pair(
         private_key: PushRelayPrivateKey,
         public_key: PushRelayPublicKey,
         lifetime: KeyLifetime,
@@ -78,8 +76,8 @@ impl RelayKey {
 
     /// The key id.
     #[must_use]
-    pub const fn key_id(&self) -> KeyId {
-        KeyId(self.public_key.key_id())
+    pub const fn key_id(&self) -> PushRelayKeyId {
+        PushRelayKeyId::new(self.public_key.key_id())
     }
 
     /// The private key, for opening.
@@ -88,11 +86,26 @@ impl RelayKey {
         &self.private_key
     }
 
-    /// The public key, for the key config.
+    /// The public key.
     #[must_use]
     pub const fn public_key(&self) -> &PushRelayPublicKey {
         &self.public_key
     }
+
+    /// The key config devices fetch and pin.
+    #[must_use]
+    pub const fn key_config(&self) -> PushRelayKeyConfig {
+        PushRelayKeyConfig {
+            key_id: self.key_id(),
+            public_key: *self.public_key.public_key(),
+        }
+    }
+}
+
+/// SHA-256 of a key config's RFC 9458 encoding: the value members pin in Party state.
+#[must_use]
+pub fn key_config_hash(config: &PushRelayKeyConfig) -> KeyConfigHash {
+    pingers_crypto::key_config_hash(&config.to_bytes())
 }
 
 /// All configured keys, ordered by activation time.
@@ -164,56 +177,10 @@ impl KeyRing {
     /// The key that opens blobs sealed under `key_id` now, if it is active or still inside its
     /// overlap window.
     #[must_use]
-    pub fn for_opening(&self, key_id: KeyId, now: UnixSeconds) -> Option<&RelayKey> {
+    pub fn for_opening(&self, key_id: PushRelayKeyId, now: UnixSeconds) -> Option<&RelayKey> {
         self.keys
             .iter()
             .find(|key| key.key_id() == key_id && key.lifetime.opens_at(now))
-    }
-}
-
-/// The OHTTP-style key config (RFC 9458 §3) of the published key: what devices fetch and pin.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct KeyConfig {
-    encoded: [u8; KeyConfig::LENGTH],
-}
-
-impl KeyConfig {
-    /// Encoded length: key id, KEM id, public key, suites length, one suite.
-    pub const LENGTH: usize = 41;
-    /// DHKEM(X25519, HKDF-SHA256).
-    const KEM_X25519: [u8; 2] = [0x00, 0x20];
-    /// HKDF-SHA256.
-    const KDF_HKDF_SHA256: [u8; 2] = [0x00, 0x01];
-    /// AES-128-GCM.
-    const AEAD_AES_128_GCM: [u8; 2] = [0x00, 0x01];
-
-    /// `key_id || kem_id || public_key || len(suites) || kdf_id || aead_id`.
-    #[must_use]
-    pub fn new(public_key: &PushRelayPublicKey) -> Self {
-        let mut encoded = Vec::with_capacity(Self::LENGTH);
-        encoded.push(public_key.key_id());
-        encoded.extend_from_slice(&Self::KEM_X25519);
-        encoded.extend_from_slice(public_key.public_key());
-        encoded.extend_from_slice(&[0x00, 0x04]);
-        encoded.extend_from_slice(&Self::KDF_HKDF_SHA256);
-        encoded.extend_from_slice(&Self::AEAD_AES_128_GCM);
-        let mut fixed = [0; Self::LENGTH];
-        for (target, source) in fixed.iter_mut().zip(encoded) {
-            *target = source;
-        }
-        Self { encoded: fixed }
-    }
-
-    /// The encoded bytes.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; Self::LENGTH] {
-        &self.encoded
-    }
-
-    /// SHA-256 of the encoding: the value members pin in Party state.
-    #[must_use]
-    pub fn hash(&self) -> KeyConfigHash {
-        pingers_crypto::key_config_hash(&self.encoded)
     }
 }
 
@@ -245,7 +212,7 @@ pub(crate) mod tests {
         if let Some(first) = public.first_mut() {
             *first ^= id;
         }
-        RelayKey::new(
+        RelayKey::from_pair(
             PushRelayPrivateKey::from_bytes(Zeroizing::new(RFC7748_PRIVATE)),
             PushRelayPublicKey::new(id, public),
             KeyLifetime {
@@ -261,7 +228,7 @@ pub(crate) mod tests {
     }
 
     fn opens(ring: &KeyRing, id: u8, now: u64) -> bool {
-        ring.for_opening(KeyId::new(id), UnixSeconds::new(now))
+        ring.for_opening(PushRelayKeyId::new(id), UnixSeconds::new(now))
             .is_some()
     }
 
@@ -364,20 +331,27 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn key_config_encoding_follows_rfc_9458() {
-        let config = KeyConfig::new(&PushRelayPublicKey::new(7, RFC7748_PUBLIC));
-        let mut expected = vec![7, 0x00, 0x20];
-        expected.extend_from_slice(&RFC7748_PUBLIC);
-        expected.extend_from_slice(&[0x00, 0x04, 0x00, 0x01, 0x00, 0x01]);
-        assert_eq!(config.as_bytes().as_slice(), expected.as_slice());
-    }
-
-    #[test]
-    fn key_config_hash_is_sha256_of_the_encoding() {
-        let config = KeyConfig::new(&PushRelayPublicKey::new(7, RFC7748_PUBLIC));
+    fn the_public_key_is_derived_from_the_private_key() -> Result<(), CryptoError> {
+        let key = RelayKey::new(
+            PushRelayKeyId::new(7),
+            PushRelayPrivateKey::from_bytes(Zeroizing::new(RFC7748_PRIVATE)),
+            KeyLifetime {
+                activated_at: UnixSeconds::EPOCH,
+                retired_at: None,
+            },
+        )?;
+        assert_eq!(key.key_id(), PushRelayKeyId::new(7));
         assert_eq!(
-            config.hash(),
-            pingers_crypto::key_config_hash(config.as_bytes())
+            key.key_config(),
+            PushRelayKeyConfig {
+                key_id: PushRelayKeyId::new(7),
+                public_key: RFC7748_PUBLIC,
+            }
         );
+        assert_eq!(
+            key_config_hash(&key.key_config()),
+            pingers_crypto::key_config_hash(&key.key_config().to_bytes())
+        );
+        Ok(())
     }
 }

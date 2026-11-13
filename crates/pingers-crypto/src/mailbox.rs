@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Mailbox ids and sealed push tokens (design B.4.9).
 
+/// Re-exported from pingers-proto, where the push request carries it; the derivations stay
+/// here.
+pub use pingers_proto::PushBind;
 use pingers_proto::{MailboxId, PushTokenPlaintext, SealedPushBlob, SubscriptionId};
 use rand_core::CryptoRng;
 use sha2::{Digest as _, Sha256};
@@ -32,25 +35,6 @@ pub fn mailbox_id(read_key: &MailboxReadKey) -> MailboxId {
     MailboxId::from_bytes(id)
 }
 
-/// `bind`: ties a sealed push to one mailbox or subscription, so the server cannot move it
-/// (design B.4.9). The relay is given this hash, never the id.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct PushBind([u8; 32]);
-
-impl PushBind {
-    /// Wraps bind bytes received by the push relay.
-    #[must_use]
-    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-
-    /// The bind bytes.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
 /// `bind = SHA-256("pingers/v1/push-bind" || mailbox_id)`.
 #[must_use]
 pub fn push_bind_for_mailbox(mailbox: &MailboxId) -> PushBind {
@@ -75,7 +59,7 @@ fn push_bind(label: &[u8], id: &[u8; 16]) -> PushBind {
     for (target, source) in bind.iter_mut().zip(digest.iter()) {
         *target = *source;
     }
-    PushBind(bind)
+    PushBind::from_bytes(bind)
 }
 
 /// SHA-256 of an encoded OHTTP or push relay key config: the value members pin in Party state

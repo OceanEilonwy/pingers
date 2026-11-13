@@ -11,11 +11,10 @@ use std::time::Duration;
 use axum::http::StatusCode;
 use pingers_crypto::{PushRelayPublicKey, PushTokenToSeal, push_bind_for_mailbox};
 use pingers_proto::{
-    MailboxId, PushClass, PushHandle, PushPlatform, PushToken, PushTokenPlaintext, Urgency,
+    MailboxId, PushClass, PushHandle, PushPlatform, PushRelayKeyId, PushRequest, PushToken,
+    PushTokenPlaintext, Urgency, WireEncode as _,
 };
 use pingers_push_relay::delivery::{Dispatcher, DispatcherSettings, EndpointPolicy};
-use pingers_push_relay::keys::KeyId;
-use pingers_push_relay::request::PushRequest;
 use pingers_testkit::{ManualClock, seeded_rng};
 use pingers_time::{Clock, SystemClock, Timer, UnixSeconds};
 use pingers_transport::TokioTimer;
@@ -94,13 +93,13 @@ async fn unifiedpush_push_arrives_on_ntfy() -> TestResult {
     );
     let relay = RunningRelay::start(opener, dispatcher, clock).await?;
     let body = PushRequest {
-        key_id: KeyId::new(KEY_ID),
+        key_id: PushRelayKeyId::new(KEY_ID),
         blob,
         bind: pingers_crypto::PushBind::from_bytes(bind),
         urgency: Urgency::Quiet,
         handle,
     }
-    .encode_json();
+    .encode()?;
     let response = reqwest::Client::new()
         .post(relay.url("/v1/push"))
         .bearer_auth(CREDENTIAL)
@@ -151,13 +150,14 @@ async fn sealed_token_push_arrives_on_ntfy_through_the_relay_binary() -> TestRes
     let client = reqwest::Client::new();
     let send = |bind| {
         let body = PushRequest {
-            key_id: KeyId::new(KEY_ID),
+            key_id: PushRelayKeyId::new(KEY_ID),
             blob,
             bind,
             urgency: Urgency::Alert,
             handle,
         }
-        .encode_json();
+        .encode()
+        .unwrap_or_default();
         client
             .post(format!("{relay}/v1/push"))
             .bearer_auth(CREDENTIAL)
