@@ -386,4 +386,108 @@ mod tests {
         assert_eq!(crate_of("xtask/src/main.rs"), None);
         assert_eq!(crate_of("crates/README.md"), None);
     }
+
+    /// A scratch directory under the system temp dir, removed on drop.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Result<Self> {
+            let path = std::env::temp_dir().join(format!("xtask-{name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path)?;
+            Ok(Self(path))
+        }
+
+        fn write(&self, relative: &str, text: &str) -> Result<()> {
+            let path = self.0.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(path, text)?;
+            Ok(())
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn missing_files_read_as_empty_and_blank_lines_are_skipped() -> Result<()> {
+        let scratch = Scratch::new("files")?;
+        assert!(read_lines(&scratch.0.join("absent.txt"))?.is_empty());
+        assert!(read_allow_file(&scratch.0.join("absent.toml"))?.is_empty());
+        scratch.write(
+            "missed.txt",
+            "crates/a/src/b.rs:1:2: one\n\n  \ncrates/a/src/b.rs:3:4: two\n",
+        )?;
+        assert_eq!(
+            read_lines(&scratch.0.join("missed.txt"))?,
+            ["crates/a/src/b.rs:1:2: one", "crates/a/src/b.rs:3:4: two"]
+        );
+        scratch.write(
+            "allow.toml",
+            "[[mutant]]\nname = \"crates/a/src/b.rs: one\"\nreason = \"equivalent\"\n",
+        )?;
+        assert_eq!(read_allow_file(&scratch.0.join("allow.toml"))?.len(), 1);
+        // A directory is not a readable file: an error, not an empty list.
+        assert!(read_lines(&scratch.0).is_err());
+        assert!(read_allow_file(&scratch.0).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn only_crates_with_a_fuzz_manifest_are_fuzzed() -> Result<()> {
+        let scratch = Scratch::new("fuzzed")?;
+        scratch.write("crates/b/fuzz/Cargo.toml", "[package]\n")?;
+        scratch.write("crates/a/fuzz/Cargo.toml", "[package]\n")?;
+        scratch.write("crates/c/fuzz/README.md", "\n")?;
+        scratch.write("crates/d/src/lib.rs", "\n")?;
+        assert_eq!(
+            fuzzed_crates(&scratch.0)?,
+            [scratch.0.join("crates/a"), scratch.0.join("crates/b")]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn crates_with_changes_since_the_base_are_found() -> Result<()> {
+        let scratch = Scratch::new("changes")?;
+        let root = scratch.0.as_path();
+        for name in ["kept", "edited", "fuzzed", "added"] {
+            scratch.write(&format!("crates/{name}/Cargo.toml"), "[package]\n")?;
+            scratch.write(&format!("crates/{name}/src/lib.rs"), "\n")?;
+        }
+        scratch.write("crates/fuzzed/fuzz/Cargo.toml", "[package]\n")?;
+        for arguments in [
+            &["init", "--quiet", "--initial-branch", "base"][..],
+            &["add", "."],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "--quiet",
+                "-m",
+                "base",
+            ],
+        ] {
+            git(root, arguments)?;
+        }
+        scratch.write("crates/edited/src/lib.rs", "// changed\n")?;
+        scratch.write("crates/fuzzed/fuzz/target.rs", "\n")?;
+        scratch.write("crates/added/src/new.rs", "\n")?;
+        scratch.write("xtask/src/main.rs", "\n")?;
+        let changed = changed_crates(root, "base")?;
+        assert_eq!(
+            changed.into_iter().collect::<Vec<_>>(),
+            ["added", "edited"],
+            "fuzz-only changes and paths outside crates/ are not crates"
+        );
+        assert!(git(root, &["rev-parse", "no-such-ref"]).is_err());
+        Ok(())
+    }
 }
