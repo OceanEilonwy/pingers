@@ -36,6 +36,13 @@ design B.5, B.6, B.6.1, G.4 to G.7).
   MLS, carried as `LiveFrame` chunks. Frames with a `wake` (chat, meet point) and stored frames
   while the channel is down go through `post_message`; ephemeral frames with no channel are
   dropped. A frame refused with `CommitPending` (a proposal waits) is dropped.
+- **Grants and asks are stored** (pingers-meetup decides; no wake): sent on the channel when
+  it is up, where the server stores and forwards them, otherwise posted to the log. A member
+  whose channel was down gets them from the log read after it reconnects. What the server
+  sees per member event (counts of stored 256 B messages, independent of who holds a key) is
+  in pingers-meetup's contract. A copy that arrives both live and from the log (the log is
+  read from the last sequence *read*, not the last frame received live) either fails to open
+  at the MLS layer or is ignored by the session.
 - **Channel**: re-opened at once after a drop, then after 1 s doubling to 60 s; the failure
   count resets only when a frame arrives (a gateway that ends every exchange at once does not
   cause a tight loop). After every (re)open the group log is read from the last sequence seen:
@@ -59,7 +66,5 @@ design B.5, B.6, B.6.1, G.4 to G.7).
 
 ## Open (needs other crates)
 
-- pingers-meetup: start grants and asks are ephemeral, so a grant sent before the peer's
-  channel is open is lost until the next rotation or re-ask.
 - `subscriptions_removed` in remove commits is empty: this crate does not know other members'
   subscription ids.
