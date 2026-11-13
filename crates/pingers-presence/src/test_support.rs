@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Test helpers: an RNG that replays listed bytes, the test error type, a roster and fixtures.
 
-use core::convert::Infallible;
-
 use pingers_crypto::{AccountPublicKey, AccountSigningKey, PresenceRoot};
 use pingers_geo::PresenceState;
 use pingers_proto::{
@@ -37,59 +35,9 @@ pub(crate) enum TestError {
     Malformed(&'static str),
 }
 
-/// An RNG that returns exactly the bytes it was given, so a vector can list the randomness a
-/// computation consumes. Reading past the end returns zeros and is recorded.
-pub(crate) struct FixedRng {
-    bytes: Vec<u8>,
-    position: usize,
-    overrun: bool,
-}
-
-impl FixedRng {
-    pub(crate) fn new(bytes: &[u8]) -> Self {
-        Self {
-            bytes: bytes.to_vec(),
-            position: 0,
-            overrun: false,
-        }
-    }
-
-    /// Whether every byte was consumed and nothing more was asked for.
-    pub(crate) fn exhausted_exactly(&self) -> bool {
-        !self.overrun && self.position == self.bytes.len()
-    }
-}
-
-impl rand_core::TryRng for FixedRng {
-    type Error = Infallible;
-
-    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-        let mut bytes = [0; 4];
-        self.try_fill_bytes(&mut bytes)?;
-        Ok(u32::from_be_bytes(bytes))
-    }
-
-    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
-        let mut bytes = [0; 8];
-        self.try_fill_bytes(&mut bytes)?;
-        Ok(u64::from_be_bytes(bytes))
-    }
-
-    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
-        for byte in destination {
-            if let Some(source) = self.bytes.get(self.position) {
-                *byte = *source;
-            } else {
-                *byte = 0;
-                self.overrun = true;
-            }
-            self.position = self.position.saturating_add(1);
-        }
-        Ok(())
-    }
-}
-
-impl rand_core::TryCryptoRng for FixedRng {}
+/// The shared vector-replaying RNG. Presence draws read bytes with `fill_bytes` and decode
+/// them big-endian themselves (`random.rs`), so its little-endian words are never used here.
+pub(crate) use pingers_testkit::FixedRng;
 
 /// The server's board for tests: segments by start bucket, append and read, no matching.
 #[derive(Default)]

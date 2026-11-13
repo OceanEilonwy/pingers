@@ -5,12 +5,12 @@
 
 mod common;
 
-use common::{ReplayRng, TestError, gateway_key};
+use common::{TestError, gateway_key};
 use pingers_ohttp::{
     BinaryRequest, BinaryResponse, ChunkPosition, ChunkedClient, ChunkedGateway, Gateway, Header,
     KeyConfig, OhttpError, OpenedChunk, StatusCode, encapsulate_request,
 };
-use pingers_testkit::{Vector, load_vectors};
+use pingers_testkit::{FixedRng, Vector, load_vectors};
 
 fn text(vector: &Vector, field: &str) -> Result<String, TestError> {
     vector
@@ -105,9 +105,9 @@ fn encapsulation_vectors() -> Result<(), TestError> {
         let request = request(vector)?;
         assert_eq!(request.encode()?, vector.expected_bytes("binary_request")?);
 
-        let mut rng = ReplayRng::new(&vector.input_bytes("encapsulation_randomness")?);
+        let mut rng = FixedRng::new(&vector.input_bytes("encapsulation_randomness")?);
         let encapsulated = encapsulate_request(&config, &request, &mut rng)?;
-        assert!(rng.used_exactly(), "{}", vector.name);
+        assert!(rng.exhausted_exactly(), "{}", vector.name);
         assert_eq!(
             encapsulated.message,
             vector.expected_bytes("encapsulated_request")?,
@@ -129,9 +129,9 @@ fn encapsulation_vectors() -> Result<(), TestError> {
         );
         let decapsulated = gateway.decapsulate(&encapsulated.message)?;
         assert_eq!(decapsulated.request, request);
-        let mut rng = ReplayRng::new(&vector.input_bytes("response_nonce")?);
+        let mut rng = FixedRng::new(&vector.input_bytes("response_nonce")?);
         let sealed = decapsulated.responder.seal(&response, &mut rng)?;
-        assert!(rng.used_exactly());
+        assert!(rng.exhausted_exactly());
         assert_eq!(sealed, vector.expected_bytes("encapsulated_response")?);
         assert_eq!(encapsulated.response_context.open(&sealed)?, response);
     }
@@ -169,12 +169,12 @@ fn chunked_vectors() -> Result<(), TestError> {
         let gateway = gateway(vector)?;
         let config = config(vector)?;
         let request = request(vector)?;
-        let mut client_rng = ReplayRng::new(&vector.input_bytes("encapsulation_randomness")?);
+        let mut client_rng = FixedRng::new(&vector.input_bytes("encapsulation_randomness")?);
         let start = ChunkedClient::start(&config, &request, &mut client_rng)?;
-        assert!(client_rng.used_exactly());
-        let mut gateway_rng = ReplayRng::new(&vector.input_bytes("response_nonce")?);
+        assert!(client_rng.exhausted_exactly());
+        let mut gateway_rng = FixedRng::new(&vector.input_bytes("response_nonce")?);
         let accepted = ChunkedGateway::accept(&gateway, &start.preamble, &mut gateway_rng)?;
-        assert!(gateway_rng.used_exactly());
+        assert!(gateway_rng.exhausted_exactly());
 
         if let Some(error) = expected_error(vector) {
             let result = if vector.inputs.contains_key("request_stream") {

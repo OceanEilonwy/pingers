@@ -4,43 +4,12 @@
 //! to send.
 #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
-use std::convert::Infallible;
-
-use pingers_testkit::seeded_rng;
+use pingers_testkit::{FixedRng, seeded_rng};
 use zeroize::Zeroizing;
 
 use super::{ChunkedClient, ChunkedGateway};
 use crate::framing::{ChunkReader, frame};
 use crate::{BinaryRequest, ChunkPosition, Gateway, GatewayKey, Header, OhttpError, OpenedChunk};
-
-/// Yields the given bytes, then zeros.
-struct Replay(Vec<u8>);
-
-impl rand_core::TryRng for Replay {
-    type Error = Infallible;
-    fn try_next_u32(&mut self) -> Result<u32, Infallible> {
-        let mut word = [0; 4];
-        self.try_fill_bytes(&mut word)?;
-        Ok(u32::from_le_bytes(word))
-    }
-    fn try_next_u64(&mut self) -> Result<u64, Infallible> {
-        let mut word = [0; 8];
-        self.try_fill_bytes(&mut word)?;
-        Ok(u64::from_le_bytes(word))
-    }
-    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Infallible> {
-        for byte in destination {
-            *byte = if self.0.is_empty() {
-                0
-            } else {
-                self.0.remove(0)
-            };
-        }
-        Ok(())
-    }
-}
-
-impl rand_core::TryCryptoRng for Replay {}
 
 fn unhex(text: &str) -> Vec<u8> {
     hex::decode(text).unwrap_or_default()
@@ -92,7 +61,9 @@ fn gateway_reproduces_chunked_draft_appendix_a() -> Result<(), OhttpError> {
     );
 
     let mut response = opener
-        .response(&mut Replay(unhex("bcce7f4cb921309ba5d62edf1769ef09")))
+        .response(&mut FixedRng::new(&unhex(
+            "bcce7f4cb921309ba5d62edf1769ef09",
+        )))
         .map_err(|_| OhttpError::Internal)?;
     let mut encapsulated = response.nonce().to_vec();
     for (chunk, is_last) in [(&[0x01][..], false), (&[0x40, 0xc8], false), (&[], true)] {
