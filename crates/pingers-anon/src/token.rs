@@ -6,35 +6,7 @@ use voprf::{EvaluationElement, Group as _, Proof, VoprfClient};
 use zeroize::Zeroizing;
 
 use crate::AnonError;
-use crate::pp::{self, NONCE_LEN, Suite};
-
-/// How many tokens to request in one batch (up to 300 a day, design B.4.8).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TokenCount(u16);
-
-impl TokenCount {
-    /// The most tokens one batch may ask for.
-    pub const MAX: u16 = 300;
-
-    /// Checks the range 1 to 300.
-    ///
-    /// # Errors
-    ///
-    /// [`AnonError::BadIssuance`] outside that range.
-    pub const fn new(count: u16) -> Result<Self, AnonError> {
-        if count >= 1 && count <= Self::MAX {
-            Ok(Self(count))
-        } else {
-            Err(AnonError::BadIssuance)
-        }
-    }
-
-    /// The count.
-    #[must_use]
-    pub const fn get(self) -> u16 {
-        self.0
-    }
-}
+use crate::pp::{self, NONCE_LEN, Suite, TokenCount};
 
 /// A batch request in flight: blinded elements sent, blinds kept to finalise the answer.
 pub struct PendingIssuance {

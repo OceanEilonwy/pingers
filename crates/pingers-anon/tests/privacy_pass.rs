@@ -6,8 +6,8 @@
 use std::collections::HashSet;
 
 use pingers_anon::{
-    AnonError, IssuerKey, PrivacyPassToken, TokenCount, begin_token_issuance, check_redemption,
-    issue_tokens,
+    AnonError, IssuerKey, PrivacyPassToken, TokenCount, batch_token_count, begin_token_issuance,
+    check_redemption, issue_tokens,
 };
 use pingers_testkit::seeded_rng;
 use zeroize::Zeroizing;
@@ -158,6 +158,24 @@ fn token_counts_are_one_to_three_hundred() {
     assert_eq!(TokenCount::new(1).map(TokenCount::get).ok(), Some(1));
     assert_eq!(TokenCount::new(300).map(TokenCount::get).ok(), Some(300));
     assert!(TokenCount::new(301).is_err());
+}
+
+#[test]
+fn the_issuer_reads_the_batch_size_from_the_request() -> Result<(), AnonError> {
+    let key = IssuerKey::generate(&mut seeded_rng(8))?;
+    let mut rng = seeded_rng(10);
+    for count in [1, 7] {
+        let pending = begin_token_issuance(&key.public_key(), TokenCount::new(count)?, &mut rng)?;
+        assert_eq!(
+            batch_token_count(pending.request())?,
+            TokenCount::new(count)?
+        );
+    }
+    assert!(matches!(
+        batch_token_count(&[0, 1, 0]),
+        Err(AnonError::BadIssuance)
+    ));
+    Ok(())
 }
 
 #[test]

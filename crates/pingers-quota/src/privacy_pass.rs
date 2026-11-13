@@ -5,7 +5,7 @@
 use core::time::Duration;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use pingers_anon::{AnonError, IssuerKey, check_redemption, issue_tokens};
+use pingers_anon::{AnonError, IssuerKey, batch_token_count, check_redemption, issue_tokens};
 use pingers_proto::AccountId;
 use pingers_time::{Clock, UnixSeconds};
 use rand_core::CryptoRng;
@@ -159,7 +159,7 @@ impl<S: PrivacyPassStore> PrivacyPass<S> {
         let issuance = Issuance {
             account,
             day: IssuanceDay::containing(now),
-            tokens: batch_size(request)?,
+            tokens: batch_token_count(request)?.get(),
         };
         match self.store.record_issuance(issuance, DAILY_TOKEN_LIMIT)? {
             Allowance::Granted => Ok(Issued {
@@ -202,18 +202,4 @@ fn redeemable(record: &IssuerKeyRecord, now: UnixSeconds) -> bool {
 
 fn issues_at(record: &IssuerKeyRecord, now: UnixSeconds) -> bool {
     record.not_before <= now && now < record.issue_until
-}
-
-/// The number of tokens in a batched request that `issue_tokens` accepted:
-/// `token_type(2) || truncated_key_id(1) || length(2) || 49-byte elements` (RFC 9578, as
-/// pingers-anon encodes it).
-fn batch_size(request: &[u8]) -> Result<u16, QuotaError> {
-    const HEADER: usize = 5;
-    const ELEMENT: usize = 49;
-    let elements = request
-        .len()
-        .checked_sub(HEADER)
-        .and_then(|body| body.checked_div(ELEMENT))
-        .ok_or(QuotaError::Anon(AnonError::BadIssuance))?;
-    u16::try_from(elements).map_err(|_| QuotaError::Anon(AnonError::BadIssuance))
 }

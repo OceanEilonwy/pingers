@@ -92,3 +92,9 @@ RLN-v2 membership proofs and Privacy Pass type 0x0001. Features: `prover` (clien
 - **Performance**: see `BENCHMARK.md`.
 - **Wave 3 (2026-11-13):** `LeafPosition` is now an alias of `pingers_proto::MembershipIndex`
   (same `new`/`get`), so wire positions need no conversion.
+- **Wave 3 (2026-11-13), additive:** `classify_request(Option<&RequestDigest>, &VerifiedProof)`
+  lets a server with slashing off store only `x` per nullifier (pingers-quota now does), so
+  no share `y` is kept; `classify_nullifier` remains for a slashing server. `TokenCount` moved
+  to the shared Privacy Pass module (available with `prover` or `issuer`) and is the only
+  definition of the 300-token batch limit; `batch_token_count(request)` (issuer) gives the
+  count of a batch request, replacing pingers-quota's copy of the wire layout.

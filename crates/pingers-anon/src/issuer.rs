@@ -7,7 +7,7 @@ use voprf::{BlindedElement, Group as _, VoprfServer};
 use zeroize::Zeroizing;
 
 use crate::AnonError;
-use crate::pp::{self, Suite};
+use crate::pp::{self, Suite, TokenCount};
 
 /// The issuer's VOPRF private key, rotated weekly (design C.1 `pp_key`). No `Debug` or `Clone`.
 pub struct IssuerKey {
@@ -69,8 +69,20 @@ impl IssuerKey {
     }
 }
 
+/// How many tokens a batch request asks for, so the caller can count it against the daily
+/// allowance without knowing the wire layout.
+///
+/// # Errors
+///
+/// [`AnonError::BadIssuance`] if the request is malformed or holds more than 300 elements.
+pub fn batch_token_count(request: &[u8]) -> Result<TokenCount, AnonError> {
+    let decoded = pp::decode_request(request)?;
+    let count = u16::try_from(decoded.elements.len()).map_err(|_| AnonError::BadIssuance)?;
+    TokenCount::new(count)
+}
+
 /// Evaluates a batch request and proves it (batched issuance, RFC 9578). Quotas are the
-/// caller's check (pingers-quota).
+/// caller's check (pingers-quota, with [`batch_token_count`]).
 ///
 /// # Errors
 ///
