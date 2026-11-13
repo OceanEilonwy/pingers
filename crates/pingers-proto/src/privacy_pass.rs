@@ -14,8 +14,10 @@
 
 use minicbor::Decoder;
 
+use pingers_time::UnixSeconds;
+
 use crate::ProtoError;
-use crate::cbor::{CborBody, Writer, array_of, versioned_cbor};
+use crate::cbor::{CborBody, Writer, array_of, fixed_bytes, list, versioned_cbor};
 
 /// The most tokens one issuance may carry (design B.4.8: a batch of up to 300 a day).
 pub const MAX_TOKENS_PER_ISSUANCE: usize = 300;
@@ -124,13 +126,102 @@ impl CborBody for PrivacyPassIssueResponse {
     }
 }
 
-versioned_cbor!(PrivacyPassIssueRequest, PrivacyPassIssueResponse);
+/// One issuer key in `GET /v1/pp/keys` (design D, `PublicKeyInfo`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivacyPassKey {
+    /// `SHA-256(public_key)`, the RFC 9578 token key id.
+    pub key_id: [u8; 32],
+    /// The compressed P-384 public key (49 bytes), for pingers-anon's
+    /// `begin_token_issuance`.
+    pub public_key: Vec<u8>,
+    /// Until when the key issues; fetch the next one after this.
+    pub issue_until: UnixSeconds,
+    /// Until when tokens under this key are accepted.
+    pub redeem_until: UnixSeconds,
+}
+
+/// `GET /v1/pp/keys`: every key whose tokens are still accepted, oldest first; the last one
+/// issues.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivacyPassKeys {
+    /// The keys.
+    pub keys: Vec<PrivacyPassKey>,
+}
+
+/// Layout: `[key id (32), public key, issue until, redeem until]`. Nested, so unversioned.
+impl CborBody for PrivacyPassKey {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(4)?;
+        writer.bytes(&self.key_id)?;
+        writer.bytes(&self.public_key)?;
+        writer.unsigned(self.issue_until.get());
+        writer.unsigned(self.redeem_until.get());
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        array_of(decoder, 4)?;
+        Ok(Self {
+            key_id: fixed_bytes(decoder)?,
+            public_key: decoder.bytes()?.to_vec(),
+            issue_until: UnixSeconds::new(decoder.u64()?),
+            redeem_until: UnixSeconds::new(decoder.u64()?),
+        })
+    }
+}
+
+/// Layout: `[[key...]]`.
+impl CborBody for PrivacyPassKeys {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(1)?;
+        writer.list(&self.keys)
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        array_of(decoder, 1)?;
+        Ok(Self {
+            keys: list(decoder)?,
+        })
+    }
+}
+
+versioned_cbor!(
+    PrivacyPassIssueRequest,
+    PrivacyPassIssueResponse,
+    PrivacyPassKeys
+);
 
 #[cfg(test)]
 mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
     use super::*;
+
+    #[test]
+    fn issuer_keys_round_trip() -> Result<(), ProtoError> {
+        use crate::{WireDecode as _, WireEncode as _};
+        let keys = PrivacyPassKeys {
+            keys: vec![
+                PrivacyPassKey {
+                    key_id: [1; 32],
+                    public_key: vec![2; 49],
+                    issue_until: UnixSeconds::new(100),
+                    redeem_until: UnixSeconds::new(200),
+                },
+                PrivacyPassKey {
+                    key_id: [3; 32],
+                    public_key: vec![4; 49],
+                    issue_until: UnixSeconds::new(300),
+                    redeem_until: UnixSeconds::new(400),
+                },
+            ],
+        };
+        let encoded = keys.encode()?;
+        assert_eq!(PrivacyPassKeys::decode(&encoded)?, keys);
+        // `[1, [[[h'01'*32, h'02'*49, 100, 200], ...]]]`
+        assert_eq!(encoded.get(..4), Some(&[0x82, 0x01, 0x81, 0x82][..]));
+        Ok(())
+    }
 
     #[test]
     fn a_full_batch_fits_and_one_more_element_does_not() {

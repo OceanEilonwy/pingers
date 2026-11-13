@@ -13,12 +13,9 @@ use pingers_proto::{
 use pingers_time::{Clock, UnixSeconds};
 use rand_core::CryptoRng;
 
-use crate::DeliveryError;
 use crate::live::{ChannelId, LiveRegistry};
 use crate::store::{CommitWrite, DeliveryStore, NewCommit, NewEntry, NewGroup, StoredSubscription};
-
-/// A group with no reads or writes for this long is deleted (design B.5, "End").
-pub const IDLE_LIFETIME: Duration = Duration::from_hours(2);
+use crate::{DeliveryError, GroupLifetime, GroupStart};
 
 /// The longest a subscription may live: Party subscriptions are renewed every 30 days
 /// (design B.4.9).
@@ -128,8 +125,11 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         &self.store
     }
 
-    fn idle_expiry(now: UnixSeconds) -> Result<UnixSeconds, DeliveryError> {
-        now.checked_add(IDLE_LIFETIME)
+    fn idle_expiry(
+        now: UnixSeconds,
+        lifetime: GroupLifetime,
+    ) -> Result<UnixSeconds, DeliveryError> {
+        now.checked_add(lifetime.idle_lifetime())
             .ok_or(DeliveryError::TimeOutOfRange)
     }
 
@@ -150,13 +150,18 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         })
     }
 
-    /// `POST /v1/groups`: a new group at epoch 0. Wakes nobody: the creator delivers Welcomes
-    /// through mailboxes.
+    /// `POST /v1/groups`: a new group at `start.epoch`, of lifetime class `start.lifetime`.
+    /// Wakes nobody: the creator delivers Welcomes through mailboxes.
     ///
     /// # Errors
     ///
     /// [`DeliveryError::GroupExists`]; [`DeliveryError::SubscriptionTooLong`]; storage errors.
-    pub fn create_group(&self, request: CreateGroup) -> Result<(), DeliveryError> {
+    pub fn create_group(
+        &self,
+        request: CreateGroup,
+        start: GroupStart,
+    ) -> Result<(), DeliveryError> {
+        let GroupStart { lifetime, epoch } = start;
         let now = self.clock.now();
         let subscriptions = request
             .subscriptions
@@ -166,9 +171,11 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         self.store.create_group(NewGroup {
             id: request.group_id,
             auth_key: request.auth_key,
+            epoch,
             state: request.state,
             subscriptions,
-            idle_expires_at: Self::idle_expiry(now)?,
+            lifetime,
+            idle_expires_at: Self::idle_expiry(now, lifetime)?,
         })
     }
 
@@ -196,6 +203,8 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
             .into_iter()
             .map(|subscription| Self::stored(now, subscription))
             .collect::<Result<Vec<_>, _>>()?;
+        // The class never changes, so reading it before the atomic append is race-free.
+        let lifetime = self.store.head(group)?.lifetime;
         let write = self.store.append_commit(
             group,
             NewCommit {
@@ -207,7 +216,7 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
                 subscriptions_added,
                 subscriptions_removed: request.subscriptions_removed,
             },
-            Self::idle_expiry(now)?,
+            Self::idle_expiry(now, lifetime)?,
         )?;
         match write {
             CommitWrite::Appended { sequence } => Ok(CommitOutcome::Accepted {
@@ -274,7 +283,7 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
                 head_epoch: head.head_epoch,
             });
         }
-        let idle_expires_at = Self::idle_expiry(now)?;
+        let idle_expires_at = Self::idle_expiry(now, head.lifetime)?;
         match delivery {
             DeliveryMode::Stored => self
                 .store
@@ -326,7 +335,8 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         let now = self.clock.now();
         let messages = self.store.entries_after(group, after)?;
         let head = self.store.head(group)?;
-        self.store.touch(group, Self::idle_expiry(now)?)?;
+        self.store
+            .touch(group, Self::idle_expiry(now, head.lifetime)?)?;
         Ok(GroupMessages {
             messages,
             head_epoch: head.head_epoch,
@@ -341,7 +351,8 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
     pub fn state(&self, group: &GroupId) -> Result<Option<GroupState>, DeliveryError> {
         let now = self.clock.now();
         let state = self.store.state(group)?;
-        self.store.touch(group, Self::idle_expiry(now)?)?;
+        let lifetime = self.store.head(group)?.lifetime;
+        self.store.touch(group, Self::idle_expiry(now, lifetime)?)?;
         Ok(state)
     }
 
@@ -352,6 +363,26 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
     /// [`DeliveryError::UnknownGroup`]; storage errors.
     pub fn auth_key(&self, group: &GroupId) -> Result<GroupAuthKey, DeliveryError> {
         Ok(self.store.head(group)?.auth_key)
+    }
+
+    /// The keys of the group's earlier epochs, newest first. A request signed with one is
+    /// from a member (or a removed member) that has not applied the later commits: the server
+    /// lets it read the log to catch up, and answers its commit with the conflict.
+    ///
+    /// # Errors
+    ///
+    /// [`DeliveryError::UnknownGroup`]; storage errors.
+    pub fn past_auth_keys(&self, group: &GroupId) -> Result<Vec<GroupAuthKey>, DeliveryError> {
+        self.store.past_auth_keys(group)
+    }
+
+    /// The epoch the next commit must be made in.
+    ///
+    /// # Errors
+    ///
+    /// [`DeliveryError::UnknownGroup`]; storage errors.
+    pub fn head_epoch(&self, group: &GroupId) -> Result<Epoch, DeliveryError> {
+        Ok(self.store.head(group)?.head_epoch)
     }
 
     /// `PUT /v1/groups/{id}/subs/{sub_id}`: a member renews or replaces its own subscription.
@@ -366,8 +397,9 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
     ) -> Result<(), DeliveryError> {
         let now = self.clock.now();
         let stored = Self::stored(now, subscription)?;
+        let lifetime = self.store.head(group)?.lifetime;
         self.store
-            .put_subscription(group, stored, Self::idle_expiry(now)?)
+            .put_subscription(group, stored, Self::idle_expiry(now, lifetime)?)
     }
 
     /// `DELETE /v1/groups/{id}/subs/{sub_id}`, and what the server does when the push relay
@@ -395,8 +427,8 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         self.live.close_group(group)
     }
 
-    /// Deletes groups idle for [`IDLE_LIFETIME`] and expired subscriptions, and closes the
-    /// deleted groups' live channels. Run it periodically.
+    /// Deletes groups idle for their class's [`GroupLifetime::idle_lifetime`] and expired
+    /// subscriptions, and closes the deleted groups' live channels. Run it periodically.
     ///
     /// # Errors
     ///
@@ -422,7 +454,8 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         sender: T,
     ) -> Result<ChannelId, DeliveryError> {
         let now = self.clock.now();
-        self.store.touch(group, Self::idle_expiry(now)?)?;
+        let lifetime = self.store.head(group)?.lifetime;
+        self.store.touch(group, Self::idle_expiry(now, lifetime)?)?;
         self.live.attach(*group, subscription, sender)
     }
 

@@ -74,7 +74,6 @@ async fn g4_a_stale_poster_declines_and_nothing_forms() -> TestResult {
 /// G.6's and G.7's Remove) is refused with 409 for good. The other scenarios work around it by
 /// posting the creation commit at epoch 0.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "finding: G.4 as drawn leaves the delivery log at epoch 0 while members are at 1"]
 async fn g5_after_g4_as_drawn_the_first_add_is_accepted() -> TestResult {
     let mut world = World::new(510).await?;
     world.g3_alice_alone().await?;

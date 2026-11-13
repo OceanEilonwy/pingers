@@ -141,8 +141,64 @@ pub(crate) fn registration_message(
     .concat()
 }
 
+/// The signed challenge of `POST /v1/auth` (design D, auth mode Acct): a signature over
+/// `"pingers/v1/auth" || public key || be64(bucket index) || server origin`. The challenge is
+/// the 15-minute bucket, so no round trip is needed to fetch one; the server accepts the
+/// current bucket, or the previous one shortly after a rollover.
+///
+/// # Errors
+///
+/// [`CryptoError::Internal`] if signing fails.
+pub fn sign_auth_challenge(
+    signing_key: &AccountSigningKey,
+    server: &pingers_proto::ServerId,
+    bucket: pingers_time::Bucket,
+) -> Result<Signature, CryptoError> {
+    let message = auth_challenge_message(&signing_key.public_key(), server, bucket);
+    Ok(Signature(primitives::ed25519_sign(
+        signing_key.expose_bytes(),
+        &message,
+    )))
+}
+
+/// Checks a signed auth challenge (server side).
+///
+/// # Errors
+///
+/// [`CryptoError::BadSignature`] if it does not verify for this key, server and bucket.
+pub fn verify_auth_challenge(
+    public_key: &AccountPublicKey,
+    server: &pingers_proto::ServerId,
+    bucket: pingers_time::Bucket,
+    signature: &Signature,
+) -> Result<(), CryptoError> {
+    primitives::ed25519_verify(
+        public_key.as_bytes(),
+        &auth_challenge_message(public_key, server, bucket),
+        signature.as_bytes(),
+    )
+}
+
+/// `"pingers/v1/auth" || public key || be64(bucket) || server origin`; the origin comes last,
+/// so no length prefix is needed.
+fn auth_challenge_message(
+    public_key: &AccountPublicKey,
+    server: &pingers_proto::ServerId,
+    bucket: pingers_time::Bucket,
+) -> Vec<u8> {
+    [
+        labels::AUTH_CHALLENGE,
+        public_key.as_bytes(),
+        &bucket.index().to_be_bytes(),
+        server.as_str().as_bytes(),
+    ]
+    .concat()
+}
+
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
     use super::*;
 
     #[test]
@@ -156,5 +212,30 @@ mod tests {
                 0x8e, 0x20
             ])
         );
+    }
+
+    #[test]
+    fn auth_challenges_verify_only_for_their_bucket_server_and_key() -> Result<(), CryptoError> {
+        let key = AccountSigningKey::from_bytes(zeroize::Zeroizing::new([7; 32]));
+        let other = AccountSigningKey::from_bytes(zeroize::Zeroizing::new([8; 32]));
+        let server = pingers_proto::ServerId::new("https://pingers.example".to_owned())
+            .map_err(|_| CryptoError::Internal)?;
+        let elsewhere = pingers_proto::ServerId::new("https://other.example".to_owned())
+            .map_err(|_| CryptoError::Internal)?;
+        let bucket = pingers_time::Bucket::from_index(1_000).map_err(|_| CryptoError::Internal)?;
+        let next = pingers_time::Bucket::from_index(1_001).map_err(|_| CryptoError::Internal)?;
+        let signature = sign_auth_challenge(&key, &server, bucket)?;
+        verify_auth_challenge(&key.public_key(), &server, bucket, &signature)?;
+        for (public, server, bucket) in [
+            (key.public_key(), &server, next),
+            (key.public_key(), &elsewhere, bucket),
+            (other.public_key(), &server, bucket),
+        ] {
+            assert!(matches!(
+                verify_auth_challenge(&public, server, bucket, &signature),
+                Err(CryptoError::BadSignature)
+            ));
+        }
+        Ok(())
     }
 }

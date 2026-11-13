@@ -133,7 +133,18 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
 - **Vectors** live in `vectors/crypto/` and load as `load_vectors("crypto/<name>")`. Fields that
   need no AEAD or curve arithmetic (derivations, tags, hashes, signed messages, AAD, info) were
   recomputed independently with Python's standard library when the files were written.
+
 - **Wave 3 (2026-11-13), additive:** `rln_external_nullifier_hash`, `rln_request_hash` and
   `RlnPreimageHash` take over the RLN preimage labels and framing from pingers-anon, which now
   only reduces the hash into the field and applies Poseidon. Outputs are unchanged
   (`vectors/rln.json` still passes).
+
+### Account auth challenge (added 2026-11-13, wave 3 server)
+
+- **`sign_auth_challenge` / `verify_auth_challenge`** (additive): the `nonce_sig` of
+  `POST /v1/auth` is an Ed25519 signature by the account key over `"pingers/v1/auth" ||
+  public key || be64(bucket index) || server origin`. Design D says "a signed challenge" but
+  gives no challenge endpoint and `AuthRequest` carries no nonce, so the challenge is the
+  current 15-minute bucket; pingers-server accepts the current bucket, or the previous one
+  within 60 s of a rollover. A replay inside the window only gets the same account another
+  bearer. New label `pingers/v1/auth` (decision).

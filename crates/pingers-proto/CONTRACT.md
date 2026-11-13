@@ -172,6 +172,15 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
 - Vectors `invite-payload-encoding` and `join-request-encoding`; fuzz targets
   `invite_payload` and `join_request`.
 
+### Privacy Pass keys (added 2026-11-13, wave 3 server)
+
+- **`PrivacyPassKeys`** (`GET /v1/pp/keys`) and **`PrivacyPassKey`** (additive): `[[key...]]`,
+  each key `[key id (32), public key (bytes), issue until, redeem until]`, oldest first, the
+  last one issuing. The design lists `keys: Vec<PublicKeyInfo>` without fields; these are the
+  fields pingers-quota's `IssuerPublicKey` has and the client needs (the public key for
+  `begin_token_issuance`, when to fetch the next). A unit round trip pins the layout; the
+  vector and fuzz target are still to add.
+
 ### Wave 3 cleanup (2026-11-13)
 
 - **One owner per concept.** `SingleSuiteKeyConfig` is the only RFC 9458 key config encoder;

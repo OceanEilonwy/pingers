@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The main app's RLN path: the membership tree kept whole from the public leaf list, and
-//! a proof the server's verifier accepts.
+//! a proof the server accepts.
 
 use pingers_anon::{
     AcceptedRoots, LeafValue, MESSAGE_LIMIT, RlnSecret, VerificationContext, request_digest, verify,
 };
+use pingers_ohttp::{BinaryRequest, Header};
 use pingers_proto::{
-    MembershipIndex, MembershipLeaves, MembershipRoot, RlnAuth, RlnScope, WireDecode,
+    MembershipLeafRequest, MembershipLeafResponse, Redacted, RlnAuth, RlnScope, WireDecode,
+    WireEncode as _,
 };
 use pingers_store::{RlnIdentity, TreePosition};
 use pingers_sync::{CredentialChoice, Delivered, MembershipRefresh, WakeBudget};
 use pingers_testkit::seeded_rng;
-use pingers_time::Clock as _;
+use pingers_time::{Clock as _, UnixSeconds};
 
 use crate::mailbox::knock_mailbox;
-use crate::support::{Device, TestError, TestResult, World, server};
+use crate::support::{Device, TestError, TestResult, World};
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
@@ -35,37 +37,36 @@ fn base64url_decode(text: &str) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-fn leaves(values: &[[u8; 32]], zeroed: &[u32], next: u32) -> MembershipLeaves {
-    MembershipLeaves {
-        leaves: values.to_vec(),
-        zeroed: zeroed.iter().copied().map(MembershipIndex::new).collect(),
-        roots: Vec::<MembershipRoot>::new(),
-        next: MembershipIndex::new(next),
-    }
-}
-
-/// Registers this device as leaf 1 of a three-leaf tree in which leaf 0 has been zeroed.
+/// Registers this device's leaf at the server, waits for the hourly root that holds it, and
+/// brings the local tree up to the server's leaf list.
 async fn join_tree(world: &World, device: &Device) -> Result<LeafValue, TestError> {
     let secret = RlnSecret::generate(&mut seeded_rng(21))?;
     let mine = secret.id_commitment()?.leaf()?;
-    let live_from = u32::try_from(world.clock.now().get() / 3_600)
-        .map_err(|_| TestError::Unexpected("root epoch past u32"))?;
+    let bearer = world.account.bearer().await?;
+    let registration = BinaryRequest {
+        method: "POST".to_owned(),
+        path: "/v1/rln/leaf".to_owned(),
+        headers: vec![Header {
+            name: "authorization".to_owned(),
+            value: bearer.into_bytes(),
+        }],
+        body: MembershipLeafRequest {
+            id_commitment: Redacted::new(*secret.id_commitment()?.as_bytes()),
+        }
+        .encode()?,
+    };
+    let answer = world.account.send(&registration).await?;
+    let leaf = MembershipLeafResponse::decode(&answer.body)?;
+    let live = UnixSeconds::new(u64::from(leaf.live_from.get()).saturating_mul(3_600));
+    world
+        .clock
+        .advance(live.saturating_duration_since(world.clock.now()));
     let identity = RlnIdentity {
         secret,
-        leaf: TreePosition::new(1),
-        live_from: pingers_store::RootEpoch::new(live_from),
+        leaf: TreePosition::new(leaf.index.get()),
+        live_from: leaf.live_from,
     };
     device.session()?.rln_identity().save(&identity)?;
-    let other = RlnSecret::generate(&mut seeded_rng(22))?
-        .id_commitment()?
-        .leaf()?;
-    device
-        .link
-        .script_leaves(leaves(&[[0; 32], *mine.as_bytes()], &[], 2));
-    device
-        .link
-        .script_leaves(leaves(&[*other.as_bytes()], &[0], 3));
-    device.link.script_leaves(leaves(&[], &[0], 3));
     let refresh = device
         .engine
         .refresh_membership(WakeBudget::UNLIMITED)
@@ -73,8 +74,8 @@ async fn join_tree(world: &World, device: &Device) -> Result<LeafValue, TestErro
     assert_eq!(
         refresh,
         MembershipRefresh {
-            added: 3,
-            zeroed: 1
+            added: 1,
+            zeroed: 0
         }
     );
     Ok(mine)
@@ -116,11 +117,6 @@ async fn the_main_app_proves_and_the_proof_verifies() -> TestResult {
 
     // The server's check: the local tree's root, this server, this exact request.
     let tree_leaves = device.session()?.rln_tree().leaves()?;
-    assert_eq!(
-        tree_leaves.first().map(|leaf| *leaf.value.as_bytes()),
-        Some([0; 32]),
-        "leaf 0 was zeroed"
-    );
     let mut tree = pingers_anon::MembershipTree::empty()?;
     tree.apply(
         &tree_leaves
@@ -128,7 +124,7 @@ async fn the_main_app_proves_and_the_proof_verifies() -> TestResult {
             .map(|leaf| pingers_anon::LeafUpdate::Appended(leaf.value))
             .collect::<Vec<_>>(),
     )?;
-    let server = server()?;
+    let server = world.server_id.clone();
     let verified = verify(
         &auth,
         &VerificationContext {

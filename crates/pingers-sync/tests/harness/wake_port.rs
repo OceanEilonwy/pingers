@@ -123,7 +123,7 @@ async fn a_knock_carries_an_alert_subscription_only_with_wake_pushes_on() -> Tes
         },
     )?;
 
-    // Knock mailboxes are sealed with the knock push: the harness lists no relay, so the
+    // Knock mailboxes are sealed with the knock push: the harness does not list its relay, so the
     // server refuses it, which shows the push was attached.
     let _ = device.stock_tokens().await?;
     let target = PoolTarget {

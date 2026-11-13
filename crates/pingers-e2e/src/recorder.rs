@@ -77,11 +77,16 @@ pub(crate) struct Net {
     pub(crate) device: String,
     pub(crate) transport: Arc<OhttpTransport>,
     pub(crate) recorder: Arc<Recorder>,
+    pub(crate) credentials: Arc<crate::TokenPool>,
 }
 
 impl Net {
     /// Sends one anonymous request through the relay and records it.
-    pub(crate) async fn send(&self, request: BinaryRequest) -> Result<BinaryResponse, E2eError> {
+    pub(crate) async fn send(
+        &self,
+        mut request: BinaryRequest,
+    ) -> Result<BinaryResponse, E2eError> {
+        self.credentials.attach(&mut request).await?;
         let keep = self.recorder.keep_bodies;
         let mut exchange = Exchange {
             device: self.device.clone(),
