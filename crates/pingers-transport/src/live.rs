@@ -231,6 +231,12 @@ async fn open_split(
     })
 }
 
+/// The response half of an exchange.
+struct Downlink {
+    response: Incoming,
+    decoder: ResponseChunkDecoder,
+}
+
 /// How an exchange ended.
 enum Outcome {
     /// The handle closed the channel.
@@ -373,10 +379,9 @@ impl Driver {
             tokio::select! {
                 frame = self.outgoing.recv() => {
                     let Some(frame) = frame else {
-                        if let Mode::Duplex { client, upstream } = &mut mode
-                            && let Ok(sealed) = client.seal_chunk(&[], ChunkPosition::Final)
-                        {
-                            let _ = upstream.send(Bytes::from(sealed)).await;
+                        if let Mode::Duplex { client, upstream } = mode {
+                            let downlink = Downlink { response, decoder };
+                            self.close_duplex(client, upstream, downlink).await;
                         }
                         return Outcome::Closed;
                     };
@@ -408,6 +413,35 @@ impl Driver {
                     Ok(None) => return self.finish(decoder).await,
                     Err(_) => return Outcome::Dropped,
                 },
+            }
+        }
+    }
+
+    /// Sends the final chunk, then reads the response to its end, so the request's end is not
+    /// cut off by a stream reset. Frames still arriving are handed over if there is room.
+    /// Bounded by [`DuplexStream::close`]'s deadline, which aborts the driver.
+    async fn close_duplex(
+        &self,
+        mut client: ChunkedClient,
+        upstream: mpsc::Sender<Bytes>,
+        downlink: Downlink,
+    ) {
+        let Downlink {
+            mut response,
+            mut decoder,
+        } = downlink;
+        if let Ok(sealed) = client.seal_chunk(&[], ChunkPosition::Final) {
+            let _ = upstream.send(Bytes::from(sealed)).await;
+        }
+        drop(upstream);
+        while let Ok(Some(bytes)) = next_data(&mut response).await {
+            let Ok(chunks) = decoder.feed(&bytes) else {
+                return;
+            };
+            for chunk in chunks {
+                if chunk.payload != KEEP_ALIVE_CHUNK {
+                    let _ = self.incoming.try_send(Ok(chunk.payload));
+                }
             }
         }
     }
