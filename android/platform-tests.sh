@@ -12,7 +12,8 @@ set -eu
 : "${ANDROID_SERIAL:?set ANDROID_SERIAL to the emulator's serial}"
 flavor="${1:-gms}"
 adb="adb -s $ANDROID_SERIAL"
-runner=org.pingers.app.debug.test/androidx.test.runner.AndroidJUnitRunner
+case "$flavor" in gms) app=org.pingers.app.debug ;; *) app=org.pingers.app.foss.debug ;; esac
+runner=$app.test/androidx.test.runner.AndroidJUnitRunner
 class=org.pingers.app.platform.PlatformDeviceTest
 out=$(mktemp)
 
@@ -32,6 +33,19 @@ while kill -0 "$pid" 2>/dev/null; do
     sleep 2
 done
 tail -3 "$out"
+
+echo "== CoreHostDeviceTest (the app's sink is the core host; a geofence reaches it)"
+$adb shell am instrument -w -e class org.pingers.app.data.CoreHostDeviceTest#sinkIsTheCoreHost "$runner" | tail -1
+$adb emu geo fix -0.2000 51.4000 >/dev/null
+$adb shell am instrument -w -e class org.pingers.app.data.CoreHostDeviceTest#geofenceReachesTheCore "$runner" >"$out" 2>&1 &
+pid=$!
+sleep 8
+while kill -0 "$pid" 2>/dev/null; do
+    $adb emu geo fix -0.1246 51.5007 >/dev/null
+    sleep 2
+done
+tail -3 "$out"
+$adb logcat -d -s PingersTest | grep PINGERS_CORE_GEOFENCE || true
 
 echo "== unifiedPushWakesTheCore"
 $adb logcat -c
