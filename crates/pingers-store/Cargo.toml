@@ -11,8 +11,15 @@ publish.workspace = true
 layer = 2
 
 [dependencies]
+# Domain types stored in the tables: RLN message ids and leaf values (pingers-anon, no
+# features, so no prover is linked), secret key types (pingers-crypto), fences and presence
+# snapshots (pingers-geo), UnixSeconds and Bucket (pingers-time).
+pingers-anon = { workspace = true }
+pingers-crypto = { workspace = true }
+pingers-geo = { workspace = true }
 pingers-mls = { workspace = true }
 pingers-proto = { workspace = true }
+pingers-time = { workspace = true }
 rusqlite = { workspace = true }
 thiserror = { workspace = true }
 zeroize = { workspace = true }
