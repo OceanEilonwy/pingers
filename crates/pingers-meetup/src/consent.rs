@@ -36,6 +36,19 @@ impl AlwaysAllow {
     pub fn contains(&self, member: &AccountPublicKey) -> bool {
         self.members.contains(member)
     }
+
+    /// Adds `member` ("Always allow"); a member already on the list is not added twice.
+    pub fn insert(&mut self, member: AccountPublicKey) {
+        if !self.contains(&member) {
+            self.members.push(member);
+        }
+    }
+
+    /// The members on the list, for writing back to the `always_allow` table.
+    #[must_use]
+    pub fn members(&self) -> &[AccountPublicKey] {
+        &self.members
+    }
 }
 
 /// How long a grant lasts.
