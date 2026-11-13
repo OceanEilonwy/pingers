@@ -29,7 +29,8 @@
 //! Grp) carries `pingers-group-time: <decimal unix seconds>` and
 //! `pingers-group-signature: <hex Ed25519 signature>` over pingers-crypto's
 //! `GroupRequest { method, path with query, body, timestamp }`; an RLN proof travels as
-//! `authorization: PingersRln <unpadded base64url of the 265-byte RlnAuth>` (design D).
+//! `authorization: PingersRln <base64url, padded, of the 265-byte RlnAuth>` (design D; padded
+//! as pingers-anon pads `PrivateToken`).
 #![forbid(unsafe_code)]
 
 mod base64url;

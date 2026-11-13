@@ -1,0 +1,542 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! The world the tests run in: the in-process harness (real server, OHTTP relay and push
+//! relay), and per device an engine over a real OHTTP transport through that relay.
+//!
+//! Two stand-ins fill routes the server on main still answers `501`:
+//!
+//! - group routes are answered by pingers-delivery in process, but only when the server
+//!   answered `501`, so the tests run against the real server once it serves them;
+//! - Privacy Pass issuance (identified, direct) is answered by pingers-anon's issuer, since
+//!   the harness server speaks plain HTTP and `DirectTransport` requires `https://`.
+//!
+//! Every anonymous request still crosses the real relay and gateway first.
+
+use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
+
+use pingers_anon::{IssuerKey, TokenCount, issue_tokens};
+use pingers_delivery::{Delivery, MemoryDeliveryStore};
+use pingers_ohttp::{BinaryRequest, BinaryResponse, Header, StatusCode};
+use pingers_proto::{
+    AnonymousCredential, AppMessage, CommitRequest, CreateGroup, GroupId, MessageAccepted,
+    PrivacyPassIssueRequest, PrivacyPassIssueResponse, SecretText, SequenceNumber, ServerId,
+    WireDecode, WireEncode,
+};
+use pingers_store::{Database, DatabaseKey, Session, TokenKeyId};
+use pingers_sync::{
+    CommitAttempts, CredentialPolicy, ProcessRole, ProverStatus, QueueCapacity, SyncEngine,
+    SyncError, SyncParts, SyncSettings, TokenIssuer, TokenStock, WakeBudget,
+};
+use pingers_testkit::{HarnessConfig, InProcessHarness, TestRng, seeded_rng};
+use pingers_time::ManualClock;
+use pingers_transport::{
+    DuplexStream, KeyPin, OhttpConfig, OhttpTransport, PrivacyClass, Relay, Router, Routes,
+    TlsRoots, Transport, TransportError, TransportKind,
+};
+use zeroize::Zeroizing;
+
+/// How long any single step may take in real time; a hang fails the test instead of
+/// stalling it.
+pub(crate) const STEP: Duration = Duration::from_secs(20);
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum TestError {
+    #[error(transparent)]
+    Sync(#[from] SyncError),
+    #[error(transparent)]
+    Transport(#[from] TransportError),
+    #[error(transparent)]
+    Harness(#[from] pingers_testkit::HarnessError),
+    #[error(transparent)]
+    Store(#[from] pingers_store::StoreError),
+    #[error(transparent)]
+    Anon(#[from] pingers_anon::AnonError),
+    #[error(transparent)]
+    Proto(#[from] pingers_proto::ProtoError),
+    #[error(transparent)]
+    Crypto(#[from] pingers_crypto::CryptoError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("timed out")]
+    Timeout,
+    #[error("unexpected: {0}")]
+    Unexpected(&'static str),
+}
+
+impl From<tokio::time::error::Elapsed> for TestError {
+    fn from(_: tokio::time::error::Elapsed) -> Self {
+        Self::Timeout
+    }
+}
+
+pub(crate) type TestResult = Result<(), TestError>;
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Lets real time pass, so loopback I/O can happen between manual clock steps.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the network under test is real; only the engine's timers are manual"
+)]
+pub(crate) async fn real_pause() {
+    tokio::time::sleep(Duration::from_millis(10)).await;
+}
+
+/// Runs `future`, advancing `clock` by `step` between short real pauses, so timers the code
+/// under test sleeps on fire when it gets to them.
+pub(crate) async fn advancing<F: Future>(
+    clock: &ManualClock,
+    step: Duration,
+    future: F,
+) -> Result<F::Output, TestError> {
+    let mut future = std::pin::pin!(future);
+    Ok(tokio::time::timeout(STEP, async {
+        loop {
+            tokio::select! {
+                output = &mut future => return output,
+                () = real_pause() => clock.advance(step),
+            }
+        }
+    })
+    .await?)
+}
+
+/// A fresh directory under the system temporary directory, removed on drop.
+pub(crate) struct TestDir {
+    path: PathBuf,
+}
+
+impl TestDir {
+    fn new() -> Result<Self, std::io::Error> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let unique = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("pingers-sync-test-{}-{unique}", std::process::id()));
+        drop(std::fs::remove_dir_all(&path));
+        std::fs::create_dir_all(&path)?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        drop(std::fs::remove_dir_all(&self.path));
+    }
+}
+
+fn response(status: u16, body: Vec<u8>) -> Result<BinaryResponse, TransportError> {
+    Ok(BinaryResponse {
+        status: StatusCode::new(status)?,
+        headers: Vec::new(),
+        body,
+    })
+}
+
+fn encoded(status: u16, value: &impl WireEncode) -> Result<BinaryResponse, TransportError> {
+    response(
+        status,
+        value.encode().map_err(|_| TransportError::InvalidRequest)?,
+    )
+}
+
+/// The group routes, answered by pingers-delivery while the server answers `501`.
+pub(crate) struct GroupStandIn {
+    delivery: Delivery<MemoryDeliveryStore, ()>,
+    rng: Mutex<TestRng>,
+}
+
+impl GroupStandIn {
+    fn new(clock: &ManualClock) -> Self {
+        Self {
+            delivery: Delivery::new(MemoryDeliveryStore::new(), Arc::new(clock.clone())),
+            rng: Mutex::new(seeded_rng(99)),
+        }
+    }
+
+    fn answer(&self, request: &BinaryRequest) -> Option<Result<BinaryResponse, TransportError>> {
+        let (path, query) = request
+            .path
+            .split_once('?')
+            .unwrap_or((request.path.as_str(), ""));
+        let segments: Vec<&str> = path.strip_prefix("/v1/")?.split('/').collect();
+        let group = |hex_id: &str| {
+            let mut bytes = [0_u8; 32];
+            hex::decode_to_slice(hex_id, &mut bytes)
+                .ok()
+                .map(|()| GroupId::from_bytes(bytes))
+        };
+        let answer = match (request.method.as_str(), segments.as_slice()) {
+            ("POST", ["groups"]) => {
+                let create = CreateGroup::decode(&request.body).ok()?;
+                match self.delivery.create_group(create) {
+                    Ok(()) => response(201, Vec::new()),
+                    Err(_) => response(409, Vec::new()),
+                }
+            }
+            ("POST", ["groups", id, "commit"]) => {
+                let commit = CommitRequest::decode(&request.body).ok()?;
+                let outcome = self
+                    .delivery
+                    .commit(&group(id)?, commit, &mut *lock(&self.rng))
+                    .ok()?;
+                let answer = outcome.response();
+                let status = match answer {
+                    pingers_proto::CommitResponse::Accepted { .. } => 200,
+                    pingers_proto::CommitResponse::Conflict { .. } => 409,
+                };
+                encoded(status, &answer)
+            }
+            ("GET", ["groups", id, "msgs"]) => {
+                let after = query
+                    .strip_prefix("after=")
+                    .and_then(|after| after.parse().ok())
+                    .unwrap_or(0);
+                let messages = self
+                    .delivery
+                    .messages(&group(id)?, SequenceNumber::new(after))
+                    .ok()?;
+                encoded(200, &messages)
+            }
+            ("POST", ["groups", id, "msgs"]) => {
+                let message = AppMessage::decode(&request.body).ok()?;
+                let posted = self
+                    .delivery
+                    .post(&group(id)?, message, &mut *lock(&self.rng))
+                    .ok()?;
+                match posted.sequence {
+                    Some(sequence) => encoded(202, &MessageAccepted { sequence }),
+                    None => response(202, Vec::new()),
+                }
+            }
+            _ => return None,
+        };
+        Some(answer)
+    }
+}
+
+/// What a device's anonymous link saw.
+#[derive(Clone, Debug)]
+pub(crate) struct Seen {
+    pub(crate) class: PrivacyClass,
+    pub(crate) method: String,
+    pub(crate) path: String,
+    pub(crate) authorization: Option<String>,
+}
+
+/// A device's anonymous and stream route: the real OHTTP transport, with switches the tests
+/// flip (relay unreachable, gateway stalls) and the group stand-in behind it.
+pub(crate) struct Link {
+    relay: OhttpTransport,
+    groups: Arc<GroupStandIn>,
+    offline: AtomicBool,
+    stalled: AtomicBool,
+    rivals: Mutex<VecDeque<BinaryRequest>>,
+    seen: Mutex<Vec<Seen>>,
+}
+
+impl Link {
+    /// Requests fail with `NoRelay`, as when no relay can be reached; nothing is sent.
+    pub(crate) fn set_offline(&self, offline: bool) {
+        self.offline.store(offline, Ordering::SeqCst);
+    }
+
+    /// Requests are sent but never answered.
+    pub(crate) fn set_stalled(&self, stalled: bool) {
+        self.stalled.store(stalled, Ordering::SeqCst);
+    }
+
+    /// Sends `rival` just before a later commit this link carries (one rival per commit, in
+    /// order): another member's commit for the same epoch winning the race.
+    pub(crate) fn race_next_commit(&self, rival: BinaryRequest) {
+        lock(&self.rivals).push_back(rival);
+    }
+
+    pub(crate) fn seen(&self) -> Vec<Seen> {
+        lock(&self.seen).clone()
+    }
+
+    async fn forward(&self, request: BinaryRequest) -> Result<BinaryResponse, TransportError> {
+        let answer = self
+            .relay
+            .request(PrivacyClass::Anonymous, request.clone())
+            .await?;
+        if answer.status.get() == 501
+            && let Some(stand_in) = self.groups.answer(&request)
+        {
+            return stand_in;
+        }
+        Ok(answer)
+    }
+}
+
+#[async_trait::async_trait]
+impl Transport for Link {
+    async fn request(
+        &self,
+        class: PrivacyClass,
+        request: BinaryRequest,
+    ) -> Result<BinaryResponse, TransportError> {
+        if self.offline.load(Ordering::SeqCst) {
+            return Err(TransportError::NoRelay);
+        }
+        lock(&self.seen).push(Seen {
+            class,
+            method: request.method.clone(),
+            path: request.path.clone(),
+            authorization: request
+                .headers
+                .iter()
+                .find(|header| header.name == "authorization")
+                .map(|header| String::from_utf8_lossy(&header.value).into_owned()),
+        });
+        if self.stalled.load(Ordering::SeqCst) {
+            return std::future::pending().await;
+        }
+        if request.path.ends_with("/commit") {
+            let rival = lock(&self.rivals).pop_front();
+            if let Some(rival) = rival {
+                self.forward(rival).await?;
+            }
+        }
+        self.forward(request).await
+    }
+
+    async fn stream(
+        &self,
+        request: BinaryRequest,
+    ) -> Result<Box<dyn DuplexStream>, TransportError> {
+        if self.offline.load(Ordering::SeqCst) {
+            return Err(TransportError::NoRelay);
+        }
+        self.relay.stream(request).await
+    }
+
+    fn kind(&self) -> TransportKind {
+        TransportKind::Ohttp
+    }
+}
+
+/// The identified route: Privacy Pass issuance answered by pingers-anon's issuer.
+pub(crate) struct Issuer {
+    key: IssuerKey,
+    rng: Mutex<TestRng>,
+    requests: AtomicUsize,
+    unavailable: AtomicBool,
+}
+
+impl Issuer {
+    fn new() -> Result<Self, TestError> {
+        Ok(Self {
+            key: IssuerKey::generate(&mut seeded_rng(5))?,
+            rng: Mutex::new(seeded_rng(6)),
+            requests: AtomicUsize::new(0),
+            unavailable: AtomicBool::new(false),
+        })
+    }
+
+    pub(crate) fn info(&self) -> TokenIssuer {
+        TokenIssuer {
+            public_key: self.key.public_key(),
+            key_id: TokenKeyId::from_bytes(self.key.key_id()),
+        }
+    }
+
+    pub(crate) fn requests(&self) -> usize {
+        self.requests.load(Ordering::SeqCst)
+    }
+
+    /// The issuer answers `503`.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl Transport for Issuer {
+    async fn request(
+        &self,
+        class: PrivacyClass,
+        request: BinaryRequest,
+    ) -> Result<BinaryResponse, TransportError> {
+        if class != PrivacyClass::Identified {
+            return Err(TransportError::ClassNotAllowed);
+        }
+        self.requests.fetch_add(1, Ordering::SeqCst);
+        let bearer = request.headers.iter().any(|header: &Header| {
+            header.name == "authorization" && header.value.starts_with(b"Bearer ")
+        });
+        if !bearer || (request.method.as_str(), request.path.as_str()) != ("POST", "/v1/pp/issue") {
+            return response(404, Vec::new());
+        }
+        if self.unavailable.load(Ordering::SeqCst) {
+            return response(503, Vec::new());
+        }
+        let issue = PrivacyPassIssueRequest::decode(&request.body)
+            .map_err(|_| TransportError::InvalidRequest)?;
+        let evaluated = issue_tokens(&self.key, issue.token_request(), &mut *lock(&self.rng))
+            .map_err(|_| TransportError::InvalidRequest)?;
+        let answer =
+            PrivacyPassIssueResponse::new(evaluated).map_err(|_| TransportError::InvalidRequest)?;
+        encoded(200, &answer)
+    }
+
+    async fn stream(
+        &self,
+        _request: BinaryRequest,
+    ) -> Result<Box<dyn DuplexStream>, TransportError> {
+        Err(TransportError::ClassNotAllowed)
+    }
+
+    fn kind(&self) -> TransportKind {
+        TransportKind::Direct
+    }
+}
+
+/// The harness and what all devices share.
+pub(crate) struct World {
+    pub(crate) harness: InProcessHarness,
+    pub(crate) clock: ManualClock,
+    groups: Arc<GroupStandIn>,
+    dir: TestDir,
+    next_device: AtomicU64,
+}
+
+/// One device: an engine over its own store and link.
+pub(crate) struct Device {
+    pub(crate) engine: SyncEngine,
+    pub(crate) session: Arc<Session>,
+    pub(crate) link: Arc<Link>,
+    pub(crate) issuer: Arc<Issuer>,
+    _database: Database,
+}
+
+pub(crate) fn bearer() -> SecretText {
+    SecretText::new("harness-bearer".to_owned())
+}
+
+pub(crate) fn server() -> Result<ServerId, TestError> {
+    Ok(ServerId::new("https://pingers.test".to_owned())?)
+}
+
+/// Proofs and tokens accepted; the prover enabled. Devices in these tests have no RLN
+/// identity, so the main app falls back to tokens (design B.4.8 trigger 1).
+pub(crate) fn policy() -> CredentialPolicy {
+    CredentialPolicy {
+        accepted: vec![
+            AnonymousCredential::MembershipProof,
+            AnonymousCredential::PrivacyPass,
+        ],
+        prover: ProverStatus::Enabled,
+    }
+}
+
+/// A small stock so issuance stays quick: refill below 3, up to 5.
+pub(crate) fn stock() -> Result<TokenStock, TestError> {
+    Ok(TokenStock::new(3, TokenCount::new(5)?)?)
+}
+
+impl World {
+    pub(crate) fn start() -> Result<Self, TestError> {
+        let config = HarnessConfig::default();
+        let clock = config.clock.clone();
+        let harness = InProcessHarness::start(&config)?;
+        Ok(Self {
+            harness,
+            groups: Arc::new(GroupStandIn::new(&clock)),
+            clock,
+            dir: TestDir::new()?,
+            next_device: AtomicU64::new(1),
+        })
+    }
+
+    fn relay(&self, address: &str) -> Result<OhttpTransport, TestError> {
+        let config = OhttpConfig::new(
+            vec![Relay::new(
+                &format!("http://{address}/ohttp"),
+                &format!("http://{address}/v1/ohttp/config"),
+            )?],
+            KeyPin::FirstUse,
+            TlsRoots::from_der(&[])?,
+        );
+        Ok(OhttpTransport::new(
+            config,
+            Arc::new(self.clock.clone()),
+            Box::new(seeded_rng(self.next_device.load(Ordering::SeqCst))),
+        )?)
+    }
+
+    /// A main-app device talking through the harness relay.
+    pub(crate) fn device(&self) -> Result<Device, TestError> {
+        let address = self.harness.endpoints().ohttp_relay.to_string();
+        self.device_with(&address, ProcessRole::MainApp)
+    }
+
+    /// A device whose relay is at `address` (which may be unreachable) in `role`.
+    pub(crate) fn device_with(
+        &self,
+        address: &str,
+        role: ProcessRole,
+    ) -> Result<Device, TestError> {
+        let number = self.next_device.fetch_add(1, Ordering::SeqCst);
+        let database = Database::open(
+            &self.dir.path.join(format!("device-{number}.db")),
+            DatabaseKey::from_bytes(Zeroizing::new(
+                [u8::try_from(number % 200).unwrap_or(1); 32],
+            )),
+        )?;
+        let session = Arc::new(database.session()?);
+        let link = Arc::new(Link {
+            relay: self.relay(address)?,
+            groups: Arc::clone(&self.groups),
+            offline: AtomicBool::new(false),
+            stalled: AtomicBool::new(false),
+            rivals: Mutex::new(VecDeque::new()),
+            seen: Mutex::new(Vec::new()),
+        });
+        let issuer = Arc::new(Issuer::new()?);
+        let router = Router::new(Routes {
+            anonymous: link.clone(),
+            identified: issuer.clone(),
+            stream: link.clone(),
+        })?;
+        let engine = SyncEngine::new(
+            SyncParts {
+                transport: Arc::new(router),
+                session: Arc::clone(&session),
+                clock: Arc::new(self.clock.clone()),
+                timer: Arc::new(self.clock.clone()),
+                rng: Box::new(seeded_rng(number.saturating_add(1000))),
+            },
+            SyncSettings {
+                server: server()?,
+                role,
+                credentials: policy(),
+                token_stock: stock()?,
+                commit_attempts: CommitAttempts::default(),
+                queue_capacity: QueueCapacity::default(),
+            },
+        );
+        Ok(Device {
+            engine,
+            session,
+            link,
+            issuer,
+            _database: database,
+        })
+    }
+}
+
+impl Device {
+    /// Fills the token stock.
+    pub(crate) async fn stock_tokens(&self) -> Result<pingers_sync::Refill, TestError> {
+        Ok(self
+            .engine
+            .refill_tokens(&self.issuer.info(), &bearer(), WakeBudget::UNLIMITED)
+            .await?)
+    }
+}
