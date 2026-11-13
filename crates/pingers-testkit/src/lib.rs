@@ -1,219 +1,76 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Fake platform, harness, vectors.
 //!
-//! Shared test fixtures for every crate's tests (architecture §3, style guide §7): a fake
-//! `Platform` (scripted fixes, DND, wakes), an in-process server with relays, a deterministic
-//! clock and RNG, and the loader for the JSON test vectors in `vectors/`.
+//! Shared test infrastructure for every crate's tests (architecture §3, style guide §7):
 //!
-//! Available now: [`seeded_rng`], [`ManualClock`] (re-exported from pingers-time) and the
-//! vector loader ([`load_vectors`]). The fake platform and the in-process server come with the
-//! crates they fake.
+//! - **Time**: [`ManualClock`] (a [`pingers_time::Clock`] and [`pingers_time::Timer`] that only
+//!   moves when the test moves it), [`TEST_START`], [`test_clock`] and [`advance_to`].
+//! - **Randomness**: [`seeded_rng`], a seeded ChaCha20 [`rand_core::CryptoRng`].
+//! - **Platform**: [`FakePlatform`], a scriptable stand-in for the Android shell: scripted fixes,
+//!   Focus/DND state, captured wake scheduling, captured OS geofences, location mode and an
+//!   in-memory secure store.
+//! - **Events** (feature `client`): `RecordingEvents`, a `pingers_client::Events` sink that
+//!   records what the core said and checks it with `Result`-returning assertions.
+//! - **Fixtures**: [`PartyBuilder`] for a Party with members and Spots, and
+//!   [`SpotFixture::fix_inside`] / [`SpotFixture::fix_outside`] for fixes against a Spot.
+//! - **Vectors**: [`load_vectors`] for the JSON known-answer tests in `vectors/`.
+//! - **Harness**: [`InProcessHarness`], the in-process server plus OHTTP relay plus push relay.
+//!   The API is fixed; the wiring waits for the server crates (see the [`harness`] module).
 //!
-//! Crates use this as a dev-dependency only; `cargo xtask layers` forbids production
-//! dependencies on it.
+//! # Dependencies and layers
+//!
+//! The testkit is a `dev` crate: `cargo xtask layers` lets it depend on anything and forbids
+//! any production dependency on it, so crates take it as a **dev-dependency only**.
+//!
+//! Cargo allows a dev-dependency cycle (crate A's tests use the testkit, which depends on A),
+//! but the test build then links two copies of A: the one under test and the one the testkit
+//! was built against. Their types do not unify, so `pingers_geo::Fix` from the testkit would
+//! not be the `Fix` in pingers-geo's own unit tests. To keep this rare and harmless:
+//!
+//! 1. **Without features, the testkit depends only on L0 and L1**: pingers-time (with
+//!    `test-util`), pingers-proto, pingers-geo and pingers-gate. These are pure crates whose
+//!    types (fixes, circles, ids, Focus state) are the vocabulary of every fake. Nothing at L2
+//!    or above, and none of the heavy L1 crates (MLS, RLN, OHTTP), so every crate can afford it.
+//! 2. **Crates the testkit depends on** (time, proto, geo, gate) use it from integration tests
+//!    in `tests/`, not from `#[cfg(test)]` modules: integration tests link the crate's normal
+//!    library, the same copy the testkit sees. pingers-time should not use it at all.
+//! 3. **Feature `client`** adds pingers-client (L3) and pingers-meetup (L1, for
+//!    `ExactLocation`) and implements `pingers_client::Platform` and `pingers_client::Events`.
+//!    Only crates at or above the composition root turn it on: pingers-client's integration
+//!    tests, pingers-screens, pingers-ffi, pingers-cli. CI builds with `--all-features`, so a
+//!    lower crate that uses the testkit may compile pingers-client in its test build; that is
+//!    slow but correct as long as rule 2 is kept for the crates pingers-client depends on.
+//! 4. **Crates in L2 and L3** that define their own ports (for example a wake scheduler trait
+//!    in pingers-wake) implement them for [`FakePlatform`] in their tests: the trait is local
+//!    to them, so the orphan rule allows `impl MyPort for FakePlatform`.
+//!
+//! The fake's own vocabulary for things pingers-client defines (fix quality, location mode,
+//! OS region, push registration) lives here as small mirror types ([`FixQuality`],
+//! [`LocationMode`], [`Geofence`], [`PushRegistration`]); feature `client` converts them with
+//! exhaustive matches, so a new variant in pingers-client fails the testkit build instead of
+//! being silently dropped.
 #![forbid(unsafe_code)]
 
-use std::fs;
-use std::path::PathBuf;
+#[cfg(feature = "client")]
+mod client;
+#[cfg(feature = "client")]
+mod events;
+mod fixtures;
+pub mod harness;
+mod platform;
+mod rng;
+mod time;
+mod vectors;
 
+#[cfg(feature = "client")]
+pub use events::{EventAssertion, EventKind, NoticeKind, RecordedEvent, RecordingEvents};
+pub use fixtures::{FixtureError, MemberFixture, PartyBuilder, PartyFixture, SpotFixture};
+pub use harness::{HarnessConfig, HarnessError, InProcessHarness};
 pub use pingers_time::ManualClock;
-use rand_core::SeedableRng as _;
-use serde::Deserialize;
-
-/// A deterministic, cryptographically strong RNG for tests: the same seed gives the same dummy
-/// slots, nonces and padding on every run (style guide §6).
-#[must_use]
-pub fn seeded_rng(seed: u64) -> rand_chacha::ChaCha20Rng {
-    rand_chacha::ChaCha20Rng::seed_from_u64(seed)
-}
-
-/// Why a vector file could not be used.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum VectorError {
-    /// The file could not be read.
-    #[error("cannot read vector file {path}")]
-    Read {
-        /// The file.
-        path: PathBuf,
-        /// Why.
-        #[source]
-        source: std::io::Error,
-    },
-    /// The file is not valid vector JSON.
-    #[error("vector file {path} is malformed")]
-    Parse {
-        /// The file.
-        path: PathBuf,
-        /// Why.
-        #[source]
-        source: serde_json::Error,
-    },
-    /// A field is missing from a vector.
-    #[error("vector `{vector}` has no field `{field}`")]
-    MissingField {
-        /// The vector's name.
-        vector: String,
-        /// The field asked for.
-        field: String,
-    },
-    /// A field is not the type asked for (for example a bytes field that is not lower-case hex).
-    #[error("vector `{vector}` field `{field}` is not {expected}")]
-    WrongType {
-        /// The vector's name.
-        vector: String,
-        /// The field.
-        field: String,
-        /// What was expected.
-        expected: &'static str,
-    },
-}
-
-/// One vector file: `vectors/<name>.json` (format in `vectors/README.md`).
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct VectorFile {
-    /// What the vectors cover, for example `presence-key-schedule`.
-    pub name: String,
-    /// Where in the design the derivation or format is defined.
-    pub description: String,
-    /// The vectors.
-    pub vectors: Vec<Vector>,
-}
-
-/// One test case.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct Vector {
-    /// A unique, descriptive name within the file.
-    pub name: String,
-    /// The inputs, by field name.
-    pub inputs: serde_json::Map<String, serde_json::Value>,
-    /// The expected outputs, by field name.
-    pub expected: serde_json::Map<String, serde_json::Value>,
-}
-
-impl Vector {
-    /// An input field holding bytes as lower-case hex.
-    ///
-    /// # Errors
-    ///
-    /// [`VectorError::MissingField`] or [`VectorError::WrongType`].
-    pub fn input_bytes(&self, field: &str) -> Result<Vec<u8>, VectorError> {
-        self.bytes(&self.inputs, field)
-    }
-
-    /// An expected field holding bytes as lower-case hex.
-    ///
-    /// # Errors
-    ///
-    /// [`VectorError::MissingField`] or [`VectorError::WrongType`].
-    pub fn expected_bytes(&self, field: &str) -> Result<Vec<u8>, VectorError> {
-        self.bytes(&self.expected, field)
-    }
-
-    /// An input field holding an unsigned integer.
-    ///
-    /// # Errors
-    ///
-    /// [`VectorError::MissingField`] or [`VectorError::WrongType`].
-    pub fn input_u64(&self, field: &str) -> Result<u64, VectorError> {
-        self.field(&self.inputs, field)?
-            .as_u64()
-            .ok_or_else(|| self.wrong_type(field, "an unsigned integer"))
-    }
-
-    fn bytes(
-        &self,
-        fields: &serde_json::Map<String, serde_json::Value>,
-        field: &str,
-    ) -> Result<Vec<u8>, VectorError> {
-        let text = self
-            .field(fields, field)?
-            .as_str()
-            .ok_or_else(|| self.wrong_type(field, "a hex string"))?;
-        if text.chars().any(|character| character.is_ascii_uppercase()) {
-            return Err(self.wrong_type(field, "lower-case hex"));
-        }
-        hex::decode(text).map_err(|_invalid| self.wrong_type(field, "a hex string"))
-    }
-
-    fn field<'vector>(
-        &self,
-        fields: &'vector serde_json::Map<String, serde_json::Value>,
-        field: &str,
-    ) -> Result<&'vector serde_json::Value, VectorError> {
-        fields.get(field).ok_or_else(|| VectorError::MissingField {
-            vector: self.name.clone(),
-            field: field.to_owned(),
-        })
-    }
-
-    fn wrong_type(&self, field: &str, expected: &'static str) -> VectorError {
-        VectorError::WrongType {
-            vector: self.name.clone(),
-            field: field.to_owned(),
-            expected,
-        }
-    }
-}
-
-/// Loads `vectors/<name>.json` from the workspace root.
-///
-/// # Errors
-///
-/// [`VectorError::Read`] or [`VectorError::Parse`].
-pub fn load_vectors(name: &str) -> Result<VectorFile, VectorError> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../vectors")
-        .join(format!("{name}.json"));
-    let text = fs::read_to_string(&path).map_err(|source| VectorError::Read {
-        path: path.clone(),
-        source,
-    })?;
-    serde_json::from_str(&text).map_err(|source| VectorError::Parse { path, source })
-}
-
-#[cfg(test)]
-mod tests {
-    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
-
-    use rand_core::Rng as _;
-
-    use super::*;
-
-    #[test]
-    fn same_seed_gives_same_bytes() {
-        let mut first = seeded_rng(7);
-        let mut second = seeded_rng(7);
-        assert_eq!(first.next_u64(), second.next_u64());
-    }
-
-    #[test]
-    fn example_vector_file_loads() -> Result<(), VectorError> {
-        let file = load_vectors("example")?;
-        let vector = file
-            .vectors
-            .first()
-            .ok_or_else(|| VectorError::MissingField {
-                vector: String::from("example"),
-                field: String::from("vectors[0]"),
-            })?;
-        assert_eq!(vector.input_bytes("message")?, b"abc");
-        assert_eq!(vector.expected_bytes("sha256")?.len(), 32);
-        Ok(())
-    }
-
-    #[test]
-    fn upper_case_hex_is_rejected() {
-        let vector = Vector {
-            name: String::from("case"),
-            inputs: serde_json::from_str(r#"{"bytes": "AB"}"#).unwrap_or_default(),
-            expected: serde_json::Map::new(),
-        };
-        assert!(matches!(
-            vector.input_bytes("bytes"),
-            Err(VectorError::WrongType { .. })
-        ));
-    }
-}
+pub use platform::{
+    FakePlatform, FixQuality, FixRequest, Geofence, LocationMode, PushRegistration,
+    SecureStoreError, StoreAvailability, WakeRequest,
+};
+pub use rng::{TestRng, random_array, seeded_rng};
+pub use time::{ClockError, TEST_START, advance_to, test_clock};
+pub use vectors::{Vector, VectorError, VectorFile, load_vectors, load_vectors_from};

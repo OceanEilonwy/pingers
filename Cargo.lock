@@ -3277,8 +3277,16 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "pingers-client",
+ "pingers-gate",
+ "pingers-geo",
+ "pingers-proto",
  "pingers-testkit",
+ "pingers-time",
+ "serde",
+ "thiserror",
  "tokio",
+ "toml 1.2.1+spec-1.1.0",
+ "url",
 ]
 
 [[package]]
@@ -3536,12 +3544,18 @@ name = "pingers-testkit"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "pingers-client",
+ "pingers-gate",
+ "pingers-geo",
+ "pingers-meetup",
+ "pingers-proto",
  "pingers-time",
  "rand_chacha 0.10.0",
  "rand_core 0.10.1",
  "serde",
  "serde_json",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]

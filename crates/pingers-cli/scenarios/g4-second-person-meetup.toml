@@ -1,0 +1,87 @@
+# Design G.4: a second person enters and a Meetup is created.
+#
+# Alice is Inside (as in G.3). Bob arrives; his board sync trial-matches Alice's record and he
+# knocks. The push relay wakes Alice with a location push; her core takes a fresh fix, runs
+# the liveness check, creates the Meetup group and sends Bob a Welcome. Bob is woken by an
+# Alert push, joins, and both see the Meetup.
+name = "g4-second-person-meetup"
+description = "Bob enters while Alice is inside: knock, liveness check, Meetup for two"
+seed = 4
+
+[party]
+members = ["alice", "bob"]
+
+[[party.spots]]
+name = "anchor"
+latitude = 51.5007
+longitude = -0.1246
+radius_m = 150
+
+# Alice is already Inside.
+[[steps]]
+at = 0
+device = "alice"
+fix = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 0
+device = "alice"
+geofence = { region = "anchor", transition = "enter" }
+
+[[steps]]
+at = 30
+device = "alice"
+location = { spot = "anchor", position = "inside" }
+
+# Bob arrives two minutes later.
+[[steps]]
+at = 120
+device = "bob"
+fix = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 120
+device = "bob"
+geofence = { region = "anchor", transition = "enter" }
+
+[[steps]]
+at = 150
+device = "bob"
+location = { spot = "anchor", position = "inside" }
+
+# Bob's sync matched and he knocked. Alice's location push: she answers with a fresh fix.
+[[steps]]
+at = 152
+device = "alice"
+fix = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 152
+device = "alice"
+wake = "push"
+
+[[steps]]
+at = 153
+device = "alice"
+expect = { event = "meetup_started" }
+
+# The Welcome reaches Bob with an Alert push.
+[[steps]]
+at = 155
+device = "bob"
+wake = "push"
+
+[[steps]]
+at = 156
+device = "bob"
+expect = { event = "meetup_started" }
+
+[[steps]]
+at = 156
+device = "alice"
+expect = { location_mode = "meetup_background" }
+
+[[steps]]
+at = 156
+device = "bob"
+expect = { location_mode = "meetup_background" }

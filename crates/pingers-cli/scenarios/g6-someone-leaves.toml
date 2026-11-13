@@ -1,0 +1,124 @@
+# Design G.6: someone leaves a Meetup.
+#
+# Alice, Bob and Carol are in a Meetup (as at the end of G.5). Bob walks out: his exit is
+# confirmed beyond the hysteresis buffer, he proposes Remove(self), revokes his lease and
+# deletes all state for the Meetup. Alice commits the removal; Carol moves to the new epoch.
+name = "g6-someone-leaves"
+description = "Bob leaves the Meetup; the others carry on without him"
+seed = 6
+
+[party]
+members = ["alice", "bob", "carol"]
+
+[[party.spots]]
+name = "anchor"
+latitude = 51.5007
+longitude = -0.1246
+radius_m = 150
+
+# The Meetup of three, as in G.5.
+[[steps]]
+at = 0
+device = "alice"
+fix = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 0
+device = "alice"
+geofence = { region = "anchor", transition = "enter" }
+
+[[steps]]
+at = 30
+device = "alice"
+location = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 120
+device = "bob"
+fix = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 120
+device = "bob"
+geofence = { region = "anchor", transition = "enter" }
+
+[[steps]]
+at = 150
+device = "bob"
+location = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 152
+device = "alice"
+fix = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 152
+device = "alice"
+wake = "push"
+
+[[steps]]
+at = 155
+device = "bob"
+wake = "push"
+
+[[steps]]
+at = 300
+device = "carol"
+fix = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 300
+device = "carol"
+geofence = { region = "anchor", transition = "enter" }
+
+[[steps]]
+at = 330
+device = "carol"
+location = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 332
+device = "alice"
+fix = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 332
+device = "alice"
+wake = "push"
+
+[[steps]]
+at = 335
+device = "carol"
+wake = "push"
+
+# Bob walks out. The geofence exit asks for a fix; it is beyond the exit buffer.
+[[steps]]
+at = 600
+device = "bob"
+fix = { spot = "anchor", position = "outside" }
+
+[[steps]]
+at = 600
+device = "bob"
+geofence = { region = "anchor", transition = "exit" }
+
+[[steps]]
+at = 601
+device = "bob"
+expect = { event = "meetup_ended" }
+
+[[steps]]
+at = 601
+device = "bob"
+expect = { location_mode = "idle" }
+
+[[steps]]
+at = 605
+device = "alice"
+expect = { event = "meetup_updated" }
+
+[[steps]]
+at = 605
+device = "carol"
+expect = { no_event = "meetup_ended" }

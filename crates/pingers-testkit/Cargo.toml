@@ -10,14 +10,28 @@ publish.workspace = true
 [package.metadata.pingers]
 layer = "dev"
 
+[features]
+# `impl pingers_client::Platform for FakePlatform`, `impl pingers_client::Events for
+# RecordingEvents`. Only for crates that already sit at or above pingers-client (pingers-ffi,
+# pingers-screens, pingers-cli, pingers-client's own integration tests). The crate docs
+# ("Dependencies and layers") say why it is not on by default.
+client = ["dep:pingers-client", "dep:pingers-meetup"]
+
 [dependencies]
+# Without the feature the testkit depends only on L0 and L1 crates (crate docs).
 pingers-time = { workspace = true, features = ["test-util"] }
+pingers-proto = { workspace = true }
+pingers-geo = { workspace = true }
+pingers-gate = { workspace = true }
+pingers-client = { workspace = true, optional = true }
+pingers-meetup = { workspace = true, optional = true }
 hex = { workspace = true }
 rand_chacha = { workspace = true }
 rand_core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+zeroize = { workspace = true }
 
 [lints]
 workspace = true
