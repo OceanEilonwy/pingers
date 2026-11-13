@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, MutexGuard};
 
 use pingers_anon::IssuerKey;
-use pingers_proto::{AccountId, MembershipRoot};
+use pingers_proto::{AccountId, HourlyRoot};
 use pingers_time::UnixSeconds;
 use zeroize::Zeroizing;
 
@@ -33,7 +33,7 @@ struct KeyRow {
 #[derive(Default)]
 struct Inner {
     leaves: Vec<StoredLeaf>,
-    roots: Vec<MembershipRoot>,
+    roots: Vec<HourlyRoot>,
     keys: Vec<KeyRow>,
     spent: HashMap<TokenNonce, UnixSeconds>,
     issued: BTreeMap<(AccountId, IssuanceDay), u16>,
@@ -84,13 +84,13 @@ impl MembershipStore for MemoryQuotaStore {
         self.lock()?.zero(zeroing)
     }
 
-    fn recent_roots(&self) -> Result<Vec<MembershipRoot>, QuotaError> {
+    fn recent_roots(&self) -> Result<Vec<HourlyRoot>, QuotaError> {
         let inner = self.lock()?;
         let skip = inner.roots.len().saturating_sub(2);
         Ok(inner.roots.iter().skip(skip).copied().collect())
     }
 
-    fn insert_root(&self, root: MembershipRoot) -> Result<(), QuotaError> {
+    fn insert_root(&self, root: HourlyRoot) -> Result<(), QuotaError> {
         let mut inner = self.lock()?;
         if inner.roots.iter().any(|stored| stored.epoch == root.epoch) {
             return Err(QuotaError::CorruptField { field: "rln_root" });

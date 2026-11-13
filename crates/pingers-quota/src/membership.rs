@@ -10,10 +10,10 @@ use core::time::Duration;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use pingers_anon::{
-    AcceptedRoots, AnonError, IdCommitment, LeafUpdate, MembershipRoot as RootValue, MembershipTree,
+    AcceptedRoots, AnonError, IdCommitment, LeafUpdate, MembershipRoot, MembershipTree,
 };
 use pingers_proto::{
-    AccountId, MembershipIndex, MembershipLeafResponse, MembershipLeaves, MembershipRoot, RootEpoch,
+    AccountId, HourlyRoot, MembershipIndex, MembershipLeafResponse, MembershipLeaves, RootEpoch,
 };
 use pingers_time::{Clock, UnixSeconds};
 
@@ -72,7 +72,7 @@ struct State {
     /// How many of `leaves` the tree contains.
     applied: usize,
     /// The latest two roots, oldest first; empty before the first roll.
-    roots: Vec<MembershipRoot>,
+    roots: Vec<HourlyRoot>,
 }
 
 impl State {
@@ -107,7 +107,7 @@ impl State {
                 .filter(|leaf| {
                     Self::zeroed_at(leaf, Some(epoch)) && !Self::zeroed_at(leaf, current)
                 })
-                .map(|leaf| LeafUpdate::Zeroed(pingers_anon::LeafPosition::new(leaf.index.get()))),
+                .map(|leaf| LeafUpdate::Zeroed(leaf.index)),
         );
         (updates, applied)
     }
@@ -174,7 +174,7 @@ impl<S: MembershipStore> Membership<S> {
         let (updates, applied) = state.updates_until(epoch);
         let mut tree = state.tree.clone();
         tree.apply(&updates)?;
-        let root = MembershipRoot {
+        let root = HourlyRoot {
             epoch,
             root: *tree.root().as_bytes(),
         };
@@ -264,7 +264,7 @@ impl<S: MembershipStore> Membership<S> {
     /// Storage errors; [`QuotaError::TimeOutOfRange`].
     pub fn accepted_roots(&self) -> Result<AcceptedRoots, QuotaError> {
         let state = self.rolled()?;
-        let value = |root: &MembershipRoot| RootValue::from_bytes(root.root);
+        let value = |root: &HourlyRoot| MembershipRoot::from_bytes(root.root);
         let mut roots = state.roots.iter().rev();
         let current = roots.next().map(value).ok_or(QuotaError::TimeOutOfRange)?;
         let accepted = AcceptedRoots::first(current);

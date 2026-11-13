@@ -118,14 +118,17 @@ impl KeyConfig {
 
     /// The upstream client for this config, offering only the pinned suite.
     pub(crate) fn client(&self) -> Result<ohttp::ClientRequest, OhttpError> {
-        let mut single_suite = Vec::with_capacity(41);
-        single_suite.push(self.key_id);
-        single_suite.extend_from_slice(&KEM_X25519.to_be_bytes());
-        single_suite.extend_from_slice(&self.public_key);
-        single_suite.extend_from_slice(&4_u16.to_be_bytes());
-        single_suite.extend_from_slice(&KDF_HKDF_SHA256.to_be_bytes());
-        single_suite.extend_from_slice(&AEAD_AES_128_GCM.to_be_bytes());
+        let single_suite = self.single_suite().to_bytes();
         ohttp::ClientRequest::from_encoded_config(&single_suite).map_err(|_| OhttpError::Internal)
+    }
+
+    /// This config narrowed to the one suite Pingers uses, in pingers-proto's encoding (the
+    /// same encoder as the push relay's config).
+    fn single_suite(&self) -> pingers_proto::SingleSuiteKeyConfig {
+        pingers_proto::SingleSuiteKeyConfig {
+            key_id: self.key_id,
+            public_key: self.public_key,
+        }
     }
 }
 
@@ -208,4 +211,31 @@ fn suite() -> Vec<ohttp::SymmetricSuite> {
         ohttp::hpke::Kdf::HkdfSha256,
         ohttp::hpke::Aead::Aes128Gcm,
     )]
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use pingers_testkit::seeded_rng;
+
+    use super::*;
+
+    /// Members pin the SHA-256 of the served config, so the gateway's encoding (upstream's)
+    /// must be byte for byte the one pingers-proto writes for the push relay.
+    #[test]
+    fn the_served_config_is_the_shared_single_suite_encoding() -> Result<(), OhttpError> {
+        let config = GatewayKey::generate(9, &mut seeded_rng(4))?.config();
+        assert_eq!(
+            config.encoded(),
+            config.single_suite().to_bytes().as_slice()
+        );
+        assert_eq!(
+            pingers_proto::SingleSuiteKeyConfig::from_bytes(config.encoded())
+                .ok()
+                .map(|parsed| parsed.key_id),
+            Some(9)
+        );
+        Ok(())
+    }
 }

@@ -89,3 +89,5 @@ RLN-v2 membership proofs and Privacy Pass type 0x0001. Features: `prover` (clien
   No sled code is reachable: `nm` finds no `sled::` symbol in the release benchmark binary.
   The `deny.toml` ignores that come from rln are all still needed (reasons updated).
 - **Performance**: see `BENCHMARK.md`.
+- **Wave 3 (2026-11-13):** `LeafPosition` is now an alias of `pingers_proto::MembershipIndex`
+  (same `new`/`get`), so wire positions need no conversion.

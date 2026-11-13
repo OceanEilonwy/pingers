@@ -99,6 +99,9 @@ mod repo;
 mod test_support;
 mod types;
 
+/// The hourly root epoch is pingers-proto's, re-exported so callers keep the store's path.
+pub use pingers_proto::RootEpoch;
+
 pub use database::{Database, Session};
 pub use error::StoreError;
 pub use key::DatabaseKey;
@@ -129,6 +132,6 @@ pub use repo::spot::{
     ExclusionZone, ExclusionZones, Presence, Spot, SpotPresenceRecord, SpotStatus, Spots,
 };
 pub use types::{
-    Avatar, FallbackReason, MemberName, OperatorName, PartyName, RootEpoch, SpotName, TokenKeyId,
-    TreeLevel, TreeNodeHash, TreePosition, UnspentToken, ZoneId, ZoneName,
+    Avatar, FallbackReason, MemberName, OperatorName, PartyName, SpotName, TokenKeyId, TreeLevel,
+    TreeNodeHash, TreePosition, UnspentToken, ZoneId, ZoneName,
 };

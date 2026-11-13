@@ -8,12 +8,12 @@ use pingers_proto::{
     BoardCursor, BoardPage, BoardSyncRequest, BoardSyncResponse, ChatBody, ChatMessageId,
     CommitRequest, CommitResponse, ContentType, CoverReadRatio, CreateGroup, CustomPushRelays,
     Delivery, DisplayName, E7Coordinate, Epoch, GroupAuthKey, GroupId, GroupLogEntry,
-    GroupMessages, GroupState, HeadingDegrees, InvitePayload, InviteUses, InviterFingerprint,
-    JoinRequest, KeyConfigHash, KeyPackageBytes, Knock, KnockSignature, Lamport, LeafIndex, Lease,
-    LeaseId, LeaseReplacement, LiveFrame, LocationGeneration, LocationPlaintext, MailboxId,
-    MailboxMessage, MailboxMessages, MailboxSpec, MeetPoint, MeetPointLabel, MeetupMessage,
-    MembershipIndex, MembershipLeafRequest, MembershipLeafResponse, MembershipLeaves,
-    MembershipRoot, MessageAccepted, MlsMessageBytes, Padded, Params, PrivacyPassIssueRequest,
+    GroupMessages, GroupState, HeadingDegrees, HourlyRoot, InvitePayload, InviteUses,
+    InviterFingerprint, JoinRequest, KeyConfigHash, KeyPackageBytes, Knock, KnockSignature,
+    Lamport, LeafIndex, Lease, LeaseId, LeaseReplacement, LiveFrame, LocationGeneration,
+    LocationPlaintext, MailboxId, MailboxMessage, MailboxMessages, MailboxSpec, MeetPoint,
+    MeetPointLabel, MeetupMessage, MembershipIndex, MembershipLeafRequest, MembershipLeafResponse,
+    MembershipLeaves, MessageAccepted, MlsMessageBytes, Padded, Params, PrivacyPassIssueRequest,
     PrivacyPassIssueResponse, PushBind, PushClass, PushHandle, PushPlatform, PushRelayConfig,
     PushRelayInfo, PushRelayKeyConfig, PushRelayKeyId, PushRequest, PushToken, PushTokenPlaintext,
     ReadBoard, Record, RecordRandomness, RecordTag, Redacted, RegisterRequest, RegisterResponse,
@@ -627,7 +627,7 @@ pub(crate) fn membership_leaves() -> impl Strategy<Value = MembershipLeaves> {
         vec(bytes32(), 0..4),
         vec(any::<u32>().prop_map(MembershipIndex::new), 0..4),
         vec(
-            (any::<u32>(), bytes32()).prop_map(|(epoch, root)| MembershipRoot {
+            (any::<u32>(), bytes32()).prop_map(|(epoch, root)| HourlyRoot {
                 epoch: RootEpoch::new(epoch),
                 root,
             }),

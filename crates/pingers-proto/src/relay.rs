@@ -5,7 +5,10 @@
 use minicbor::Decoder;
 
 use crate::cbor::{self, CborBody, Writer, versioned_cbor};
-use crate::{ProtoError, PushBind, PushHandle, PushPlatform, SealedPushBlob, TimeToLive, Urgency};
+use crate::{
+    ProtoError, PushBind, PushHandle, PushPlatform, SealedPushBlob, SingleSuiteKeyConfig,
+    TimeToLive, Urgency,
+};
 
 /// The one-byte id of a push relay HPKE key, as in an OHTTP key config. A push request names
 /// the key its blob was sealed to; the id is also bound into the seal.
@@ -40,58 +43,28 @@ pub struct PushRelayKeyConfig {
 
 impl PushRelayKeyConfig {
     /// Encoded length.
-    pub const LENGTH: usize = 41;
-    /// Everything after the key id and before the public key: the KEM id.
-    const KEM_X25519: [u8; 2] = [0x00, 0x20];
-    /// Everything after the public key: suites length 4, HKDF-SHA256, AES-128-GCM.
-    const SUITES: [u8; 6] = [0x00, 0x04, 0x00, 0x01, 0x00, 0x01];
+    pub const LENGTH: usize = SingleSuiteKeyConfig::LENGTH;
 
-    /// The 41-byte encoding.
+    /// The 41-byte encoding, written by [`SingleSuiteKeyConfig`] like the OHTTP gateway's.
     #[must_use]
     pub fn to_bytes(&self) -> [u8; Self::LENGTH] {
-        let mut encoded = [0; Self::LENGTH];
-        let fields = [self.key_id.get()]
-            .into_iter()
-            .chain(Self::KEM_X25519)
-            .chain(self.public_key)
-            .chain(Self::SUITES);
-        for (target, source) in encoded.iter_mut().zip(fields) {
-            *target = source;
+        SingleSuiteKeyConfig {
+            key_id: self.key_id.get(),
+            public_key: self.public_key,
         }
-        encoded
+        .to_bytes()
     }
 
     /// Parses a key config.
     ///
     /// # Errors
     ///
-    /// [`ProtoError::WrongLength`] unless it is 41 bytes; [`ProtoError::OutOfRange`] if the
-    /// KEM or the suite is not the one Pingers uses.
+    /// As [`SingleSuiteKeyConfig::from_bytes`].
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ProtoError> {
-        let fixed: &[u8; Self::LENGTH] =
-            bytes
-                .try_into()
-                .map_err(|_length| ProtoError::WrongLength {
-                    expected: Self::LENGTH,
-                    actual: bytes.len(),
-                })?;
-        let (&[key_id], rest) = fixed
-            .split_first_chunk::<1>()
-            .ok_or(ProtoError::BadPadding)?;
-        let (kem, rest) = rest
-            .split_first_chunk::<2>()
-            .ok_or(ProtoError::BadPadding)?;
-        let (public_key, suites) = rest
-            .split_first_chunk::<32>()
-            .ok_or(ProtoError::BadPadding)?;
-        if *kem != Self::KEM_X25519 || suites != Self::SUITES {
-            return Err(ProtoError::OutOfRange {
-                field: "push relay key config suite",
-            });
-        }
+        let config = SingleSuiteKeyConfig::from_bytes(bytes)?;
         Ok(Self {
-            key_id: PushRelayKeyId::new(key_id),
-            public_key: *public_key,
+            key_id: PushRelayKeyId::new(config.key_id),
+            public_key: config.public_key,
         })
     }
 }
@@ -196,12 +169,15 @@ mod tests {
         }
     }
 
+    // The encoding itself is tested in `key_config`; these pin the key id mapping.
     #[test]
-    fn key_config_encoding_follows_rfc_9458() {
-        let mut expected = vec![7, 0x00, 0x20];
-        expected.extend_from_slice(&[0x85; 32]);
-        expected.extend_from_slice(&[0x00, 0x04, 0x00, 0x01, 0x00, 0x01]);
-        assert_eq!(config(7).to_bytes().as_slice(), expected.as_slice());
+    fn key_config_is_the_single_suite_encoding_with_the_key_id_first() {
+        let expected = SingleSuiteKeyConfig {
+            key_id: 7,
+            public_key: [0x85; 32],
+        }
+        .to_bytes();
+        assert_eq!(config(7).to_bytes(), expected);
     }
 
     #[test]
@@ -211,37 +187,5 @@ mod tests {
             config(3)
         );
         Ok(())
-    }
-
-    #[test]
-    fn key_config_with_another_suite_is_refused() {
-        // Each of KEM, suites length, KDF and AEAD.
-        for position in [2, 36, 38, 40] {
-            let mut bytes = config(1).to_bytes();
-            if let Some(byte) = bytes.get_mut(position) {
-                *byte ^= 0x01;
-            }
-            assert!(
-                matches!(
-                    PushRelayKeyConfig::from_bytes(&bytes),
-                    Err(ProtoError::OutOfRange {
-                        field: "push relay key config suite"
-                    })
-                ),
-                "byte {position}"
-            );
-        }
-    }
-
-    #[test]
-    fn key_config_of_the_wrong_length_is_refused() {
-        let bytes = config(1).to_bytes();
-        assert!(matches!(
-            PushRelayKeyConfig::from_bytes(bytes.get(..40).unwrap_or_default()),
-            Err(ProtoError::WrongLength {
-                expected: 41,
-                actual: 40
-            })
-        ));
     }
 }

@@ -7,7 +7,7 @@ use core::time::Duration;
 use std::sync::Arc;
 
 use pingers_anon::{AnonError, IdCommitment, LeafUpdate, LeafValue, MembershipTree, RlnSecret};
-use pingers_proto::{AccountId, MembershipIndex, MembershipRoot, RootEpoch};
+use pingers_proto::{AccountId, HourlyRoot, MembershipIndex, RootEpoch};
 use pingers_quota::{
     LEAVES_PER_PAGE, Membership, MembershipStore, MemoryQuotaStore, QuotaError, ROOT_EPOCH_LENGTH,
     root_epoch,
@@ -49,11 +49,7 @@ fn client_tree(membership: &Membership<impl MembershipStore>) -> Result<Membersh
         .iter()
         .map(|leaf| LeafUpdate::Appended(LeafValue::from_bytes(*leaf)))
         .collect();
-    updates.extend(
-        list.zeroed
-            .iter()
-            .map(|index| LeafUpdate::Zeroed(pingers_anon::LeafPosition::new(index.get()))),
-    );
+    updates.extend(list.zeroed.iter().map(|index| LeafUpdate::Zeroed(*index)));
     let mut tree = MembershipTree::empty()?;
     tree.apply(&updates)?;
     Ok(tree)
@@ -83,7 +79,7 @@ fn registration_is_listed_from_the_next_root_epoch(
     let empty_root = *MembershipTree::empty()?.root().as_bytes();
     assert_eq!(
         before.roots,
-        vec![MembershipRoot {
+        vec![HourlyRoot {
             epoch: now,
             root: empty_root
         }]
@@ -290,7 +286,7 @@ fn the_tree_is_rebuilt_from_the_store<S: MembershipStore>(store: S) -> Result<()
 fn a_stored_root_that_does_not_match_the_leaves_is_detected<S: MembershipStore>(
     store: S,
 ) -> Result<(), TestError> {
-    store.insert_root(MembershipRoot {
+    store.insert_root(HourlyRoot {
         epoch: RootEpoch::new(5),
         root: [1; 32],
     })?;
