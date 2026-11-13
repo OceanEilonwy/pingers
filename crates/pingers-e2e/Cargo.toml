@@ -11,6 +11,8 @@ publish.workspace = true
 layer = "dev"
 
 [dependencies]
+# Privacy Pass tokens for the devices' anonymous requests.
+pingers-anon = { workspace = true, features = ["prover"] }
 pingers-crypto = { workspace = true }
 pingers-delivery = { workspace = true, features = ["sqlite"] }
 pingers-geo = { workspace = true }

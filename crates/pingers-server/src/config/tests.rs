@@ -18,7 +18,10 @@ const SECRET_A: &str = "01010101010101010101010101010101010101010101010101010101
 const SECRET_B: &str = "0202020202020202020202020202020202020202020202020202020202020202";
 
 fn minimal(keys: &str) -> String {
-    format!("listen = \"127.0.0.1:8080\"\n[ohttp]\nrelays = [\"10.0.0.5\"]\n{keys}")
+    format!(
+        "listen = \"127.0.0.1:8080\"\nserver_id = \"https://pingers.test\"\n\
+         [ohttp]\nrelays = [\"10.0.0.5\"]\n{keys}"
+    )
 }
 
 fn key(key_id: u8, secret: &str) -> String {
@@ -42,6 +45,7 @@ fn minimal_file_gets_the_quiet_defaults() -> TestResult {
 fn every_field_is_read() -> TestResult {
     let config = ServerConfig::parse(&format!(
         "listen = \"[::1]:9000\"\n\
+         server_id = \"https://pingers.test\"\n\
          logging = \"counts\"\n\
          counts_interval_s = 60\n\
          request_timeout_s = 5\n\
@@ -91,7 +95,7 @@ fn bad_files_are_refused_with_the_rule_they_break() {
         }),
         (
             format!(
-                "listen = \"127.0.0.1:1\"\n[ohttp]\nrelays = []\n{}",
+                "listen = \"127.0.0.1:1\"\nserver_id = \"https://p.test\"\n[ohttp]\nrelays = []\n{}",
                 key(1, SECRET_A)
             ),
             |error| matches!(error, ConfigError::NoRelays),
@@ -120,10 +124,10 @@ fn bad_files_are_refused_with_the_rule_they_break() {
         }),
         (
             format!(
-                "listen = \"127.0.0.1:1\"\n\n[ohttp]\nrelays = [\"not an address\"]\n{}",
+                "server_id = \"https://p.test\"\nlisten = \"127.0.0.1:1\"\n\n[ohttp]\nrelays = [\"not an address\"]\n{}",
                 key(1, SECRET_A)
             ),
-            |error| matches!(error, ConfigError::Syntax { line: 4 }),
+            |error| matches!(error, ConfigError::Syntax { line: 5 }),
         ),
     ];
     for (text, expected) in cases {
@@ -197,7 +201,7 @@ fn wiring_fields_are_read_with_defaults() -> TestResult {
     use pingers_proto::{RelayId, RelayRef};
 
     let defaults = ServerConfig::parse(&minimal(&key(1, SECRET_A)))?;
-    assert_eq!(defaults.mailbox_store, super::MailboxStore::Memory);
+    assert_eq!(defaults.mailbox_store, super::Database::Memory);
     assert_eq!(defaults.mailbox_posts_per_bucket.get(), 60);
     assert_eq!(defaults.push_timeout, Duration::from_secs(10));
     assert_eq!(defaults.expire_interval, Duration::from_secs(60));
@@ -216,7 +220,7 @@ fn wiring_fields_are_read_with_defaults() -> TestResult {
     ))?;
     assert_eq!(
         config.mailbox_store,
-        super::MailboxStore::File("/tmp/m.sqlite".into())
+        super::Database::File("/tmp/m.sqlite".into())
     );
     assert_eq!(config.mailbox_posts_per_bucket.get(), 5);
     assert_eq!(config.push_timeout, Duration::from_secs(3));
@@ -272,6 +276,115 @@ fn bad_wiring_fields_are_refused() {
                 }
             )
         }),
+    ];
+    for (text, expected) in cases {
+        let refused = ServerConfig::parse(&text).err();
+        assert!(
+            refused.as_ref().is_some_and(expected),
+            "{text}\n{refused:?}"
+        );
+    }
+}
+
+#[test]
+fn server_identity_and_published_fields_are_read() -> TestResult {
+    let defaults = ServerConfig::parse(&minimal(&key(1, SECRET_A)))?;
+    assert_eq!(defaults.server_id.as_str(), "https://pingers.test");
+    assert_eq!(defaults.server_operator, "https://pingers.test");
+    assert!(defaults.registration_codes.is_empty());
+    assert!(defaults.ohttp_relay_urls.is_empty());
+    assert!(defaults.advertised_push_relays.is_empty());
+    assert_eq!(defaults.push_relay_ca, None);
+    assert_eq!(defaults.delivery_store, super::Database::Memory);
+    assert_eq!(defaults.quota_store, super::Database::Memory);
+    assert_eq!(defaults.map_host, None);
+
+    let config = ServerConfig::parse(&format!(
+        "server_operator = \"Example Ltd\"\nregistration_codes = [\"a\", \"b\"]\n\
+         map_host = \"https://maps.example\"\n\
+         ohttp_relay_urls = [\"https://relay.example/ohttp\"]\n\
+         delivery_db = \"/tmp/g.sqlite\"\nquota_db = \"/tmp/q.sqlite\"\n\
+         push_relay_ca = \"/tmp/ca.pem\"\n{}{}key_config_hash = \"{}\"\noperator = \"Relay Ltd\"\n{}",
+        minimal(&key(1, SECRET_A)),
+        relay(3, "https://push.example"),
+        "ab".repeat(32),
+        relay(4, "https://other.example"),
+    ))?;
+    assert_eq!(config.server_operator, "Example Ltd");
+    assert_eq!(
+        config
+            .registration_codes
+            .iter()
+            .map(pingers_proto::SecretText::expose)
+            .collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+    assert_eq!(
+        config
+            .ohttp_relay_urls
+            .iter()
+            .map(pingers_proto::RelayUrl::as_str)
+            .collect::<Vec<_>>(),
+        ["https://relay.example/ohttp"]
+    );
+    assert_eq!(
+        config.delivery_store,
+        super::Database::File("/tmp/g.sqlite".into())
+    );
+    assert_eq!(
+        config.quota_store,
+        super::Database::File("/tmp/q.sqlite".into())
+    );
+    assert_eq!(
+        config.push_relay_ca,
+        Some(super::CertificateSource::File("/tmp/ca.pem".into()))
+    );
+    // Only the relay with a key hash and an operator is advertised.
+    assert_eq!(config.advertised_push_relays.len(), 1);
+    let advertised = config.advertised_push_relays.first().ok_or("advertised")?;
+    assert_eq!(advertised.relay_id, pingers_proto::RelayId::new(3));
+    assert_eq!(advertised.url.as_str(), "https://push.example");
+    assert_eq!(advertised.key_config_hash.as_bytes(), &[0xab; 32]);
+    assert_eq!(advertised.operator, "Relay Ltd");
+    assert_eq!(
+        config
+            .map_host
+            .as_ref()
+            .map(pingers_proto::MapHostUrl::as_str),
+        Some("https://maps.example")
+    );
+    Ok(())
+}
+
+#[test]
+fn bad_identity_fields_are_refused() {
+    let with_key = minimal(&key(1, SECRET_A));
+    let http_server = with_key.replace("https://pingers.test", "http://pingers.test");
+    let cases: [(String, Expected); 6] = [
+        (http_server, |error| matches!(error, ConfigError::ServerId)),
+        (
+            format!("map_host = \"http://maps.example\"\n{with_key}"),
+            |error| matches!(error, ConfigError::MapHostUrl),
+        ),
+        (
+            with_key.replace("server_id = \"https://pingers.test\"\n", ""),
+            |error| matches!(error, ConfigError::Syntax { .. }),
+        ),
+        (
+            format!("ohttp_relay_urls = [\"http://relay.example\"]\n{with_key}"),
+            |error| matches!(error, ConfigError::OhttpRelayUrl),
+        ),
+        (
+            format!("{with_key}{}operator = \"x\"\n", relay(1, "https://a")),
+            |error| matches!(error, ConfigError::RelayInfo),
+        ),
+        (
+            format!(
+                "{with_key}{}key_config_hash = \"zz\"\noperator = \"x\"\n",
+                relay(1, "https://a")
+            ),
+            |error| matches!(error, ConfigError::RelayInfo),
+        ),
     ];
     for (text, expected) in cases {
         let refused = ServerConfig::parse(&text).err();

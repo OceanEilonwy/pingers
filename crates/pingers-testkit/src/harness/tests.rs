@@ -32,7 +32,7 @@ mod running {
     use std::net::SocketAddr;
     use std::time::Duration;
 
-    use axum::body::{Body, Bytes, HttpBody as _};
+    use axum::body::{Body, HttpBody as _};
     use hyper::client::conn::http2::SendRequest;
     use hyper::header::{AUTHORIZATION, CONTENT_TYPE};
     use hyper::{Method, Request, StatusCode};
@@ -92,6 +92,14 @@ mod running {
             .body(Body::empty())
     }
 
+    /// An HTTPS client that trusts only the harness's test CA.
+    fn push_client(
+        endpoints: &super::super::Endpoints,
+    ) -> Result<reqwest::Client, Box<dyn std::error::Error + Send + Sync>> {
+        let ca = reqwest::Certificate::from_pem(endpoints.push_relay_ca.as_bytes())?;
+        Ok(reqwest::Client::builder().tls_certs_only([ca]).build()?)
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_three_services_answer_and_stop_cleanly() -> TestResult {
         let harness = InProcessHarness::start(&HarnessConfig::default())?;
@@ -121,13 +129,22 @@ mod running {
         let opened = encapsulated.response_context.open(&sealed)?;
         assert_eq!(
             opened.status.get(),
-            501,
-            "pingers-delivery is not wired yet"
+            401,
+            "an anonymous route without a credential"
         );
 
-        // The push relay publishes its key.
-        let (status, _) = exchange(endpoints.push_relay, get("/v1/config")?).await?;
-        assert_eq!(status, StatusCode::OK);
+        // The push relay publishes its key, over HTTPS with the test CA's certificate.
+        let config = push_client(&endpoints)?
+            .get(format!("https://{}/v1/config", endpoints.push_relay))
+            .send()
+            .await?;
+        assert_eq!(config.status().as_u16(), 200);
+        // Plain HTTP is not served.
+        assert!(
+            exchange(endpoints.push_relay, get("/v1/config")?)
+                .await
+                .is_err()
+        );
 
         harness.shutdown();
         for address in [
@@ -202,25 +219,41 @@ mod running {
             urgency: pingers_proto::Urgency::Quiet,
             handle: pingers_proto::PushHandle::from_bytes([1, 2, 3, 4, 5, 6, 7, 8]),
         })?;
-        let request = Request::builder()
-            .method(Method::POST)
-            .uri("http://harness/v1/push")
-            .header(CONTENT_TYPE, "application/cbor")
-            .header(
-                AUTHORIZATION,
-                format!("Bearer {}", String::from_utf8(PUSH_CREDENTIAL.to_vec())?),
-            )
-            .body(Body::from(Bytes::from(body)))?;
-        let (status, _) = exchange(endpoints.push_relay, request).await?;
-        assert_eq!(status, StatusCode::ACCEPTED);
+        let client = push_client(&endpoints)?;
+        let push = || {
+            client
+                .post(format!("https://{}/v1/push", endpoints.push_relay))
+                .header(CONTENT_TYPE.as_str(), "application/cbor")
+                .header(
+                    AUTHORIZATION.as_str(),
+                    format!("Bearer {}", String::from_utf8_lossy(PUSH_CREDENTIAL)),
+                )
+                .body(body.clone())
+                .send()
+        };
+        assert_eq!(push().await?.status().as_u16(), 202);
 
         let pushes = harness.pushes();
         assert_eq!(pushes.len(), 1);
-        let push = pushes.first().ok_or("no push")?;
-        assert_eq!(push.platform, PushPlatform::UnifiedPush);
-        assert_eq!(push.class, PushClass::Location);
-        assert_eq!(push.token, token);
-        assert_eq!(push.sent_at, crate::TEST_START);
+        let captured = pushes.first().ok_or("no push")?;
+        assert_eq!(captured.platform, PushPlatform::UnifiedPush);
+        assert_eq!(captured.class, PushClass::Location);
+        assert_eq!(captured.token, token);
+        assert_eq!(captured.sent_at, crate::TEST_START);
+        assert!(harness.gone_pushes().is_empty());
+
+        // A token marked gone is answered 410 and noted, not captured.
+        harness.mark_token_gone(token.clone());
+        assert_eq!(push().await?.status().as_u16(), 410);
+        assert_eq!(harness.pushes().len(), 1);
+        assert_eq!(
+            harness
+                .gone_pushes()
+                .iter()
+                .map(|gone| gone.token.clone())
+                .collect::<Vec<_>>(),
+            vec![token]
+        );
         Ok(())
     }
 }

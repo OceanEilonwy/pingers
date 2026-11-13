@@ -8,13 +8,12 @@ use axum::http::StatusCode;
 use pingers_crypto::MailboxReadKey;
 use pingers_mailbox::{ListedRelays, MailboxError, Mailboxes, PostsPerBucket, SqliteStorage};
 use pingers_ohttp::BinaryRequest;
-use pingers_proto::{MailboxId, MailboxSpec, MessageAccepted, Padded, SequenceNumber};
+use pingers_proto::{MailboxId, MailboxSpec, MessageAccepted, Padded, RlnScope, SequenceNumber};
 use pingers_time::Clock;
-use rand_chacha::ChaCha20Rng;
-use rand_core::{Rng as _, SeedableRng as _};
 use zeroize::Zeroizing;
 
 use crate::Shared;
+use crate::credential::admit;
 use crate::dispatch::Reply;
 use crate::wire::{READ_KEY_HEADER, decode, encoded, header_hex, hex_array, query, segment};
 
@@ -68,8 +67,21 @@ fn answer<T>(result: Result<T, MailboxError>, ok: impl FnOnce(T) -> Reply) -> Re
     }
 }
 
-/// `POST /v1/mailboxes`.
-pub(crate) async fn register(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
+/// Checks the Anon credential (scope Mailbox) on the blocking pool.
+async fn admitted(shared: &Arc<Shared>, request: &BinaryRequest) -> Result<(), Reply> {
+    let shared = Arc::clone(shared);
+    let request = request.clone();
+    tokio::task::spawn_blocking(move || admit(&shared, &request, RlnScope::Mailbox).map(drop))
+        .await
+        .map_err(|_| Reply::status(StatusCode::INTERNAL_SERVER_ERROR))?
+}
+
+/// `POST /v1/mailboxes`: Anon, scope Mailbox.
+pub(crate) async fn register(
+    shared: &Arc<Shared>,
+    request: &BinaryRequest,
+) -> Result<Reply, Reply> {
+    admitted(shared, request).await?;
     let spec = decode::<MailboxSpec>(&request.body)?;
     let registered = blocking(&shared.mailboxes, move |mailboxes| {
         mailboxes.register(&spec)
@@ -78,17 +90,15 @@ pub(crate) async fn register(shared: &Shared, request: &BinaryRequest) -> Result
     Ok(answer(registered, |()| Reply::status(StatusCode::CREATED)))
 }
 
-/// `POST /v1/mailboxes/{id}/msgs`: stores the post and hands its wake to the push jobs.
-pub(crate) async fn post(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
+/// `POST /v1/mailboxes/{id}/msgs`: Anon, scope Mailbox. Stores the post and hands its wake
+/// to the push jobs.
+pub(crate) async fn post(shared: &Arc<Shared>, request: &BinaryRequest) -> Result<Reply, Reply> {
+    admitted(shared, request).await?;
     let id = mailbox_id(request)?;
     let body = Padded::from_wire(request.body.clone())
         .map_err(|_| Reply::status(StatusCode::UNPROCESSABLE_ENTITY))?;
     // The post draws its push delay on the blocking pool, from a generator seeded here.
-    let mut rng = shared.with_rng(|rng| {
-        let mut seed = Zeroizing::new([0_u8; 32]);
-        rng.fill_bytes(seed.as_mut_slice());
-        ChaCha20Rng::from_seed(*seed)
-    });
+    let mut rng = shared.forked_rng();
     let posted = blocking(&shared.mailboxes, move |mailboxes| {
         mailboxes.post(&id, &body, &mut rng)
     })

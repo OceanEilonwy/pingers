@@ -32,7 +32,7 @@ use zeroize::Zeroizing;
 use crate::live::next_data;
 use crate::{
     AddressList, CountsReport, DeliveryLive, LiveChannel, LiveFrame, LiveRefused, Metrics,
-    OhttpKeys, Outside, RelayAllowList, RngSeed, ServerConfig, serve_with,
+    OhttpKeys, Outside, RelayAllowList, Required, RngSeed, ServerConfig, serve_with,
 };
 
 type TestError = Box<dyn std::error::Error + Send + Sync>;
@@ -47,6 +47,13 @@ const OTHER_LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
 
 fn rng(seed: u64) -> ChaCha20Rng {
     ChaCha20Rng::seed_from_u64(seed)
+}
+
+/// The origin every test server has.
+fn server_id() -> Result<pingers_proto::ServerId, TestError> {
+    Ok(pingers_proto::ServerId::new(
+        "https://pingers.test".to_owned(),
+    )?)
 }
 
 /// Echoes every frame back: the channel's outbound stream is its inbound stream.
@@ -106,11 +113,12 @@ async fn start(setup: Setup, live: impl LiveChannel) -> Result<Running, TestErro
     let server_config = ServerConfig {
         metrics: AddressList::new(setup.metrics),
         push_relays: setup.push_relays,
-        ..ServerConfig::new(
-            SocketAddr::new(LOOPBACK, 0),
-            OhttpKeys::new(vec![key])?,
-            RelayAllowList::new(vec![setup.relay])?,
-        )
+        ..ServerConfig::new(Required {
+            listen: SocketAddr::new(LOOPBACK, 0),
+            server_id: server_id()?,
+            ohttp_keys: OhttpKeys::new(vec![key])?,
+            relays: RelayAllowList::new(vec![setup.relay])?,
+        })
     };
     let listener = tokio::net::TcpListener::bind(server_config.listen).await?;
     let address = listener.local_addr()?;
@@ -401,11 +409,12 @@ async fn empty_frames_are_dropped_in_both_directions() -> TestResult {
 async fn serve_runs_with_the_production_parts_until_shutdown() -> TestResult {
     let key = GatewayKey::generate(1, &mut rng(7))?;
     let config = key.config();
-    let server_config = ServerConfig::new(
-        SocketAddr::new(LOOPBACK, 0),
-        OhttpKeys::new(vec![key])?,
-        RelayAllowList::new(vec![LOOPBACK])?,
-    );
+    let server_config = ServerConfig::new(Required {
+        listen: SocketAddr::new(LOOPBACK, 0),
+        server_id: server_id()?,
+        ohttp_keys: OhttpKeys::new(vec![key])?,
+        relays: RelayAllowList::new(vec![LOOPBACK])?,
+    });
     let listener = tokio::net::TcpListener::bind(server_config.listen).await?;
     let address = listener.local_addr()?;
     let (stop, stopped) = oneshot::channel::<()>();
@@ -441,7 +450,8 @@ fn load_config_reads_the_file_or_says_why_not() -> TestResult {
     let path = directory.join("server.toml");
     std::fs::write(
         &path,
-        "listen = \"127.0.0.1:8080\"\n[ohttp]\nrelays = [\"10.0.0.5\"]\n\
+        "listen = \"127.0.0.1:8080\"\nserver_id = \"https://pingers.test\"\n\
+         [ohttp]\nrelays = [\"10.0.0.5\"]\n\
          [[ohttp.keys]]\nkey_id = 2\n\
          secret = \"0303030303030303030303030303030303030303030303030303030303030303\"\n",
     )?;
@@ -467,8 +477,8 @@ async fn inner_requests_are_routed_by_their_privacy_class() -> TestResult {
     let server = start(Setup::default(), Echo).await?;
     let mut relay = connect(server.address, LOOPBACK).await?;
     let cases = [
-        // Anonymous: belongs here, pingers-delivery is not wired yet.
-        (inner("POST", "/v1/groups"), 501),
+        // Anonymous: belongs here, and asks for its credential.
+        (inner("POST", "/v1/board/sync"), 401),
         // Identified: names the account, so it goes direct.
         (inner("POST", "/v1/accounts"), 421),
         // A split channel's uplink frame with no downlink open (and no body).
@@ -543,9 +553,9 @@ async fn direct_requests_are_routed_by_their_privacy_class() -> TestResult {
             "/v1/groups/g1/live",
             StatusCode::MISDIRECTED_REQUEST,
         ),
-        // Identified: belongs here, its crate is not wired yet.
-        (Method::POST, "/v1/accounts", StatusCode::NOT_IMPLEMENTED),
-        (Method::GET, "/v1/params", StatusCode::NOT_IMPLEMENTED),
+        // Identified and public: belong here (the body is not a registration).
+        (Method::POST, "/v1/accounts", StatusCode::BAD_REQUEST),
+        (Method::GET, "/v1/params", StatusCode::OK),
         (Method::GET, "/v1/nothing", StatusCode::NOT_FOUND),
         (Method::GET, "/ohttp", StatusCode::METHOD_NOT_ALLOWED),
         (
@@ -858,7 +868,12 @@ async fn metrics_count_outcomes_for_allowed_addresses_only() -> TestResult {
         request(Method::POST, "/v1/board/sync", None, Body::empty())?,
     )
     .await?;
-    oblivious(&mut client, &server.config, &inner("POST", "/v1/groups")).await?;
+    oblivious(
+        &mut client,
+        &server.config,
+        &inner("POST", "/v1/board/sync"),
+    )
+    .await?;
     let (_sender, live_client, body) = open_live(&server, "/v1/groups/g1/live").await?;
     ends_with_nothing_but_the_final_chunk(&live_client, body).await?;
     let (_sender, live_client, body) = open_live(&server, "/v1/board/sync").await?;
@@ -882,9 +897,8 @@ async fn metrics_count_outcomes_for_allowed_addresses_only() -> TestResult {
     for expected in [
         "{channel=\"direct\",outcome=\"ok\"} 1",
         "{channel=\"direct\",outcome=\"client_error\"} 1",
-        "{channel=\"ohttp\",outcome=\"not_implemented\"} 1",
-        "{channel=\"ohttp_chunked\",outcome=\"not_implemented\"} 1",
-        "{channel=\"ohttp_chunked\",outcome=\"client_error\"} 1",
+        "{channel=\"ohttp\",outcome=\"client_error\"} 1",
+        "{channel=\"ohttp_chunked\",outcome=\"client_error\"} 2",
     ] {
         assert!(text.contains(expected), "{expected}\n{text}");
     }
@@ -969,5 +983,7 @@ fn live_frames_print_only_their_length() {
     );
 }
 
+mod credentials;
 mod live;
+mod wallet;
 mod wired;

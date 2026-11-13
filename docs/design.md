@@ -68,6 +68,7 @@ Definitions used throughout:
 | Who knocked | No: the sender is anonymous | No | No from the knock; by push token once the Welcome wakes the knocker |
 | Where, which Spot, which Party | No | No | No |
 | That a Meetup formed, when, and how many members | Yes: a new group with n subscriptions | Yes | Yes |
+| Whether a group is a Meetup or a Party (its lifetime class, stated at creation: Meetup groups expire after 2 hours idle, Party groups after 180 days) | Yes. It already learns that a Meetup formed; the class adds that a long-lived group is a Party's. | Yes | Yes |
 | Who is in a Meetup | **No.** The live channel arrives through the relay, so the server sees n anonymous channels for group G and no IPs. No stored list of accounts. | Same | Push tokens of the members |
 | Party membership graph | **Not stored.** Each group has n sealed subscriptions that cannot be tied to accounts or to each other. | Not stored, and no subscriptions | **Yes**, as a graph over push tokens |
 
@@ -539,7 +540,7 @@ Rules:
 - **Late joiners** get the current epoch only: no earlier chat. One existing member (lowest leaf index online) sends a state snapshot (meet point, thread heads without bodies) after the Add.
 - **Leaving** (exit confirmed, DND on, exclusion zone, user taps Leave): the leaver posts a self-`Remove` proposal and revokes its lease; any remaining member commits it. The leaver deletes group state immediately. Subsequent traffic is under a new epoch the leaver cannot derive.
 - **Silent disappearance**: if a member has sent nothing for 10 minutes (members send a location or keep-alive at least every 5), any member commits `Remove`.
-- **End**: the Meetup persists while at least one member remains so that a returning or new person joins the same session. When the last member leaves, or a lone member has been alone for 30 minutes, the core deletes: MLS group state, epoch secrets, transcript, peers' last positions, meet point. It then calls `DELETE /groups/{id}`; the server also expires idle logs after 2 hours.
+- **End**: the Meetup persists while at least one member remains so that a returning or new person joins the same session. When the last member leaves, or a lone member has been alone for 30 minutes, the core deletes: MLS group state, epoch secrets, transcript, peers' last positions, meet point. It then calls `DELETE /groups/{id}`; the server also expires idle Meetup logs after 2 hours (Party logs after 180 days; the class is stated at `POST /v1/groups`).
 - **Duplicate groups** (two un-met occupants each create a group with the same newcomer): the newcomer keeps the lexicographically smaller group id and leaves the other group, telling the occupant it leaves which group to knock on. That occupant knocks a member of the kept group and is added in the usual way. (Board beacons carry no KeyPackage, so the newcomer cannot add them directly.)
 - After joining a Meetup, each member's next lease carries `meetup_hint` in its record for that Spot.
 
@@ -771,7 +772,7 @@ Everything in **bold** is opaque ciphertext or random to the server.
 account      (account_id BLOB PK, sig_pk BLOB, created_at, disabled)    -- used only for registration, the membership leaf and token issuance
 mailbox      (mailbox_id BLOB PK /*random*/, sealed_push BLOB NULL /*bold; NULL = no wake*/, relay_id, urgency, handle, expires_at)
 mailbox_msg  (mailbox_id FK, seq, body BLOB /*bold*/, expires_at)
-grp          (group_id BLOB PK /*random*/, auth_pk BLOB, head_epoch, created_at, idle_expires_at)
+grp          (group_id BLOB PK /*random*/, auth_pk BLOB, head_epoch, lifetime /*meetup|party*/, created_at, idle_expires_at)
 grp_msg      (group_id FK, seq, epoch, content_type, body BLOB /*bold*/)
 grp_sub      (group_id FK, sub_id BLOB /*random*/, sealed_push BLOB /*bold*/, relay_id, handle, expires_at)
 grp_state    (group_id FK, epoch, blob BLOB /*bold*/)               -- latest snapshot only
@@ -795,7 +796,7 @@ leases: HashMap<LeaseId, (RevokeCommit, u64 /*b0*/, [u32; 4])>
 rln_nullifiers: HashMap<(u64 /*bucket*/, Scope), HashMap<[u8;32] /*nullifier*/, ([u8;32] /*x*/, [u8;32] /*y*/)>>  // current + previous bucket
 ```
 
-Not stored anywhere: names, Party or Spot metadata, locations, push tokens, KeyPackage directory, a Party-versus-Meetup flag on groups (the server cannot tell them apart except by lifetime), any index or count of board matches (none exist to store), any link between a board record and a mailbox (the mailbox id is inside the sealed beacon), access logs for board and mailbox endpoints (operator guidance: disable).
+Not stored anywhere: names, Party or Spot metadata, locations, push tokens, KeyPackage directory, any index or count of board matches (none exist to store), any link between a board record and a mailbox (the mailbox id is inside the sealed beacon), access logs for board and mailbox endpoints (operator guidance: disable).
 
 Sizing: the board is `devices × 384 B` of RAM (4 MB at 10,000 devices). A sealed push token is 320 B. Nothing here is large.
 
@@ -929,7 +930,7 @@ GET  /v1/mailboxes/{id}/msgs?after=seq (Cap: read_key)   -> { msgs: Vec<(u64, By
 DELETE /v1/mailboxes/{id}  (Cap: read_key)
 
 // --- groups: MLS delivery service for Party and Meetup groups alike ---
-POST /v1/groups            (Anon, scope Group) CreateGroup { group_id: [u8;32], auth_pk: [u8;32], subs: Vec<Subscription>, state: Option<Bytes> }
+POST /v1/groups?lifetime=meetup|party (Anon, scope Group) CreateGroup { group_id: [u8;32], auth_pk: [u8;32], subs: Vec<Subscription>, state: Option<Bytes> }
                            // Subscription { sub_id: [u8;16], push: SealedPush, ttl_s: u32 }   (bind uses sub_id in place of mailbox_id)
 POST /v1/groups/{id}/commit (Grp) CommitReq { epoch: u64, commit: Bytes, next_auth_pk: [u8;32], state: Option<Bytes>,
                                               subs_add: Vec<Subscription>, subs_del: Vec<[u8;16]>, wake: Quiet|Alert }
