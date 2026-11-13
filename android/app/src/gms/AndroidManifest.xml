@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Merged only into builds with -PpingersFcm (app/build.gradle.kts). -->
+<!-- The gms flavour: the Geofencing API's receiver and FCM. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
+        <receiver
+            android:name="org.pingers.app.platform.GeofenceReceiver"
+            android:exported="false" />
+
+        <!-- FCM data messages. Inert in a build without google-services.json. -->
         <service
             android:name="org.pingers.app.platform.FcmService"
             android:exported="false">

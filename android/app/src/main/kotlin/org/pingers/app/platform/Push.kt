@@ -14,14 +14,15 @@ import java.util.concurrent.Executors
 /**
  * Push registration (design B.4.9, B.7). The push token never leaves the phone raw: the core
  * seals it per mailbox and subscription. With UnifiedPush the token is the distributor's
- * endpoint URL; with an FCM build it is the FCM registration token (FcmService, built with
- * `-PpingersFcm`). UnifiedPush wins when both exist, because it needs no publisher credentials.
+ * endpoint URL; in the `gms` flavour it can be the FCM registration token (FcmService). UnifiedPush wins when both exist, because it needs no publisher credentials.
  */
 object Push {
     private const val TAG = "PingersPush"
     const val PREFS = "pingers.push"
     private const val KEY_UP_ENDPOINT = "unifiedpush.endpoint"
     private const val KEY_FCM_TOKEN = "fcm.token"
+    private const val KEY_SENT_HIGH = "fcm.sent-high"
+    private const val KEY_DOWNGRADED = "fcm.downgraded"
 
     /** The connector's instance; Pingers has exactly one registration. */
     const val INSTANCE = "pingers"
@@ -78,6 +79,31 @@ object Push {
         prefs(context).edit { putString(KEY_FCM_TOKEN, token) }
         val tokens = tokens(context)
         executor.execute { PlatformHost.sink.onPushTokensChanged(tokens) }
+    }
+
+    /** FCM's priority downgrades so far (design B.4.9): high-priority messages received, and how many came downgraded. */
+    data class DowngradeCount(val sentHigh: Long, val downgraded: Long)
+
+    /**
+     * Records one FCM message's original and delivered priority; returns whether it was
+     * downgraded. The count is local only and feeds the core's `Notice::PushDowngraded`.
+     */
+    fun recordPriority(context: Context, sentHigh: Boolean, deliveredHigh: Boolean): Boolean {
+        if (!sentHigh) return false
+        val downgraded = !deliveredHigh
+        synchronized(this) {
+            val prefs = prefs(context)
+            prefs.edit {
+                putLong(KEY_SENT_HIGH, prefs.getLong(KEY_SENT_HIGH, 0) + 1)
+                if (downgraded) putLong(KEY_DOWNGRADED, prefs.getLong(KEY_DOWNGRADED, 0) + 1)
+            }
+        }
+        return downgraded
+    }
+
+    fun downgradeCount(context: Context): DowngradeCount {
+        val prefs = prefs(context)
+        return DowngradeCount(prefs.getLong(KEY_SENT_HIGH, 0), prefs.getLong(KEY_DOWNGRADED, 0))
     }
 
     /**

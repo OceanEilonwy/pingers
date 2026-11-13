@@ -10,7 +10,6 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.testing.SynchronousExecutor
 import androidx.work.testing.WorkManagerTestInitHelper
-import com.google.android.gms.location.Priority
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -19,7 +18,6 @@ import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.pingers.app.platform.FusedFixes.Companion.continuousRequest
 import org.pingers.app.platform.onboarding.PermissionState
 import org.pingers.app.platform.onboarding.PermissionStep
 import org.robolectric.RobolectricTestRunner
@@ -115,13 +113,21 @@ class PlatformUnitTest {
 
     @Test
     fun meetupModesFollowContinuously() {
-        assertNull(LocationMode.IDLE.continuousRequest())
-        assertNull(LocationMode.DWELL.continuousRequest())
-        val fg = LocationMode.MEETUP_FOREGROUND.continuousRequest()!!
+        assertNull(ContinuousRequest.of(LocationMode.IDLE))
+        assertNull(ContinuousRequest.of(LocationMode.DWELL))
+        val fg = ContinuousRequest.of(LocationMode.MEETUP_FOREGROUND)!!
         assertEquals(1_000L, fg.intervalMillis)
-        assertEquals(Priority.PRIORITY_HIGH_ACCURACY, fg.priority)
-        val bg = LocationMode.MEETUP_BACKGROUND.continuousRequest()!!
-        assertEquals(20f, bg.minUpdateDistanceMeters)
+        assertEquals(true, fg.highAccuracy)
+        assertEquals(20f, ContinuousRequest.of(LocationMode.MEETUP_BACKGROUND)!!.minDistanceMeters)
+    }
+
+    @Test
+    fun downgradesAreCounted() {
+        context.getSharedPreferences(Push.PREFS, Context.MODE_PRIVATE).edit().clear().commit()
+        assertEquals(false, Push.recordPriority(context, sentHigh = true, deliveredHigh = true))
+        assertEquals(true, Push.recordPriority(context, sentHigh = true, deliveredHigh = false))
+        assertEquals(false, Push.recordPriority(context, sentHigh = false, deliveredHigh = false))
+        assertEquals(Push.DowngradeCount(sentHigh = 2, downgraded = 1), Push.downgradeCount(context))
     }
 
     @Test

@@ -14,7 +14,7 @@ class AndroidPlatform private constructor(context: Context) : Platform {
     private val app = context.applicationContext
     val secureStore = SecureStore(app)
     val geofences = Geofences(app, secureStore)
-    val fixes = FusedFixes(app) { PlatformHost.sink }
+    val fixes = FlavorServices.fixes(app) { PlatformHost.sink }
     val modes = LocationModes(app, fixes)
     val focus = Focus(app)
     val wakes = Wakes(app)
@@ -22,6 +22,7 @@ class AndroidPlatform private constructor(context: Context) : Platform {
     init {
         Notifications.ensureChannels(app)
         focus.watch { PlatformHost.sink.onFocusChanged(it) }
+        FlavorServices.startPush(app)
     }
 
     override fun secureStoreGet(key: SecureStoreKey): ByteArray? = secureStore.get(key)
@@ -39,6 +40,12 @@ class AndroidPlatform private constructor(context: Context) : Platform {
     override fun scheduleWake(afterMillis: Long) = wakes.schedule(afterMillis)
 
     override fun pushTokens(): PushTokens? = Push.tokens(app)
+
+    /** Which flavour this is: "gms" (FCM and UnifiedPush) or "foss" (UnifiedPush only). */
+    val flavor: String get() = FlavorServices.NAME
+
+    /** Whether FCM is configured in this build (gms with google-services.json). */
+    val fcmAvailable: Boolean get() = FlavorServices.fcmAvailable(app)
 
     companion object {
         // Holds the application context only, which lives as long as the process.

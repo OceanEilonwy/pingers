@@ -45,15 +45,12 @@
             </intent-filter>
         </activity>
 
-        <!-- Platform layer. -->
+        <!-- Platform layer. The flavours add their geofence receiver (gms: Geofencing API,
+             foss: proximity alerts) and, in gms, the FCM service. -->
         <service
             android:name=".platform.LocationService"
             android:exported="false"
             android:foregroundServiceType="location" />
-
-        <receiver
-            android:name=".platform.GeofenceReceiver"
-            android:exported="false" />
 
         <receiver
             android:name=".platform.BootReceiver"

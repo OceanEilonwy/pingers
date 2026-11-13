@@ -86,7 +86,7 @@ class LocationService : Service() {
  */
 class LocationModes(
     private val context: Context,
-    private val fixes: FusedFixes,
+    private val fixes: FixSource,
 ) {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 

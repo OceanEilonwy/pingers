@@ -21,7 +21,7 @@ import org.junit.runner.RunWith
  * - [geofenceFiresOnMockLocation]: the host sends `adb emu geo fix -0.1246 51.5007` while it runs.
  * - [unifiedPushWakesTheCore]: a UnifiedPush distributor (ntfy) must be installed; the test logs
  *   `PINGERS_ENDPOINT <url>` and the host POSTs a push to that URL.
- * scripts: android/platform-tests.sh.
+ * Host script: android/platform-tests.sh.
  */
 @RunWith(AndroidJUnit4::class)
 class PlatformDeviceTest {
@@ -123,6 +123,19 @@ class PlatformDeviceTest {
         val manager = context.getSystemService(android.app.NotificationManager::class.java)
         assertTrue(waitFor(5) { manager.activeNotifications.any { it.id == 42 } })
         Log.i("PingersTest", "PINGERS_PUSH_OK")
+    }
+
+    @Test
+    fun fcmTokenIsObtained() {
+        assumeTrue("FCM not configured in this build", FlavorServices.fcmAvailable(context))
+        context.getSharedPreferences(Push.PREFS, Context.MODE_PRIVATE).edit().clear().commit()
+        FlavorServices.startPush(context)
+        val tokens = sink.await<RecordingSink.Tokens>(60)?.tokens
+        assertNotNull("no FCM token", tokens)
+        assertEquals(PushPlatform.FCM, tokens!!.platform)
+        assertTrue(tokens.token.size > 100)
+        // Its length only: the token itself is a push target and stays out of logs.
+        Log.i("PingersTest", "PINGERS_FCM_TOKEN ${tokens.token.size} bytes")
     }
 
     private fun waitFor(seconds: Long, condition: () -> Boolean): Boolean {

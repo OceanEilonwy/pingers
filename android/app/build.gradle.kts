@@ -17,14 +17,73 @@ val minSdkVersion = 29
 // -PpingersSplits builds an APK for each ABI plus a universal one; any other build is one APK
 // holding both.
 val splitting = project.hasProperty("pingersSplits")
-// -PpingersFcm adds the FCM push service (src/fcm). It needs google-services credentials, which
-// the project doesn't have yet; without the flag push is UnifiedPush only.
-val fcm = project.hasProperty("pingersFcm")
+// Firebase's google-services.json for the gms flavour's FCM. It is never in the repository:
+// point at it with the Gradle property pingers.googleServicesJson (for example in
+// ~/.gradle/gradle.properties) or PINGERS_GOOGLE_SERVICES_JSON. Without it the gms flavour
+// still builds, with FCM off (push is UnifiedPush only).
+val googleServicesJson: Provider<RegularFile> = providers.gradleProperty("pingers.googleServicesJson")
+    .orElse(providers.environmentVariable("PINGERS_GOOGLE_SERVICES_JSON"))
+    .map { layout.projectDirectory.file(File(it).absolutePath) }
+val firebasePackage = "org.pingers.app"
 
 /** A cargo command that writes one directory, so AGP can take it as generated sources. */
 abstract class CargoTask : Exec() {
     @get:OutputDirectory
     abstract val outDir: DirectoryProperty
+}
+
+/**
+ * Copies google-services.json into the build directory and writes the Android resources the
+ * Google Services plugin would (FirebaseApp reads them at start-up), without that plugin, which
+ * wants the file inside the source tree.
+ */
+abstract class GoogleServicesTask : DefaultTask() {
+    @get:InputFile
+    abstract val json: RegularFileProperty
+
+    @get:Input
+    abstract val packageName: Property<String>
+
+    @get:OutputDirectory
+    abstract val resDir: DirectoryProperty
+
+    @get:OutputFile
+    abstract val copy: RegularFileProperty
+
+    @TaskAction
+    fun generate() {
+        val source = json.get().asFile
+        source.copyTo(copy.get().asFile, overwrite = true)
+        @Suppress("UNCHECKED_CAST")
+        val root = groovy.json.JsonSlurper().parse(source) as Map<String, Any?>
+        val project = root["project_info"] as Map<String, Any?>
+        val clients = root["client"] as List<Map<String, Any?>>
+        val client = clients.firstOrNull {
+            val info = it["client_info"] as Map<String, Any?>
+            (info["android_client_info"] as Map<String, Any?>)["package_name"] == packageName.get()
+        } ?: throw GradleException("google-services.json has no client for ${packageName.get()}")
+        val appId = (client["client_info"] as Map<String, Any?>)["mobilesdk_app_id"] as String
+        val apiKey = ((client["api_key"] as List<Map<String, Any?>>).first())["current_key"] as String
+        val values = linkedMapOf(
+            "google_app_id" to appId,
+            "gcm_defaultSenderId" to project["project_number"].toString(),
+            "google_api_key" to apiKey,
+            "google_crash_reporting_api_key" to apiKey,
+            "project_id" to project["project_id"].toString(),
+        )
+        (project["storage_bucket"] as String?)?.let { values["google_storage_bucket"] = it }
+        val out = resDir.get().asFile.resolve("values")
+        out.mkdirs()
+        out.resolve("google-services.xml").writeText(
+            buildString {
+                appendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>")
+                appendLine("<!-- Generated from google-services.json at build time. -->")
+                appendLine("<resources>")
+                values.forEach { (k, v) -> appendLine("    <string name=\"$k\" translatable=\"false\">$v</string>") }
+                appendLine("</resources>")
+            },
+        )
+    }
 }
 
 android {
@@ -44,6 +103,20 @@ android {
 
     testOptions {
         unitTests.isIncludeAndroidResources = true
+    }
+
+    // gms: Play services location and FCM alongside UnifiedPush. foss: no Google code at all,
+    // UnifiedPush only. Debug builds default to gms when google-services.json is configured.
+    flavorDimensions += "services"
+    productFlavors {
+        create("gms") {
+            dimension = "services"
+            isDefault = googleServicesJson.isPresent
+        }
+        create("foss") {
+            dimension = "services"
+            isDefault = !googleServicesJson.isPresent
+        }
     }
 
     // Only the ABIs pingers-ffi is built for: JNA's AAR also carries 32-bit libraries, and a
@@ -133,9 +206,16 @@ androidComponents {
         val native = if (variant.buildType == "release") cargoNdkRelease else cargoNdkDebug
         variant.sources.jniLibs?.addGeneratedSourceDirectory(native, CargoTask::outDir)
         variant.sources.kotlin?.addGeneratedSourceDirectory(uniffiBindings, CargoTask::outDir)
-        if (fcm) {
-            variant.sources.kotlin?.addStaticSourceDirectory("src/fcm/kotlin")
-            variant.sources.manifests.addStaticManifestFile("src/fcm/AndroidManifest.xml")
+        if (variant.flavorName == "gms" && googleServicesJson.isPresent) {
+            val name = variant.name.replaceFirstChar { it.uppercase() }
+            val task = tasks.register<GoogleServicesTask>("googleServices$name") {
+                description = "Writes Firebase's resources for $name from google-services.json."
+                json.set(googleServicesJson)
+                packageName.set(firebasePackage)
+                resDir.set(layout.buildDirectory.dir("generated/google-services/${variant.name}/res"))
+                copy.set(layout.buildDirectory.file("generated/google-services/${variant.name}/google-services.json"))
+            }
+            variant.sources.res?.addGeneratedSourceDirectory(task, GoogleServicesTask::resDir)
         }
     }
 }
@@ -154,10 +234,10 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
 
     // Platform layer.
-    implementation(libs.play.services.location)
     implementation(libs.unifiedpush.connector)
     implementation(libs.work.runtime)
-    if (fcm) implementation(libs.firebase.messaging)
+    "gmsImplementation"(libs.play.services.location)
+    "gmsImplementation"(libs.firebase.messaging)
 
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
