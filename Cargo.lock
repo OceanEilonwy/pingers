@@ -3518,11 +3518,21 @@ dependencies = [
 name = "pingers-meetup-session"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "pingers-crypto",
+ "pingers-geo",
  "pingers-meetup",
  "pingers-mls",
+ "pingers-ohttp",
+ "pingers-proto",
  "pingers-store",
+ "pingers-testkit",
+ "pingers-time",
  "pingers-transport",
+ "rand_core 0.10.1",
  "thiserror",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]
