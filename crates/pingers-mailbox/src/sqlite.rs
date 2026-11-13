@@ -5,8 +5,8 @@
 use std::path::Path;
 
 use pingers_proto::{
-    KeyConfigHash, MailboxId, MailboxMessage, Padded, PushHandle, RelayId, RelayRef, RelayUrl,
-    SealedPush, SealedPushBlob, SequenceNumber, Urgency,
+    KeyConfigHash, MailboxId, MailboxMessage, Padded, PushHandle, PushRelayKeyId, RelayId,
+    RelayRef, RelayUrl, SealedPush, SealedPushBlob, SequenceNumber, Urgency,
 };
 use pingers_time::UnixSeconds;
 use rusqlite::{Connection, OptionalExtension as _, Row, params};
@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS mailbox (
     relay_id       INTEGER,
     relay_url      TEXT,
     relay_key_hash BLOB,
+    relay_key_id   INTEGER,
     push_blob      BLOB,
     urgency        INTEGER,
     handle         BLOB
@@ -88,6 +89,7 @@ struct PushColumns {
     relay_id: Option<i64>,
     relay_url: Option<String>,
     relay_key_hash: Option<Vec<u8>>,
+    key_id: Option<i64>,
     blob: Option<Vec<u8>>,
     urgency: Option<i64>,
     handle: Option<Vec<u8>>,
@@ -100,6 +102,7 @@ impl PushColumns {
                 relay_id: None,
                 relay_url: None,
                 relay_key_hash: None,
+                key_id: None,
                 blob: None,
                 urgency: None,
                 handle: None,
@@ -120,6 +123,7 @@ impl PushColumns {
             relay_id,
             relay_url,
             relay_key_hash,
+            key_id: Some(i64::from(push.key_id.get())),
             blob: Some(push.blob.as_bytes().to_vec()),
             urgency: Some(match push.urgency {
                 Urgency::Alert => 0,
@@ -130,7 +134,8 @@ impl PushColumns {
     }
 
     fn into_push(self) -> Result<Option<SealedPush>, StorageError> {
-        let (Some(blob), Some(urgency), Some(handle)) = (self.blob, self.urgency, self.handle)
+        let (Some(key_id), Some(blob), Some(urgency), Some(handle)) =
+            (self.key_id, self.blob, self.urgency, self.handle)
         else {
             return Ok(None);
         };
@@ -146,6 +151,9 @@ impl PushColumns {
         };
         Ok(Some(SealedPush {
             relay,
+            key_id: PushRelayKeyId::new(
+                u8::try_from(key_id).map_err(|_range| StorageError::Corrupt)?,
+            ),
             blob: SealedPushBlob::from_bytes(fixed(&blob)?),
             urgency: match urgency {
                 0 => Urgency::Alert,
@@ -165,9 +173,10 @@ fn mailbox_from_row(row: &Row<'_>) -> rusqlite::Result<(Vec<u8>, i64, PushColumn
             relay_id: row.get(2)?,
             relay_url: row.get(3)?,
             relay_key_hash: row.get(4)?,
-            blob: row.get(5)?,
-            urgency: row.get(6)?,
-            handle: row.get(7)?,
+            key_id: row.get(5)?,
+            blob: row.get(6)?,
+            urgency: row.get(7)?,
+            handle: row.get(8)?,
         },
     ))
 }
@@ -177,14 +186,15 @@ impl MailboxStorage for SqliteStorage {
         let push = PushColumns::from_push(mailbox.push.as_ref());
         let inserted = self.connection.execute(
             "INSERT OR IGNORE INTO mailbox (mailbox_id, expires_at, last_seq, relay_id, relay_url,
-                 relay_key_hash, push_blob, urgency, handle)
-             VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 relay_key_hash, relay_key_id, push_blob, urgency, handle)
+             VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 mailbox.id.as_bytes().as_slice(),
                 to_sql_integer(mailbox.expires_at.get())?,
                 push.relay_id,
                 push.relay_url,
                 push.relay_key_hash,
+                push.key_id,
                 push.blob,
                 push.urgency,
                 push.handle,
@@ -200,8 +210,8 @@ impl MailboxStorage for SqliteStorage {
         let row = self
             .connection
             .query_row(
-                "SELECT mailbox_id, expires_at, relay_id, relay_url, relay_key_hash, push_blob,
-                        urgency, handle
+                "SELECT mailbox_id, expires_at, relay_id, relay_url, relay_key_hash, relay_key_id,
+                        push_blob, urgency, handle
                  FROM mailbox WHERE mailbox_id = ?1",
                 params![id.as_bytes().as_slice()],
                 mailbox_from_row,
@@ -232,7 +242,7 @@ impl MailboxStorage for SqliteStorage {
     fn clear_push(&mut self, id: &MailboxId) -> Result<(), StorageError> {
         self.connection.execute(
             "UPDATE mailbox SET relay_id = NULL, relay_url = NULL, relay_key_hash = NULL,
-                 push_blob = NULL, urgency = NULL, handle = NULL
+                 relay_key_id = NULL, push_blob = NULL, urgency = NULL, handle = NULL
              WHERE mailbox_id = ?1",
             params![id.as_bytes().as_slice()],
         )?;
@@ -356,7 +366,22 @@ mod tests {
             .connection
             .execute(
                 "UPDATE mailbox SET push_blob = x'00', urgency = 0, handle = x'0000000000000000',
-                 relay_id = 1",
+                 relay_id = 1, relay_key_id = 1",
+                [],
+            )
+            .map_err(StorageError::from)?;
+        assert!(matches!(
+            storage.mailbox(&stored.id),
+            Err(StorageError::Corrupt)
+        ));
+        // A key id that does not fit the one-byte wire field is corrupt too.
+        storage
+            .connection
+            .execute(
+                &format!(
+                    "UPDATE mailbox SET push_blob = x'{}', relay_key_id = 256",
+                    "00".repeat(320)
+                ),
                 [],
             )
             .map_err(StorageError::from)?;

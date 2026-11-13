@@ -2,18 +2,18 @@
 //! Board cursors: the reader's position in each segment, sealed so only this board can read or
 //! change it (design B.4.3, D: "opaque, server-MACed").
 //!
-//! The position is sealed with pingers-crypto's XChaCha20-Poly1305 snapshot seal under a key
-//! that exists only for cursors. Authenticated encryption gives the MAC the design asks for and
-//! also keeps segment positions opaque to the client.
+//! The position is sealed with pingers-crypto's board-cursor seal (XChaCha20-Poly1305 with the
+//! `pingers/v1/board-cursor` label as associated data) under a key that exists only for
+//! cursors. Authenticated encryption gives the MAC the design asks for and also keeps segment
+//! positions opaque to the client.
 
 use core::time::Duration;
 use std::collections::BTreeMap;
 
-use pingers_crypto::{StateKey, open_state_snapshot, seal_state_snapshot};
-use pingers_proto::{BoardCursor, SealedSnapshot};
+use pingers_crypto::{BoardCursorKey, open_board_cursor, seal_board_cursor};
+use pingers_proto::BoardCursor;
 use pingers_time::{Bucket, UnixSeconds};
 use rand_core::CryptoRng;
-use zeroize::Zeroizing;
 
 use crate::BoardError;
 
@@ -25,15 +25,13 @@ const VERSION: u8 = 1;
 
 /// The key that seals board cursors. Generated at start-up and never stored: the board lives
 /// in memory, so cursors die with it.
-pub struct CursorKey(StateKey);
+pub struct CursorKey(BoardCursorKey);
 
 impl CursorKey {
     /// A fresh key.
     #[must_use]
     pub fn generate(rng: &mut impl CryptoRng) -> Self {
-        let mut bytes = Zeroizing::new([0_u8; 32]);
-        rng.fill_bytes(bytes.as_mut_slice());
-        Self(StateKey::from_bytes(bytes))
+        Self(BoardCursorKey::generate(rng))
     }
 }
 
@@ -113,15 +111,13 @@ impl ReadPosition {
         key: &CursorKey,
         rng: &mut impl CryptoRng,
     ) -> Result<BoardCursor, BoardError> {
-        let sealed = seal_state_snapshot(&key.0, &self.encode()?, rng)?;
-        Ok(BoardCursor::from_bytes(sealed.into_bytes()))
+        Ok(seal_board_cursor(&key.0, &self.encode()?, rng)?)
     }
 
     /// Opens a cursor sealed by [`ReadPosition::seal`] under the same key.
     pub(crate) fn open(key: &CursorKey, cursor: &BoardCursor) -> Result<Self, BoardError> {
-        let sealed = SealedSnapshot::from_bytes(cursor.as_bytes().to_vec());
         let plaintext =
-            open_state_snapshot(&key.0, &sealed).map_err(|_tampered| BoardError::BadCursor)?;
+            open_board_cursor(&key.0, cursor).map_err(|_tampered| BoardError::BadCursor)?;
         Self::decode(&plaintext)
     }
 }

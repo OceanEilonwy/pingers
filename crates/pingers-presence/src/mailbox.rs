@@ -8,7 +8,8 @@ use pingers_crypto::{
     seal_push_token,
 };
 use pingers_proto::{
-    MailboxSpec, PushHandle, PushTokenPlaintext, RelayRef, SealedPush, TimeToLive, Urgency,
+    MailboxSpec, PushHandle, PushRelayKeyId, PushTokenPlaintext, RelayRef, SealedPush, TimeToLive,
+    Urgency,
 };
 use pingers_time::{Bucket, UnixSeconds};
 use rand_core::CryptoRng;
@@ -34,7 +35,8 @@ pub enum PushSealing<'push> {
     Seal {
         /// Which relay, as the server knows it.
         relay: RelayRef,
-        /// The relay's pinned key.
+        /// The relay's pinned key, from its pinned key config; its key id goes into the seal
+        /// and into the `SealedPush`, so the server forwards the id the blob was sealed to.
         relay_key: &'push PushRelayPublicKey,
         /// The token, class and expiry to seal.
         token: &'push PushTokenPlaintext,
@@ -101,6 +103,7 @@ pub fn prepare_mailbox(
             )?;
             Some(SealedPush {
                 relay: relay.clone(),
+                key_id: PushRelayKeyId::new(relay_key.key_id()),
                 blob,
                 urgency: *urgency,
                 handle: PushHandle::from_bytes(handle),
@@ -167,7 +170,7 @@ pub fn knock_unanswered(sent_at: UnixSeconds, now: UnixSeconds) -> bool {
 mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
-    use pingers_crypto::{PushRelayPrivateKey, open_push_token};
+    use pingers_crypto::{PushRelayPrivateKey, PushTokenToOpen, open_push_token};
     use pingers_proto::{PushClass, PushPlatform, PushToken, RelayId};
     use pingers_testkit::seeded_rng;
 
@@ -208,7 +211,7 @@ mod tests {
     fn sealed_push_opens_only_for_this_mailbox() -> Result<(), TestError> {
         let mut rng = seeded_rng(71);
         let relay_secret = PushRelayPrivateKey::generate(&mut rng);
-        let relay_key = relay_secret.public_key(1)?;
+        let relay_key = relay_secret.public_key(4)?;
         let token = PushTokenPlaintext {
             platform: PushPlatform::Fcm,
             class: PushClass::Location,
@@ -232,11 +235,24 @@ mod tests {
         };
         assert_eq!(push.relay, RelayRef::Listed(RelayId::new(3)));
         assert_eq!(push.urgency, Urgency::Quiet);
+        // The key id of the pinned relay key travels with the blob and opens it.
+        assert_eq!(push.key_id, PushRelayKeyId::new(4));
+        let open = |bind, key_id| {
+            open_push_token(
+                &relay_secret,
+                &PushTokenToOpen {
+                    key_id,
+                    bind,
+                    blob: &push.blob,
+                },
+            )
+        };
         let bind = push_bind_for_mailbox(&first.spec.mailbox_id);
-        assert_eq!(open_push_token(&relay_secret, &bind, &push.blob)?, token);
-        // Moved to another mailbox, the blob does not open.
+        assert_eq!(open(bind, push.key_id.get())?, token);
+        // Under another key id, or moved to another mailbox, the blob does not open.
+        assert!(open(bind, 1).is_err());
         let other_bind = push_bind_for_mailbox(&second.spec.mailbox_id);
-        assert!(open_push_token(&relay_secret, &other_bind, &push.blob).is_err());
+        assert!(open(other_bind, push.key_id.get()).is_err());
         // Fresh per mailbox: nothing repeats between two registrations of the same token.
         assert_ne!(push.blob, other.blob);
         assert_ne!(push.handle, other.handle);

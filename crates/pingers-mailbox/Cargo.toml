@@ -21,8 +21,6 @@ pingers-crypto = { workspace = true }
 pingers-presence = { workspace = true, features = ["server"] }
 pingers-proto = { workspace = true }
 pingers-time = { workspace = true }
-# The push relay's JSON body carries its byte fields as hex.
-hex = { workspace = true }
 rand_core = { workspace = true }
 rusqlite = { workspace = true, optional = true }
 thiserror = { workspace = true }

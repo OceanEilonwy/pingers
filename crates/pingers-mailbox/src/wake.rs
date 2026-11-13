@@ -8,7 +8,9 @@ use pingers_proto::{MailboxId, Urgency};
 use pingers_time::Timer;
 use rand_core::CryptoRng;
 
-use crate::relay::{PushRelay, PushRequest, RelayAnswer, RelayTarget, RelayUnreachable};
+use pingers_proto::PushRequest;
+
+use crate::relay::{PushRelay, RelayAnswer, RelayTarget, RelayUnreachable};
 
 /// The longest a `Quiet` push is held back.
 pub const QUIET_DELAY_MAX: Duration = Duration::from_secs(30);

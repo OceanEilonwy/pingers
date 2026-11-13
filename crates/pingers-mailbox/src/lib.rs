@@ -21,9 +21,10 @@
 //! - **Every `Quiet` push is delayed**, mailbox posts included, so that a quiet push looks the
 //!   same to the relay whatever caused it. Knock mailboxes are registered `Alert` (or class
 //!   Location), so knocks are not slowed.
-//! - **The relay's key id comes from server configuration** ([`RelayTarget::key_id`]):
-//!   `SealedPush` does not carry one. Blobs sealed to a retired key fail with 422 at the relay
-//!   until the mailbox is re-registered.
+//! - **The relay's key id comes from the sealed push**: `SealedPush::key_id` is the key the
+//!   device sealed to (bound into the seal), and the server forwards it unchanged in the
+//!   CBOR [`PushRequest`] (`Content-Type:` [`PUSH_CONTENT_TYPE`]). A blob whose key has been
+//!   retired answers 410 and is deleted.
 //! - **Custom relays do not resolve** in [`ListedRelays`]: the server holds no credential for
 //!   them. An operator who allows them supplies its own [`RelayDirectory`].
 #![forbid(unsafe_code)]
@@ -39,9 +40,11 @@ mod wake;
 
 pub use error::{MailboxError, StorageError};
 pub use limit::{Admission, NoPostLimit, PostLimit, PostsPerBucket};
+/// The body of `POST /v1/push`, re-exported from pingers-proto.
+pub use pingers_proto::PushRequest;
 pub use relay::{
-    ListedRelays, PUSH_PATH, PushRelay, PushRequest, RelayAnswer, RelayCredential, RelayDirectory,
-    RelayKeyId, RelayTarget, RelayUnreachable,
+    ListedRelays, PUSH_CONTENT_TYPE, PUSH_PATH, PushRelay, RelayAnswer, RelayCredential,
+    RelayDirectory, RelayTarget, RelayUnreachable,
 };
 pub use service::{MailboxParts, MailboxRules, Mailboxes, Posted};
 #[cfg(feature = "sqlite")]

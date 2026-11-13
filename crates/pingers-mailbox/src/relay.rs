@@ -4,8 +4,7 @@
 use core::future::Future;
 use std::collections::HashMap;
 
-use pingers_crypto::PushBind;
-use pingers_proto::{PushHandle, RelayId, RelayRef, RelayUrl, SealedPushBlob, Urgency};
+use pingers_proto::{PushRequest, RelayId, RelayRef, RelayUrl};
 
 /// The path of the relay's push endpoint, relative to its URL.
 pub const PUSH_PATH: &str = "/v1/push";
@@ -35,24 +34,6 @@ impl core::fmt::Debug for RelayCredential {
     }
 }
 
-/// Which of the relay's HPKE keys a blob is sealed to (the relay's `key_id`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct RelayKeyId(u8);
-
-impl RelayKeyId {
-    /// Wraps the key id from the relay's published config.
-    #[must_use]
-    pub const fn new(id: u8) -> Self {
-        Self(id)
-    }
-
-    /// The wire value.
-    #[must_use]
-    pub const fn get(self) -> u8 {
-        self.0
-    }
-}
-
 /// Everything needed to call one relay (design C.1 `push_relay`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RelayTarget {
@@ -60,8 +41,6 @@ pub struct RelayTarget {
     pub url: RelayUrl,
     /// This server's credential at the relay.
     pub credential: RelayCredential,
-    /// The relay's current key id, which devices seal to.
-    pub key_id: RelayKeyId,
 }
 
 /// Resolves the relay a sealed push names to a target this server can call.
@@ -96,45 +75,9 @@ impl RelayDirectory for ListedRelays {
     }
 }
 
-/// The body of `POST /v1/push`: the blob as registered, never opened.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PushRequest {
-    /// Which relay key the blob is sealed to.
-    pub key_id: RelayKeyId,
-    /// The sealed token.
-    pub blob: SealedPushBlob,
-    /// `SHA-256("pingers/v1/push-bind" || mailbox_id)`: the relay never sees the id.
-    pub bind: PushBind,
-    /// Priority for class Standard.
-    pub urgency: Urgency,
-    /// Echoed in the push so the device knows which mailbox to read.
-    pub handle: PushHandle,
-}
-
-impl PushRequest {
-    /// The JSON body the relay expects:
-    ///
-    /// ```json
-    /// {"key_id":1,"blob":"<640 hex>","bind":"<64 hex>","urgency":"alert","handle":"<16 hex>"}
-    /// ```
-    ///
-    /// `urgency` is `"alert"` or `"quiet"`.
-    #[must_use]
-    pub fn to_json(&self) -> String {
-        let urgency = match self.urgency {
-            Urgency::Alert => "alert",
-            Urgency::Quiet => "quiet",
-        };
-        format!(
-            r#"{{"key_id":{},"blob":"{}","bind":"{}","urgency":"{}","handle":"{}"}}"#,
-            self.key_id.get(),
-            hex::encode(self.blob.as_bytes()),
-            hex::encode(self.bind.as_bytes()),
-            urgency,
-            hex::encode(self.handle.as_bytes()),
-        )
-    }
-}
+/// The `Content-Type` of a push request: the body is
+/// [`pingers_proto::PushRequest`] in CBOR (`WireEncode::encode`), as the relay expects.
+pub const PUSH_CONTENT_TYPE: &str = "application/cbor";
 
 /// What the relay answered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,13 +85,14 @@ impl PushRequest {
 pub enum RelayAnswer {
     /// 202: the push was sent.
     Accepted,
-    /// 410: the token was rejected by the push service or has expired; delete the blob.
+    /// 410: the token was rejected by the push service, has expired, outlives the relay's
+    /// `max_ttl`, or its key is retired; delete the blob.
     Gone,
-    /// 422: the blob does not open under this bind.
+    /// 422: the blob does not open under this bind and key id.
     Rejected,
     /// 429: a rate limit at the relay.
     RateLimited,
-    /// Any other status.
+    /// Any other status (400, 401, 500, 501 platform not served, 502, 504): keep the blob.
     Failed,
 }
 
@@ -173,8 +117,8 @@ pub struct RelayUnreachable;
 
 /// Sends one push request to a relay. pingers-server implements it over HTTPS
 /// (`POST {url}{PUSH_PATH}`, `Authorization` from [`RelayCredential::authorization`],
-/// `Content-Type: application/json`, body [`PushRequest::to_json`], with a timeout from its
-/// `Timer`); tests use a fake.
+/// `Content-Type:` [`PUSH_CONTENT_TYPE`], body `request.encode()` (CBOR), with a timeout from
+/// its `Timer`); tests use a fake.
 pub trait PushRelay {
     /// Sends `request` to `target`.
     ///
@@ -200,34 +144,25 @@ mod tests {
         Ok(RelayTarget {
             url: RelayUrl::new(String::from("https://push.example"))?,
             credential: RelayCredential::new(String::from("s3cret")),
-            key_id: RelayKeyId::new(1),
         })
     }
 
     #[test]
-    fn json_body_matches_the_relay_contract() -> Result<(), serde_json::Error> {
+    fn the_body_is_the_relay_s_cbor_push_request() -> Result<(), pingers_proto::ProtoError> {
+        use pingers_proto::{
+            PushBind, PushHandle, PushRelayKeyId, SealedPushBlob, Urgency, WireDecode as _,
+            WireEncode as _,
+        };
         let request = PushRequest {
-            key_id: RelayKeyId::new(3),
+            key_id: PushRelayKeyId::new(3),
             blob: SealedPushBlob::from_bytes([0xab; 320]),
             bind: PushBind::from_bytes([0x01; 32]),
             urgency: Urgency::Quiet,
             handle: PushHandle::from_bytes([0xfe; 8]),
         };
-        let json: serde_json::Value = serde_json::from_str(&request.to_json())?;
-        let expected = serde_json::json!({
-            "key_id": 3,
-            "blob": "ab".repeat(320),
-            "bind": "01".repeat(32),
-            "urgency": "quiet",
-            "handle": "fe".repeat(8),
-        });
-        assert_eq!(json, expected);
-        let alert = PushRequest {
-            urgency: Urgency::Alert,
-            ..request
-        };
-        let json: serde_json::Value = serde_json::from_str(&alert.to_json())?;
-        assert_eq!(json.get("urgency"), Some(&serde_json::json!("alert")));
+        // What the relay decodes is exactly what was sent.
+        assert_eq!(PushRequest::decode(&request.encode()?)?, request);
+        assert_eq!(PUSH_CONTENT_TYPE, "application/cbor");
         Ok(())
     }
 
