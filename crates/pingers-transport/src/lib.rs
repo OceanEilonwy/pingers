@@ -39,7 +39,7 @@ pub use ohttp::{LiveSettings, OhttpConfig, OhttpTransport, Timeouts};
 pub use relay::{Backoff, KeyPin, Relay};
 pub use router::{Router, Routes};
 pub use timer::TokioTimer;
-pub use tls::TlsRoots;
+pub use tls::{TlsRoots, certificates_from_pem};
 
 /// The randomness an [`OhttpTransport`] draws HPKE keys and nonces from. Production passes an
 /// OS-seeded CSPRNG; tests pass a seeded one (style guide §6).
@@ -176,6 +176,20 @@ pub trait Transport: Send + Sync {
     /// Any [`TransportError`].
     async fn stream(&self, request: BinaryRequest)
     -> Result<Box<dyn DuplexStream>, TransportError>;
+
+    /// Fetches the gateway's key config afresh through a relay and checks it against the pin:
+    /// the reachability check ("What your server sees"). It sends nothing to the gateway and
+    /// carries no account, Party or mailbox. A transport without a gateway key (direct)
+    /// answers [`TransportError::ClassNotAllowed`].
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::NoRelay`] if no relay answered;
+    /// [`TransportError::Ohttp`] with [`OhttpError::KeyMismatch`] if the config does not match
+    /// the pin (latched as for a request); any other [`TransportError`].
+    async fn check_gateway_key(&self) -> Result<(), TransportError> {
+        Err(TransportError::ClassNotAllowed)
+    }
 
     /// What this transport is.
     fn kind(&self) -> TransportKind;

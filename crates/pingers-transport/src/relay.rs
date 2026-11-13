@@ -4,7 +4,7 @@
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use pingers_ohttp::{KeyConfig, OhttpError, check_pin};
+use pingers_ohttp::{KeyConfig, KeyPins, OhttpError, check_pins};
 use pingers_proto::KeyConfigHash;
 use pingers_time::MonotonicTime;
 
@@ -171,10 +171,12 @@ impl RelayPool {
 }
 
 /// What a fetched key config is checked against (design B.12).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeyPin {
-    /// The hash pinned in the Party's encrypted state (or shipped with an official build).
-    Pinned(KeyConfigHash),
+    /// The hashes the config may have: those shipped with an official build (the key served now
+    /// and the next one, for two-slot rotation), or the one pinned in a Party's encrypted state.
+    /// First-use pinning is off.
+    Pinned(KeyPins),
     /// No pin yet: the first config fetched becomes the pin; read it back with
     /// [`OhttpTransport::key_config_hash`](crate::OhttpTransport::key_config_hash) and store it.
     FirstUse,
@@ -220,10 +222,10 @@ impl KeyGuard {
         if let KeyState::Mismatch = self.state {
             return Err(OhttpError::KeyMismatch.into());
         }
-        match self.pin {
-            KeyPin::FirstUse => self.pin = KeyPin::Pinned(fetched.hash()),
-            KeyPin::Pinned(pinned) => {
-                if let Err(error) = check_pin(&fetched, &pinned) {
+        match &self.pin {
+            KeyPin::FirstUse => self.pin = KeyPin::Pinned(fetched.hash().into()),
+            KeyPin::Pinned(pins) => {
+                if let Err(error) = check_pins(&fetched, pins) {
                     self.state = KeyState::Mismatch;
                     return Err(error.into());
                 }
@@ -240,11 +242,19 @@ impl KeyGuard {
         self.state = KeyState::Unverified;
     }
 
-    /// The pinned hash, once there is one.
-    pub(crate) fn pinned_hash(&self) -> Option<KeyConfigHash> {
-        match self.pin {
-            KeyPin::Pinned(hash) => Some(hash),
-            KeyPin::FirstUse => None,
+    /// The hash of the config fetched and found to match the pin, once there is one.
+    pub(crate) fn verified_hash(&self) -> Option<KeyConfigHash> {
+        match &self.state {
+            KeyState::Verified(config) => Some(config.hash()),
+            KeyState::Unverified | KeyState::Mismatch => None,
+        }
+    }
+
+    /// Forgets the verified config so the next request fetches it again (a reachability
+    /// check). A latched mismatch stays latched.
+    pub(crate) fn refetch(&mut self) {
+        if let KeyState::Verified(_) = self.state {
+            self.state = KeyState::Unverified;
         }
     }
 }
@@ -373,11 +383,11 @@ mod tests {
     #[test]
     fn a_matching_config_is_verified_and_kept() -> Result<(), TransportError> {
         let fetched = config(1)?;
-        let mut guard = KeyGuard::new(KeyPin::Pinned(fetched.hash()));
+        let mut guard = KeyGuard::new(KeyPin::Pinned(fetched.hash().into()));
         assert!(guard.current()?.is_none());
         assert_eq!(guard.accept(fetched.clone())?, fetched);
         assert_eq!(guard.current()?, Some(fetched.clone()));
-        assert_eq!(guard.pinned_hash(), Some(fetched.hash()));
+        assert_eq!(guard.verified_hash(), Some(fetched.hash()));
         Ok(())
     }
 
@@ -385,7 +395,7 @@ mod tests {
     fn a_mismatch_is_latched_until_repinned() -> Result<(), TransportError> {
         let pinned = config(1)?;
         let other = config(2)?;
-        let mut guard = KeyGuard::new(KeyPin::Pinned(pinned.hash()));
+        let mut guard = KeyGuard::new(KeyPin::Pinned(pinned.hash().into()));
         assert!(matches!(
             guard.accept(other.clone()),
             Err(TransportError::Ohttp(OhttpError::KeyMismatch))
@@ -397,7 +407,7 @@ mod tests {
         // Even the right config is refused while the mismatch stands.
         assert!(guard.accept(pinned.clone()).is_err());
 
-        guard.repin(KeyPin::Pinned(other.hash()));
+        guard.repin(KeyPin::Pinned(other.hash().into()));
         assert!(guard.current()?.is_none());
         assert_eq!(guard.accept(other.clone())?, other);
         Ok(())
@@ -407,12 +417,42 @@ mod tests {
     fn first_use_pins_the_first_config() -> Result<(), TransportError> {
         let first = config(1)?;
         let mut guard = KeyGuard::new(KeyPin::FirstUse);
-        assert_eq!(guard.pinned_hash(), None);
+        assert_eq!(guard.verified_hash(), None);
         guard.accept(first.clone())?;
-        assert_eq!(guard.pinned_hash(), Some(first.hash()));
+        assert_eq!(guard.verified_hash(), Some(first.hash()));
 
         // From then on the first config is the pin: a different one is a mismatch.
         assert!(guard.accept(config(2)?).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn a_pin_set_accepts_the_next_key_after_rotation() -> Result<(), TransportError> {
+        let current = config(1)?;
+        let next = config(2)?;
+        let pins = KeyPins::new([current.hash(), next.hash()])?;
+        let mut guard = KeyGuard::new(KeyPin::Pinned(pins));
+        guard.accept(current)?;
+        // The operator starts serving the second slot: no mismatch, no first-use repin.
+        guard.refetch();
+        assert!(guard.current()?.is_none());
+        assert_eq!(guard.accept(next.clone())?, next);
+        assert_eq!(guard.verified_hash(), Some(next.hash()));
+        // A third key is refused even though two are pinned.
+        guard.refetch();
+        assert!(guard.accept(config(3)?).is_err());
+        assert_eq!(guard.verified_hash(), None);
+        Ok(())
+    }
+
+    #[test]
+    fn a_refetch_keeps_a_latched_mismatch() -> Result<(), TransportError> {
+        let pinned = config(1)?;
+        let mut guard = KeyGuard::new(KeyPin::Pinned(pinned.hash().into()));
+        assert!(guard.accept(config(2)?).is_err());
+        guard.refetch();
+        assert!(guard.current().is_err());
+        assert!(guard.accept(pinned).is_err());
         Ok(())
     }
 }

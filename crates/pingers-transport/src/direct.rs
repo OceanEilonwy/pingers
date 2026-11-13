@@ -205,6 +205,11 @@ mod tests {
             direct.stream(request).await,
             Err(TransportError::ClassNotAllowed)
         ));
+        // There is no gateway key to check without a relay.
+        assert!(matches!(
+            direct.check_gateway_key().await,
+            Err(TransportError::ClassNotAllowed)
+        ));
         assert_eq!(direct.kind(), TransportKind::Direct);
         Ok(())
     }

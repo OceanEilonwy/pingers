@@ -5,7 +5,9 @@
 mod common;
 
 use common::{SECRET, TestError, gateway_key, request, response, setup};
-use pingers_ohttp::{Gateway, GatewayKey, KeyConfig, OhttpError, check_pin, encapsulate_request};
+use pingers_ohttp::{
+    Gateway, GatewayKey, KeyConfig, KeyPins, OhttpError, check_pin, check_pins, encapsulate_request,
+};
 use pingers_testkit::{FixedRng, seeded_rng};
 
 #[test]
@@ -251,6 +253,21 @@ fn pin_check_accepts_the_same_config_and_refuses_another() -> Result<(), TestErr
     check_pin(&config, &config.hash())?;
     assert!(matches!(
         check_pin(&other, &config.hash()),
+        Err(OhttpError::KeyMismatch)
+    ));
+    Ok(())
+}
+
+#[test]
+fn a_pin_set_admits_either_slot_and_nothing_else() -> Result<(), TestError> {
+    let current = gateway_key(1, SECRET)?.config();
+    let next = GatewayKey::generate(2, &mut seeded_rng(16))?.config();
+    let stranger = GatewayKey::generate(1, &mut seeded_rng(17))?.config();
+    let pins = KeyPins::new([current.hash(), next.hash()])?;
+    check_pins(&current, &pins)?;
+    check_pins(&next, &pins)?;
+    assert!(matches!(
+        check_pins(&stranger, &pins),
         Err(OhttpError::KeyMismatch)
     ));
     Ok(())

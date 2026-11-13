@@ -50,6 +50,27 @@ impl TlsRoots {
     }
 }
 
+/// The DER certificates in a PEM bundle (`-----BEGIN CERTIFICATE-----` blocks; anything else
+/// in it is ignored), for [`TlsRoots::from_der`]. A local test stack's CA arrives this way.
+///
+/// # Errors
+///
+/// [`TransportError::InvalidCertificate`] if a block is malformed or there is no certificate.
+pub fn certificates_from_pem(pem: &str) -> Result<Vec<Vec<u8>>, TransportError> {
+    use rustls::pki_types::pem::PemObject as _;
+    let certificates = CertificateDer::pem_slice_iter(pem.as_bytes())
+        .map(|certificate| {
+            certificate
+                .map(|der| der.as_ref().to_vec())
+                .map_err(|_| TransportError::InvalidCertificate)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if certificates.is_empty() {
+        return Err(TransportError::InvalidCertificate);
+    }
+    Ok(certificates)
+}
+
 /// The key exchange groups offered, best first. X25519MLKEM768 is the hybrid post-quantum
 /// group (architecture §3); the classical ones follow for servers that lack it.
 fn provider() -> CryptoProvider {
@@ -102,6 +123,43 @@ mod tests {
         let config = client_config(&TlsRoots::from_der(&[])?)?;
         assert_eq!(config.alpn_protocols, [b"h2".to_vec()]);
         Ok(())
+    }
+
+    #[test]
+    fn a_pem_bundle_gives_its_certificates_as_der() -> Result<(), Box<dyn std::error::Error>> {
+        let first = rcgen::generate_simple_self_signed(vec!["ca.invalid".to_owned()])?;
+        let second = rcgen::generate_simple_self_signed(vec!["other.invalid".to_owned()])?;
+        // A private key in the bundle is passed over, not taken for a certificate.
+        let bundle = format!(
+            "{}{}{}",
+            first.cert.pem(),
+            first.signing_key.serialize_pem(),
+            second.cert.pem()
+        );
+        let certificates = certificates_from_pem(&bundle)?;
+        assert_eq!(
+            certificates,
+            [first.cert.der().to_vec(), second.cert.der().to_vec()]
+        );
+        assert!(!TlsRoots::from_der(&certificates)?.store.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn a_pem_without_a_valid_certificate_is_refused() {
+        for pem in [
+            "",
+            "not pem at all",
+            "-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----\n",
+        ] {
+            assert!(
+                matches!(
+                    certificates_from_pem(pem),
+                    Err(TransportError::InvalidCertificate)
+                ),
+                "{pem:?}"
+            );
+        }
     }
 
     #[test]

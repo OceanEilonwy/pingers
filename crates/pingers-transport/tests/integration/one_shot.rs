@@ -62,7 +62,7 @@ async fn with_no_relay_reachable_nothing_is_sent_at_all() -> Result<(), TestErro
     let world = world().await?;
     let client = world.client_with(
         vec![relay_at(closed_address().await?)?],
-        KeyPin::Pinned(world.gateway.config.hash()),
+        KeyPin::Pinned(world.gateway.config.hash().into()),
     )?;
     for _ in 0..2 {
         let result = tokio::time::timeout(
@@ -87,7 +87,7 @@ async fn an_unreachable_relay_is_skipped_for_the_next_one() -> Result<(), TestEr
             relay_at(closed_address().await?)?,
             relay_at(world.relay_address()?)?,
         ],
-        KeyPin::Pinned(world.gateway.config.hash()),
+        KeyPin::Pinned(world.gateway.config.hash().into()),
     )?;
     let response = tokio::time::timeout(
         STEP,
@@ -104,7 +104,7 @@ async fn a_key_config_that_does_not_match_the_pin_fails_closed() -> Result<(), T
     let other = GatewayKey::generate(1, &mut seeded_rng(99))?.config();
     let client = world.client_with(
         vec![relay_at(world.relay_address()?)?],
-        KeyPin::Pinned(other.hash()),
+        KeyPin::Pinned(other.hash().into()),
     )?;
     let anonymous = || client.request(PrivacyClass::Anonymous, request("/v1/board/sync", b"x"));
 
@@ -130,9 +130,66 @@ async fn a_key_config_that_does_not_match_the_pin_fails_closed() -> Result<(), T
     assert_eq!(world.gateway.seen().paths, ["/v1/ohttp/config"]);
 
     // Once resolved (the user accepted the new key), traffic resumes.
-    client.repin(KeyPin::Pinned(world.gateway.config.hash()));
+    client.repin(KeyPin::Pinned(world.gateway.config.hash().into()));
     let response = tokio::time::timeout(STEP, anonymous()).await??;
     assert_eq!(response.status.get(), 200);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_reachability_check_fetches_the_key_config_afresh_and_nothing_else()
+-> Result<(), TestError> {
+    let world = world().await?;
+    let next = GatewayKey::generate(2, &mut seeded_rng(98))?.config();
+    let pins = pingers_ohttp::KeyPins::new([next.hash(), world.gateway.config.hash()])?;
+    let client = world.client_with(vec![relay_at(world.relay_address()?)?], KeyPin::Pinned(pins))?;
+    tokio::time::timeout(STEP, client.check_gateway_key()).await??;
+    tokio::time::timeout(
+        STEP,
+        client.request(PrivacyClass::Anonymous, request("/v1/board/sync", b"x")),
+    )
+    .await??;
+    // A second check asks again even though the config is known.
+    tokio::time::timeout(STEP, client.check_gateway_key()).await??;
+    assert_eq!(
+        world.gateway.seen().paths,
+        ["/v1/ohttp/config", "/ohttp", "/v1/ohttp/config"]
+    );
+    assert_eq!(client.key_config_hash(), Some(world.gateway.config.hash()));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_reachability_check_reports_a_mismatch_and_no_relay() -> Result<(), TestError> {
+    let world = world().await?;
+    let other = GatewayKey::generate(1, &mut seeded_rng(99))?.config();
+    let mismatched = world.client_with(
+        vec![relay_at(world.relay_address()?)?],
+        KeyPin::Pinned(other.hash().into()),
+    )?;
+    let checked = tokio::time::timeout(STEP, mismatched.check_gateway_key()).await?;
+    assert!(matches!(
+        checked,
+        Err(TransportError::Ohttp(OhttpError::KeyMismatch))
+    ));
+    // The mismatch is latched for requests too.
+    let request_after = tokio::time::timeout(
+        STEP,
+        mismatched.request(PrivacyClass::Anonymous, request("/v1/board/sync", b"x")),
+    )
+    .await?;
+    assert!(matches!(
+        request_after,
+        Err(TransportError::Ohttp(OhttpError::KeyMismatch))
+    ));
+
+    let unreachable = world.client_with(
+        vec![relay_at(closed_address().await?)?],
+        KeyPin::Pinned(world.gateway.config.hash().into()),
+    )?;
+    let checked = tokio::time::timeout(STEP, unreachable.check_gateway_key()).await?;
+    assert!(matches!(checked, Err(TransportError::NoRelay)));
+    assert_eq!(world.gateway.seen().paths, ["/v1/ohttp/config"]);
     Ok(())
 }
 
@@ -163,7 +220,7 @@ async fn a_relay_error_status_is_reported() -> Result<(), TestError> {
     .await?;
     let client = world.client_with(
         vec![relay_at(orphan.address)?],
-        KeyPin::Pinned(world.gateway.config.hash()),
+        KeyPin::Pinned(world.gateway.config.hash().into()),
     )?;
     let result = tokio::time::timeout(
         STEP,
@@ -187,7 +244,7 @@ async fn a_silent_relay_times_out_on_the_injected_timer_and_then_rests() -> Resu
     });
     let client = world.client_with(
         vec![relay_at(silent)?],
-        KeyPin::Pinned(world.gateway.config.hash()),
+        KeyPin::Pinned(world.gateway.config.hash().into()),
     )?;
     // Time moves only once the client waits on its 30 s request deadline.
     let result = advancing_through(

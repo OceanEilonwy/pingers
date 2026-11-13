@@ -74,6 +74,11 @@ impl Transport for Router {
         self.routes.stream.stream(request).await
     }
 
+    /// The anonymous route's check: that is the relay anonymous requests take.
+    async fn check_gateway_key(&self) -> Result<(), TransportError> {
+        self.routes.anonymous.check_gateway_key().await
+    }
+
     /// The anonymous route's kind; [`Router::kind_for`] answers per class.
     fn kind(&self) -> TransportKind {
         self.routes.anonymous.kind()
@@ -147,6 +152,12 @@ mod tests {
             Err(TransportError::StreamClosed)
         }
 
+        async fn check_gateway_key(&self) -> Result<(), TransportError> {
+            Err(TransportError::Status {
+                status: self.status,
+            })
+        }
+
         fn kind(&self) -> TransportKind {
             self.kind
         }
@@ -199,6 +210,11 @@ mod tests {
         let answered = router.request(PrivacyClass::Stream, request()).await?;
         assert_eq!(answered.status.get(), 203);
         assert!(router.stream(request()).await.is_err());
+        // The check goes to the relay anonymous requests take.
+        assert!(matches!(
+            router.check_gateway_key().await,
+            Err(TransportError::Status { status: 201 })
+        ));
 
         assert_eq!(anonymous.seen(), [PrivacyClass::Anonymous]);
         assert_eq!(identified.seen(), [PrivacyClass::Identified]);

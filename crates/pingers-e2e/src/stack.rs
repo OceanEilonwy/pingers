@@ -268,7 +268,7 @@ impl Stack {
         )?;
         let mut config = OhttpConfig::new(
             vec![relay],
-            KeyPin::Pinned(self.key_config.hash()),
+            KeyPin::Pinned(self.key_config.hash().into()),
             TlsRoots::from_der(&[])?,
         );
         config.max_response_bytes = 4 * 1024 * 1024;

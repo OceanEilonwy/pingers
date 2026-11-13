@@ -241,6 +241,31 @@ impl Shared {
         }
         Err(TransportError::NoRelay)
     }
+
+    /// Fetches the gateway's key config afresh through the first relay that can be reached
+    /// and checks it against the pin. Only the relay's key config endpoint is asked: no
+    /// request reaches the gateway and nothing about the device goes with it.
+    async fn check_key_config(&self) -> Result<(), TransportError> {
+        self.key().refetch();
+        for index in self.pool.available(self.timer.now()) {
+            match self.key_config(index).await {
+                Ok(_) => {
+                    self.pool.record_success(index);
+                    return Ok(());
+                }
+                Err(SendError::Unreachable(_)) => {
+                    self.pool.record_failure(index, self.timer.now());
+                }
+                Err(SendError::Failed(error)) => {
+                    if is_relay_fault(&error) {
+                        self.pool.record_failure(index, self.timer.now());
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        Err(TransportError::NoRelay)
+    }
 }
 
 /// A POST of an encapsulated body to a relay. Only the media type goes with it.
@@ -298,11 +323,11 @@ impl OhttpTransport {
         })
     }
 
-    /// The pinned key config hash: the configured pin, or after [`KeyPin::FirstUse`] the hash
-    /// of the first config fetched, for the caller to store in Party state.
+    /// The hash of the key config in use, once it has been fetched and matched the pin (after
+    /// [`KeyPin::FirstUse`], the first config fetched), for the caller to store in Party state.
     #[must_use]
     pub fn key_config_hash(&self) -> Option<KeyConfigHash> {
-        self.shared.key().pinned_hash()
+        self.shared.key().verified_hash()
     }
 
     /// Replaces the pin once a `RelayKeyMismatch` has been resolved; the key config is
@@ -333,6 +358,10 @@ impl Transport for OhttpTransport {
         request: BinaryRequest,
     ) -> Result<Box<dyn DuplexStream>, TransportError> {
         live::open(Arc::clone(&self.shared), request).await
+    }
+
+    async fn check_gateway_key(&self) -> Result<(), TransportError> {
+        self.shared.check_key_config().await
     }
 
     fn kind(&self) -> TransportKind {

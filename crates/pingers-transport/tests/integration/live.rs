@@ -179,7 +179,7 @@ async fn a_key_mismatch_on_reconnect_ends_the_channel_at_once() -> Result<(), Te
     let mut stream = tokio::time::timeout(STEP, client.stream(live_request())).await??;
     // The pin changes under the open channel (say, another member pinned a different key).
     let other = pingers_ohttp::GatewayKey::generate(1, &mut seeded_rng(99))?.config();
-    client.repin(KeyPin::Pinned(other.hash()));
+    client.repin(KeyPin::Pinned(other.hash().into()));
     // A silent downlink: past the idle limit the exchange counts as dropped and the driver
     // reconnects at once, fetching the key config again. Moving time before the driver has
     // armed its idle timer would push the deadline out of reach, so wait for it first.
@@ -202,7 +202,7 @@ async fn a_stream_is_refused_when_the_first_key_config_does_not_match() -> Resul
     let other = pingers_ohttp::GatewayKey::generate(1, &mut seeded_rng(99))?.config();
     let client = world.client_with(
         vec![relay_at(world.relay_address()?)?],
-        KeyPin::Pinned(other.hash()),
+        KeyPin::Pinned(other.hash().into()),
     )?;
     let result = tokio::time::timeout(STEP, client.stream(live_request())).await?;
     assert!(matches!(
@@ -250,7 +250,7 @@ fn client_with_live(
 ) -> Result<OhttpTransport, TestError> {
     let mut config = OhttpConfig::new(
         relays,
-        KeyPin::Pinned(world.gateway.config.hash()),
+        KeyPin::Pinned(world.gateway.config.hash().into()),
         TlsRoots::from_der(&[])?,
     );
     tune(&mut config);

@@ -645,7 +645,7 @@ impl World {
     pub(crate) fn client(&self) -> Result<OhttpTransport, TestError> {
         self.client_with(
             vec![relay_at(self.relay_address()?)?],
-            KeyPin::Pinned(self.gateway.config.hash()),
+            KeyPin::Pinned(self.gateway.config.hash().into()),
         )
     }
 }

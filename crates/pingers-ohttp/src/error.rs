@@ -44,6 +44,9 @@ pub enum OhttpError {
     /// A Binary HTTP message is malformed.
     #[error("malformed binary HTTP message")]
     BadMessage,
+    /// A pin is not a base64url SHA-256, or a pin set is empty.
+    #[error("malformed key pin")]
+    InvalidPin,
     /// The HPKE layer reported an error the types should have ruled out.
     #[error("internal OHTTP error")]
     Internal,

@@ -20,6 +20,7 @@ mod config;
 mod error;
 mod framing;
 mod message;
+mod pins;
 mod request;
 
 pub use chunked::{
@@ -29,6 +30,7 @@ pub use chunked::{
 pub use config::{GatewayKey, KeyConfig, check_pin};
 pub use error::OhttpError;
 pub use message::{BinaryRequest, BinaryResponse, Header, StatusCode};
+pub use pins::{KeyPins, check_pins};
 pub use request::{
     DecapsulatedRequest, EncapsulatedRequest, Gateway, Responder, ResponseContext,
     encapsulate_request,
