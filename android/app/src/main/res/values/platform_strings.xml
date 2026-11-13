@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The platform layer's strings (org.pingers.app.platform): permission onboarding,
+     notification channels and the foreground service's notification. Kept apart from
+     strings.xml, which the UI layer owns. -->
+<resources>
+    <!-- Permission onboarding -->
+    <string name="platform_perm_location_title">Your location stays on this phone</string>
+    <string name="platform_perm_location_body">Pingers checks your location against your Party\'s Spots on this phone. Your server never sees where you are: it only sees encrypted records it can\'t read.</string>
+    <string name="platform_perm_location_action">Allow location</string>
+
+    <string name="platform_perm_background_title">Notice friends while the app is closed</string>
+    <string name="platform_perm_background_body">Pingers uses your location in the background, even when the app is closed or not in use, to tell when you arrive at or leave one of your Party\'s Spots, and during a Meetup to share where you are with the people in it. Location is only checked on this phone and is never sent to your server.</string>
+    <string name="platform_perm_background_how">On the next screen, choose \"Allow all the time\". You can change this later in Settings.</string>
+    <string name="platform_perm_background_action">Continue</string>
+    <string name="platform_perm_open_settings">Open app settings</string>
+
+    <string name="platform_perm_notifications_title">Know when friends are at a Spot</string>
+    <string name="platform_perm_notifications_body">Pingers tells you when someone from your Party is at the same Spot, and when a Meetup starts. Notifications carry nothing your server can read.</string>
+    <string name="platform_perm_notifications_action">Allow notifications</string>
+
+    <string name="platform_perm_not_now">Not now</string>
+
+    <!-- Notification channels -->
+    <string name="platform_channel_running">Running in the background</string>
+    <string name="platform_channel_running_description">Shown while Pingers keeps running for a Meetup, or because Keep Pingers running is on.</string>
+    <string name="platform_channel_alerts">Friends nearby</string>
+    <string name="platform_channel_alerts_description">Someone from your Party is at the same Spot, a Meetup started, or a message arrived.</string>
+    <string name="platform_channel_quiet">Updates</string>
+    <string name="platform_channel_quiet_description">Changes to your Parties and Meetups that don\'t need a sound.</string>
+
+    <!-- The foreground service's notification -->
+    <string name="platform_running_meetup">In a Meetup</string>
+    <string name="platform_running_meetup_text">Sharing your location with the people in this Meetup.</string>
+    <string name="platform_running_keep">Pingers is running</string>
+    <string name="platform_running_keep_text">Keep Pingers running is on, so friends nearby are noticed on time.</string>
+</resources>

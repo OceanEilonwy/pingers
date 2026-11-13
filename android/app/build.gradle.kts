@@ -17,6 +17,9 @@ val minSdkVersion = 29
 // -PpingersSplits builds an APK for each ABI plus a universal one; any other build is one APK
 // holding both.
 val splitting = project.hasProperty("pingersSplits")
+// -PpingersFcm adds the FCM push service (src/fcm). It needs google-services credentials, which
+// the project doesn't have yet; without the flag push is UnifiedPush only.
+val fcm = project.hasProperty("pingersFcm")
 
 /** A cargo command that writes one directory, so AGP can take it as generated sources. */
 abstract class CargoTask : Exec() {
@@ -36,6 +39,11 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
     }
 
     // Only the ABIs pingers-ffi is built for: JNA's AAR also carries 32-bit libraries, and a
@@ -125,6 +133,10 @@ androidComponents {
         val native = if (variant.buildType == "release") cargoNdkRelease else cargoNdkDebug
         variant.sources.jniLibs?.addGeneratedSourceDirectory(native, CargoTask::outDir)
         variant.sources.kotlin?.addGeneratedSourceDirectory(uniffiBindings, CargoTask::outDir)
+        if (fcm) {
+            variant.sources.kotlin?.addStaticSourceDirectory("src/fcm/kotlin")
+            variant.sources.manifests.addStaticManifestFile("src/fcm/AndroidManifest.xml")
+        }
     }
 }
 
@@ -140,4 +152,18 @@ dependencies {
     // JNA as an AAR for the app: it carries JNA's own native library. UniFFI's bindings use it.
     implementation("${libs.jna.get()}@aar")
     debugImplementation(libs.compose.ui.tooling)
+
+    // Platform layer.
+    implementation(libs.play.services.location)
+    implementation(libs.unifiedpush.connector)
+    implementation(libs.work.runtime)
+    if (fcm) implementation(libs.firebase.messaging)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.work.testing)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.core)
 }
