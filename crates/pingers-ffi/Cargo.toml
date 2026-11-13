@@ -1,0 +1,20 @@
+[package]
+name = "pingers-ffi"
+description = "UniFFI bindings."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 5
+
+[dependencies]
+pingers-client = { workspace = true }
+pingers-screens = { workspace = true }
+pingers-words = { workspace = true }
+uniffi = { workspace = true }
+
+[lints]
+workspace = true

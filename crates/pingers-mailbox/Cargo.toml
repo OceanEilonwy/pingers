@@ -1,0 +1,20 @@
+[package]
+name = "pingers-mailbox"
+description = "Server: mailboxes and the wake rule."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 3
+
+[dependencies]
+pingers-presence = { workspace = true, features = ["server"] }
+pingers-proto = { workspace = true }
+pingers-time = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

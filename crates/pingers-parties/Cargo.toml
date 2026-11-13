@@ -1,0 +1,21 @@
+[package]
+name = "pingers-parties"
+description = "Party lifecycle: create, invite, join, roster, Spots."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 3
+
+[dependencies]
+pingers-geo = { workspace = true }
+pingers-mls = { workspace = true }
+pingers-proto = { workspace = true }
+pingers-store = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "pingers-words"
+description = "All user-facing text."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 4
+
+[dependencies]
+pingers-client = { workspace = true }
+
+[lints]
+workspace = true

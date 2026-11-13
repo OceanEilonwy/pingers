@@ -1,0 +1,19 @@
+[package]
+name = "pingers-delivery"
+description = "Server: MLS delivery log, subscriptions, live fan-out."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 3
+
+[dependencies]
+pingers-proto = { workspace = true }
+pingers-time = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

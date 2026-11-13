@@ -1,0 +1,21 @@
+[package]
+name = "pingers-store"
+description = "SQLCipher storage."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 2
+
+[dependencies]
+pingers-mls = { workspace = true }
+pingers-proto = { workspace = true }
+rusqlite = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+
+[lints]
+workspace = true

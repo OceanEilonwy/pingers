@@ -1,0 +1,21 @@
+[package]
+name = "pingers-meetup-session"
+description = "A live meetup: channel, members, lifecycle."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 3
+
+[dependencies]
+pingers-meetup = { workspace = true }
+pingers-mls = { workspace = true }
+pingers-store = { workspace = true }
+pingers-transport = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

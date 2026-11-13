@@ -1,0 +1,22 @@
+[package]
+name = "pingers-wake"
+description = "The background pipeline: one wake, start to finish."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 3
+
+[dependencies]
+pingers-gate = { workspace = true }
+pingers-geo = { workspace = true }
+pingers-parties = { workspace = true }
+pingers-presence = { workspace = true }
+pingers-sync = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

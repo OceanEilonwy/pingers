@@ -1,0 +1,29 @@
+[package]
+name = "pingers-client"
+description = "Composition root: wires the client crates, no domain logic."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 3
+
+[dependencies]
+pingers-gate = { workspace = true }
+pingers-geo = { workspace = true }
+pingers-meetup = { workspace = true }
+pingers-meetup-session = { workspace = true }
+pingers-parties = { workspace = true }
+pingers-proto = { workspace = true }
+pingers-store = { workspace = true }
+pingers-sync = { workspace = true }
+pingers-time = { workspace = true }
+pingers-transport = { workspace = true }
+pingers-wake = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+
+[lints]
+workspace = true

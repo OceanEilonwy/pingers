@@ -1,0 +1,20 @@
+[package]
+name = "pingers-quota"
+description = "Server: RLN tree, nullifiers, Privacy Pass issuer, limits."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 3
+
+[dependencies]
+pingers-anon = { workspace = true, features = ["verifier", "issuer"] }
+pingers-proto = { workspace = true }
+pingers-time = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

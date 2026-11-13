@@ -1,0 +1,25 @@
+[package]
+name = "pingers-server"
+description = "Server binary: routes to the crates above, nothing else."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 5
+
+[dependencies]
+pingers-board-store = { workspace = true }
+pingers-delivery = { workspace = true }
+pingers-mailbox = { workspace = true }
+pingers-ohttp = { workspace = true }
+pingers-quota = { workspace = true }
+pingers-time = { workspace = true }
+anyhow = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true
