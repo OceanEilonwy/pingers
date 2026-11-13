@@ -88,6 +88,14 @@ A narrow wrapper over OpenMLS 0.9. No other crate touches OpenMLS types.
   `Meetup::add_members` takes no PSK, so a later Add's Welcome carries none. `join_meetup_group`
   refuses a Welcome whose PSK differs from the binding, accepts one without a PSK on the roster
   check alone, and refuses more than one PSK.
+- **X-Wing** (feature `x-wing`): `QuantumResistant` maps to
+  `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519` (0x004D). OpenMLS 0.9.2 gates the suite
+  behind the PQ-draft feature of `openmls_traits` (and of its providers), and only
+  `openmls_libcrux_crypto` 0.4 implements it, so with the feature libcrux does all MLS crypto,
+  for both suites. `openmls`'s own PQ feature is not enabled: it names its optional SQLite
+  storage, whose rusqlite `links` clash with the workspace's; `openmls` has no PQ code outside
+  its tests. Added `openmls_libcrux_crypto = "0.4.0"` to the workspace dependencies. Tests
+  cover an X-Wing Party end to end and a Meetup with 1216-byte grant keys.
 - **Storage failures**: the group handle may be ahead of the store after `MlsError::Storage`;
   callers drop it, roll back, and reload.
 - **`MlsError::NotImplemented`** is no longer returned; kept so the variant list is unchanged.

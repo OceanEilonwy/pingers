@@ -70,6 +70,8 @@ openmls_rust_crypto = "0.6.0"
 openmls_traits = "0.6.0"
 openmls_basic_credential = "0.6.0"
 openmls_memory_storage = "0.6.0"
+# The X-Wing suite (0x004D) for "quantum-resistant" Parties (design B.8); pingers-mls feature x-wing.
+openmls_libcrux_crypto = "0.4.0"
 tls_codec = "0.5.0"
 
 # Anonymous authorisation (pingers-anon only)

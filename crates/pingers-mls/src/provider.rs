@@ -5,29 +5,53 @@ use core::cell::RefCell;
 
 use openmls::prelude::{BasicCredential, CredentialWithKey, SignatureScheme};
 use openmls_basic_credential::SignatureKeyPair;
-use openmls_rust_crypto::RustCrypto;
 use openmls_traits::OpenMlsProvider;
 use openmls_traits::random::OpenMlsRand;
 use pingers_crypto::AccountSigningKey;
 use rand_core::CryptoRng;
 
-use crate::MlsStorage;
 use crate::adapter::StorageAdapter;
+use crate::{MlsError, MlsStorage};
+
+/// The OpenMLS crypto backend: `RustCrypto`, or libcrux when the X-Wing suite is built in (only
+/// libcrux implements it).
+#[cfg(not(feature = "x-wing"))]
+pub(crate) type Crypto = openmls_rust_crypto::RustCrypto;
+/// The OpenMLS crypto backend: `RustCrypto`, or libcrux when the X-Wing suite is built in (only
+/// libcrux implements it).
+#[cfg(feature = "x-wing")]
+pub(crate) type Crypto = openmls_libcrux_crypto::CryptoProvider;
+
+/// A crypto backend instance.
+#[cfg(not(feature = "x-wing"))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the libcrux backend's constructor is fallible"
+)]
+pub(crate) fn new_crypto() -> Result<Crypto, MlsError> {
+    Ok(Crypto::default())
+}
+
+/// A crypto backend instance.
+#[cfg(feature = "x-wing")]
+pub(crate) fn new_crypto() -> Result<Crypto, MlsError> {
+    Crypto::new().map_err(|_| MlsError::Internal)
+}
 
 /// Crypto, randomness and storage for one wrapper call.
 pub(crate) struct Provider<'storage, S: MlsStorage, R> {
-    crypto: RustCrypto,
+    crypto: Crypto,
     rand: R,
     storage: StorageAdapter<'storage, S>,
 }
 
 impl<'storage, S: MlsStorage, R: OpenMlsRand> Provider<'storage, S, R> {
-    pub(crate) fn new(storage: &'storage S, rand: R) -> Self {
-        Self {
-            crypto: RustCrypto::default(),
+    pub(crate) fn new(storage: &'storage S, rand: R) -> Result<Self, MlsError> {
+        Ok(Self {
+            crypto: new_crypto()?,
             rand,
             storage: StorageAdapter::new(storage),
-        }
+        })
     }
 
     /// The storage adapter, to turn an OpenMLS failure into the right [`crate::MlsError`].
@@ -37,7 +61,7 @@ impl<'storage, S: MlsStorage, R: OpenMlsRand> Provider<'storage, S, R> {
 }
 
 impl<'storage, S: MlsStorage, R: OpenMlsRand> OpenMlsProvider for Provider<'storage, S, R> {
-    type CryptoProvider = RustCrypto;
+    type CryptoProvider = Crypto;
     type RandProvider = R;
     type StorageProvider = StorageAdapter<'storage, S>;
 
