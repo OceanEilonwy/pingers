@@ -3699,7 +3699,9 @@ dependencies = [
 name = "pingers-push-relay"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "axum",
+ "base64",
  "hex",
  "pingers-crypto",
  "pingers-proto",
@@ -3707,6 +3709,7 @@ dependencies = [
  "pingers-time",
  "pingers-transport",
  "rand_core 0.10.1",
+ "rcgen",
  "reqwest",
  "serde",
  "serde_json",
