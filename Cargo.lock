@@ -3213,10 +3213,15 @@ dependencies = [
 name = "pingers-board-store"
 version = "0.1.0"
 dependencies = [
+ "pingers-crypto",
  "pingers-presence",
  "pingers-proto",
+ "pingers-testkit",
  "pingers-time",
+ "proptest",
+ "rand_core 0.10.1",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]
