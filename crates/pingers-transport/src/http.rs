@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use hyper::body::{Body, Bytes, Frame, Incoming, SizeHint};
+use hyper::body::{Body, Bytes, Frame, Incoming};
 use hyper::client::conn::http2::{Builder, SendRequest};
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
@@ -64,21 +64,6 @@ impl Body for OutBody {
             Self::Stream(receiver) => receiver
                 .poll_recv(context)
                 .map(|message| message.map(|bytes| Ok(Frame::data(bytes)))),
-        }
-    }
-
-    fn is_end_stream(&self) -> bool {
-        matches!(self, Self::Full(None))
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        match self {
-            Self::Full(bytes) => SizeHint::with_exact(
-                bytes
-                    .as_ref()
-                    .map_or(0, |bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
-            ),
-            Self::Stream(_) => SizeHint::default(),
         }
     }
 }
@@ -210,10 +195,8 @@ impl HttpClient {
         let mut sender = self.sender(origin).await.map_err(SendError::Unreachable)?;
         match within(&*self.timer, deadline, sender.send_request(request)).await {
             Ok(Ok(response)) => Ok(response),
-            Ok(Err(_)) => {
-                self.forget_if_closed(origin).await;
-                Err(SendError::Failed(TransportError::Connection))
-            }
+            // A connection that broke is noticed (closed) and replaced on the next request.
+            Ok(Err(_)) => Err(SendError::Failed(TransportError::Connection)),
             Err(timeout) => Err(SendError::Failed(timeout)),
         }
     }
@@ -232,16 +215,6 @@ impl HttpClient {
         let sender = connection.sender.clone();
         connections.insert(origin.clone(), connection);
         Ok(sender)
-    }
-
-    async fn forget_if_closed(&self, origin: &Origin) {
-        let mut connections = self.connections.lock().await;
-        if connections
-            .get(origin)
-            .is_some_and(|connection| connection.sender.is_closed())
-        {
-            connections.remove(origin);
-        }
     }
 }
 
@@ -290,7 +263,10 @@ async fn connect(origin: &Origin, tls: &Arc<ClientConfig>) -> Result<Connection,
 }
 
 /// The next DATA frame's bytes, `None` at the end of the body. Cancellation-safe.
-pub(crate) async fn next_data(body: &mut Incoming) -> Result<Option<Bytes>, TransportError> {
+pub(crate) async fn next_data<B>(body: &mut B) -> Result<Option<Bytes>, TransportError>
+where
+    B: Body<Data = Bytes> + Unpin,
+{
     loop {
         let frame = poll_fn(|context| Pin::new(&mut *body).poll_frame(context)).await;
         match frame {
@@ -307,10 +283,10 @@ pub(crate) async fn next_data(body: &mut Incoming) -> Result<Option<Bytes>, Tran
 }
 
 /// The whole body, refusing more than `limit` bytes.
-pub(crate) async fn read_body(
-    body: &mut Incoming,
-    limit: usize,
-) -> Result<Vec<u8>, TransportError> {
+pub(crate) async fn read_body<B>(body: &mut B, limit: usize) -> Result<Vec<u8>, TransportError>
+where
+    B: Body<Data = Bytes> + Unpin,
+{
     let mut all = Vec::new();
     while let Some(data) = next_data(body).await? {
         if data.len() > limit.saturating_sub(all.len()) {
@@ -319,4 +295,48 @@ pub(crate) async fn read_body(
         all.extend_from_slice(&data);
     }
     Ok(all)
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use super::*;
+
+    /// A streamed body of the given frames.
+    fn frames(parts: &[&[u8]]) -> OutBody {
+        let (sender, receiver) = mpsc::channel(parts.len().max(1));
+        for part in parts {
+            let _ = sender.try_send(Bytes::copy_from_slice(part));
+        }
+        OutBody::Stream(receiver)
+    }
+
+    #[tokio::test]
+    async fn a_body_up_to_the_limit_is_read_whole() -> Result<(), TransportError> {
+        let mut body = frames(&[b"abc", b"de"]);
+        assert_eq!(read_body(&mut body, 5).await?, b"abcde");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_body_over_the_limit_is_refused_across_frames() {
+        let mut body = frames(&[b"abc", b"de"]);
+        assert!(matches!(
+            read_body(&mut body, 4).await,
+            Err(TransportError::TooLarge)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_full_body_is_one_frame_then_ends() -> Result<(), TransportError> {
+        let mut body = OutBody::full(b"xyz".to_vec());
+        assert_eq!(
+            next_data(&mut body).await?.as_deref(),
+            Some(b"xyz".as_slice())
+        );
+        assert_eq!(next_data(&mut body).await?, None);
+        assert_eq!(read_body(&mut OutBody::empty(), 0).await?, b"");
+        Ok(())
+    }
 }

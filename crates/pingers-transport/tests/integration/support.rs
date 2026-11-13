@@ -218,6 +218,8 @@ pub(crate) struct ExchangeRecord {
     pub(crate) keep_alives: usize,
     /// The final chunk arrived (the client closed cleanly).
     pub(crate) finished: bool,
+    /// The gateway's side of the exchange is over.
+    pub(crate) ended: bool,
 }
 
 /// Everything the gateway saw.
@@ -367,6 +369,9 @@ impl TestGateway {
                 index,
             };
             let _ = gateway.live(exchange).await;
+            if let Some(record) = gateway.seen().exchanges.get_mut(index) {
+                record.ended = true;
+            }
         });
         Ok(Response::builder()
             .header(CONTENT_TYPE, "message/ohttp-chunked-res")

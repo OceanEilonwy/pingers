@@ -153,11 +153,6 @@ impl Shared {
             .ok_or(SendError::Unreachable(TransportError::NoRelay))
     }
 
-    /// Fails closed if a key mismatch is latched.
-    pub(crate) fn check_key(&self) -> Result<(), TransportError> {
-        self.key().current().map(|_| ())
-    }
-
     /// The verified key config, fetched through relay `index` if not yet known.
     pub(crate) async fn key_config(&self, index: usize) -> Result<KeyConfig, SendError> {
         if let Some(config) = self.key().current().map_err(SendError::Failed)? {
@@ -227,7 +222,6 @@ impl Shared {
     /// tried on the next relay if no connection to the last could be made, so it is never
     /// delivered twice. With no relay reachable it is not sent at all.
     async fn anonymous(&self, request: &BinaryRequest) -> Result<BinaryResponse, TransportError> {
-        self.check_key()?;
         for index in self.pool.available(self.timer.now()) {
             match self.one_shot(index, request).await {
                 Ok(response) => {

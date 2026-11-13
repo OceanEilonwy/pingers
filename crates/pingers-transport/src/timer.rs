@@ -53,10 +53,10 @@ fn tokio_now() -> tokio::time::Instant {
     tokio::time::Instant::now()
 }
 
-/// About thirty years after `origin`: a deadline that will not arrive, for overflowing inputs.
+/// About thirty years (262 800 hours) after `origin`: a deadline that will not arrive, for overflowing inputs.
 fn far_future(origin: tokio::time::Instant) -> tokio::time::Instant {
     origin
-        .checked_add(Duration::from_hours(24 * 365 * 30))
+        .checked_add(Duration::from_hours(262_800))
         .unwrap_or(origin)
 }
 

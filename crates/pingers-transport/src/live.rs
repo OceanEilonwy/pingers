@@ -68,7 +68,6 @@ pub(crate) async fn open(
     if !head.body.is_empty() {
         return Err(TransportError::InvalidRequest);
     }
-    shared.check_key()?;
     let session = connect(&shared, &head).await?;
     let (outgoing, outgoing_receiver) = mpsc::channel(QUEUE);
     let (incoming_sender, incoming) = mpsc::channel(QUEUE);
@@ -231,12 +230,6 @@ async fn open_split(
     })
 }
 
-/// The response half of an exchange.
-struct Downlink {
-    response: Incoming,
-    decoder: ResponseChunkDecoder,
-}
-
 /// How an exchange ended.
 enum Outcome {
     /// The handle closed the channel.
@@ -380,8 +373,7 @@ impl Driver {
                 frame = self.outgoing.recv() => {
                     let Some(frame) = frame else {
                         if let Mode::Duplex { client, upstream } = mode {
-                            let downlink = Downlink { response, decoder };
-                            self.close_duplex(client, upstream, downlink).await;
+                            self.close_duplex(client, upstream, response).await;
                         }
                         return Outcome::Closed;
                     };
@@ -418,32 +410,20 @@ impl Driver {
     }
 
     /// Sends the final chunk, then reads the response to its end, so the request's end is not
-    /// cut off by a stream reset. Frames still arriving are handed over if there is room.
+    /// cut off by a stream reset.
     /// Bounded by [`DuplexStream::close`]'s deadline, which aborts the driver.
     async fn close_duplex(
         &self,
         mut client: ChunkedClient,
         upstream: mpsc::Sender<Bytes>,
-        downlink: Downlink,
+        mut response: Incoming,
     ) {
-        let Downlink {
-            mut response,
-            mut decoder,
-        } = downlink;
         if let Ok(sealed) = client.seal_chunk(&[], ChunkPosition::Final) {
             let _ = upstream.send(Bytes::from(sealed)).await;
         }
         drop(upstream);
-        while let Ok(Some(bytes)) = next_data(&mut response).await {
-            let Ok(chunks) = decoder.feed(&bytes) else {
-                return;
-            };
-            for chunk in chunks {
-                if chunk.payload != KEEP_ALIVE_CHUNK {
-                    let _ = self.incoming.try_send(Ok(chunk.payload));
-                }
-            }
-        }
+        // Frames arriving after the caller closed are not wanted; only the end matters.
+        while let Ok(Some(_)) = next_data(&mut response).await {}
     }
 
     /// The response stream ended: with a final chunk the gateway closed the channel;
@@ -535,6 +515,7 @@ mod tests {
 
     #[test]
     fn frames_must_be_non_empty_bounded_and_not_a_keep_alive() {
+        assert!(check_frame(&vec![1; 16 * 1024]).is_ok());
         assert!(check_frame(&[]).is_err());
         assert!(check_frame(KEEP_ALIVE_CHUNK).is_err());
         assert!(check_frame(&vec![1; MAX_FRAME_BYTES + 1]).is_err());

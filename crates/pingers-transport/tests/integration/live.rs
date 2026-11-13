@@ -137,33 +137,26 @@ async fn the_channel_reconnects_with_a_fresh_context_after_the_relay_drops() -> 
     stream.send(frame("before", 0)).await?;
     assert_eq!(receive(&mut stream).await?, echo(&frame("before", 0)));
 
-    // The relay goes away, taking the exchange with it, and comes back on the same address
-    // a little later.
+    // The relay goes away, taking the exchange with it. The driver notices at once and
+    // waits out its backoff on the injected (manual) timer.
     let address = world.relay_address()?;
     world.relay = None;
-    for _ in 0..5 {
+    for _ in 0..20 {
         real_pause().await;
+    }
+    // Frames sent meanwhile are kept, at most 16, the oldest dropped first.
+    for index in 0..17 {
+        stream.send(frame("during", index)).await?;
     }
     world.relay = Some(start_relay(address, world.gateway_address).await?);
 
-    // The driver retries on the injected timer's backoff. Frames sent while it is down are
-    // kept and go out on the new exchange (one sent just as the old one broke may be lost).
-    let mut sent = Vec::new();
-    let got = tokio::time::timeout(STEP, async {
-        loop {
-            let probe = frame("during", sent.len());
-            stream.send(probe.clone()).await?;
-            sent.push(probe);
-            world.clock.advance(Duration::from_secs(1));
-            if let Ok(received) =
-                tokio::time::timeout(Duration::from_millis(50), stream.receive()).await
-            {
-                return received?.ok_or(TestError::Setup("stream ended"));
-            }
-        }
-    })
-    .await??;
-    assert!(sent.iter().any(|probe| echo(probe) == got));
+    // Once the backoff has passed, the new exchange carries the kept frames in order.
+    let first_back =
+        advancing(&world.clock, Duration::from_secs(1), receive(&mut stream)).await??;
+    assert_eq!(first_back, echo(&frame("during", 1)));
+    for index in 2..17 {
+        assert_eq!(receive(&mut stream).await?, echo(&frame("during", index)));
+    }
 
     let seen = world.gateway.seen();
     let [first, second] = seen.exchanges.as_slice() else {
@@ -174,7 +167,76 @@ async fn the_channel_reconnects_with_a_fresh_context_after_the_relay_drops() -> 
         "a reconnect uses a fresh HPKE context"
     );
     assert_eq!(first.frames, [frame("before", 0)]);
-    assert!(!second.frames.is_empty());
+    assert_eq!(second.frames.len(), 16);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_key_mismatch_on_reconnect_ends_the_channel_at_once() -> Result<(), TestError> {
+    let world = world().await?;
+    let client = world.client()?;
+    let mut stream = tokio::time::timeout(STEP, client.stream(live_request())).await??;
+    // The pin changes under the open channel (say, another member pinned a different key).
+    let other = pingers_ohttp::GatewayKey::generate(1, &mut seeded_rng(99))?.config();
+    client.repin(KeyPin::Pinned(other.hash()));
+    // A silent downlink: past the idle limit the exchange counts as dropped and the driver
+    // reconnects at once, fetching the key config again.
+    world.clock.advance(Duration::from_secs(70));
+    // No backoff, no retries: the clock does not move again and the error still arrives.
+    let result = tokio::time::timeout(STEP, stream.receive()).await?;
+    assert!(matches!(
+        result,
+        Err(TransportError::Ohttp(
+            pingers_ohttp::OhttpError::KeyMismatch
+        ))
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stream_is_refused_when_the_first_key_config_does_not_match() -> Result<(), TestError> {
+    let world = world().await?;
+    let other = pingers_ohttp::GatewayKey::generate(1, &mut seeded_rng(99))?.config();
+    let client = world.client_with(
+        vec![relay_at(world.relay_address()?)?],
+        KeyPin::Pinned(other.hash()),
+    )?;
+    let result = tokio::time::timeout(STEP, client.stream(live_request())).await?;
+    assert!(matches!(
+        result,
+        Err(TransportError::Ohttp(
+            pingers_ohttp::OhttpError::KeyMismatch
+        ))
+    ));
+    assert_eq!(world.gateway.seen().paths, ["/v1/ohttp/config"]);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropping_the_stream_aborts_the_exchange_without_a_final_chunk() -> Result<(), TestError> {
+    let world = world().await?;
+    let client = world.client()?;
+    let mut stream = tokio::time::timeout(STEP, client.stream(live_request())).await??;
+    stream.send(frame("only", 0)).await?;
+    assert_eq!(receive(&mut stream).await?, echo(&frame("only", 0)));
+    drop(stream);
+    eventually(|| {
+        world
+            .gateway
+            .seen()
+            .exchanges
+            .first()
+            .is_some_and(|e| e.ended)
+    })
+    .await?;
+    assert!(
+        !world
+            .gateway
+            .seen()
+            .exchanges
+            .first()
+            .is_some_and(|e| e.finished)
+    );
     Ok(())
 }
 
@@ -204,8 +266,12 @@ async fn reconnecting_gives_up_after_the_limit() -> Result<(), TestError> {
     })?;
     let mut stream = tokio::time::timeout(STEP, client.stream(live_request())).await??;
     world.relay = None;
+    let start = pingers_time::Timer::now(&world.clock);
     let result = advancing(&world.clock, Duration::from_secs(1), stream.receive()).await?;
     assert!(matches!(result, Err(TransportError::NoRelay)));
+    // An immediate retry, then waits of 1 s and 2 s: the third failure exceeds the limit.
+    let waited = pingers_time::Timer::now(&world.clock).saturating_duration_since(start);
+    assert!(waited >= Duration::from_secs(3), "{waited:?}");
     assert!(matches!(
         stream.receive().await,
         Err(TransportError::StreamClosed)
