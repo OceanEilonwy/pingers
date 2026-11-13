@@ -3483,7 +3483,6 @@ dependencies = [
 name = "pingers-mailbox"
 version = "0.1.0"
 dependencies = [
- "hex",
  "pingers-crypto",
  "pingers-presence",
  "pingers-proto",
