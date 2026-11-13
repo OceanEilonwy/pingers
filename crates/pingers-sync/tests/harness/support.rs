@@ -461,6 +461,9 @@ pub(crate) struct Device {
     pub(crate) session: Arc<Session>,
     pub(crate) link: Arc<Link>,
     pub(crate) issuer: Arc<Issuer>,
+    /// Names the database file and key, so a restart reopens the same store.
+    number: u64,
+    role: ProcessRole,
     _database: Database,
 }
 
@@ -532,13 +535,6 @@ impl World {
         role: ProcessRole,
     ) -> Result<Device, TestError> {
         let number = self.next_device.fetch_add(1, Ordering::SeqCst);
-        let database = Database::open(
-            &self.dir.path.join(format!("device-{number}.db")),
-            DatabaseKey::from_bytes(Zeroizing::new(
-                [u8::try_from(number % 200).unwrap_or(1); 32],
-            )),
-        )?;
-        let session = Arc::new(database.session()?);
         let link = Arc::new(Link {
             relay: self.relay(address)?,
             groups: Arc::clone(&self.groups),
@@ -550,6 +546,55 @@ impl World {
             seen: Mutex::new(Vec::new()),
         });
         let issuer = Arc::new(Issuer::new()?);
+        self.open_device(Boot {
+            number,
+            role,
+            link,
+            issuer,
+            seed: number.saturating_add(1000),
+        })
+    }
+
+    /// The same device after an app restart: a fresh engine and session over the same
+    /// database file. Only the network (link, issuer) carries over; nothing in memory does.
+    pub(crate) fn restart(&self, device: Device) -> Result<Device, TestError> {
+        let Device {
+            engine,
+            session,
+            link,
+            issuer,
+            number,
+            role,
+            _database: database,
+        } = device;
+        // The session holds the store's lock: everything that holds it goes first.
+        drop(engine);
+        drop(session);
+        drop(database);
+        self.open_device(Boot {
+            number,
+            role,
+            link,
+            issuer,
+            seed: number.saturating_add(2000),
+        })
+    }
+
+    fn open_device(&self, boot: Boot) -> Result<Device, TestError> {
+        let Boot {
+            number,
+            role,
+            link,
+            issuer,
+            seed,
+        } = boot;
+        let database = Database::open(
+            &self.dir.path.join(format!("device-{number}.db")),
+            DatabaseKey::from_bytes(Zeroizing::new(
+                [u8::try_from(number % 200).unwrap_or(1); 32],
+            )),
+        )?;
+        let session = Arc::new(database.session()?);
         let router = Router::new(Routes {
             anonymous: link.clone(),
             identified: issuer.clone(),
@@ -561,7 +606,7 @@ impl World {
                 session: Arc::clone(&session),
                 clock: Arc::new(self.clock.clone()),
                 timer: Arc::new(self.clock.clone()),
-                rng: Box::new(seeded_rng(number.saturating_add(1000))),
+                rng: Box::new(seeded_rng(seed)),
             },
             SyncSettings {
                 server: server()?,
@@ -577,9 +622,20 @@ impl World {
             session,
             link,
             issuer,
+            number,
+            role,
             _database: database,
         })
     }
+}
+
+/// What a device is opened with, first or after a restart.
+struct Boot {
+    number: u64,
+    role: ProcessRole,
+    link: Arc<Link>,
+    issuer: Arc<Issuer>,
+    seed: u64,
 }
 
 impl Device {

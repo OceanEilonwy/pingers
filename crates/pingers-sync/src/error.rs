@@ -76,6 +76,10 @@ pub enum SyncError {
     /// A counter or time computation left its range.
     #[error("{0} out of range")]
     OutOfRange(&'static str),
+    /// A request could not be encoded for the store's queue, or a queued one read back from
+    /// it does not decode (the entry is dropped).
+    #[error("a queued request does not encode or decode")]
+    QueuedRequest,
     /// A blocking task (SQLCipher or the prover) did not finish.
     #[error("background task failed")]
     Internal,

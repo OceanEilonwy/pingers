@@ -9,6 +9,7 @@ pub(crate) mod mls;
 pub(crate) mod party;
 pub(crate) mod relay;
 pub(crate) mod spot;
+pub(crate) mod sync;
 
 use crate::StoreError;
 

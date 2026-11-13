@@ -10,7 +10,7 @@ use pingers_time::{Clock as _, UnixSeconds};
 use crate::mailbox::knock_mailbox;
 use crate::support::{Device, TestError, TestResult, World};
 
-async fn registered(device: &Device) -> Result<MailboxId, TestError> {
+pub(crate) async fn registered(device: &Device) -> Result<MailboxId, TestError> {
     let _ = device.stock_tokens().await?;
     match device
         .engine
@@ -24,7 +24,7 @@ async fn registered(device: &Device) -> Result<MailboxId, TestError> {
     }
 }
 
-fn later(world: &World, seconds: u64) -> UnixSeconds {
+pub(crate) fn later(world: &World, seconds: u64) -> UnixSeconds {
     UnixSeconds::new(world.clock.now().get().saturating_add(seconds))
 }
 
@@ -69,7 +69,7 @@ async fn unsent_requests_wait_for_a_relay_and_go_out_in_a_later_flush() -> TestR
             route: Route::ReadMailbox
         })
     ));
-    assert_eq!(device.engine.queued(), 1);
+    assert_eq!(device.engine.queued().await?, 1);
 
     let still_offline = device.engine.flush_queue(budget).await?;
     assert!(still_offline.sent.is_empty());

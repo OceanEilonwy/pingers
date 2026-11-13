@@ -131,12 +131,32 @@ pub struct Pulled {
 }
 
 impl SyncEngine {
-    /// Whether the entry at `sequence` of `group` was posted by this engine; forgets it.
-    fn take_own_entry(&self, group: &GroupId, sequence: SequenceNumber) -> bool {
-        self.own_entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&(*group, sequence))
+    /// The positions of this device's entries in `group` not yet pulled (pingers-store's
+    /// `own_group_entry`, so they outlive a restart).
+    async fn own_entries(&self, group: &GroupId) -> Result<Vec<SequenceNumber>, SyncError> {
+        let group = *group;
+        crate::engine::blocking(&self.session, move |session| {
+            Ok(session.own_group_entries().positions(&group)?)
+        })
+        .await
+    }
+
+    /// Forgets own positions in `group` up to `through`: the pull has handed them over.
+    async fn forget_own_entries(
+        &self,
+        group: &GroupId,
+        through: Option<SequenceNumber>,
+    ) -> Result<(), SyncError> {
+        let Some(through) = through else {
+            return Ok(());
+        };
+        let group = *group;
+        crate::engine::blocking(&self.session, move |session| {
+            Ok(session
+                .own_group_entries()
+                .forget_through(&group, through)?)
+        })
+        .await
     }
 
     fn signer<'key>(&self, key: &'key LogAuthKeyPair) -> GroupSigner<'key> {
@@ -195,15 +215,23 @@ impl SyncEngine {
             if page.messages.is_empty() {
                 return Ok(pulled);
             }
+            let own = self.own_entries(group).await?;
+            // The last position handed over: own positions up to it are forgotten after the
+            // page. If the owner fails midway, the next page's forget covers them, since
+            // positions only grow.
+            let mut handed = None;
             for entry in page.messages {
-                if self.take_own_entry(group, entry.sequence) {
-                    owner.skip_own(entry.sequence).map_err(GroupError::Owner)?;
+                let sequence = entry.sequence;
+                if own.contains(&sequence) {
+                    owner.skip_own(sequence).map_err(GroupError::Owner)?;
                     pulled.skipped = pulled.skipped.saturating_add(1);
                 } else {
                     owner.apply(entry).map_err(GroupError::Owner)?;
                     pulled.applied = pulled.applied.saturating_add(1);
                 }
+                handed = Some(sequence);
             }
+            self.forget_own_entries(group, handed).await?;
         }
     }
 

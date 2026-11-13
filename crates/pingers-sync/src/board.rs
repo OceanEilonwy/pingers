@@ -8,7 +8,7 @@ use pingers_proto::{
     BoardCursor, BoardPage, BoardSyncRequest, BoardSyncResponse, Lease, LeaseId, LeaseReplacement,
     MembershipIndex, MembershipLeaves, Params, ReadBoard, SecretBytes,
 };
-use pingers_store::{TreeLeaf, TreePosition};
+use pingers_store::{LastUpload, TreeLeaf, TreePosition};
 
 use crate::engine::blocking;
 use crate::mailbox::Delivered;
@@ -22,12 +22,6 @@ pub struct NewLease {
     pub revoke_key: RevokeKey,
     /// Whether to read the board after the append.
     pub read: ReadBoard,
-}
-
-/// The last lease this engine uploaded: what the next upload names in `replaces`.
-pub(crate) struct HeldLease {
-    pub(crate) id: LeaseId,
-    pub(crate) revoke_key: SecretBytes<32>,
 }
 
 /// What a membership refresh changed.
@@ -68,27 +62,25 @@ impl SyncEngine {
     /// Uploads `lease`, replacing the one this engine uploaded before (by revealing its
     /// revoke key), and keeps the new lease's id and key for the next upload. Never queued.
     ///
-    /// The previous lease is held in memory: pingers-store's lease table needs every slot's
-    /// Spot and knock mailbox, which only pingers-wake knows, so after a restart the first
-    /// upload does not name the old lease and it expires on its own (at most four buckets).
+    /// The previous upload's id and key are kept in pingers-store's `board_upload` table, so
+    /// the first upload after a restart still replaces the old lease.
     ///
     /// # Errors
     ///
-    /// As [`SyncEngine::board_sync`].
+    /// As [`SyncEngine::board_sync`]; [`SyncError::Store`].
     pub async fn upload_lease(
         &self,
         upload: NewLease,
         budget: WakeBudget,
     ) -> Result<Delivered<BoardSyncResponse>, SyncError> {
-        let replaces = self
-            .previous_lease
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .map(|held| LeaseReplacement {
-                lease_id: held.id,
-                revoke_key: held.revoke_key.clone(),
-            });
+        let replaces = blocking(&self.session, |session| {
+            Ok(session.board_upload().last()?)
+        })
+        .await?
+        .map(|last| LeaseReplacement {
+            lease_id: last.lease,
+            revoke_key: SecretBytes::new(*last.revoke_key.expose_bytes()),
+        });
         let delivered = self
             .board_sync(
                 &BoardSyncRequest {
@@ -100,13 +92,14 @@ impl SyncEngine {
             )
             .await?;
         if let Delivered::Done(response) = &delivered {
-            *self
-                .previous_lease
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(HeldLease {
-                id: response.lease_id,
-                revoke_key: SecretBytes::new(*upload.revoke_key.expose_bytes()),
-            });
+            let last = LastUpload {
+                lease: response.lease_id,
+                revoke_key: upload.revoke_key,
+            };
+            blocking(&self.session, move |session| {
+                Ok(session.board_upload().remember(&last)?)
+            })
+            .await?;
         }
         Ok(delivered)
     }
