@@ -4,8 +4,11 @@
 use pingers_proto::{RlnAuth, RlnScope, ServerId};
 use pingers_time::Bucket;
 
-use crate::stub::not_implemented;
-use crate::{AnonError, MembershipRoot, Nullifier, RequestDigest};
+use rln::circuit::Proof;
+use rln::prelude::{CanonicalDeserialize as _, RLNProofValues, RLNZkProof as _};
+
+use crate::circuit::BACKEND;
+use crate::{AnonError, MembershipRoot, Nullifier, RequestDigest, external_nullifier, field};
 
 /// The roots the server accepts: the current hourly root and the previous one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,6 +17,33 @@ pub struct AcceptedRoots {
     pub current: MembershipRoot,
     /// The previous root, if there has been one.
     pub previous: Option<MembershipRoot>,
+}
+
+impl AcceptedRoots {
+    /// The roots before any rollover: only the first root.
+    #[must_use]
+    pub const fn first(root: MembershipRoot) -> Self {
+        Self {
+            current: root,
+            previous: None,
+        }
+    }
+
+    /// The roots after the hourly root epoch rolls over to `next`: the current root becomes
+    /// the previous one and the old previous root stops being accepted (design B.4.8).
+    #[must_use]
+    pub const fn advance(self, next: MembershipRoot) -> Self {
+        Self {
+            current: next,
+            previous: Some(self.current),
+        }
+    }
+
+    /// Whether a proof against `root` is accepted.
+    #[must_use]
+    pub fn accepts(&self, root: &MembershipRoot) -> bool {
+        self.current == *root || self.previous.as_ref() == Some(root)
+    }
 }
 
 /// A proof that verified, with what the nullifier set needs.
@@ -52,17 +82,51 @@ pub enum NullifierOutcome {
 
 /// Verifies `auth` for a request whose digest the server computed as `context.expected`.
 ///
-/// Checks the proof, the root and `x`. Bucket acceptance (current, or previous within 60 s of rollover) is the caller's check.
+/// Checks the root, `x` and the proof, cheapest first. Bucket acceptance (current, or
+/// previous within 60 s of rollover) is the caller's check, as is the nullifier lookup
+/// ([`classify_nullifier`]).
 ///
 /// # Errors
 ///
-/// [`AnonError::BadProof`], [`AnonError::StaleRoot`], [`AnonError::WrongRequest`],
-/// [`AnonError::Parameters`].
+/// [`AnonError::StaleRoot`] if the root is neither the current nor the previous one;
+/// [`AnonError::WrongRequest`] if `x` is not the digest of the request received;
+/// [`AnonError::BadProof`] if a public input is not canonical, the proof bytes are not valid
+/// curve points, or the proof does not verify; [`AnonError::Internal`].
 pub fn verify(
     auth: &RlnAuth,
     context: &VerificationContext<'_>,
 ) -> Result<VerifiedProof, AnonError> {
-    not_implemented((auth, context))
+    let root = MembershipRoot::from_bytes(auth.root);
+    if !context.roots.accepts(&root) {
+        return Err(AnonError::StaleRoot);
+    }
+    if auth.x != *context.expected.as_bytes() {
+        return Err(AnonError::WrongRequest);
+    }
+    let public = |bytes: &[u8; 32]| field::decode(bytes).map_err(|_| AnonError::BadProof);
+    let external = external_nullifier(context.server, auth.scope, auth.bucket)?;
+    let values = RLNProofValues::new_single()
+        .y(public(&auth.y)?)
+        .root(public(&auth.root)?)
+        .nullifier(public(&auth.nullifier)?)
+        .x(public(&auth.x)?)
+        .external_nullifier(field::decode(external.as_bytes())?)
+        .build();
+    // Compressed decoding checks that each point is on the curve and in the right subgroup.
+    let proof =
+        Proof::deserialize_compressed(auth.proof.as_slice()).map_err(|_| AnonError::BadProof)?;
+    match BACKEND.verify(&proof, &values) {
+        Ok(true) => Ok(VerifiedProof {
+            scope: auth.scope,
+            bucket: auth.bucket,
+            nullifier: Nullifier::from_bytes(auth.nullifier),
+            record: NullifierRecord {
+                x: context.expected,
+                y: auth.y,
+            },
+        }),
+        Ok(false) | Err(_) => Err(AnonError::BadProof),
+    }
 }
 
 /// What the server checks a proof against.

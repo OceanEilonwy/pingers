@@ -1,0 +1,44 @@
+{
+  "name": "privacy-pass",
+  "description": "Privacy Pass token type 0x0001 (RFC 9577, RFC 9578; VOPRF P384-SHA384, RFC 9497) as design B.4.8 uses it: issuer keys are 48-byte big-endian scalars, public keys 49-byte compressed points, token_key_id = SHA-256(public key); every token answers the fixed TokenChallenge (type 0x0001, issuer name \"pingers\", empty redemption context and origin info); a token is token_type || nonce || challenge_digest || token_key_id || authenticator (146 bytes). Issuance is randomised; the token below is one a client finished from a real issuance, and redemption must accept it",
+  "vectors": [
+    {
+      "name": "token-challenge",
+      "inputs": {},
+      "expected": {
+        "token_challenge": "0001000770696e67657273000000",
+        "challenge_digest": "ffab9fd64d00d5ddc5a1b3a29753ef2db2667eadd8c26dc9eac27d879df8db4a"
+      }
+    },
+    {
+      "name": "issuer-key",
+      "inputs": {
+        "secret_key": "89fbb00866f41834a0da8888138772f004b810537ae3d97def44d2866785498aca67225bc50973802b8f6957c9a8b2c3"
+      },
+      "expected": {
+        "public_key": "032286dfecca9c20e95b53643c42f95646447e35cc2c4efe2d9d9190f23db7ad9fbd1abf52ec2719c5097e29c3599002b8",
+        "key_id": "8432a1aabb2475836842d5813d1d215281ae0ef11dcaa958af164507b9c5369e"
+      }
+    },
+    {
+      "name": "token-redeems",
+      "inputs": {
+        "secret_key": "89fbb00866f41834a0da8888138772f004b810537ae3d97def44d2866785498aca67225bc50973802b8f6957c9a8b2c3",
+        "token": "00016e3e30d9b7c61c8b7bbb6fe6c166b6931bff049e5dc21a4525d8ea4672365d74ffab9fd64d00d5ddc5a1b3a29753ef2db2667eadd8c26dc9eac27d879df8db4a8432a1aabb2475836842d5813d1d215281ae0ef11dcaa958af164507b9c5369e23f33ef3178a634329f65bab19eccb243ac768cddca750a1373be2a5ca7cfe41fafe25fdc95afe75d339111a70ea3d01"
+      },
+      "expected": {
+        "nonce": "6e3e30d9b7c61c8b7bbb6fe6c166b6931bff049e5dc21a4525d8ea4672365d74"
+      }
+    },
+    {
+      "name": "token-with-forged-authenticator",
+      "inputs": {
+        "secret_key": "89fbb00866f41834a0da8888138772f004b810537ae3d97def44d2866785498aca67225bc50973802b8f6957c9a8b2c3",
+        "token": "00016e3e30d9b7c61c8b7bbb6fe6c166b6931bff049e5dc21a4525d8ea4672365d74ffab9fd64d00d5ddc5a1b3a29753ef2db2667eadd8c26dc9eac27d879df8db4a8432a1aabb2475836842d5813d1d215281ae0ef11dcaa958af164507b9c5369e23f33ef3178a634329f65bab19eccb243ac768cddca750a1373be2a5ca7cfe41fafe25fdc95afe75d339111a70ea3d00"
+      },
+      "expected": {
+        "error": "BadToken"
+      }
+    }
+  ]
+}

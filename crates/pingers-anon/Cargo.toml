@@ -13,20 +13,36 @@ layer = 1
 [features]
 default = []
 # Client: membership tree copy, witness and proof generation, Privacy Pass token requests.
-prover = ["dep:rln", "dep:voprf"]
+prover = ["dep:voprf", "dep:p384"]
 # Server: proof verification and nullifier classification.
-verifier = ["dep:rln"]
+verifier = []
 # Server: Privacy Pass issuance and redemption checks.
-issuer = ["dep:voprf"]
+issuer = ["dep:voprf", "dep:p384", "dep:subtle"]
 
 [dependencies]
 pingers-proto = { workspace = true }
 pingers-time = { workspace = true }
 rand_core = { workspace = true }
-rln = { workspace = true, optional = true }
+# Not optional: `RlnSecret::id_commitment` and `external_nullifier` are always available and
+# are Poseidon hashes, which come from rln.
+rln = { workspace = true }
+ark-ff = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
+subtle = { workspace = true, optional = true }
 voprf = { workspace = true, optional = true }
+p384 = { workspace = true, optional = true }
 zeroize = { workspace = true }
+
+[dev-dependencies]
+pingers-testkit = { workspace = true }
+hex = { workspace = true }
+serde_json = { workspace = true }
+rand_chacha = { workspace = true }
+
+[[example]]
+name = "prove_bench"
+required-features = ["prover", "verifier"]
 
 [lints]
 workspace = true

@@ -1,0 +1,113 @@
+{
+  "name": "rln",
+  "description": "RLN-v2 values from design B.4.8 and D: field elements are 32-byte little-endian canonical BN254 scalars; id_commitment = Poseidon(secret), leaf = Poseidon(id_commitment, 8); external_nullifier = Poseidon(SHA-256(\"pingers/v1/rln\" || u64be(len) || server_id || scope || u64be(bucket)) mod r); request_digest = SHA-256(\"pingers/v1/rln/x\" || u64be(len) || method || u64be(len) || path || body) mod r, both hashes read little-endian; membership tree of depth 20 with zero leaves and Poseidon(left, right) parents; the proof's public values y and nullifier (the proof itself is randomised and not a vector)",
+  "vectors": [
+    {
+      "name": "identity",
+      "inputs": {
+        "secret": "0a484feb753edb1a9dd674a4a410c7c4df9776271192dc63e6d2a309b9215427"
+      },
+      "expected": {
+        "id_commitment": "c8ac2c8bef5d9c96eb9ce57bfd697f92c9c49bd173d92a81f467d4f0e33cca2a",
+        "leaf": "715ed3616b739cb747e69e16c67aaaca92ad40ad6fd4f46cd102c87d9e7ba824"
+      }
+    },
+    {
+      "name": "secret-equal-to-the-modulus",
+      "inputs": {
+        "secret": "010000f093f5e1439170b97948e833285d588181b64550b829a031e1724e6430"
+      },
+      "expected": {
+        "error": "NotAFieldElement"
+      }
+    },
+    {
+      "name": "external-nullifier-mailbox",
+      "inputs": {
+        "server_id": "https://pingers.example",
+        "scope": 1,
+        "bucket": 1900000
+      },
+      "expected": {
+        "preimage": "70696e676572732f76312f726c6e000000000000001768747470733a2f2f70696e676572732e6578616d706c650100000000001cfde0",
+        "preimage_sha256": "1cf36c862cbdbeae3045cbb2fc88459c777994a9a0724895f44dedc7ba500c26",
+        "external_nullifier": "47ea36834af1b56239009867e56424c05c07d626eef28c083ae4874ff6567019"
+      }
+    },
+    {
+      "name": "request-digest-below-the-modulus",
+      "inputs": {
+        "method": "POST",
+        "path": "/v1/mailboxes",
+        "body": "7b226c65617365223a317d"
+      },
+      "expected": {
+        "preimage": "70696e676572732f76312f726c6e2f780000000000000004504f5354000000000000000d2f76312f6d61696c626f7865737b226c65617365223a317d",
+        "preimage_sha256": "76d7bde47df51e4c1bc7ecfbfaa03ef09f2e444033724f47bac44ce1c20fca0d",
+        "request_digest": "76d7bde47df51e4c1bc7ecfbfaa03ef09f2e444033724f47bac44ce1c20fca0d"
+      }
+    },
+    {
+      "name": "request-digest-reduced-empty-body",
+      "inputs": {
+        "method": "GET",
+        "path": "/v1/board/page",
+        "body": ""
+      },
+      "expected": {
+        "preimage": "70696e676572732f76312f726c6e2f780000000000000003474554000000000000000e2f76312f626f6172642f70616765",
+        "preimage_sha256": "01739433e7b808f0140c409e0619823b6f3ebeec3b1761e8b1d211af86844a9e",
+        "request_digest": "fe7294632bd8622461ba13312d60e6c257353a68184670bf34f27c0b2e991d0d"
+      }
+    },
+    {
+      "name": "empty-tree",
+      "inputs": {
+        "leaves": ""
+      },
+      "expected": {
+        "root": "3e1f1922dfb671d3f912f7ea461e0a88ee848fdde12b6c18ab1ad2c56ae73421"
+      }
+    },
+    {
+      "name": "three-leaves",
+      "inputs": {
+        "leaves": "715ed3616b739cb747e69e16c67aaaca92ad40ad6fd4f46cd102c87d9e7ba824698b7e249e3e09852101e3ed96844b4889d84a1b10f1c4fbe6dca8281decb704e3d0745cc3b9f04b599f1408dae243ecc1b4c9af1f5afd3fa898ae5cd820aa13"
+      },
+      "expected": {
+        "root": "6528db1fd2cbcc697e90c3c5ef9fc7623b968365f2950a493c577e87666cd001"
+      }
+    },
+    {
+      "name": "three-leaves-second-zeroed",
+      "inputs": {
+        "leaves": "715ed3616b739cb747e69e16c67aaaca92ad40ad6fd4f46cd102c87d9e7ba824698b7e249e3e09852101e3ed96844b4889d84a1b10f1c4fbe6dca8281decb704e3d0745cc3b9f04b599f1408dae243ecc1b4c9af1f5afd3fa898ae5cd820aa13",
+        "zeroed": 1
+      },
+      "expected": {
+        "root": "7acf6c2314346b74873c6c142f9e1fc0e3e801ebfa05406965c09734e907d629"
+      }
+    },
+    {
+      "name": "proof-public-values",
+      "inputs": {
+        "secret": "0a484feb753edb1a9dd674a4a410c7c4df9776271192dc63e6d2a309b9215427",
+        "leaves": "715ed3616b739cb747e69e16c67aaaca92ad40ad6fd4f46cd102c87d9e7ba824698b7e249e3e09852101e3ed96844b4889d84a1b10f1c4fbe6dca8281decb704e3d0745cc3b9f04b599f1408dae243ecc1b4c9af1f5afd3fa898ae5cd820aa13",
+        "position": 0,
+        "server_id": "https://pingers.example",
+        "scope": 1,
+        "bucket": 1900000,
+        "message_id": 5,
+        "method": "POST",
+        "path": "/v1/mailboxes",
+        "body": "7b226c65617365223a317d"
+      },
+      "expected": {
+        "root": "6528db1fd2cbcc697e90c3c5ef9fc7623b968365f2950a493c577e87666cd001",
+        "x": "76d7bde47df51e4c1bc7ecfbfaa03ef09f2e444033724f47bac44ce1c20fca0d",
+        "y": "4e385d75f16d2658e01dd8d8e31d7c525b5f43ff118e222ee7f2f535a848bf20",
+        "nullifier": "6a94c1e12e8bc8c0c5118e4631668865a5f5c2f70949abdab07e727eeda98220"
+      }
+    }
+  ]
+}

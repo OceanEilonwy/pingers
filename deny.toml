@@ -10,11 +10,16 @@ yanked = "deny"
 # Each entry needs a reason and is re-examined when the crate that pulls it in is implemented.
 ignore = [
   { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 timing issues: via p256 in hpke-rs-rust-crypto (openmls_rust_crypto); Pingers uses no P-256 MLS suite. Re-check when pingers-mls is implemented." },
-  { id = "RUSTSEC-2025-0055", reason = "tracing-subscriber 0.2: via rln (zerokit); nothing in Pingers logs through it. Re-check when pingers-anon is implemented." },
-  { id = "RUSTSEC-2026-0403", reason = "zstd-safe 4: via rln's sled; Pingers never decompresses untrusted zstd. Re-check when pingers-anon is implemented." },
-  { id = "RUSTSEC-2024-0388", reason = "derivative unmaintained: via rln (arkworks). No fix upstream." },
-  { id = "RUSTSEC-2025-0057", reason = "fxhash unmaintained: via rln's sled. No fix upstream." },
-  { id = "RUSTSEC-2024-0384", reason = "instant unmaintained: via rln's sled. No fix upstream." },
+  # rln entries, re-checked 2026-11-13 with pingers-anon implemented. sled cannot be removed:
+  # rln 3.x lists it as a non-optional dependency for every non-wasm target (with the
+  # `compression` feature that pulls zstd-safe 4), and every zerokit_utils release does the same,
+  # so no feature set or older rln avoids it. pingers-anon never constructs rln's PmTree (it has
+  # its own in-memory tree), so no sled code is reachable from Pingers.
+  { id = "RUSTSEC-2025-0055", reason = "tracing-subscriber 0.2: via ark-relations' `std` feature, which rln forces on; nothing in Pingers installs a subscriber through it. No fix in arkworks 0.5." },
+  { id = "RUSTSEC-2026-0403", reason = "zstd-safe 4: via rln's unconditional sled (feature `compression`); sled is unreachable from pingers-anon, so no zstd input is ever decoded." },
+  { id = "RUSTSEC-2024-0388", reason = "derivative unmaintained: via rln (arkworks 0.5). No fix upstream." },
+  { id = "RUSTSEC-2025-0057", reason = "fxhash unmaintained: via rln's unconditional sled, unreachable from pingers-anon. No fix upstream." },
+  { id = "RUSTSEC-2024-0384", reason = "instant unmaintained: via rln's unconditional sled, unreachable from pingers-anon. No fix upstream." },
   { id = "RUSTSEC-2024-0436", reason = "paste unmaintained: widely used build-time macro crate. No fix upstream." },
   { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 unmaintained: build-time macro dependency. No fix upstream." },
 ]
