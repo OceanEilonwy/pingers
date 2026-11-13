@@ -287,3 +287,8 @@ fn a_version_two_database_keeps_its_rows_and_gains_the_sync_tables() -> Result<(
 fn the_default_capacity_is_thirty_two() {
     assert_eq!(QueueCapacity::default().get(), 32);
 }
+
+#[test]
+fn a_queued_request_prints_no_bytes() {
+    assert_eq!(format!("{:?}", bytes(9)), "RequestBytes(redacted)");
+}
