@@ -11,6 +11,7 @@ use pingers_time::{Timer as _, UnixSeconds};
 use pingers_proto::{WireDecode as _, WireEncode as _};
 
 use super::*;
+use crate::error::ServiceAccountError;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -91,15 +92,56 @@ async fn serve_refuses_to_start_when_no_key_is_active_yet() -> TestResult {
 }
 
 #[tokio::test]
-async fn serve_reports_an_unreadable_fcm_token_file() -> TestResult {
+async fn serve_reports_an_unreadable_service_account_file() -> TestResult {
     let text = config_text("127.0.0.1:0", 0).replace(
         "[unifiedpush]",
-        "[fcm]\nproject_id = \"p\"\naccess_token_file = \"/nonexistent/pingers-fcm-token\"",
+        "[fcm]\nproject_id = \"p\"\nservice_account_file = \"/nonexistent/pingers-fcm-service-account.json\"",
     );
     let config = RelayConfig::parse(&text)?;
     let listener = listen(&config).await?;
     let result = serve(config, listener, clock(), std::future::ready(())).await;
     assert!(matches!(result, Err(RelayError::ReadFile { .. })));
+    Ok(())
+}
+
+fn fcm_config(service_account_file: &std::path::Path) -> Result<RelayConfig, ConfigError> {
+    RelayConfig::parse(&config_text("127.0.0.1:0", 0).replace(
+        "[unifiedpush]",
+        &format!(
+            "[fcm]\nproject_id = \"p\"\nservice_account_file = \"{}\"",
+            service_account_file.display()
+        ),
+    ))
+}
+
+#[tokio::test]
+async fn the_dispatcher_loads_the_service_account_file() -> TestResult {
+    let file = TempFile::new(
+        "good.json",
+        &crate::fcm_auth::tests::account_json("https://oauth2.googleapis.com/token")?,
+    )?;
+    let sender = dispatcher(&fcm_config(&file.0)?, Arc::new(clock()))?;
+    assert!(sender.supports(pingers_proto::PushPlatform::Fcm));
+    assert!(!sender.supports(pingers_proto::PushPlatform::UnifiedPush));
+    Ok(())
+}
+
+#[tokio::test]
+async fn serve_reports_a_malformed_service_account_file_by_field() -> TestResult {
+    let file = TempFile::new(
+        "bad.json",
+        r#"{"client_email":"","private_key":"x","token_uri":"https://oauth2.googleapis.com/token"}"#,
+    )?;
+    let config = fcm_config(&file.0)?;
+    let listener = listen(&config).await?;
+    let result = serve(config, listener, clock(), std::future::ready(())).await;
+    assert!(matches!(
+        result,
+        Err(RelayError::ServiceAccount {
+            source: ServiceAccountError::NoClientEmail,
+            ..
+        })
+    ));
     Ok(())
 }
 
