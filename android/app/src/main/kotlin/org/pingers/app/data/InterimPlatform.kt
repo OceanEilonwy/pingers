@@ -7,20 +7,25 @@ import uniffi.pingers.LocationMode
 import uniffi.pingers.OsRegion
 import uniffi.pingers.Platform
 import uniffi.pingers.PushTokens
+import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 
 /**
  * A stand-in for the generated [Platform] interface, so CoreRepository can open the core
  * before the shell's platform layer (package org.pingers.app.platform, owned by the platform
- * work) implements it. It keeps the secure store in memory, reports Focus as unknown, and
- * logs what the core asks for.
+ * work) implements it. It keeps the secure store in memory with a fresh random database key
+ * (so the database is unreadable after a restart), reports Focus as unknown, and logs what the
+ * core asks for.
  *
- * REPLACE at integration: MainActivity passes the platform package's `AndroidPlatform`
- * (Keystore store, Fused Location, geofences, DND, WorkManager, push) once it implements
- * `uniffi.pingers.Platform`, and this file goes.
+ * REPLACE at integration: CoreRepositories passes the platform package's `AndroidPlatform`
+ * (Keystore store holding the database key, Fused Location, geofences, DND, WorkManager,
+ * push) once it implements `uniffi.pingers.Platform`, and this file goes.
  */
 class InterimPlatform : Platform {
-    private val store = ConcurrentHashMap<String, ByteArray>()
+    private val store = ConcurrentHashMap<String, ByteArray>().apply {
+        // pingers-client opens the SQLCipher database with the key under this name.
+        put(DATABASE_KEY, ByteArray(32).also(SecureRandom()::nextBytes))
+    }
 
     override fun secureStoreGet(key: String): ByteArray? = store[key]?.copyOf()
 
@@ -50,5 +55,6 @@ class InterimPlatform : Platform {
 
     private companion object {
         const val TAG = "InterimPlatform"
+        const val DATABASE_KEY = "pingers.database-key"
     }
 }

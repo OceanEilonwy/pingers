@@ -74,12 +74,9 @@ class CoreRepository(
         override fun privacyStatusChanged() = refreshLater()
     }
 
-    private val core: Core? = try {
-        Core.open(dbPath, platform, sink)
-    } catch (e: CoreException) {
-        Log.e(TAG, "the core did not open: ${e.message}")
-        null
-    }
+    /** Null until [Core.open] finishes, or if it failed (then [openError] says why). */
+    private var core: Core? = null
+    private var openError: String? = null
 
     private var snapshot: Snapshot? = null
 
@@ -92,7 +89,6 @@ class CoreRepository(
     private var replyingTo: MessageId? = null
     private var compassSelection: CompassSelection = CompassSelection.MeetPoint
     private var createError: String? = null
-    private var registered: String? = null
 
     private var partyDraft = uniffi.pingers.PartyDraft(
         name = "",
@@ -161,7 +157,16 @@ class CoreRepository(
     override val meetupEnded: StateFlow<MeetupEndedState> = _meetupEnded.asStateFlow()
 
     init {
-        refresh()
+        scope.launch {
+            core = try {
+                Core.open(dbPath, platform, sink)
+            } catch (e: CoreException) {
+                Log.w(TAG, "the core did not open: ${e.message}")
+                openError = e.message
+                null
+            }
+            refresh()
+        }
     }
 
     // ------------------------------------------------------------ Reading the core
@@ -175,12 +180,7 @@ class CoreRepository(
 
     /** Takes a fresh snapshot and republishes every flow. */
     private fun refresh() {
-        val next = try {
-            core?.snapshot()
-        } catch (e: CoreException) {
-            Log.i(TAG, "no snapshot yet: ${e.message}")
-            null
-        }
+        val next = core?.snapshot()
         if (next != null) {
             snapshot?.destroy()
             snapshot = next
@@ -288,7 +288,7 @@ class CoreRepository(
 
     /** Runs one core call; a failure is logged and handed to [onError]. */
     private fun call(what: String, onError: (String) -> Unit = {}, block: suspend (Core) -> Unit) {
-        val c = core ?: return onError(res.getString(R.string.core_unavailable))
+        val c = core ?: return onError(openError ?: res.getString(R.string.core_unavailable))
         scope.launch {
             try {
                 block(c)
@@ -300,18 +300,6 @@ class CoreRepository(
         }
     }
 
-    private fun check(host: String, set: (uniffi.pingers.Reachability) -> Unit) {
-        set(uniffi.pingers.Reachability.Checking)
-        publishNewParty()
-        call("check $host", onError = { set(uniffi.pingers.Reachability.Unreachable); publishNewParty() }) {
-            val result = it.checkService(host)
-            set(result)
-            publishNewParty()
-        }
-    }
-
-    private fun checkServer() = check(partyDraft.server.host) { partyDraft = partyDraft.copy(server = partyDraft.server.copy(check = it)) }
-    private fun checkRelay() = check(partyDraft.relay.host) { partyDraft = partyDraft.copy(relay = partyDraft.relay.copy(check = it)) }
 
     // ------------------------------------------------------------ Parties and invites
 
@@ -334,30 +322,30 @@ class CoreRepository(
     override fun createParty() {
         val draft = partyDraft
         call("create party", onError = { createError = it; publishNewParty() }) { core ->
-            val server = draft.server.host
-            if (registered != server) {
-                core.register(serverUrl(server), null)
-                registered = server
-            }
-            val id = core.createParty(draft, res.getString(R.string.core_my_name)).toUi()
+            val created = uniffi.pingers.NewPartyDraft(
+                name = draft.name,
+                myName = res.getString(R.string.core_my_name),
+                colour = draft.colour,
+                postQuantum = draft.postQuantum,
+            )
+            val id = core.createParty(created).toUi()
             currentParty = id
             core.createInvite(id.toFfi())
         }
     }
 
-    override fun openAdvanced() {
-        checkServer()
-        checkRelay()
-    }
+    // WAITING(pingers-client): it has no call that asks a server or relay who runs it, so the
+    // checks stay at Checking and pingers-screens keeps New party's Create disabled.
+    override fun openAdvanced() = publishNewParty()
 
     override fun setServer(url: String) {
         partyDraft = partyDraft.copy(server = partyDraft.server.copy(host = url))
-        checkServer()
+        publishNewParty()
     }
 
     override fun setRelay(url: String) {
         partyDraft = partyDraft.copy(relay = partyDraft.relay.copy(host = url))
-        checkRelay()
+        publishNewParty()
     }
 
     override fun setPushRelay(choice: PushRelayChoice) {
@@ -440,7 +428,12 @@ class CoreRepository(
         val party = currentParty ?: return
         val spot = editingSpot
         val draft = spotDraft
-        call("save spot") { it.upsertSpot(party.toFfi(), spot?.toFfi(), draft) }
+        // A circle stays where the editor's map is centred; an area is what was drawn.
+        val fence = draft.area?.takeIf { draft.shape == uniffi.pingers.ShapeKind.AREA }
+            ?.let { uniffi.pingers.Fence.Polygon(it) }
+            ?: uniffi.pingers.Fence.Circle(drawFrame.origin.toFfi(), draft.radiusM)
+        val save = uniffi.pingers.SpotToSave(spot?.toFfi(), draft.name, fence)
+        call("save spot") { it.saveSpot(party.toFfi(), save) }
     }
 
     private fun draw(change: (AreaEditor) -> Unit) {
@@ -480,7 +473,7 @@ class CoreRepository(
     override fun setSharing(on: Boolean) = change(SettingChange.LocationSharing(on))
     override fun setPauseInFocus(on: Boolean) = change(SettingChange.PauseInFocus(on))
     override fun setQuietHours(on: Boolean) = change(SettingChange.QuietHours(on))
-    override fun setNoWakePushes(on: Boolean) = change(SettingChange.WakePushes(!on))
+    override fun setNoWakePushes(on: Boolean) = call("wake pushes") { it.setWakePushes(!on) }
     override fun setVisibility(visibility: Visibility) = change(
         SettingChange.Visibility(
             when (visibility) {
@@ -537,9 +530,14 @@ class CoreRepository(
 
     override fun shareMeetPoint() {
         val id = meetupId() ?: return
-        val pin = meetPointPin ?: return
-        val draft = uniffi.pingers.MeetPointDraft(meetPointMode.toFfi(), meetPointLabel, pin.toFfi())
-        call("share meet point") { it.setMeetPoint(id.toFfi(), draft) }
+        val label = meetPointLabel.ifBlank { null }
+        val choice = when (meetPointMode) {
+            MeetPointMode.AtMe -> uniffi.pingers.MeetPointChoice.AtMe
+            // A pin, or the midpoint pingers-screens computed for the screen.
+            MeetPointMode.Pin, MeetPointMode.Midpoint ->
+                uniffi.pingers.MeetPointChoice.Fixed((_meetPoint.value.point ?: return).toFfi(), label)
+        }
+        call("share meet point") { it.setMeetPoint(id.toFfi(), choice) }
     }
 
     override fun selectCompassTarget(target: CompassSelection) {
@@ -573,8 +571,5 @@ class CoreRepository(
 
     private companion object {
         const val TAG = "CoreRepository"
-
-        /** A host as typed, as the URL the core registers with. */
-        fun serverUrl(host: String) = if ("://" in host) host else "https://$host"
     }
 }

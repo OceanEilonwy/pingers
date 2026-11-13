@@ -43,18 +43,11 @@ impl TryFrom<LocalClock> for screens::clock::LocalClock {
 
 /// The client's state at one moment. Read-only.
 #[derive(Debug, uniffi::Object)]
-pub struct Snapshot(ClientSnapshot);
+pub struct Snapshot(Arc<ClientSnapshot>);
 
 impl Snapshot {
     /// Wraps a snapshot from pingers-client.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Core::snapshot wraps the client's once pingers-client merges"
-        )
-    )]
-    pub(crate) fn new(snapshot: ClientSnapshot) -> Arc<Self> {
+    pub(crate) fn new(snapshot: Arc<ClientSnapshot>) -> Arc<Self> {
         Arc::new(Self(snapshot))
     }
 }
@@ -383,7 +376,7 @@ mod tests {
         let snapshot = fixtures::snapshot().map_err(|error| CoreError::Invalid {
             reason: format!("{error:?}"),
         })?;
-        Ok(Snapshot::new(snapshot))
+        Ok(Snapshot::new(std::sync::Arc::new(snapshot)))
     }
 
     #[test]

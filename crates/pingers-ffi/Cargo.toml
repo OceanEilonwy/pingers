@@ -37,6 +37,7 @@ pingers-geo = { workspace = true }
 pingers-meetup = { workspace = true }
 pingers-proto = { workspace = true }
 pingers-screens = { workspace = true }
+pingers-store = { workspace = true }
 pingers-time = { workspace = true }
 pingers-words = { workspace = true }
 thiserror = { workspace = true }
@@ -45,6 +46,8 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 pingers-screens = { workspace = true, features = ["fixtures"] }
+pingers-testkit = { workspace = true, features = ["client"] }
+tokio = { workspace = true }
 
 # The workspace's lints, copied because Cargo cannot override a single inherited lint. Keep in
 # step with [workspace.lints] in the root Cargo.toml. The one difference is `unsafe_code`.

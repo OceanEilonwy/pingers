@@ -18,7 +18,9 @@ object CoreRepositories {
         instance ?: CoreRepository(
             res = context.resources,
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
-            dbPath = File(context.noBackupFilesDir, "pingers.db").absolutePath,
+            // InterimPlatform's key lives in memory, so last run's database can't be opened:
+            // start a new one. Goes with InterimPlatform.
+            dbPath = File(context.noBackupFilesDir, "pingers.db").also { it.delete() }.absolutePath,
             platform = InterimPlatform(),
         ).also { instance = it }
     }

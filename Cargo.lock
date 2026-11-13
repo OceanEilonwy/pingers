@@ -3485,9 +3485,12 @@ dependencies = [
  "pingers-meetup",
  "pingers-proto",
  "pingers-screens",
+ "pingers-store",
+ "pingers-testkit",
  "pingers-time",
  "pingers-words",
  "thiserror",
+ "tokio",
  "uniffi",
  "zeroize",
 ]

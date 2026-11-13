@@ -74,6 +74,12 @@ impl From<ScreenError> for CoreError {
     }
 }
 
+impl From<pingers_client::snapshot::SnapshotError> for CoreError {
+    fn from(error: pingers_client::snapshot::SnapshotError) -> Self {
+        ScreenError::from(error).into()
+    }
+}
+
 impl From<pingers_geo::GeoError> for CoreError {
     fn from(error: pingers_geo::GeoError) -> Self {
         ScreenError::from(error).into()
