@@ -8,6 +8,10 @@ use zeroize::Zeroizing;
 
 use crate::{Session, StoreError};
 
+/// Deletes every `mls_kv` row whose key starts with `?1`. `substr` on a BLOB compares bytes,
+/// so this matches exactly those keys, with no LIKE wildcards or collation to worry about.
+pub(crate) const DELETE_PREFIX: &str = "DELETE FROM mls_kv WHERE substr(key, 1, length(?1)) = ?1";
+
 /// OpenMLS state as opaque bytes (design C.2 `mls_*`). pingers-mls chooses the key layout.
 ///
 /// Each call is atomic. Inside [`Session::transaction`], MLS writes commit or roll back
@@ -55,13 +59,8 @@ impl MlsStorage for Session {
     }
 
     fn delete_prefix(&self, prefix: &[u8]) -> Result<(), StorageError> {
-        // `substr` on a BLOB compares bytes, so this matches exactly the keys that start with
-        // `prefix`, with no LIKE wildcards or collation to worry about.
         self.with(|connection| {
-            connection.execute(
-                "DELETE FROM mls_kv WHERE substr(key, 1, length(?1)) = ?1",
-                [prefix],
-            )?;
+            connection.execute(DELETE_PREFIX, [prefix])?;
             Ok(())
         })
         .map_err(|error| storage_error(&error))
@@ -75,16 +74,26 @@ impl MlsStorage for Session {
 fn storage_error(error: &StoreError) -> StorageError {
     match error {
         StoreError::Corrupt { .. } => StorageError::Corrupt,
+        StoreError::Database(database) if is_busy(database) => StorageError::Unavailable,
         StoreError::Database(_)
         | StoreError::OutOfRange { .. }
         | StoreError::NotFound { .. }
-        | StoreError::InvalidText { .. } => StorageError::Failed,
+        | StoreError::InvalidText { .. }
+        | StoreError::Internal => StorageError::Failed,
         StoreError::WrongKey
         | StoreError::Busy
         | StoreError::Lock(_)
         | StoreError::NewerSchema { .. }
         | StoreError::Poisoned => StorageError::Unavailable,
     }
+}
+
+/// `SQLITE_BUSY` or `SQLITE_LOCKED`: another connection holds the database; retry later.
+fn is_busy(error: &rusqlite::Error) -> bool {
+    matches!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
 }
 
 #[cfg(test)]
@@ -116,6 +125,23 @@ mod tests {
         storage.delete(b"group/1")?;
         assert!(storage.read(b"group/2")?.is_some());
         Ok(())
+    }
+
+    #[test]
+    fn busy_and_locked_databases_are_unavailable_not_failed() {
+        let sqlite = |code| {
+            StoreError::Database(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(code),
+                None,
+            ))
+        };
+        for code in [rusqlite::ffi::SQLITE_BUSY, rusqlite::ffi::SQLITE_LOCKED] {
+            assert_eq!(storage_error(&sqlite(code)), StorageError::Unavailable);
+        }
+        assert_eq!(
+            storage_error(&sqlite(rusqlite::ffi::SQLITE_CONSTRAINT)),
+            StorageError::Failed
+        );
     }
 
     #[test]

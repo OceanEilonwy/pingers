@@ -433,6 +433,43 @@ mod tests {
     }
 
     #[test]
+    fn rln_identity_round_trips_through_pingers_anon() -> Result<(), TestError> {
+        let fixture = Fixture::new()?;
+        let identities = fixture.session.rln_identity();
+        identities.save(&RlnIdentity {
+            secret: RlnSecret::from_bytes(Zeroizing::new([6; 32]))?,
+            leaf: TreePosition::new(12),
+            live_from: RootEpoch::new(34),
+        })?;
+        let loaded = identities.load()?.ok_or(StoreError::NotFound {
+            table: "rln_identity",
+        })?;
+        assert_eq!(*loaded.secret.expose_bytes(), [6; 32]);
+        assert_eq!(loaded.leaf, TreePosition::new(12));
+        assert_eq!(loaded.live_from, RootEpoch::new(34));
+        Ok(())
+    }
+
+    #[test]
+    fn a_stored_secret_pingers_anon_rejects_is_corrupt() -> Result<(), TestError> {
+        let fixture = Fixture::new()?;
+        let identities = fixture.session.rln_identity();
+        // 0xff..ff is not a canonical BN254 scalar.
+        identities.save_row(&RlnIdentityRow {
+            secret: Zeroizing::new([0xff; 32]),
+            leaf: TreePosition::new(1),
+            live_from: RootEpoch::new(2),
+        })?;
+        assert!(matches!(
+            identities.load(),
+            Err(StoreError::Corrupt {
+                field: "rln_identity.sk"
+            })
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn rln_identity_columns_round_trip() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
         let identities = fixture.session.rln_identity();

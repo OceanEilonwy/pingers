@@ -20,7 +20,6 @@ use std::{
 
 use byteorder::{NetworkEndian, WriteBytesExt};
 use crypto::{Decrypt, Encrypt};
-use log::trace;
 use rand_core::CryptoRng;
 
 pub use crate::{
@@ -61,7 +60,6 @@ fn build_info(label: &[u8], key_id: KeyId, config: HpkeConfig) -> Res<Vec<u8>> {
     info.write_u16::<NetworkEndian>(u16::from(config.kem()))?;
     info.write_u16::<NetworkEndian>(u16::from(config.kdf()))?;
     info.write_u16::<NetworkEndian>(u16::from(config.aead()))?;
-    trace!("HPKE info: {}", hex::encode(&info));
     Ok(info)
 }
 

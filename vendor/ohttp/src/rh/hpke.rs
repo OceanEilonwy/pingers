@@ -3,7 +3,6 @@ use std::ops::Deref;
 use ::hpke as rust_hpke;
 use ::hpke::inout::InOutBuf;
 use hpke::kem::DhP256HkdfSha256;
-use log::trace;
 use rust_hpke::{
     Deserializable, OpModeR, OpModeS, Serializable,
     aead::{AeadCtxR, AeadCtxS, AeadTag, AesGcm128, ChaCha20Poly1305},
@@ -710,7 +709,6 @@ pub fn generate_key_pair(
             (PrivateKey::XWing(sk), PublicKey::XWing(pk))
         }
     };
-    trace!("Generated key pair: sk={sk:?} pk={pk:?}");
     Ok((sk, pk))
 }
 
@@ -730,7 +728,6 @@ pub fn derive_key_pair(kem: Kem, ikm: &[u8]) -> Res<(PrivateKey, PublicKey)> {
             (PrivateKey::XWing(sk), PublicKey::XWing(pk))
         }
     };
-    trace!("Derived key pair: sk={sk:?} pk={pk:?}");
     Ok((sk, pk))
 }
 

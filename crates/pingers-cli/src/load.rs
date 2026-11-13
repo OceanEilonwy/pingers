@@ -6,11 +6,10 @@ use core::fmt;
 use core::num::NonZeroU32;
 use core::time::Duration;
 
+use pingers_time::Bucket;
+
 /// Records one lease holds: one real or dummy record per slot (design B.4.2).
 const RECORDS_PER_LEASE: u32 = 4;
-
-/// Seconds in a bucket (design F.1).
-const BUCKET_SECONDS: u64 = 900;
 
 /// A validated load plan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,7 +32,7 @@ impl LoadPlan {
 
     /// Buckets the run touches, counting a partial bucket.
     pub(crate) fn buckets(&self) -> u64 {
-        self.duration.as_secs().div_ceil(BUCKET_SECONDS)
+        self.duration.as_secs().div_ceil(Bucket::LENGTH.as_secs())
     }
 
     /// Knocks sent over the run, counting a partial minute.

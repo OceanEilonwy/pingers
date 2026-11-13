@@ -79,6 +79,14 @@ mod tests {
     }
 
     #[test]
+    fn subtracting_within_range_moves_back() {
+        let earlier = UnixSeconds::new(10).checked_sub(Duration::from_secs(3));
+        assert_eq!(earlier, Some(UnixSeconds::new(7)));
+        let epoch = UnixSeconds::new(10).checked_sub(Duration::from_secs(10));
+        assert_eq!(epoch, Some(UnixSeconds::EPOCH));
+    }
+
+    #[test]
     fn adding_drops_sub_second_parts() {
         let later = UnixSeconds::new(10).checked_add(Duration::from_millis(1_999));
         assert_eq!(later, Some(UnixSeconds::new(11)));

@@ -335,13 +335,13 @@ private fun Footnote(state: MeetupState, nav: Navigator) {
     val manage = stringResource(R.string.meetup_manage)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
         Text(
-            pluralStringResource(R.plurals.meetup_only_here, state.hereCount, state.hereCount) + " " + shared + " · ",
+            pluralStringResource(R.plurals.meetup_only_here, state.hereCount, state.hereCount) + " " + shared,
             style = body(12.sp, color = Pc.Muted, lineHeight = 1.45f),
             textAlign = TextAlign.Center,
             modifier = Modifier.weight(1f, fill = false),
         )
         Box(
-            Modifier.heightIn(min = 48.dp).clickable(role = Role.Button) { nav.go(Route.Privacy) },
+            Modifier.padding(start = 12.dp).heightIn(min = 48.dp).clickable(role = Role.Button) { nav.go(Route.Privacy) },
             contentAlignment = Alignment.Center,
         ) { Text(manage, style = body(12.sp, 600, Pc.Blue)) }
     }

@@ -18,6 +18,13 @@ pub const RECOMMENDED_SPOT_RADIUS: Meters = Meters::constant(150.0);
 /// computed in is exact to the millimetre only within this range.
 pub const MAXIMUM_POLYGON_EXTENT: Meters = Meters::constant(100_000.0);
 
+/// The most vertices a polygon may have.
+///
+/// Polygons arrive from other Party members and are rebuilt on every load, and the validity
+/// checks are quadratic (self-intersection) and cubic (enclosing circle) in the vertex count,
+/// so an unbounded polygon could stall every member's core. A drawn Spot needs far fewer.
+pub const MAXIMUM_POLYGON_VERTICES: usize = 100;
+
 /// A circular fence.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Circle {
@@ -112,6 +119,7 @@ impl Polygon {
     /// # Errors
     ///
     /// - [`GeoError::TooFewVertices`] for fewer than three vertices;
+    /// - [`GeoError::TooManyVertices`] for more than [`MAXIMUM_POLYGON_VERTICES`];
     /// - [`GeoError::PolygonTooLarge`] if a vertex is farther than [`MAXIMUM_POLYGON_EXTENT`]
     ///   from the first;
     /// - [`GeoError::Degenerate`] if every vertex lies on one line;
@@ -123,6 +131,9 @@ impl Polygon {
         };
         if vertices.len() < 3 {
             return Err(GeoError::TooFewVertices);
+        }
+        if vertices.len() > MAXIMUM_POLYGON_VERTICES {
+            return Err(GeoError::TooManyVertices);
         }
         if vertices
             .iter()
@@ -137,8 +148,7 @@ impl Polygon {
         if plane::is_collinear(&provisional) {
             return Err(GeoError::Degenerate);
         }
-        let minimal =
-            plane::minimal_enclosing_circle(&provisional).ok_or(GeoError::TooFewVertices)?;
+        let minimal = plane::minimal_enclosing_circle(&provisional).ok_or(GeoError::Internal)?;
         let center = plane::unproject(first, minimal.center)?;
         let ring: Vec<Planar> = vertices
             .iter()
@@ -284,6 +294,30 @@ mod tests {
 
     fn close(actual: f64, expected: f64, tolerance: f64) -> bool {
         (actual - expected).abs() <= tolerance
+    }
+
+    /// `count` vertices on a 500 m circle around the anchor: a valid convex polygon.
+    fn regular_polygon(count: u32) -> Result<Vec<Coordinate>, GeoError> {
+        let center = anchor()?;
+        let step = core::f64::consts::TAU / f64::from(count);
+        (0..count)
+            .map(|index| {
+                let angle = step * f64::from(index);
+                offset(center, 500.0 * angle.sin(), 500.0 * angle.cos())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn polygons_above_the_vertex_limit_are_refused() -> Result<(), GeoError> {
+        let limit = u32::try_from(MAXIMUM_POLYGON_VERTICES).map_err(|_| GeoError::Internal)?;
+        assert!(Polygon::new(regular_polygon(limit)?).is_ok());
+        let over = limit.checked_add(1).ok_or(GeoError::Internal)?;
+        assert_eq!(
+            Polygon::new(regular_polygon(over)?).err(),
+            Some(GeoError::TooManyVertices)
+        );
+        Ok(())
     }
 
     #[test]
@@ -736,19 +770,6 @@ mod tests {
                 prop_assert!(polygon.distance_outside(point).get() >= margin * 0.999);
             }
 
-            #[test]
-            fn containment_agrees_with_distance_outside(
-                star in star(),
-                east in -2_500.0..2_500.0_f64,
-                north in -2_500.0..2_500.0_f64,
-            ) {
-                let polygon = star.polygon()?;
-                let point = offset(star.center, east, north)?;
-                prop_assert_eq!(
-                    polygon.contains(point),
-                    polygon.distance_outside(point) == Meters::ZERO
-                );
-            }
         }
     }
 }

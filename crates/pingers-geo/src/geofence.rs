@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Choosing which Spots to register as OS geofences (design E.2).
 
-use crate::{Circle, Coordinate, Fence, distance, exit_buffer};
+use crate::{Circle, Coordinate, Fence, MINIMUM_SPOT_RADIUS, distance, exit_buffer};
 
 /// How many Spot regions the platform lets the app register, leaving room for the horizon
 /// region and a spare.
@@ -54,7 +54,9 @@ pub struct GeofenceSelection<Key> {
 }
 
 /// Picks the Spots nearest to `position` up to `capacity`, plus a horizon region of radius
-/// `0.8 ×` the distance to the farthest chosen Spot (design E.2).
+/// `0.8 ×` the distance to the farthest chosen Spot (design E.2), and at least
+/// [`MINIMUM_SPOT_RADIUS`]: when the device stands at the centre of every chosen Spot, a
+/// zero-radius horizon would be no circle at all and the OS would never ask to reselect.
 ///
 /// Uses only local data, so the choice has no privacy cost.
 #[must_use]
@@ -82,7 +84,11 @@ pub fn select_os_geofences<Key: Clone>(
     } else {
         regions
             .last()
-            .map(|farthest| distance(position, farthest.region.center()).scaled(0.8))
+            .map(|farthest| {
+                distance(position, farthest.region.center())
+                    .scaled(0.8)
+                    .max(MINIMUM_SPOT_RADIUS)
+            })
             .and_then(|radius| Circle::new(position, radius).ok())
     };
     GeofenceSelection { regions, horizon }
@@ -130,6 +136,23 @@ mod tests {
         let horizon = selection.horizon.ok_or(GeoError::ZeroRadius)?;
         // 0.8 × the distance to the second-nearest Spot (0.02° ≈ 2,224 m).
         assert!((horizon.radius().get() - 1_779.0).abs() < 2.0);
+        Ok(())
+    }
+
+    #[test]
+    fn standing_at_every_chosen_centre_still_gives_a_horizon() -> Result<(), GeoError> {
+        let fences = [spot_at(0.0)?, spot_at(0.0)?, spot_at(0.01)?];
+        let candidates: Vec<_> = fences
+            .iter()
+            .map(|fence| GeofenceCandidate { key: (), fence })
+            .collect();
+        let selection = select_os_geofences(
+            &candidates,
+            Coordinate::new(0.0, 0.0)?,
+            GeofenceCapacity::new(2),
+        );
+        let horizon = selection.horizon.ok_or(GeoError::ZeroRadius)?;
+        assert_eq!(horizon.radius(), MINIMUM_SPOT_RADIUS);
         Ok(())
     }
 

@@ -15,7 +15,7 @@
 mod bucket;
 mod clock;
 mod error;
-#[cfg(feature = "test-util")]
+#[cfg(any(test, feature = "test-util"))]
 mod manual;
 mod timer;
 mod unix;
@@ -23,7 +23,7 @@ mod unix;
 pub use bucket::{Bucket, BucketCount};
 pub use clock::{Clock, SystemClock};
 pub use error::TimeError;
-#[cfg(feature = "test-util")]
+#[cfg(any(test, feature = "test-util"))]
 pub use manual::ManualClock;
 pub use timer::{MonotonicTime, Sleep, Timer};
 pub use unix::UnixSeconds;

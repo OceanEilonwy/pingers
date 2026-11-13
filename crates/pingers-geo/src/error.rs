@@ -29,6 +29,9 @@ pub enum GeoError {
     /// A polygon spans more than `MAXIMUM_POLYGON_EXTENT`.
     #[error("polygon is too large")]
     PolygonTooLarge,
+    /// A polygon has more than `MAXIMUM_POLYGON_VERTICES` vertices.
+    #[error("polygon has too many vertices")]
+    TooManyVertices,
     /// A bearing outside `[0, 360)` degrees or not a number.
     #[error("bearing out of range")]
     BearingOutOfRange,
@@ -36,4 +39,7 @@ pub enum GeoError {
     /// The caller drops it; state is unchanged.
     #[error("presence input is older than the last one processed")]
     StaleInput,
+    /// A computation the types should have made infallible failed. A bug, not bad input.
+    #[error("internal geometry error")]
+    Internal,
 }

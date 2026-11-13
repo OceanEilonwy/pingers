@@ -1,7 +1,6 @@
 #![allow(dead_code)] // TODO: remove
 
 use hkdf::Hkdf as HkdfImpl;
-use log::trace;
 use sha2::{Sha256, Sha384, Sha512};
 
 use super::SymKey;
@@ -60,23 +59,11 @@ impl Hkdf {
                 SymKey::from(HkdfImpl::<Sha512>::extract(Some(salt), &ikm.0).0.as_slice())
             }
         };
-        trace!(
-            "HKDF extract: salt={} ikm={:?} prk={:?}",
-            hex::encode(salt),
-            ikm,
-            prk
-        );
         Ok(prk)
     }
 
     pub fn expand_key(&self, prk: &SymKey, info: &[u8], key_mech: KeyMechanism) -> Res<SymKey> {
         let okm = SymKey::from(self.expand_data(prk, info, key_mech.len())?);
-        trace!(
-            "HKDF expand_key: prk={:?} info={} okm={:?}",
-            prk,
-            hex::encode(info),
-            okm,
-        );
         Ok(okm)
     }
 
@@ -96,13 +83,6 @@ impl Hkdf {
                 h.expand(info, &mut okm).map_err(|_| Error::Internal)?;
             }
         }
-        trace!(
-            "HKDF expand_data: prk={:?} info={} len={} okm={:?}",
-            prk,
-            hex::encode(info),
-            len,
-            hex::encode(&okm),
-        );
         Ok(okm)
     }
 }

@@ -1,16 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Spot keys that exist only while the device is Inside (design B.4.3).
-#![expect(
-    dead_code,
-    reason = "the keys are read once the stub bodies are implemented"
-)]
-
-use pingers_crypto::{PresenceRoot, SpotKey, TagKey};
+use pingers_crypto::{PresenceRoot, SpotKey, TagKey, derive_spot_key, derive_tag_key};
 use pingers_geo::PresenceState;
 use pingers_proto::{Epoch, PartyId, SpotId};
 
 use crate::PresenceError;
-use crate::stub::not_implemented;
 
 /// A Spot of a Party.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -56,13 +50,25 @@ impl ActiveSpot {
         if status.state != PresenceState::Inside {
             return Err(PresenceError::NotInside);
         }
-        not_implemented((root, status))
+        let spot_key = derive_spot_key(root, &status.spot.spot)?;
+        let tag_key = derive_tag_key(&spot_key)?;
+        Ok(Self {
+            spot: status.spot,
+            epoch: status.epoch,
+            spot_key,
+            tag_key,
+        })
     }
 
     /// Which Spot.
     #[must_use]
     pub const fn spot(&self) -> SpotRef {
         self.spot
+    }
+
+    /// Which Spot, borrowed (for structures that hold references to its ids).
+    pub(crate) const fn spot_ref(&self) -> &SpotRef {
+        &self.spot
     }
 
     /// Which Party epoch the keys belong to.

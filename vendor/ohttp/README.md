@@ -31,6 +31,10 @@ Pingers needs three things the published crate cannot give (design B.4.9, H.1 #1
   (they used the old signatures; pingers-ohttp's tests and vectors cover this code, including
   the RFC 9458 and chunked-draft examples), `ClientRequest::from_encoded_config_list`,
   `init()`, and the Cargo features (the crate is always client + server + rust-hpke).
+- **No logging, and symmetric keys are zeroed:** every `log::trace!` call is removed, with the
+  `log` dependency. Upstream traced HKDF output in hex (the response AEAD key and nonce), the
+  extract salt and inputs, and generated private keys through their `Debug`, so any logger at
+  trace level would have recorded key material. `SymKey` zeroizes its bytes on drop.
 - **Randomness from the caller:** `HpkeS::new`, `generate_key_pair`, `KeyConfig::new`,
   `ClientRequest::encapsulate` and `ServerResponse::encapsulate` take
   `&mut impl rand_core::CryptoRng`. The `hpke`, `aes-gcm` and `chacha20poly1305` dependencies

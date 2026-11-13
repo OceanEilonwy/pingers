@@ -21,8 +21,17 @@ pub const MESSAGE_LIMIT: u8 = 8;
 macro_rules! field_element {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        ///
+        /// `Debug` prints only the type name: commitments and nullifiers identify a device's
+        /// requests (style guide §9).
+        #[derive(Clone, Copy, PartialEq, Eq, Hash)]
         pub struct $name([u8; 32]);
+
+        impl core::fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                formatter.write_str(concat!(stringify!($name), "(redacted)"))
+            }
+        }
 
         impl $name {
             /// Wraps an encoded field element (from the wire or the tree). Canonicity is
@@ -249,6 +258,14 @@ mod tests {
         assert_eq!(loaded.expose_bytes(), secret.expose_bytes());
         assert_eq!(loaded.id_commitment()?, secret.id_commitment()?);
         Ok(())
+    }
+
+    #[test]
+    fn debug_does_not_print_field_elements() {
+        let nullifier = Nullifier::from_bytes([0xab; 32]);
+        assert_eq!(format!("{nullifier:?}"), "Nullifier(redacted)");
+        let commitment = IdCommitment::from_bytes([0xab; 32]);
+        assert_eq!(format!("{commitment:?}"), "IdCommitment(redacted)");
     }
 
     #[test]

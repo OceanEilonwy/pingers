@@ -59,8 +59,9 @@ pub struct VerifiedProof {
     pub record: NullifierRecord,
 }
 
-/// What the server keeps per nullifier: the share `(x, y)`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What the server keeps per nullifier: the share `(x, y)`. `Debug` prints neither: two
+/// shares for one nullifier recover the device's secret.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct NullifierRecord {
     /// The request digest.
     pub x: RequestDigest,
@@ -68,9 +69,16 @@ pub struct NullifierRecord {
     pub y: [u8; 32],
 }
 
+impl core::fmt::Debug for NullifierRecord {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("NullifierRecord(redacted)")
+    }
+}
+
 /// What a nullifier lookup means (design D).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use]
+#[non_exhaustive]
 pub enum NullifierOutcome {
     /// Not seen: accept and store the record.
     Fresh,
