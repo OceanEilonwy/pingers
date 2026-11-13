@@ -144,6 +144,31 @@ fn ending_a_meetup_leaves_no_rows() -> Result<(), TestError> {
 }
 
 #[test]
+fn an_out_of_range_stored_coordinate_is_corrupt() -> Result<(), TestError> {
+    let fixture = Fixture::new()?;
+    let session = &fixture.session;
+    let owner = party(1)?;
+    session.parties().insert(&owner)?;
+    let live = meetup(&owner.id, 1);
+    populate(session, &live, 1)?;
+    let stored = 98_765_432_101_i64;
+    session.with(|connection| {
+        Ok(connection.execute(
+            "UPDATE meetup_peer SET location_lat_e7 = ?1 WHERE group_id = ?2",
+            rusqlite::params![stored, live.group.as_bytes()],
+        )?)
+    })?;
+    let result = session.meetup_peers().get(&live.group, LeafIndex::new(2));
+    assert!(matches!(
+        result,
+        Err(StoreError::Corrupt {
+            field: "meetup_peer.location_lat_e7"
+        })
+    ));
+    Ok(())
+}
+
+#[test]
 fn ending_a_meetup_deletes_its_mls_state() -> Result<(), TestError> {
     let fixture = Fixture::new()?;
     let session = &fixture.session;

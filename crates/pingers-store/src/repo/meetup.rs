@@ -289,14 +289,18 @@ fn peer_from_row(row: &Row<'_>) -> Result<MeetupPeer, StoreError> {
             expires_at: read_time(row, 5, "meetup_peer.peer_lk_expires_at")?,
         }),
     };
-    let location = match row.get::<_, Option<i32>>(6)? {
+    // Read as i64 and narrowed here: rusqlite's own out-of-range error would carry the
+    // stored coordinate into `StoreError::Database` (style guide §9).
+    let location = match row.get::<_, Option<i64>>(6)? {
         None => None,
         Some(latitude) => {
             let corrupt = |_| StoreError::Corrupt {
                 field: "meetup_peer.location",
             };
+            let latitude = narrow(latitude, "meetup_peer.location_lat_e7")?;
+            let longitude = narrow(row.get::<_, i64>(7)?, "meetup_peer.location_lon_e7")?;
             Some(LocationPlaintext {
-                position: E7Coordinate::new(latitude, row.get(7)?).map_err(corrupt)?,
+                position: E7Coordinate::new(latitude, longitude).map_err(corrupt)?,
                 accuracy: AccuracyMeters::new(row.get(8)?),
                 heading: row
                     .get::<_, Option<u16>>(9)?
