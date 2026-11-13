@@ -130,3 +130,34 @@ pub(crate) fn credential(key: &AccountSigningKey) -> CredentialWithKey {
         signature_key: public.into(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use rand_core::Rng as _;
+
+    use super::*;
+
+    #[test]
+    fn openmls_randomness_comes_from_the_injected_rng() -> Result<(), RandUnavailable> {
+        let mut injected = pingers_testkit::seeded_rng(3);
+        let mut reference = pingers_testkit::seeded_rng(3);
+        let rand = InjectedRand::new(&mut injected);
+        let array: [u8; 16] = rand.random_array()?;
+        let vector = rand.random_vec(24)?;
+        let mut expected_array = [0; 16];
+        reference.fill_bytes(&mut expected_array);
+        let mut expected_vector = vec![0; 24];
+        reference.fill_bytes(&mut expected_vector);
+        assert_eq!(array, expected_array);
+        assert_eq!(vector, expected_vector);
+        Ok(())
+    }
+
+    #[test]
+    fn operations_without_an_rng_get_no_randomness() {
+        assert!(NoRand.random_array::<4>().is_err());
+        assert!(NoRand.random_vec(4).is_err());
+    }
+}

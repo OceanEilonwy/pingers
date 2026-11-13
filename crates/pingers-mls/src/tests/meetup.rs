@@ -23,11 +23,39 @@ fn create<'device>(
     party_roster: &Roster,
     rng: &mut ChaCha20Rng,
 ) -> Result<(MeetupGroup<'device>, WelcomeBytes), TestError> {
+    create_with_id(
+        a,
+        Knock {
+            knocker,
+            party_roster,
+        },
+        0xA0,
+        rng,
+    )
+}
+
+/// Who knocks, and the Party roster the creator checks them against.
+#[derive(Clone, Copy)]
+struct Knock<'knock> {
+    knocker: &'knock Device,
+    party_roster: &'knock Roster,
+}
+
+fn create_with_id<'device>(
+    a: &'device Device,
+    knock: Knock<'_>,
+    id: u8,
+    rng: &mut ChaCha20Rng,
+) -> Result<(MeetupGroup<'device>, WelcomeBytes), TestError> {
+    let Knock {
+        knocker,
+        party_roster,
+    } = knock;
     let first_member = knocker.meetup_key_package(&grant_key(2), rng)?;
     let psk = meetup_psk(7);
     let created = a.context().create_meetup_group(
         &MeetupCreation {
-            group_id: group_id(0xA0),
+            group_id: group_id(id),
             psk: MeetupPskBinding {
                 id: psk_id(4)?,
                 value: &psk,
@@ -184,6 +212,49 @@ fn members_refuse_a_commit_adding_someone_outside_their_roster() -> TestResult {
         Err(MlsError::NotInPartyRoster)
     ));
     assert_eq!(group_b.epoch(), Epoch::new(1));
+    Ok(())
+}
+
+#[test]
+fn each_meetup_checks_against_its_own_roster() -> TestResult {
+    let mut rng = rng(47);
+    let (a, b, c) = (
+        Device::new(&mut rng),
+        Device::new(&mut rng),
+        Device::new(&mut rng),
+    );
+    let party_without_c = roster_of(&[&a, &b]);
+    let party_with_c = roster_of(&[&a, &b, &c]);
+    // B is in two Meetups: one whose Party roster includes C, one whose roster does not.
+    let (mut first_a, first_welcome) = create_with_id(
+        &a,
+        Knock {
+            knocker: &b,
+            party_roster: &party_without_c,
+        },
+        0xA1,
+        &mut rng,
+    )?;
+    let mut first_b = join(&b, &first_welcome, &party_without_c)?;
+    let (_second_a, second_welcome) = create_with_id(
+        &a,
+        Knock {
+            knocker: &b,
+            party_roster: &party_with_c,
+        },
+        0xA2,
+        &mut rng,
+    )?;
+    let _second_b = join(&b, &second_welcome, &party_with_c)?;
+    let add_c = first_a.add_members(
+        &[c.meetup_key_package(&grant_key(3), &mut rng)?],
+        &party_with_c,
+        &mut rng,
+    )?;
+    assert!(matches!(
+        first_b.process(&add_c.commit),
+        Err(MlsError::NotInPartyRoster)
+    ));
     Ok(())
 }
 

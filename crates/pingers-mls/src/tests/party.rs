@@ -315,6 +315,35 @@ fn leaver_proposes_and_another_member_commits() -> TestResult {
 }
 
 #[test]
+fn received_proposal_survives_a_reload_until_committed() -> TestResult {
+    let mut rng = rng(20);
+    let (a, b, c) = (
+        Device::new(&mut rng),
+        Device::new(&mut rng),
+        Device::new(&mut rng),
+    );
+    let Trio {
+        a: mut group_a,
+        b: mut group_b,
+        c: mut group_c,
+    } = party_of_three(&a, &b, &c, &mut rng)?;
+    let leave = group_b.propose_leave(&mut rng)?;
+    group_a.process(&leave)?;
+    group_c.process(&leave)?;
+    // A restarts before committing: the proposal comes back from storage.
+    drop(group_a);
+    let mut group_a = a.context().party_group(&group_id(1))?;
+    let commit = group_a.commit_pending_proposals(&mut rng)?;
+    assert_eq!(
+        group_a.merge_pending_commit()?.removed,
+        vec![LeafIndex::new(1)]
+    );
+    let summary = commit_summary(group_c.process(&commit.commit)?)?;
+    assert_eq!(summary.removed, vec![LeafIndex::new(1)]);
+    Ok(())
+}
+
+#[test]
 fn commit_from_outside_the_group_is_rejected() -> TestResult {
     let mut rng = rng(7);
     let (a, outsider) = (Device::new(&mut rng), Device::new(&mut rng));

@@ -461,21 +461,6 @@ impl<'context, S: MlsStorage> MlsContext<'context, S> {
         let adapter = crate::adapter::StorageAdapter::new(self.storage);
         let id = openmls::prelude::GroupId::from_slice(group_id.as_bytes());
         if let Some(mut inner) = MlsGroup::load(&adapter, &id)? {
-            // OpenMLS keeps the private keys of our current leaf (and of a pending commit's
-            // new leaf) outside the group's own rows; delete them too.
-            let leaf_keys = inner
-                .own_leaf()
-                .map(|leaf| leaf.encryption_key().clone())
-                .into_iter()
-                .chain(
-                    inner
-                        .pending_commit()
-                        .and_then(StagedCommit::update_path_leaf_node)
-                        .map(|leaf| leaf.encryption_key().clone()),
-                );
-            for key in leaf_keys {
-                adapter.delete_encryption_key_pair(&key)?;
-            }
             // `MlsGroup::delete` removes the current epoch's key pairs. A member that merged its
             // own removal has moved to the next epoch without key pairs, so its last ones are
             // the previous epoch's.

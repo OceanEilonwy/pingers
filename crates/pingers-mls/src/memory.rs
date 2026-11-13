@@ -120,6 +120,7 @@ mod tests {
             Some(&b"value"[..])
         );
         assert_eq!(storage.len(), 1);
+        assert!(!storage.is_empty());
         assert!(storage.contains_key_fragment(b"ke"));
         assert!(!storage.contains_key_fragment(b"other"));
         assert!(!storage.contains_key_fragment(b""));
