@@ -1,10 +1,45 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Server: MLS delivery log, subscriptions, live fan-out.
 //!
-//! The MLS delivery service: group logs with one commit per epoch, sealed-push subscriptions,
-//! Welcome routing via mailboxes, the live-channel fan-out registry, group expiry. Owns its
-//! storage trait, with a SQLite implementation behind a `sqlite` feature added later.
+//! The MLS delivery service for Party and Meetup groups alike (design B.2, B.4.9, B.5, D):
 //!
-//! Wave 1 scaffold: only the crate's job is fixed here. Its public API is designed by the crate's
-//! owner against the contracts of the crates it depends on.
+//! - **Group logs.** Application messages are appended in arrival order; exactly one commit
+//!   is accepted per epoch, and a second commit for the same epoch gets
+//!   [`CommitOutcome::Conflict`] with the head epoch (HTTP 409). The check and the append are
+//!   one atomic store operation, so concurrent committers are serialised.
+//! - **Sealed-push subscriptions.** Each group keeps a list of sealed pushes, never accounts.
+//!   A commit, or a stored message with `wake` set, yields one [`Wake`] per unexpired
+//!   subscription not attached to a live channel; the server hands them to the push relay
+//!   (pingers-mailbox's relay client). `Quiet` wakes carry a random 0 to 30 s delay.
+//! - **Live fan-out.** Which open live channels belong to a group, with the caller's handle for
+//!   each; no IP addresses. Frames and stored messages are forwarded to the other channels.
+//! - **Expiry and deletion.** A group with no reads or writes for two hours is deleted, as is
+//!   one a member deletes; its live channels are closed with it.
+//!
+//! Welcomes are not handled here: they travel as mailbox posts (pingers-mailbox).
+//!
+//! Storage is the [`DeliveryStore`] trait, with [`MemoryDeliveryStore`] and, behind the
+//! `sqlite` feature, `SqliteDeliveryStore`.
 #![forbid(unsafe_code)]
+
+mod error;
+mod live;
+mod memory;
+mod service;
+#[cfg(feature = "sqlite")]
+mod sqlite;
+mod store;
+
+pub use error::DeliveryError;
+pub use live::ChannelId;
+pub use memory::MemoryDeliveryStore;
+pub use service::{
+    CommitOutcome, Delivery, Forwarded, IDLE_LIFETIME, MAX_QUIET_DELAY, MAX_SUBSCRIPTION_LIFETIME,
+    Posted, Wake,
+};
+#[cfg(feature = "sqlite")]
+pub use sqlite::SqliteDeliveryStore;
+pub use store::{
+    CommitWrite, DeliveryStore, GroupHead, NewCommit, NewEntry, NewGroup, PAGE_ENTRIES,
+    StoredSubscription,
+};

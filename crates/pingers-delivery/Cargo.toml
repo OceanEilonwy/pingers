@@ -10,10 +10,23 @@ publish.workspace = true
 [package.metadata.pingers]
 layer = 3
 
+[features]
+default = []
+# `SqliteDeliveryStore`: group logs, subscriptions and snapshots in one SQLite file, so a
+# self-hosted server stays one file (architecture §3).
+sqlite = ["dep:rusqlite"]
+
 [dependencies]
+pingers-crypto = { workspace = true }
 pingers-proto = { workspace = true }
 pingers-time = { workspace = true }
+rand_core = { workspace = true }
+# `fallible_uint`: epochs, sequence numbers and times are u64; values over i64::MAX are refused.
+rusqlite = { workspace = true, optional = true, features = ["fallible_uint"] }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+pingers-testkit = { workspace = true }
 
 [lints]
 workspace = true
