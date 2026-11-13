@@ -1,0 +1,256 @@
+{
+  "description": "TrialMatcher::match_page over one segment (design B.4.3, B.4.7). The reader is Inside Spot `spot_id` of Party `party_id` at `epoch` with `presence_root`; when `previous_presence_root` is not empty it also holds that root's keys for epoch - 1 (the grace period). `now` is the reader's bucket: segments that have expired (now - start >= 4) or start after now + 1 are skipped. `own_records` (concatenated 16-byte randomness) are skipped. Expected: the page indexes of matched records, the epoch each matched under, and their opened 48-byte beacons, concatenated.",
+  "name": "presence/trial-match",
+  "vectors": [
+    {
+      "expected": {
+        "beacons": "211487cae870769fa7bb65d450d2270e0000000000000000000000000000000000000000000000000000000000000000",
+        "matched_epochs": [
+          9
+        ],
+        "matched_indexes": [
+          0
+        ]
+      },
+      "inputs": {
+        "epoch": 9,
+        "now": 1966300,
+        "own_records": "",
+        "party_id": "47eed2c01768b75f2e332ee388bb45c8",
+        "presence_root": "ae326c9b9aca9caab28ffff76ef3fea99e5e59955061cab4527d425ab6c9d1cd",
+        "previous_presence_root": "",
+        "records": "49fd98b70cb4a9570811d35fb65f6f5c1473380bf8b679283c43a5832c7109ecfc6a7fbce0b1172e0c2e57ba34d98034bda0f4dcecb0b636a63eb470c091d8ac14217c1c610a60129713ddd6c01787eb68765bb2b24e609569231df9104266a2a3b263d39aa9c0430ac9536dfdae5be403c9d00cc2b6bfa5c144669d9430fb8e727440ef307ace2afc61ab48fed395ae2615db89c1dd1549bc45dc52dceb10d54775a511165a9d073c2ef57a06de2d4ff7450d77fcc2bf22ee9bc43977953f393b59d9a55900438ee4e4c696d89f9635c2a7378afa74bef5f7eb32caa72185186ab0ba14fd9fdcf86f3795273f0eca7f8dbf5dfe7f6e9cd763903c8934db4c931609bbb58c9d474ceae6d65741ed2aae5c7ffe0b1c47e9923f8a57f0944abedacc5c1ad66859640d9f1e6282687f653b76b4b784640503b2fbafee458204e5b34b0d28c3536feda5b8ed3857aca7e24e5e4ace676d490b7a560fb9801edc629ad4aa58c19b0b47da571466e0ccb4f12a7f25c9d1fb0157ca1484f3a1b3390b36",
+        "segment_start": 1966300,
+        "spot_id": "810603dfdeed56457edcdb3afd22eb64"
+      },
+      "name": "real-record-matches"
+    },
+    {
+      "expected": {
+        "beacons": "211487cae870769fa7bb65d450d2270e0000000000000000000000000000000000000000000000000000000000000000284ba3f4de358a2f8f03bfee9c087fe10000000000000000000000000000000016683db0a4c98f4db4b2e44226fdbf5f",
+        "matched_epochs": [
+          9,
+          9
+        ],
+        "matched_indexes": [
+          0,
+          5
+        ]
+      },
+      "inputs": {
+        "epoch": 9,
+        "now": 1966300,
+        "own_records": "",
+        "party_id": "47eed2c01768b75f2e332ee388bb45c8",
+        "presence_root": "ae326c9b9aca9caab28ffff76ef3fea99e5e59955061cab4527d425ab6c9d1cd",
+        "previous_presence_root": "",
+        "records": "49fd98b70cb4a9570811d35fb65f6f5c1473380bf8b679283c43a5832c7109ecfc6a7fbce0b1172e0c2e57ba34d98034bda0f4dcecb0b636a63eb470c091d8ac14217c1c610a60129713ddd6c01787eb68765bb2b24e609569231df9104266a2a3b263d39aa9c0430ac9536dfdae5be403c9d00cc2b6bfa5c144669d9430fb8e727440ef307ace2afc61ab48fed395ae2615db89c1dd1549bc45dc52dceb10d54775a511165a9d073c2ef57a06de2d4ff7450d77fcc2bf22ee9bc43977953f393b59d9a55900438ee4e4c696d89f9635c2a7378afa74bef5f7eb32caa72185186ab0ba14fd9fdcf86f3795273f0eca7f8dbf5dfe7f6e9cd763903c8934db4c931609bbb58c9d474ceae6d65741ed2aae5c7ffe0b1c47e9923f8a57f0944abedacc5c1ad66859640d9f1e6282687f653b76b4b784640503b2fbafee458204e5b34b0d28c3536feda5b8ed3857aca7e24e5e4ace676d490b7a560fb9801edc629ad4aa58c19b0b47da571466e0ccb4f12a7f25c9d1fb0157ca1484f3a1b3390b3696e71e28491dbddfba38635861f09c6d137710d9b105c1324d10e1155ac06a9a69079bbecdd8e3183a68086325e166814d6ecc6016fbc78ca17f9118679b0017c6900e8e9029094402975a8a07117766e0df8b5eeccf44453ae2c129b08bac6ec51cca06093e56d5c831d664d5ea584cc86687183eb179b4a904ed3827da324973b41e8b70694b0fbdf9989d3cde8f4482da2e05a6b9af2778d44ef7945ed6289a0d2a4e94ee1dd4e5de348ba9e0e4fb4748408f82b232b10c0c677e9a1ee46a1af44da65bc8da3b10717057f0bc8c8ae126791dc3645fdf8d090fae196f00330fda19294447a74b6d9f87c3c656b39120cbaeeb0de9dbcdd87cecda9b5720a5e7c7b0677bbde9fbd9cbcc520a3519a50a72c7493312defc2181df5520c476f497923a075b3fc263f2fbd4278810ced6831f03fd6e39f82fc2550035560be399d3f084d3108f5d5ff8fb25d5a5d3fc94f493b5e42f1907e4637b4659f91690a7f79e1f0f9e03f73a1276de3a3979698bf118ee8a73222a1a2fdb3b50fb1efc0a",
+        "segment_start": 1966300,
+        "spot_id": "810603dfdeed56457edcdb3afd22eb64"
+      },
+      "name": "two-leases-one-with-meetup-hint"
+    },
+    {
+      "expected": {
+        "beacons": "",
+        "matched_epochs": [],
+        "matched_indexes": []
+      },
+      "inputs": {
+        "epoch": 9,
+        "now": 1966300,
+        "own_records": "c51cca06093e56d5c831d664d5ea584c",
+        "party_id": "47eed2c01768b75f2e332ee388bb45c8",
+        "presence_root": "ae326c9b9aca9caab28ffff76ef3fea99e5e59955061cab4527d425ab6c9d1cd",
+        "previous_presence_root": "",
+        "records": "96e71e28491dbddfba38635861f09c6d137710d9b105c1324d10e1155ac06a9a69079bbecdd8e3183a68086325e166814d6ecc6016fbc78ca17f9118679b0017c6900e8e9029094402975a8a07117766e0df8b5eeccf44453ae2c129b08bac6ec51cca06093e56d5c831d664d5ea584cc86687183eb179b4a904ed3827da324973b41e8b70694b0fbdf9989d3cde8f4482da2e05a6b9af2778d44ef7945ed6289a0d2a4e94ee1dd4e5de348ba9e0e4fb4748408f82b232b10c0c677e9a1ee46a1af44da65bc8da3b10717057f0bc8c8ae126791dc3645fdf8d090fae196f00330fda19294447a74b6d9f87c3c656b39120cbaeeb0de9dbcdd87cecda9b5720a5e7c7b0677bbde9fbd9cbcc520a3519a50a72c7493312defc2181df5520c476f497923a075b3fc263f2fbd4278810ced6831f03fd6e39f82fc2550035560be399d3f084d3108f5d5ff8fb25d5a5d3fc94f493b5e42f1907e4637b4659f91690a7f79e1f0f9e03f73a1276de3a3979698bf118ee8a73222a1a2fdb3b50fb1efc0a",
+        "segment_start": 1966300,
+        "spot_id": "810603dfdeed56457edcdb3afd22eb64"
+      },
+      "name": "own-record-is-skipped"
+    },
+    {
+      "expected": {
+        "beacons": "",
+        "matched_epochs": [],
+        "matched_indexes": []
+      },
+      "inputs": {
+        "epoch": 9,
+        "now": 1966300,
+        "own_records": "",
+        "party_id": "47eed2c01768b75f2e332ee388bb45c8",
+        "presence_root": "ae326c9b9aca9caab28ffff76ef3fea99e5e59955061cab4527d425ab6c9d1cd",
+        "previous_presence_root": "",
+        "records": "555793a6ccda4dd82cb2dd7a2c7c262976918d2512d48d0660a8fdc7e3dbad22e0b185166bfd0e48c7d924694e4b505100e2ec4c5044df28ab2b97449c783f87abdc08d9fb18af8c582d82d721103fe191eb8d6f26e5fec6bd532d086a270f2e503eba22406b525a6380e667975b919ca4ab55c281884cf2a3057ba411b119866c47d5e6eab79e3196be9b815046023b4c86d7a031e8e8d1ca12613a4db6dea75be7593b18877c392629a71fcf8be6345e4d1a8a5185426c1b7b9cbf93c105128fd2b14709a6b92e95de083b6b6bab55e9ab6f2d01fd39b58453c894823cc570b8d2dab0672f6f86afeb35bdddb06ac6afa16a7b98480bb08bee572e86a77dcaa2896a79bab3e926b6c4d6be350deb4e6735e59249cfd2035c0e612eae8b954c40e705229862aa3f20183b45cd2a31491be9f44e510d407631db38f4d1005e532b5ae857b05f752fb492bb972714a1a71cdd70d079f0d3175f045c1648269923383404522a320d120d71ff3f4b2320ccb569120c89cf5504c071120d8bf770ab",
+        "segment_start": 1966300,
+        "spot_id": "810603dfdeed56457edcdb3afd22eb64"
+      },
+      "name": "forged-records-do-not-match"
+    },
+    {
+      "expected": {
+        "beacons": "",
+        "matched_epochs": [],
+        "matched_indexes": []
+      },
+      "inputs": {
+        "epoch": 9,
+        "now": 1966300,
+        "own_records": "",
+        "party_id": "47eed2c01768b75f2e332ee388bb45c8",
+        "presence_root": "ae326c9b9aca9caab28ffff76ef3fea99e5e59955061cab4527d425ab6c9d1cd",
+        "previous_presence_root": "",
+        "records": "919de49ab15663769cac296f2acdebc82fdda2bab42a79a3bcef5b9839b3e072dcd95b9997a93c80118135266838ff8d7cda20631c274c50c606f105acc2df75557a2918ae4e07b8ffb12aa298651de011f333299a88dc99dfb56ce22477e655b33dbf7f6b9bdc32952d593de593da2b3b62303a5726582125a27e3244d0e05fa6247316326d4625f3b2a940944ef7ec0e933ed08839b140630d6fd19631b5e104ef5677b759f3f2048a192a94ce84ea03306f490bfa67bfa416aa556f4e359fc3f856506772a861f2fe664957a37ecb3c57aef2ee3729b38cb9128a28edbcfe28cf388d96f0d07646194b4eb611950859a1c7bbbea57cc2635ec64a435e417f4df7ae14d2ea5c6dd3bff73bf521a34ccc8b3064b3486043e4547f1433021901fe71584c25e1c4857dd1058aaaccf2ed88dd5270d23a5898a3fc3e723374be12c8b24f568f258ef29731cf17c254e01809dd4789b3425badb342926943752ee3bd661da6c6627f42180de8dd3d929c989bf0b8de46521657c977b33e4671e2e6",
+        "segment_start": 1966300,
+        "spot_id": "810603dfdeed56457edcdb3afd22eb64"
+      },
+      "name": "record-replayed-into-a-later-segment"
+    },
+    {
+      "expected": {
+        "beacons": "7e269a560fecef9d5e794f86276d8bdc0000000000000000000000000000000000000000000000000000000000000000",
+        "matched_epochs": [
+          9
+        ],
+        "matched_indexes": [
+          1
+        ]
+      },
+      "inputs": {
+        "epoch": 9,
+        "now": 1966300,
+        "own_records": "",
+        "party_id": "47eed2c01768b75f2e332ee388bb45c8",
+        "presence_root": "ae326c9b9aca9caab28ffff76ef3fea99e5e59955061cab4527d425ab6c9d1cd",
+        "previous_presence_root": "",
+        "records": "75c52a1dad72e9374eaec01c401662895c129929f14686b5d65ad78f55ed5ecd03e84ab7034ad563bb38a80b72207eef2a09337ad165699df7c4e60526d4a21443ddd865ffd16b18a724f8a668493c507150042293f504d041bdb3b5abfab8e48497e64f6d259e6b7d848a1b125af4c0ac58381da2362ab1d5a5dac7a085071270b127414ce25d7eae5b0d488fe47a8ca747ea93056ab82af12b32bacfa9c3ff539b7b959860871853034f3afd5e6944673e6ff8f4da85119a37f21906088a2b64ce04a4406b3e765d75f144ec92dd7d378dafd8edab5c89917f872fcf6f374d3770c9bdae3005db859f009ed5e9e55c71f484936ebbc7177d2f2b05175e2beade2dcc0aeb61e496b4eae3f8aba5626c89985bf282ed5605bf9153d4c4809618a79c070b5a61997f3ffbeee015dc5744e88668ee474c09f0028f25c7f2efddc0fb5aec9d1a47140d1cbf5bc1554fd2c467fd46dedb4cd44d8ce9c3e91955c5f6c04ed0efdd49c3d332ce500d109ac186d4080f38cfb3ae1ef4fb3e3e0f24948f",
+        "segment_start": 1966297,
+        "spot_id": "810603dfdeed56457edcdb3afd22eb64"
+      },
+      "name": "segment-three-buckets-old-is-live"
+    },
+    {
+      "expected": {
+        "beacons": "",
+        "matched_epochs": [],
+        "matched_indexes": []
+      },
+      "inputs": {
+        "epoch": 9,
+        "now": 1966300,
+        "own_records": "",
+        "party_id": "47eed2c01768b75f2e332ee388bb45c8",
+        "presence_root": "ae326c9b9aca9caab28ffff76ef3fea99e5e59955061cab4527d425ab6c9d1cd",
+        "previous_presence_root": "",
+        "records": "477106ff709f7c7a04dd1a48e6b7004d25c79d86fff6755629525082d87cf6a575ec3d728b8bb89b62b6dad61e9e219af9635a6ff3fb0db61d00e6d9d523e14365a5cd5c124206c37aefe513968ccaaaac4f320e25798fd1630cb51b9976430bb5ec15285999be2cd71700f4a5bcee2a8ee6f99ebf4007a21458dde1ae7caddd0fb85a42a84b73dc3af13c2b21fa395e94aa7c66be7267035049a020d749123100afc1adf1adb049c130b081fe4ac28156e1a3326a18b322c5b4fee3e7ad121ebe1b5d537370d1cd702f083687a8a3235505548c19f3540227487dda6dd5eccaddf8244d0a86c5e594a20861c380e832bed78fc4da74168b800c6940d6c99a9c4218539286837e170660a6801783c58ce86efeee59573f5846bce6048fd53a5c6aa03be0b748a5c377dc40138d87942c832e296544afe6a3e96f42afc1bdae5fb13b60c8dbc793af5d710351a4657364e3621b938868458d7a3bb296f406a2a5a05f238119400a0a10ca9975c855b0e128880fae64826537abeadd29fc1fe36a",
+        "segment_start": 1966296,
+        "spot_id": "810603dfdeed56457edcdb3afd22eb64"
+      },
+      "name": "segment-four-buckets-old-has-expired"
+    },
+    {
+      "expected": {
+        "beacons": "cf87e2a371ef28750b7f3223051ea6f30000000000000000000000000000000000000000000000000000000000000000",
+        "matched_epochs": [
+          9
+        ],
+        "matched_indexes": [
+          0
+        ]
+      },
+      "inputs": {
+        "epoch": 9,
+        "now": 1966300,
+        "own_records": "",
+        "party_id": "47eed2c01768b75f2e332ee388bb45c8",
+        "presence_root": "ae326c9b9aca9caab28ffff76ef3fea99e5e59955061cab4527d425ab6c9d1cd",
+        "previous_presence_root": "",
+        "records": "cdf1d7533863c437ab61b0f7d2336d57a9d99a2aee1c8610a0687b56037dc1a1c4cc15d9c6b1be28702584e99be99167f17e239d8bc51177bf134e4e7fda5f4ca6b62ce04abce967967020cdd397d8fd48c69ac041aa9b965d32d7d21d562f5eb699c9c5d77f13577a5754e751e151bff208be76b4d28b89fe68ab8d5fe05af453c4301f544fb42d94bfac77a4240ea48125a4888abb6e50c69610876f9a5afca3e144fd738b6218b00bc304893436bf4487a36d9fea12783618154ceaf4485f02cd4229a63fa79e30600d5534d7aab180aaf891817e82a0bb07306d09bf8c9305614261bd8d0815a57a715f9cde5cd6568dd988c34b5b9777a103a1acd68dc973bbe9fb6acb1eb9d3a4aefeb13ca913b006d14cfa65100ab01cd8419b587f468ee0de03d77bd1865910d7ed79fdea4ccbfd29832fa3a967826454b87ba85354700c91e69fc7118edd4b9116af8aa591c1e47bbb6f0bc4ef412d672e84148be62dee349b3c126ed538ee8f3e093be57988bdcc7ffe4e0dadce2ef63e49d9f673",
+        "segment_start": 1966301,
+        "spot_id": "810603dfdeed56457edcdb3afd22eb64"
+      },
+      "name": "segment-one-bucket-ahead-is-accepted"
+    },
+    {
+      "expected": {
+        "beacons": "",
+        "matched_epochs": [],
+        "matched_indexes": []
+      },
+      "inputs": {
+        "epoch": 9,
+        "now": 1966300,
+        "own_records": "",
+        "party_id": "47eed2c01768b75f2e332ee388bb45c8",
+        "presence_root": "ae326c9b9aca9caab28ffff76ef3fea99e5e59955061cab4527d425ab6c9d1cd",
+        "previous_presence_root": "",
+        "records": "6e62605d2cdfb60a8de5e6a08424884a317e4aeb2f2bdca227f12cf9f6759c05b7db5ea8eecd05d3026f16d4fbf3667f1ffa84eb2cfc737306583cc2f84fff4376207f3aa9a1da29c904fafa114078b0a260e23cbda6e1914d31a72809ed66af07bcdf174d6ece62f9d2c3eb92fe7dfa49c32338648c20920ebfca27ddd44771cf7cd4cda35cc661bf8480dedfbb76828a77a6ad83f26bfaa71365b8a9c145eb8af9bc6c8d126df3ac9558abbaa3f9f6e407340fc3b0d8bf38dce8767fc46c776b63def90d7196f24ad054101ae73259643a9932bb213d7e2c7d7bf5f30240bc1bd316f785374b2a4181c380bc23814e813cedb81483f8dd7484c86641f6b00a1fde23bf24b9fe3fbc00cc6c2607bc565807cb8cb2cd34737463cdc86806c819c01492dd0d0c36a8fb9455537da72596fc66fdea9b50723e4c65aecb3eac6faa370ea9ebecd146c959458e4541cea2c4ebd20ea9ff00324dc38352d11c0e9cf57e9ad80b37abf1812b481ac87f32d116a52cf721a1845df37137dfdb53ed3f07",
+        "segment_start": 1966302,
+        "spot_id": "810603dfdeed56457edcdb3afd22eb64"
+      },
+      "name": "segment-two-buckets-ahead-is-skipped"
+    },
+    {
+      "expected": {
+        "beacons": "",
+        "matched_epochs": [],
+        "matched_indexes": []
+      },
+      "inputs": {
+        "epoch": 9,
+        "now": 1966300,
+        "own_records": "",
+        "party_id": "47eed2c01768b75f2e332ee388bb45c8",
+        "presence_root": "ae326c9b9aca9caab28ffff76ef3fea99e5e59955061cab4527d425ab6c9d1cd",
+        "previous_presence_root": "",
+        "records": "6452577924e215c9220178a2e54e8c3ee72f620a870844066628ba80ba651c51108eb9d903c8f8f72a024032ceb8c717ace1005f60e5daed322a4880a9802515bb1a01fc8100c917e4e2f5b2579cc02619ee24abf74a2bc1644550db532436a8f2463472c7fb76374bdd6d309a04c7e74005353926057c19b1b2b8d59ab81019dee7bb82f82853a1deed6807a0b3fd0400f41350e93e7e399690cc89e41cac181cae50fc13972896ec4b5efb81fe4955228a639c430e769d2d42d63042c958a433c009acb4b18a3c967c65c885a02907f52099c7fe36658f1dc9560ef4e9d14e8b8928757ac866f11f1bc456fa7fa15d80c496535588cce866f6e5b1c6556306afb5ed644ec7ade9f7ac77ae5656557532a058d8a3054dde0eee165d078b6334f34b1efdeff582e19cc0bcd1cdbc210203655f6aaac845fae543bc238dd0c2556712b977de42acdd7f2e8fb787149249a1a15dc5751579cacfa27d2f73fc9354eb271f585e3e62b184b830cdd360b94be1dd1a52a9768d68d335b5ce9629552a",
+        "segment_start": 1966300,
+        "spot_id": "810603dfdeed56457edcdb3afd22eb64"
+      },
+      "name": "previous-epoch-without-grace"
+    },
+    {
+      "expected": {
+        "beacons": "738a2ce735c0f6895fb8ee51dec04c000000000000000000000000000000000000000000000000000000000000000000",
+        "matched_epochs": [
+          8
+        ],
+        "matched_indexes": [
+          2
+        ]
+      },
+      "inputs": {
+        "epoch": 9,
+        "now": 1966300,
+        "own_records": "",
+        "party_id": "47eed2c01768b75f2e332ee388bb45c8",
+        "presence_root": "ae326c9b9aca9caab28ffff76ef3fea99e5e59955061cab4527d425ab6c9d1cd",
+        "previous_presence_root": "7e6c498b65522c9200feaf68c57b26943ea068b973d988d3699a7fe74a5ca17e",
+        "records": "6452577924e215c9220178a2e54e8c3ee72f620a870844066628ba80ba651c51108eb9d903c8f8f72a024032ceb8c717ace1005f60e5daed322a4880a9802515bb1a01fc8100c917e4e2f5b2579cc02619ee24abf74a2bc1644550db532436a8f2463472c7fb76374bdd6d309a04c7e74005353926057c19b1b2b8d59ab81019dee7bb82f82853a1deed6807a0b3fd0400f41350e93e7e399690cc89e41cac181cae50fc13972896ec4b5efb81fe4955228a639c430e769d2d42d63042c958a433c009acb4b18a3c967c65c885a02907f52099c7fe36658f1dc9560ef4e9d14e8b8928757ac866f11f1bc456fa7fa15d80c496535588cce866f6e5b1c6556306afb5ed644ec7ade9f7ac77ae5656557532a058d8a3054dde0eee165d078b6334f34b1efdeff582e19cc0bcd1cdbc210203655f6aaac845fae543bc238dd0c2556712b977de42acdd7f2e8fb787149249a1a15dc5751579cacfa27d2f73fc9354eb271f585e3e62b184b830cdd360b94be1dd1a52a9768d68d335b5ce9629552a",
+        "segment_start": 1966300,
+        "spot_id": "810603dfdeed56457edcdb3afd22eb64"
+      },
+      "name": "previous-epoch-with-grace"
+    },
+    {
+      "expected": {
+        "beacons": "",
+        "matched_epochs": [],
+        "matched_indexes": []
+      },
+      "inputs": {
+        "epoch": 9,
+        "now": 1966300,
+        "own_records": "",
+        "party_id": "47eed2c01768b75f2e332ee388bb45c8",
+        "presence_root": "ae326c9b9aca9caab28ffff76ef3fea99e5e59955061cab4527d425ab6c9d1cd",
+        "previous_presence_root": "7e6c498b65522c9200feaf68c57b26943ea068b973d988d3699a7fe74a5ca17e",
+        "records": "0f9160b77af10ea51eb2190e316a4717a135570babe449803083bcc133ea6fbb855adacb2a6321d86831bf0e35908c0697e2ed5b28449360d7d325a5ab40cd3b4c1f6d2344f8f745b1ea97c756be2d553ae14e03df17d967d99d2a2fd57c6b3a4c6804b6928b842cfff28a9bd58e29d26d250fd6390cf9f7a1052f8725393fd9b8c16cb73532ee59522dd15babca64ee737110df4ef62ec7d428d14365ded88ea00074b287fd91403c9eadd43e93150f5c0fc1f39084b6357dac52f277cea63542928e362dc5687986c0bc4f7f6502f83d8ab64213594863198a12a3a2e1a9bdd56c61f2b7512a974be7c6131ba3986199e16506cc05fe05eeee3989a938ba0c3e6a47274d5ff3a704e2a7c65ffe2af7c86687dd96aa741c812613d2820640b41a7289e014e899160bee79b2d87e5f1ad0d3fc64044d6e56a2e18057a6084467c3063c8df28cc4063f5db715c44558db9c273f0c72c78dd9b92506e48a7d5ef8feea1f64b66637b84f59e3aef4a3ab90e945c8b4f0257820989d9e32f958d83b",
+        "segment_start": 1966300,
+        "spot_id": "810603dfdeed56457edcdb3afd22eb64"
+      },
+      "name": "other-spot-of-the-party"
+    }
+  ]
+}

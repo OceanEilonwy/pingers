@@ -3468,9 +3468,12 @@ dependencies = [
  "pingers-crypto",
  "pingers-geo",
  "pingers-proto",
+ "pingers-testkit",
  "pingers-time",
+ "proptest",
  "rand_core 0.10.1",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]

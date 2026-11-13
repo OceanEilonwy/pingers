@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Building leases: always four records, real or dummy, shuffled (design B.4.2, B.4.5).
 
-use pingers_crypto::RevokeKey;
-use pingers_proto::{Lease, MailboxId, MeetupHint, RecordRandomness};
+use pingers_crypto::{
+    BeaconHeader, RevokeKey, derive_seal_key, record_tag, revoke_commitment, seal_board_beacon,
+};
+use pingers_proto::{BoardBeacon, Lease, MailboxId, MeetupHint, Record, RecordRandomness};
 use pingers_time::{Bucket, BucketCount, UnixSeconds};
 use rand_core::CryptoRng;
 
-use crate::stub::not_implemented;
+use crate::random::shuffle;
 use crate::{ActiveSpot, PresenceError, SpotRef};
 
 /// A lease is live for its start bucket and the next three (design B.4.2, F.1).
@@ -87,6 +89,10 @@ pub struct BuiltLease {
 /// Builds a lease: one sealed record per real slot, random bytes for the rest, shuffled
 /// with `rng`. Dummies are indistinguishable from real records without the Spot key.
 ///
+/// Randomness is drawn in a fixed order, so `vectors/presence/lease.json` can list it: for
+/// each slot in order, 16 bytes of record randomness if it is real or 96 bytes if it is a
+/// dummy; then the Fisher–Yates draws of the shuffle (see the `random` module).
+///
 /// # Errors
 ///
 /// [`PresenceError::TooManySlots`] if more than four real slots are given;
@@ -98,5 +104,99 @@ pub fn build_lease(
     if inputs.real.len() > Lease::SLOTS {
         return Err(PresenceError::TooManySlots);
     }
-    not_implemented((inputs, rng))
+    let mut slots = Vec::with_capacity(Lease::SLOTS);
+    for index in 0..Lease::SLOTS {
+        let slot = match inputs.real.get(index) {
+            Some(real) => real_record(inputs.start, real, rng)?,
+            None => dummy_record(rng),
+        };
+        slots.push(slot);
+    }
+    shuffle(&mut slots, rng);
+    let records: [Record; Lease::SLOTS] = slots
+        .iter()
+        .map(|slot| slot.record)
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_length| PresenceError::Internal)?;
+    let slots: [SlotRecord; Lease::SLOTS] = slots
+        .iter()
+        .map(|slot| slot.stored)
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_length| PresenceError::Internal)?;
+    Ok(BuiltLease {
+        lease: Lease {
+            start: inputs.start,
+            records,
+            revoke_commitment: revoke_commitment(inputs.revoke_key),
+        },
+        slots,
+    })
+}
+
+/// A record and what the client stores about it, kept together through the shuffle.
+struct BuiltSlot {
+    record: Record,
+    stored: SlotRecord,
+}
+
+/// `r`, `tag(b0, r)` and the sealed beacon (design B.4.1, B.4.2).
+fn real_record(
+    start: Bucket,
+    real: &RealSlot<'_>,
+    rng: &mut impl CryptoRng,
+) -> Result<BuiltSlot, PresenceError> {
+    let mut randomness = [0; RecordRandomness::LENGTH];
+    rng.fill_bytes(&mut randomness);
+    let randomness = RecordRandomness::from_bytes(randomness);
+    let tag = record_tag(real.spot.tag_key(), start, &randomness)?;
+    let seal_key = derive_seal_key(real.spot.spot_key(), start)?;
+    let sealed = seal_board_beacon(
+        &seal_key,
+        &BeaconHeader {
+            start,
+            randomness: &randomness,
+            tag: &tag,
+        },
+        &BoardBeacon {
+            knock_mailbox: real.knock_mailbox,
+            meetup_hint: real.meetup_hint,
+        },
+    )?;
+    Ok(BuiltSlot {
+        record: Record {
+            randomness,
+            tag,
+            sealed,
+        },
+        stored: SlotRecord {
+            randomness,
+            content: SlotContent::Real {
+                spot: real.spot.spot(),
+                knock_mailbox: real.knock_mailbox,
+            },
+        },
+    })
+}
+
+/// 96 random bytes (design B.4.5).
+fn dummy_record(rng: &mut impl CryptoRng) -> BuiltSlot {
+    let mut bytes = [0; Record::SIZE];
+    rng.fill_bytes(&mut bytes);
+    let record = Record::from_bytes(&bytes);
+    BuiltSlot {
+        record,
+        stored: SlotRecord {
+            randomness: record.randomness,
+            content: SlotContent::Dummy,
+        },
+    }
+}
+
+/// Whether a segment that started at `start` has expired at `now`: it is dropped when bucket
+/// `start + 4` starts (design B.4.3). Readers skip expired segments, which is what stops a
+/// server replaying an old segment as if it were live.
+pub(crate) fn segment_expired(start: Bucket, now: Bucket) -> bool {
+    now.saturating_buckets_since(start) >= LEASE_BUCKETS
 }

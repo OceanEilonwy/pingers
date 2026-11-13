@@ -11,15 +11,25 @@ pub enum PresenceError {
     /// A lease holds at most four real slots; choose them with `choose_slots`.
     #[error("more than four real slots")]
     TooManySlots,
+    /// The Spot keys given are not those of the Spot and epoch the record matched under.
+    #[error("spot keys do not belong to the matched record")]
+    SpotMismatch,
     /// A knock answers a record that is not one of this device's live records.
     #[error("knock does not answer one of our records")]
     KnockForOtherRecord,
-    /// The knocker's leaf is not in the Party roster at the knock's epoch.
+    /// A knock names a Party epoch other than the one its record's keys belong to.
+    #[error("knock is for another epoch")]
+    WrongEpoch,
+    /// The knocker's leaf is not in the Party roster at the knock's epoch, or has since been
+    /// removed or replaced.
     #[error("knocker is not in the roster")]
     UnknownKnocker,
     /// A lease's start bucket is not acceptable now (server side).
     #[error("lease start bucket is not current")]
     LeaseNotCurrent,
+    /// A lease carries the same record randomness twice (server side).
+    #[error("lease repeats a record")]
+    DuplicateRecord,
     /// A mailbox registration or post breaks the posting rules (server side).
     #[error("mailbox request breaks the posting rules")]
     MailboxRule,
@@ -29,7 +39,7 @@ pub enum PresenceError {
     /// Bytes could not be encoded or decoded.
     #[error("encoding failed")]
     Proto(#[from] pingers_proto::ProtoError),
-    /// This part of the contract has no implementation yet.
-    #[error("not implemented")]
-    NotImplemented,
+    /// A step the types should have ruled out failed (style guide §5).
+    #[error("internal error")]
+    Internal,
 }
