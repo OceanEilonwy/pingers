@@ -10,11 +10,27 @@ publish.workspace = true
 [package.metadata.pingers]
 layer = 3
 
+[features]
+default = []
+# Durable mailboxes in one SQLite file, for self-hosting (architecture §3).
+sqlite = ["dep:rusqlite"]
+
 [dependencies]
+# Mailbox ids from read keys and push binds: only pingers-crypto calls primitives.
+pingers-crypto = { workspace = true }
 pingers-presence = { workspace = true, features = ["server"] }
 pingers-proto = { workspace = true }
 pingers-time = { workspace = true }
+# The push relay's JSON body carries its byte fields as hex.
+hex = { workspace = true }
+rand_core = { workspace = true }
+rusqlite = { workspace = true, optional = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+pingers-testkit = { workspace = true }
+serde_json = { workspace = true }
+zeroize = { workspace = true }
 
 [lints]
 workspace = true
