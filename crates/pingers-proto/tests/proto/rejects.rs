@@ -343,7 +343,10 @@ fn hand_built_location_decodes() -> Result<(), ProtoError> {
     let location = LocationPlaintext::decode(&location(vec![0x20], uint(359)))?;
     assert_eq!(location.position.latitude_e7(), -1);
     assert_eq!(location.accuracy.get(), 10);
-    assert_eq!(location.heading.map(pingers_proto::HeadingDegrees::get), Some(359));
+    assert_eq!(
+        location.heading.map(pingers_proto::HeadingDegrees::get),
+        Some(359)
+    );
     Ok(())
 }
 

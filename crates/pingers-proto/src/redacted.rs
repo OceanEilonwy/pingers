@@ -43,6 +43,11 @@ mod tests {
     #[test]
     fn debug_hides_the_value() {
         let printed = format!("{:?}", Redacted::new(String::from("The Anchor")));
-        assert!(!printed.contains("Anchor"));
+        assert_eq!(printed, "Redacted<alloc::string::String>");
+    }
+
+    #[test]
+    fn into_inner_returns_the_wrapped_value() {
+        assert_eq!(Redacted::new(7_u8).into_inner(), 7);
     }
 }

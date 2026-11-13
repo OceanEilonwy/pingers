@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! Hand-written `Debug` impls print a fixed shape and never the value (style guide §9).
+
+use pingers_proto::{
+    BoardCursor, ChatBody, KeyPackageBytes, KnockSignature, LocationGeneration, MeetPointLabel,
+    MeetupHint, MlsMessageBytes, ProtoError, PushToken, RecordTag, SealedAsk, SealedBeacon,
+    SealedGrant, SealedLocationFrame, SealedPushBlob, SealedSnapshot, WelcomeBytes,
+};
+
+#[test]
+fn fixed_size_secrets_print_only_their_type() {
+    let printed = [
+        format!("{:?}", RecordTag::from_bytes([0xab; 16])),
+        format!("{:?}", SealedBeacon::from_bytes([0xab; 64])),
+        format!("{:?}", MeetupHint::from_wire([0xab; 16])),
+        format!("{:?}", BoardCursor::from_bytes(vec![0xab; 4])),
+        format!("{:?}", KnockSignature::from_bytes([0xab; 64])),
+        format!("{:?}", PushToken::from_bytes(vec![0xab; 4])),
+        format!("{:?}", SealedPushBlob::from_bytes([0xab; 320])),
+    ];
+    assert_eq!(
+        printed,
+        [
+            "RecordTag(redacted)",
+            "SealedBeacon(redacted)",
+            "Some(MeetupHint(redacted))",
+            "BoardCursor(redacted)",
+            "KnockSignature(..)",
+            "PushToken(redacted)",
+            "SealedPushBlob(..)",
+        ]
+    );
+}
+
+#[test]
+fn byte_strings_print_only_their_length() {
+    let printed = [
+        format!("{:?}", KeyPackageBytes::from_bytes(vec![0xab; 3])),
+        format!("{:?}", MlsMessageBytes::from_bytes(vec![0xab; 3])),
+        format!("{:?}", WelcomeBytes::from_bytes(vec![0xab; 3])),
+        format!("{:?}", SealedSnapshot::from_bytes(vec![0xab; 3])),
+        format!("{:?}", SealedGrant::from_bytes(vec![0xab; 3])),
+        format!("{:?}", SealedAsk::from_bytes(vec![0xab; 3])),
+    ];
+    assert_eq!(
+        printed,
+        [
+            "KeyPackageBytes(3 bytes)",
+            "MlsMessageBytes(3 bytes)",
+            "WelcomeBytes(3 bytes)",
+            "SealedSnapshot(3 bytes)",
+            "SealedGrant(3 bytes)",
+            "SealedAsk(3 bytes)",
+        ]
+    );
+}
+
+#[test]
+fn text_and_frames_hide_their_content() -> Result<(), ProtoError> {
+    assert_eq!(
+        format!("{:?}", ChatBody::new(String::from("secret"))?),
+        "ChatBody(6 bytes)"
+    );
+    assert_eq!(
+        format!("{:?}", MeetPointLabel::new(String::from("Pub"))?),
+        "MeetPointLabel(3 bytes)"
+    );
+    let frame = SealedLocationFrame {
+        generation: LocationGeneration::new(2),
+        nonce: [0xab; 12],
+        ciphertext: vec![0xab; 5],
+    };
+    assert_eq!(
+        format!("{frame:?}"),
+        "SealedLocationFrame { generation: LocationGeneration(2), .. }"
+    );
+    Ok(())
+}

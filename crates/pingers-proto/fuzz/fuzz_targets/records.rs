@@ -6,7 +6,10 @@ use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(records) = pingers_proto::Record::parse_concatenated(data) {
-        let encoded: Vec<u8> = records.iter().flat_map(pingers_proto::Record::to_bytes).collect();
+        let encoded: Vec<u8> = records
+            .iter()
+            .flat_map(pingers_proto::Record::to_bytes)
+            .collect();
         assert_eq!(encoded, data);
     }
 });

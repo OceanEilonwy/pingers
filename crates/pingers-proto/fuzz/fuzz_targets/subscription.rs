@@ -4,4 +4,6 @@
 
 use libfuzzer_sys::fuzz_target;
 
-fuzz_target!(|data: &[u8]| pingers_proto_fuzz::decodes_only_canonical::<pingers_proto::Subscription>(data));
+fuzz_target!(
+    |data: &[u8]| pingers_proto_fuzz::decodes_only_canonical::<pingers_proto::Subscription>(data)
+);

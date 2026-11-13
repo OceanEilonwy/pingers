@@ -242,4 +242,19 @@ mod tests {
         assert!(ServerId::new(String::from("http://pingers.example")).is_err());
         assert!(ServerId::new(String::from("https://pingers.example")).is_ok());
     }
+
+    #[test]
+    fn server_id_keeps_the_origin() -> Result<(), ProtoError> {
+        let origin = "https://pingers.example";
+        assert_eq!(ServerId::new(String::from(origin))?.as_str(), origin);
+        Ok(())
+    }
+
+    #[test]
+    fn rln_auth_debug_shows_scope_and_bucket_only() -> Result<(), ProtoError> {
+        let printed = format!("{:?}", sample()?);
+        assert!(printed.starts_with("RlnAuth { scope: Group, bucket: Bucket("));
+        assert!(!printed.contains("root"));
+        Ok(())
+    }
 }

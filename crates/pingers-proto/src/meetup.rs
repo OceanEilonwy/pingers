@@ -619,6 +619,8 @@ versioned_cbor!(MeetupMessage, LocationPlaintext);
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
     use super::*;
 
     #[test]
@@ -631,6 +633,14 @@ mod tests {
     fn coordinates_are_redacted_in_debug_output() {
         let coordinate = E7Coordinate::new(515_000_000, -1_000_000);
         assert_eq!(format!("{coordinate:?}"), "Ok(E7Coordinate(redacted))");
+    }
+
+    #[test]
+    fn coordinate_keeps_latitude_and_longitude_apart() -> Result<(), ProtoError> {
+        let coordinate = E7Coordinate::new(-338_688_000, 1_512_093_000)?;
+        assert_eq!(coordinate.latitude_e7(), -338_688_000);
+        assert_eq!(coordinate.longitude_e7(), 1_512_093_000);
+        Ok(())
     }
 
     #[test]
