@@ -20,6 +20,7 @@ pub mod errors;
 pub mod home;
 pub mod invite;
 pub mod location_request;
+pub mod maps;
 pub mod meet_point;
 pub mod meetup;
 pub mod party;
