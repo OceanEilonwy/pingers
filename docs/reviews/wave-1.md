@@ -11,12 +11,12 @@ crate, so a human or the owning agent should choose.
 
 ## Summary
 
-| Severity | Found | Fixed here | For the owner |
+| Severity | Found | Fixed here | For the owner or a human |
 |---|---|---|---|
-| High | 6 | 4 | 2 |
-| Medium | 27 | 10 | 17 |
-| Low | 39 | 10 | 29 |
-| **Total** | **72** | **24** | **48** |
+| High | 5 | 3, and 1 in part | 2 |
+| Medium | 28 | 8 | 20 |
+| Low | 50 | 11 | 39 |
+| **Total** | **83** | **22, and 1 in part** | **61** |
 
 The five that matter most:
 
@@ -352,7 +352,6 @@ reaches rln's sled-backed `PmTree`.
   anon but `{epoch, root}` in proto; `PrivacyPassToken` (anon) vs `UnspentToken` (store); the key
   id is a raw `[u8; 32]` in anon and `TokenKeyId` in store. Give each concept one owner. **For a
   human.**
-- **Medium: `RootEpoch`** is `u32` in pingers-proto and `u64` in pingers-store (above).
 - **Low: pingers-crypto `src/location.rs:151` vs pingers-proto `src/meetup.rs:141-148`.** The
   80-byte sealed-location size lives in crypto while proto's `ciphertext` is a `Vec<u8>` of any
   length; crypto reimplements proto's `be16 || payload || zeros` padding twice. **For the
