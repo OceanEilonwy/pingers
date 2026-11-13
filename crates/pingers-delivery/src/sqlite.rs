@@ -12,17 +12,18 @@ use pingers_proto::{
 use pingers_time::UnixSeconds;
 use rusqlite::{Connection, OptionalExtension as _, Transaction, TransactionBehavior, params};
 
-use crate::DeliveryError;
 use crate::store::{
     CommitWrite, DeliveryStore, GroupHead, NewCommit, NewEntry, NewGroup, PAGE_ENTRIES,
     StoredSubscription,
 };
+use crate::{DeliveryError, GroupLifetime};
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS grp (
     group_id        BLOB PRIMARY KEY,
     auth_pk         BLOB NOT NULL,
     head_epoch      INTEGER NOT NULL,
+    lifetime        INTEGER NOT NULL,
     idle_expires_at INTEGER NOT NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS grp_idle ON grp (idle_expires_at);
@@ -102,14 +103,14 @@ impl SqliteDeliveryStore {
 }
 
 fn head_of(transaction: &Transaction<'_>, group: &GroupId) -> Result<GroupHead, DeliveryError> {
-    let row: Option<(u64, Vec<u8>)> = transaction
+    let row: Option<(u64, Vec<u8>, u8)> = transaction
         .query_row(
-            "SELECT head_epoch, auth_pk FROM grp WHERE group_id = ?1",
+            "SELECT head_epoch, auth_pk, lifetime FROM grp WHERE group_id = ?1",
             [group.as_bytes().as_slice()],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    let (head_epoch, auth_key) = row.ok_or(DeliveryError::UnknownGroup)?;
+    let (head_epoch, auth_key, lifetime) = row.ok_or(DeliveryError::UnknownGroup)?;
     Ok(GroupHead {
         head_epoch: Epoch::new(head_epoch),
         auth_key: GroupAuthKey::from_bytes(
@@ -117,6 +118,8 @@ fn head_of(transaction: &Transaction<'_>, group: &GroupId) -> Result<GroupHead, 
                 .try_into()
                 .map_err(|_| DeliveryError::CorruptField { field: "auth_pk" })?,
         ),
+        lifetime: GroupLifetime::from_stored(lifetime)
+            .ok_or(DeliveryError::CorruptField { field: "lifetime" })?,
     })
 }
 
@@ -235,11 +238,12 @@ impl DeliveryStore for SqliteDeliveryStore {
     fn create_group(&self, group: NewGroup) -> Result<(), DeliveryError> {
         self.transact(|transaction| {
             let inserted = transaction.execute(
-                "INSERT OR IGNORE INTO grp (group_id, auth_pk, head_epoch, idle_expires_at)
-                 VALUES (?1, ?2, 0, ?3)",
+                "INSERT OR IGNORE INTO grp (group_id, auth_pk, head_epoch, lifetime, idle_expires_at)
+                 VALUES (?1, ?2, 0, ?3, ?4)",
                 params![
                     group.id.as_bytes().as_slice(),
                     group.auth_key.as_bytes().as_slice(),
+                    group.lifetime.to_stored(),
                     group.idle_expires_at.get()
                 ],
             )?;

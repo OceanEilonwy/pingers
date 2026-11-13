@@ -10,11 +10,11 @@ use pingers_proto::{
 };
 use pingers_time::UnixSeconds;
 
-use crate::DeliveryError;
 use crate::store::{
     CommitWrite, DeliveryStore, GroupHead, NewCommit, NewEntry, NewGroup, PAGE_ENTRIES,
     StoredSubscription,
 };
+use crate::{DeliveryError, GroupLifetime};
 
 /// Keeps every group in a map behind one lock.
 #[derive(Debug, Default)]
@@ -26,6 +26,7 @@ pub struct MemoryDeliveryStore {
 struct Group {
     head_epoch: Epoch,
     auth_key: GroupAuthKey,
+    lifetime: GroupLifetime,
     idle_expires_at: UnixSeconds,
     log: Vec<GroupLogEntry>,
     state: Option<GroupState>,
@@ -90,6 +91,7 @@ impl DeliveryStore for MemoryDeliveryStore {
             Group {
                 head_epoch: epoch,
                 auth_key: group.auth_key,
+                lifetime: group.lifetime,
                 idle_expires_at: group.idle_expires_at,
                 log: Vec::new(),
                 state: group.state.map(|state| GroupState { epoch, state }),
@@ -108,6 +110,7 @@ impl DeliveryStore for MemoryDeliveryStore {
             Ok(GroupHead {
                 head_epoch: found.head_epoch,
                 auth_key: found.auth_key,
+                lifetime: found.lifetime,
             })
         })
     }

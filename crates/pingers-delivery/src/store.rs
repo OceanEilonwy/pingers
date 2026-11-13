@@ -11,7 +11,7 @@ use pingers_proto::{
 };
 use pingers_time::UnixSeconds;
 
-use crate::DeliveryError;
+use crate::{DeliveryError, GroupLifetime};
 
 /// The most log entries one read returns; the client asks again after the last one it got.
 pub const PAGE_ENTRIES: usize = 512;
@@ -36,6 +36,8 @@ pub struct NewGroup {
     pub state: Option<SealedSnapshot>,
     /// The first subscriptions.
     pub subscriptions: Vec<StoredSubscription>,
+    /// How long it may be idle; fixed for the group's life.
+    pub lifetime: GroupLifetime,
     /// When the group expires unless something touches it first.
     pub idle_expires_at: UnixSeconds,
 }
@@ -47,6 +49,8 @@ pub struct GroupHead {
     pub head_epoch: Epoch,
     /// The key that authorises requests in the head epoch.
     pub auth_key: GroupAuthKey,
+    /// Its lifetime class, which sets how far each touch moves the idle expiry.
+    pub lifetime: GroupLifetime,
 }
 
 /// A stored non-commit message.
@@ -105,7 +109,7 @@ pub trait DeliveryStore: Send + Sync {
     /// [`DeliveryError::GroupExists`] if the id is taken; storage errors.
     fn create_group(&self, group: NewGroup) -> Result<(), DeliveryError>;
 
-    /// The group's head epoch and current log-auth key.
+    /// The group's head epoch, current log-auth key and lifetime class.
     ///
     /// # Errors
     ///
