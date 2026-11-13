@@ -144,7 +144,10 @@ async fn sealed_token_push_arrives_on_ntfy_through_the_relay_binary() -> TestRes
             plaintext: &plaintext,
         },
         &mut rng,
-    )?;
+    )
+    .map_err(|error| {
+        format!("seal_push_token failed: {error} (is pingers-crypto's sealed push implemented?)")
+    })?;
     let client = reqwest::Client::new();
     let send = |bind| {
         let body = PushRequest {
