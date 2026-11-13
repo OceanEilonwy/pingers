@@ -321,9 +321,9 @@ impl<'session> PartyLifecycle<'session> {
             .entries()
             .iter()
             .map(|entry| {
-                let profile = members.iter().find(|member| {
-                    member.leaf == entry.leaf && member.signature_key == entry.signature_key
-                });
+                // Member rows follow every merged commit (removed leaves lose theirs), so the
+                // row at a leaf is the current occupant's.
+                let profile = members.iter().find(|member| member.leaf == entry.leaf);
                 RosterMember {
                     leaf: entry.leaf,
                     signature_key: entry.signature_key,
@@ -885,12 +885,12 @@ fn apply_roster_change(
 
 /// The member who sent an application message.
 #[derive(Clone, Copy)]
-struct Sender {
-    leaf: LeafIndex,
-    key: AccountPublicKey,
+pub(crate) struct Sender {
+    pub(crate) leaf: LeafIndex,
+    pub(crate) key: AccountPublicKey,
 }
 
-fn apply_operation(
+pub(crate) fn apply_operation(
     session: &Session,
     row: &Party,
     from: Sender,

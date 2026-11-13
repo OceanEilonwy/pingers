@@ -41,7 +41,9 @@ Parties as long-lived things (client, L3). Sans network: every request for the s
 
 Inputs: posts to an invite mailbox go to `receive_join_request`; the Welcome in a reply
 mailbox plus `GET /v1/groups/{id}/state` go to `accept_welcome`; every group log entry goes
-to `process_group_message` in log order. pingers-sync keeps the mailbox pool: invites take a
+to `process_group_message` in log order, except entries this device posted itself (their
+`seq` came back from the post): an own commit is already merged by `commit_accepted` and
+an own application message cannot be decrypted by its sender (both are errors). pingers-sync keeps the mailbox pool: invites take a
 pooled `MailboxPurpose::Invite` mailbox (registered with an Alert sealed push) and joins a
 pooled `Reply` one; with none, `NoPooledMailbox`.
 
@@ -89,3 +91,10 @@ pooled `Reply` one; with none, `NoPooledMailbox`.
    KeyPackage for a quantum-resistant Party.
 5. **pingers-mls**: the KeyPackage's signature key (to name an added member before merge),
    and `QuantumResistant` once X-Wing is wired.
+
+## Mutation testing
+
+`cargo mutants -p pingers-parties`: 329 mutants, 232 caught, 91 unviable, 6 missed, all
+equivalent: five replace `|` with `^` in the base64url bit packing, where the combined fields
+never share a set bit; one replaces `>` with `>=` in `spot_wins` on a branch taken only when
+the two Lamport clocks differ.

@@ -264,7 +264,9 @@ mod tests {
         assert!(spot_wins(&spot(2, "A")?, &spot(1, "B")?)?);
         assert!(!spot_wins(&spot(1, "B")?, &spot(2, "A")?)?);
         let (first, second) = (spot(5, "A")?, spot(5, "B")?);
-        assert_ne!(spot_wins(&second, &first)?, spot_wins(&first, &second)?);
+        // The larger encoding ("B" sorts after "A") wins the tie.
+        assert!(spot_wins(&second, &first)?);
+        assert!(!spot_wins(&first, &second)?);
         assert!(!spot_wins(&first, &first)?);
         Ok(())
     }

@@ -430,13 +430,16 @@ impl PartyLifecycle<'_> {
                 avatar: None,
                 verification: Verification::Unverified,
             })?;
-            for profile in snapshot.profiles {
+            // This device's own name is the one it gave, whatever the snapshot says.
+            for profile in snapshot
+                .profiles
+                .into_iter()
+                .filter(|profile| profile.key != own_key)
+            {
                 let leaf = roster
                     .entries()
                     .iter()
-                    .find(|entry| {
-                        entry.signature_key == profile.key && entry.signature_key != own_key
-                    })
+                    .find(|entry| entry.signature_key == profile.key)
                     .map(|entry| entry.leaf);
                 if let Some(leaf) = leaf {
                     session.members().put(&Member {

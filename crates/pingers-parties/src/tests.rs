@@ -73,7 +73,13 @@ fn new_party(
     })
 }
 
-fn create_party(device: &Device, rng: &mut ChaCha20Rng) -> Result<PartyId, TestError> {
+/// A Party a device created, and the creator's subscription in it.
+struct Founded {
+    party: PartyId,
+    subscription: SubscriptionId,
+}
+
+fn create_party(device: &Device, rng: &mut ChaCha20Rng) -> Result<Founded, TestError> {
     let own = subscription(device.fill())?;
     let created = device
         .parties()
@@ -81,9 +87,12 @@ fn create_party(device: &Device, rng: &mut ChaCha20Rng) -> Result<PartyId, TestE
     let Outbound::CreateGroup(request) = created.outbound else {
         return Err(TestError::Unexpected("expected a group registration"));
     };
-    assert_eq!(request.subscriptions, vec![own]);
+    assert_eq!(request.subscriptions, vec![own.clone()]);
     assert!(request.state.is_some());
-    Ok(created.party)
+    Ok(Founded {
+        party: created.party,
+        subscription: own.id,
+    })
 }
 
 fn invite(
@@ -197,6 +206,7 @@ struct TwoMembers {
     bob: Device,
     party: PartyId,
     group: GroupId,
+    alice_subscription: SubscriptionId,
     bob_subscription: SubscriptionId,
     rng: ChaCha20Rng,
 }
@@ -205,7 +215,8 @@ fn two_members() -> Result<TwoMembers, TestError> {
     let mut rng = rng(1);
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
-    let party = create_party(&alice, &mut rng)?;
+    let founded = create_party(&alice, &mut rng)?;
+    let party = founded.party;
     let created = invite(&alice, &party, InviteUses::Single, &mut rng)?;
     let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
     assert_eq!(posted.mailbox, created.invite.mailbox());
@@ -230,6 +241,7 @@ fn two_members() -> Result<TwoMembers, TestError> {
         bob,
         party,
         group: commit.group,
+        alice_subscription: founded.subscription,
         bob_subscription: posted.subscription.id,
         rng,
     })
@@ -256,6 +268,7 @@ fn create_invite_join_verify_then_remove_rotates_keys() -> Result<(), TestError>
         group,
         bob_subscription,
         mut rng,
+        ..
     } = two_members()?;
     let alice_parties = alice.parties();
     let bob_parties = bob.parties();
@@ -395,7 +408,7 @@ fn single_use_invite_admits_once() -> Result<(), TestError> {
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
     let carol = Device::new(3)?;
-    let party = create_party(&alice, &mut rng)?;
+    let party = create_party(&alice, &mut rng)?.party;
     let created = invite(&alice, &party, InviteUses::Single, &mut rng)?;
     assert_eq!(
         alice.parties().invite_status(created.invite)?,
@@ -426,7 +439,7 @@ fn invites_expire_after_24_hours() -> Result<(), TestError> {
     let mut rng = rng(3);
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
-    let party = create_party(&alice, &mut rng)?;
+    let party = create_party(&alice, &mut rng)?.party;
     let created = invite(&alice, &party, InviteUses::Multiple, &mut rng)?;
     let deadline = NOW
         .checked_add(INVITE_LIFETIME)
@@ -474,7 +487,7 @@ fn invites_expire_after_24_hours() -> Result<(), TestError> {
 fn invite_expires_with_a_shorter_lived_mailbox() -> Result<(), TestError> {
     let mut rng = rng(4);
     let alice = Device::new(1)?;
-    let party = create_party(&alice, &mut rng)?;
+    let party = create_party(&alice, &mut rng)?.party;
     let mailbox_end = later(3_600)?;
     alice.pool_mailbox(MailboxPurpose::Invite, mailbox_end)?;
     let created = alice
@@ -496,7 +509,7 @@ fn revoked_invite_refuses_and_deletes_its_mailbox() -> Result<(), TestError> {
     let mut rng = rng(5);
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
-    let party = create_party(&alice, &mut rng)?;
+    let party = create_party(&alice, &mut rng)?.party;
     let created = invite(&alice, &party, InviteUses::Multiple, &mut rng)?;
     let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
     let outbound = alice.parties().revoke_invite(created.invite)?;
@@ -522,7 +535,7 @@ fn join_request_under_another_secret_is_rejected() -> Result<(), TestError> {
     let mut rng = rng(6);
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
-    let party = create_party(&alice, &mut rng)?;
+    let party = create_party(&alice, &mut rng)?.party;
     let first = invite(&alice, &party, InviteUses::Single, &mut rng)?;
     let second = invite(&alice, &party, InviteUses::Single, &mut rng)?;
     let posted = post_join(&bob, first.link.as_str(), &mut rng)?;
@@ -551,7 +564,7 @@ fn multi_use_invite_waits_for_approval() -> Result<(), TestError> {
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
     let carol = Device::new(3)?;
-    let party = create_party(&alice, &mut rng)?;
+    let party = create_party(&alice, &mut rng)?.party;
     let created = invite(&alice, &party, InviteUses::Multiple, &mut rng)?;
     let bob_post = post_join(&bob, created.link.as_str(), &mut rng)?;
     let carol_post = post_join(&carol, created.link.as_str(), &mut rng)?;
@@ -568,6 +581,13 @@ fn multi_use_invite_waits_for_approval() -> Result<(), TestError> {
     }
     assert_eq!(alice.parties().pending_joins(&party)?.len(), 2);
     alice.parties().decline_join(&party, carol_post.join)?;
+    let waiting: Vec<JoinId> = alice
+        .parties()
+        .pending_joins(&party)?
+        .iter()
+        .map(|pending| pending.join)
+        .collect();
+    assert_eq!(waiting, [bob_post.join]);
     assert!(matches!(
         alice.parties().decline_join(&party, carol_post.join),
         Err(PartiesError::UnknownJoin)
@@ -595,7 +615,7 @@ fn approval_after_the_invite_expired_is_refused() -> Result<(), TestError> {
     let mut rng = rng(12);
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
-    let party = create_party(&alice, &mut rng)?;
+    let party = create_party(&alice, &mut rng)?.party;
     let created = invite(&alice, &party, InviteUses::Multiple, &mut rng)?;
     let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
     alice
@@ -616,7 +636,7 @@ fn rejected_commit_returns_the_join_to_approval() -> Result<(), TestError> {
     let mut rng = rng(8);
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
-    let party = create_party(&alice, &mut rng)?;
+    let party = create_party(&alice, &mut rng)?.party;
     let created = invite(&alice, &party, InviteUses::Single, &mut rng)?;
     let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
     admitted(
@@ -670,7 +690,7 @@ fn welcome_from_a_group_without_the_inviter_is_refused() -> Result<(), TestError
     let mut rng = rng(9);
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
-    let party = create_party(&alice, &mut rng)?;
+    let party = create_party(&alice, &mut rng)?.party;
     let created = invite(&alice, &party, InviteUses::Single, &mut rng)?;
     // Bob holds a link naming someone else as the inviter.
     let mut payload = created.link.payload()?;
@@ -701,6 +721,7 @@ fn leaving_proposes_removal_and_forgets_the_party() -> Result<(), TestError> {
         group,
         bob_subscription,
         mut rng,
+        ..
     } = two_members()?;
     let outbound = bob.parties().leave_party(&party, &mut rng)?;
     let Some(Outbound::Leave(leave)) = outbound.into_iter().next() else {
@@ -728,7 +749,7 @@ fn leaving_proposes_removal_and_forgets_the_party() -> Result<(), TestError> {
 fn leaving_deletes_the_party_invites() -> Result<(), TestError> {
     let mut rng = rng(13);
     let alice = Device::new(1)?;
-    let party = create_party(&alice, &mut rng)?;
+    let party = create_party(&alice, &mut rng)?.party;
     let created = invite(&alice, &party, InviteUses::Multiple, &mut rng)?;
     let outbound = alice.parties().leave_party(&party, &mut rng)?;
     assert!(outbound.iter().any(|request| matches!(
@@ -1011,5 +1032,206 @@ fn joiner_settings_come_from_the_link() -> Result<(), TestError> {
     assert_eq!(settings.server.as_str(), SERVER);
     assert_eq!(settings.relays, RelayChoice::ServerDefault);
     assert_eq!(settings.post_quantum, PostQuantum::Classical);
+    Ok(())
+}
+
+#[test]
+fn third_member_learns_every_name_from_the_snapshot() -> Result<(), TestError> {
+    let TwoMembers {
+        alice,
+        bob,
+        party,
+        group,
+        mut rng,
+        ..
+    } = two_members()?;
+    let carol = Device::new(3)?;
+    let created = invite(&alice, &party, InviteUses::Single, &mut rng)?;
+    let posted = post_join(&carol, created.link.as_str(), &mut rng)?;
+    let commit = admitted(alice.parties().receive_join_request(
+        created.invite,
+        &posted.body,
+        &mut rng,
+    )?)?;
+    alice.parties().commit_accepted(&party)?;
+    bob.parties()
+        .process_group_message(&group, &commit.request.commit)?;
+    carol
+        .parties()
+        .accept_welcome(&arrived(&posted, &commit)?, &mut rng)?;
+    // Every leaf's stored profile carries that leaf's own key.
+    let roster = carol.parties().roster(&party)?;
+    let keys: Vec<_> = roster.iter().map(|member| member.signature_key).collect();
+    let expected: Vec<_> = alice
+        .parties()
+        .roster(&party)?
+        .iter()
+        .map(|member| member.signature_key)
+        .collect();
+    assert_eq!(keys, expected);
+    let named: Vec<bool> = roster.iter().map(|member| member.name.is_some()).collect();
+    assert_eq!(named, [true, true, true]);
+    let stored: Vec<_> = carol
+        .session
+        .members()
+        .list(&party)?
+        .into_iter()
+        .map(|member| member.signature_key)
+        .collect();
+    assert_eq!(stored, keys);
+    Ok(())
+}
+
+#[test]
+fn creator_keeps_its_subscription_when_members_join() -> Result<(), TestError> {
+    let TwoMembers {
+        alice,
+        party,
+        alice_subscription,
+        mut rng,
+        ..
+    } = two_members()?;
+    let outbound = alice.parties().leave_party(&party, &mut rng)?;
+    let Some(Outbound::Leave(leave)) = outbound.into_iter().next() else {
+        return Err(TestError::Unexpected("expected a leave request"));
+    };
+    assert_eq!(leave.subscription, Some(alice_subscription));
+    Ok(())
+}
+
+#[test]
+fn leaving_one_party_keeps_the_others_records() -> Result<(), TestError> {
+    use crate::records::{Key, read};
+
+    let mut rng = rng(14);
+    let alice = Device::new(1)?;
+    let first = create_party(&alice, &mut rng)?.party;
+    let second = create_party(&alice, &mut rng)?.party;
+    assert_ne!(first, second);
+    alice.parties().leave_party(&first, &mut rng)?;
+    for key in [
+        Key::Settings(&first),
+        Key::Epochs(&first),
+        Key::Subscriptions(&first),
+    ] {
+        assert!(read(&alice.session, &key)?.is_none());
+    }
+    assert_eq!(alice.parties().settings(&second)?.server.as_str(), SERVER);
+    assert_eq!(
+        alice.parties().roster_view(&second)?.current_epoch(),
+        Epoch::new(0)
+    );
+    Ok(())
+}
+
+/// A Spot with `created_by` set to `creator`, as another member might send it.
+fn foreign_spot(
+    party: PartyId,
+    creator: pingers_crypto::AccountPublicKey,
+) -> Result<pingers_store::Spot, TestError> {
+    Ok(pingers_store::Spot {
+        id: SpotId::from_bytes([9; 16]),
+        party,
+        name: SpotName::new("Pub".into())?,
+        fence: crate::test_support::circle_fence(150.0)?,
+        created_by: creator,
+        lamport: pingers_proto::Lamport::new(1),
+        status: pingers_store::SpotStatus::Active,
+    })
+}
+
+#[test]
+fn operations_that_misattribute_spots_or_profiles_are_refused() -> Result<(), TestError> {
+    use crate::lifecycle::{Sender, apply_operation};
+    use crate::ops::PartyOperation;
+
+    let TwoMembers {
+        alice,
+        party,
+        mut rng,
+        ..
+    } = two_members()?;
+    let session = &alice.session;
+    let row = session
+        .parties()
+        .get(&party)?
+        .ok_or(TestError::Unexpected("party"))?;
+    let roster = alice.parties().roster(&party)?;
+    let alice_key = roster
+        .first()
+        .map(|member| member.signature_key)
+        .ok_or(TestError::Unexpected("alice"))?;
+    let bob_key = roster
+        .get(1)
+        .map(|member| member.signature_key)
+        .ok_or(TestError::Unexpected("bob"))?;
+    let bob = Sender {
+        leaf: LEAF_BOB,
+        key: bob_key,
+    };
+    let malformed = |result: Result<Incoming, PartiesError>| {
+        matches!(result, Err(PartiesError::Malformed { .. }))
+    };
+
+    // A new Spot must be created by its sender.
+    let spot = foreign_spot(party, alice_key)?;
+    assert!(malformed(apply_operation(
+        session,
+        &row,
+        bob,
+        PartyOperation::Spot(spot.clone())
+    )));
+    // An edit may not change the creator.
+    let mut owned = spot;
+    owned.created_by = bob_key;
+    apply_operation(session, &row, bob, PartyOperation::Spot(owned.clone()))?;
+    let mut stolen = owned.clone();
+    stolen.created_by = alice_key;
+    stolen.lamport = pingers_proto::Lamport::new(5);
+    assert!(malformed(apply_operation(
+        session,
+        &row,
+        bob,
+        PartyOperation::Spot(stolen)
+    )));
+    // A Spot filed under another Party is not this Party's.
+    let other = create_party(&alice, &mut rng)?.party;
+    let other_row = session
+        .parties()
+        .get(&other)?
+        .ok_or(TestError::Unexpected("party"))?;
+    let mut moved = owned;
+    moved.party = other;
+    moved.lamport = pingers_proto::Lamport::new(6);
+    assert!(malformed(apply_operation(
+        session,
+        &other_row,
+        bob,
+        PartyOperation::Spot(moved)
+    )));
+
+    // A profile keeps the verification of the same key, and drops it for a new key.
+    let code = alice.parties().safety_code(&party, LEAF_BOB)?;
+    alice.parties().verify_member(&party, LEAF_BOB, &code)?;
+    let profile = || -> Result<PartyOperation, TestError> {
+        Ok(PartyOperation::Profile {
+            name: MemberName::new("Robert".into())?,
+            subscription: None,
+        })
+    };
+    apply_operation(session, &row, bob, profile()?)?;
+    let verification = || -> Result<_, TestError> {
+        Ok(session
+            .members()
+            .get(&party, LEAF_BOB)?
+            .map(|member| member.verification))
+    };
+    assert_eq!(verification()?, Some(Verification::Verified));
+    let someone_else = Sender {
+        leaf: LEAF_BOB,
+        key: pingers_crypto::AccountPublicKey::from_bytes([7; 32]),
+    };
+    apply_operation(session, &row, someone_else, profile()?)?;
+    assert_eq!(verification()?, Some(Verification::Unverified));
     Ok(())
 }
