@@ -3349,6 +3349,7 @@ dependencies = [
  "ark-ff",
  "hex",
  "p384 0.14.0",
+ "pingers-crypto",
  "pingers-proto",
  "pingers-testkit",
  "pingers-time",

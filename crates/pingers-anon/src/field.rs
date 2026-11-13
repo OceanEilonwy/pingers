@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! BN254 scalar field helpers shared by both sides: canonical encoding, hashing into the
+//! BN254 scalar field helpers shared by both sides: canonical encoding, reduction into the
 //! field, and Poseidon.
 //!
 //! Encoding: 32 bytes, little-endian, canonical (below the field modulus), as zerokit and
-//! arkworks serialise `Fr`. Hashing into the field: SHA-256, read little-endian, reduced
-//! modulo the field order.
+//! arkworks serialise `Fr`. Hashing into the field: a SHA-256 from pingers-crypto (which owns
+//! the labels), read little-endian, reduced modulo the field order.
 
 use ark_ff::{BigInteger as _, PrimeField as _};
 use rln::circuit::Fr;
 use rln::hashers::{Hasher, PoseidonHash};
-use sha2::{Digest as _, Sha256};
 
 use crate::AnonError;
 
@@ -36,15 +35,6 @@ pub(crate) fn encode(element: Fr) -> [u8; 32] {
 /// Reduces any little-endian byte string modulo the field order.
 pub(crate) fn reduce(bytes: &[u8]) -> Fr {
     Fr::from_le_bytes_mod_order(bytes)
-}
-
-/// SHA-256 of the concatenation of `parts`, reduced into the field.
-pub(crate) fn sha256_to_field(parts: &[&[u8]]) -> Fr {
-    let mut hasher = Sha256::new();
-    for part in parts {
-        hasher.update(part);
-    }
-    reduce(&hasher.finalize())
 }
 
 /// Poseidon over 1 to 16 inputs (the circom parameters the circuit uses).
@@ -95,11 +85,5 @@ mod tests {
     #[test]
     fn reduction_wraps_at_the_modulus() {
         assert_eq!(reduce(&MODULUS_LE), Fr::from(0_u64));
-    }
-
-    #[test]
-    fn sha256_parts_are_concatenated() {
-        assert_eq!(sha256_to_field(&[b"ab", b"c"]), sha256_to_field(&[b"abc"]));
-        assert_ne!(sha256_to_field(&[b"abc"]), sha256_to_field(&[b"abd"]));
     }
 }

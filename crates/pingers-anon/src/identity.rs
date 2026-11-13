@@ -9,10 +9,8 @@ use zeroize::Zeroizing;
 use crate::AnonError;
 use crate::field;
 
-/// Domain label of the external nullifier preimage (design B.4.8).
-const EXTERNAL_NULLIFIER_LABEL: &[u8] = b"pingers/v1/rln";
-/// Domain label of the request digest preimage.
-const REQUEST_DIGEST_LABEL: &[u8] = b"pingers/v1/rln/x";
+// The preimage labels and framing live in pingers-crypto (style guide §8); this crate reduces
+// the resulting hashes into the field.
 
 /// Requests per scope per bucket per device: the RLN message limit `k` (design B.4.8).
 pub const MESSAGE_LIMIT: u8 = 8;
@@ -192,14 +190,9 @@ pub fn external_nullifier(
     scope: RlnScope,
     bucket: Bucket,
 ) -> Result<ExternalNullifier, AnonError> {
-    let server = server.as_str().as_bytes();
-    let preimage = field::sha256_to_field(&[
-        EXTERNAL_NULLIFIER_LABEL,
-        &length_prefix(server)?,
-        server,
-        &[scope.to_wire()],
-        &bucket.index().to_be_bytes(),
-    ]);
+    let hash = pingers_crypto::rln_external_nullifier_hash(server, scope, bucket)
+        .map_err(|_| AnonError::Internal)?;
+    let preimage = field::reduce(hash.as_bytes());
     Ok(ExternalNullifier(field::encode(field::poseidon(&[
         preimage,
     ]))))
@@ -212,22 +205,9 @@ pub fn external_nullifier(
 ///
 /// [`AnonError::Internal`] if hashing fails.
 pub fn request_digest(method: &str, path: &str, body: &[u8]) -> Result<RequestDigest, AnonError> {
-    let digest = field::sha256_to_field(&[
-        REQUEST_DIGEST_LABEL,
-        &length_prefix(method.as_bytes())?,
-        method.as_bytes(),
-        &length_prefix(path.as_bytes())?,
-        path.as_bytes(),
-        body,
-    ]);
-    Ok(RequestDigest(field::encode(digest)))
-}
-
-/// The length of a variable-length preimage field, as 8 bytes big-endian.
-fn length_prefix(bytes: &[u8]) -> Result<[u8; 8], AnonError> {
-    u64::try_from(bytes.len())
-        .map(u64::to_be_bytes)
-        .map_err(|_| AnonError::Internal)
+    let hash =
+        pingers_crypto::rln_request_hash(method, path, body).map_err(|_| AnonError::Internal)?;
+    Ok(RequestDigest(field::encode(field::reduce(hash.as_bytes()))))
 }
 
 #[cfg(test)]

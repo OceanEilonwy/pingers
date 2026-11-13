@@ -74,8 +74,9 @@ RLN-v2 membership proofs and Privacy Pass type 0x0001. Features: `prover` (clien
 - **Encodings** (`vectors/rln.json`): field elements 32-byte little-endian canonical;
   `external_nullifier = Poseidon(SHA-256("pingers/v1/rln" ‖ u64be(len) ‖ server_id ‖ scope ‖
   u64be(bucket)) mod r)`; `request_digest = SHA-256("pingers/v1/rln/x" ‖ u64be(len) ‖ method ‖
-  u64be(len) ‖ path ‖ body) mod r`, hashes read little-endian. The labels live here rather than
-  in pingers-crypto because the field reduction and Poseidon are this crate's.
+  u64be(len) ‖ path ‖ body) mod r`, hashes read little-endian. The labels and the SHA-256
+  framing are pingers-crypto's (`rln_external_nullifier_hash`, `rln_request_hash`, wave 3); the
+  field reduction and Poseidon stay here.
 - **Privacy Pass encodings** (`vectors/privacy-pass.json`): P384-SHA384 VOPRF; public key 49-byte
   compressed point, `token_key_id = SHA-256(pkI)`; request `token_type ‖ truncated_key_id ‖
   blinded<2-byte length>`, response `evaluated<2-byte length> ‖ proof(96)`; token
