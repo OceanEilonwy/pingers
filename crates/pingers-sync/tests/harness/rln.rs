@@ -48,7 +48,8 @@ fn leaves(values: &[[u8; 32]], zeroed: &[u32], next: u32) -> MembershipLeaves {
 async fn join_tree(world: &World, device: &Device) -> Result<LeafValue, TestError> {
     let secret = RlnSecret::generate(&mut seeded_rng(21))?;
     let mine = secret.id_commitment()?.leaf()?;
-    let live_from = world.clock.now().get() / 3_600;
+    let live_from = u32::try_from(world.clock.now().get() / 3_600)
+        .map_err(|_| TestError::Unexpected("root epoch past u32"))?;
     let identity = RlnIdentity {
         secret,
         leaf: TreePosition::new(1),

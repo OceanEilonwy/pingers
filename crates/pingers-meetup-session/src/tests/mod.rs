@@ -4,6 +4,7 @@
 
 #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
+mod catch_up;
 mod scenarios;
 mod server;
 mod units;

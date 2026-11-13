@@ -226,15 +226,67 @@ fn chat_and_meet_point_are_stored_and_wake() -> TestResult {
 }
 
 #[test]
-fn asks_are_ephemeral_and_the_same_size_as_location_frames() -> TestResult {
+fn asks_and_grants_are_stored_without_a_wake_at_location_frame_size() -> TestResult {
     let mut net = Net::new(&asking(2), 48)?;
     net.take_sent(ALICE)?;
-    net.act(ALICE, MeetupAction::AskLocation(BEN))?;
-    net.advance(60)?;
-    let sent = shapes(&net.take_sent(ALICE)?)?;
-    assert_eq!(sent.len(), 2);
-    assert!(sent.iter().all(|shape| shape.size == 256
-        && shape.delivery == Delivery::Ephemeral
+    net.take_sent(BEN)?;
+    net.grant(ALICE, BEN, GrantScope::ThisMeetup)?;
+    let ask = shapes(&net.take_sent(ALICE)?)?;
+    let grant = shapes(&net.take_sent(BEN)?)?;
+    assert_eq!(
+        ask.iter().map(|shape| shape.kind).collect::<Vec<_>>(),
+        ["ask"]
+    );
+    assert_eq!(
+        grant.iter().map(|shape| shape.kind).collect::<Vec<_>>(),
+        ["grant"]
+    );
+    assert!(ask.iter().chain(&grant).all(|shape| shape.size == 256
+        && shape.delivery == Delivery::Stored
         && shape.wake.is_none()));
+    Ok(())
+}
+
+/// Ben's stored frames (what the group log keeps) as a four-member meetup goes through a
+/// revoke, a member leaving, a member joining and a setting change, after sharing with
+/// `grantees`.
+fn bens_stored_frames(grantees: Grantees) -> Result<Vec<Shape>, super::TestError> {
+    let mut setups = asking(4);
+    if let (Grantees::All, Some(ben)) = (grantees, setups.get_mut(1)) {
+        ben.visibility = LocationVisibility::Everyone;
+    }
+    let mut net = Net::new(&setups, 49)?;
+    let mut stored = shapes(&net.take_sent(BEN)?)?;
+    if let Grantees::One = grantees {
+        net.grant(CHLOE, BEN, GrantScope::ThisMeetup)?;
+    }
+    net.take_sent(BEN)?;
+    net.advance(10)?;
+    net.act(BEN, MeetupAction::RevokeLocation(ALICE))?;
+    net.advance(10)?;
+    let _left = net.remove(DAN)?;
+    net.advance(10)?;
+    net.add(DAN, &Setup::with(LocationVisibility::AskEachTime))?;
+    net.advance(10)?;
+    net.act(BEN, MeetupAction::SetVisibility(LocationVisibility::Nobody))?;
+    stored.extend(shapes(&net.take_sent(BEN)?)?);
+    stored.retain(|shape| shape.delivery == Delivery::Stored);
+    Ok(stored)
+}
+
+#[test]
+fn stored_grant_traffic_is_the_same_with_zero_one_or_all_grantees() -> TestResult {
+    let none = bens_stored_frames(Grantees::None)?;
+    let one = bens_stored_frames(Grantees::One)?;
+    let all = bens_stored_frames(Grantees::All)?;
+    assert_eq!(none, one);
+    assert_eq!(none, all);
+    // Start 3, revoke 3, leave 2, join 1, setting change 3: one per other member each time
+    // (one per newcomer on joining), all grant-sized, none waking anyone.
+    assert_eq!(none.len(), 3 + 3 + 2 + 1 + 3);
+    assert!(
+        none.iter()
+            .all(|shape| shape.kind == "grant" && shape.size == 256 && shape.wake.is_none())
+    );
     Ok(())
 }

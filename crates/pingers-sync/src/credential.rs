@@ -108,7 +108,9 @@ pub(crate) const fn root_epoch(now: UnixSeconds) -> u64 {
 pub(crate) fn readiness(identity: Option<&RlnIdentity>, now: UnixSeconds) -> RlnReadiness {
     match identity {
         None => RlnReadiness::NoIdentity,
-        Some(identity) if identity.live_from.get() > root_epoch(now) => RlnReadiness::NotLiveYet,
+        Some(identity) if u64::from(identity.live_from.get()) > root_epoch(now) => {
+            RlnReadiness::NotLiveYet
+        }
         Some(_) => RlnReadiness::Ready,
     }
 }

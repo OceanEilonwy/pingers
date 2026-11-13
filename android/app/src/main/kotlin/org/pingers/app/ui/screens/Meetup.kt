@@ -111,6 +111,10 @@ import org.pingers.app.ui.components.PillButton
 import org.pingers.app.ui.components.Segmented
 import org.pingers.app.ui.components.TwoLines
 import org.pingers.app.ui.map.MapBox
+import org.pingers.app.ui.map.MapChrome
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
 import org.pingers.app.ui.map.MapCanvas
 import org.pingers.app.ui.map.Scenes
 import org.pingers.app.ui.theme.Inter
@@ -211,7 +215,11 @@ fun MeetupScreen(state: MeetupState, repo: PingersRepository, nav: Navigator) {
         val frame = state.mapFrame
         val me = state.me?.let(frame::toMap)
         val meetAt = state.meetPoint?.at?.let(frame::toMap)
-        MapBox(Scenes.Meetup, overlay = {
+        MapBox(Scenes.Meetup, frame = frame, chrome = MapChrome(
+            attribution = Alignment.TopEnd,
+            attributionPadding = PaddingValues(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 68.dp, end = 12.dp),
+            promptAt = 0.3f,
+        ), overlay = {
             if (me != null && meetAt != null) {
                 drawLine(
                     Pc.Ink, Offset(me.x, me.y), Offset(meetAt.x, meetAt.y), strokeWidth = 2f,
@@ -547,6 +555,12 @@ fun MeetPointScreen(state: MeetPointState, repo: PingersRepository, nav: Navigat
                     }
                 },
                 pan = pan,
+                frame = frame,
+                chrome = MapChrome(
+                    attribution = Alignment.TopEnd,
+                    attributionPadding = PaddingValues(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 68.dp, end = 12.dp),
+                    promptAt = 0.25f,
+                ),
             ) { u ->
                 state.members.forEach { (p, c) ->
                     val at = frame.toMap(c)

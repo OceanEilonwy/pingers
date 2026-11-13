@@ -11,17 +11,17 @@ use pingers_proto::{
     GroupMessages, GroupState, HeadingDegrees, HourlyRoot, InvitePayload, InviteUses,
     InviterFingerprint, JoinRequest, KeyConfigHash, KeyPackageBytes, Knock, KnockSignature,
     Lamport, LeafIndex, Lease, LeaseId, LeaseReplacement, LiveFrame, LocationGeneration,
-    LocationPlaintext, MailboxId, MailboxMessage, MailboxMessages, MailboxSpec, MeetPoint,
-    MeetPointLabel, MeetupMessage, MembershipIndex, MembershipLeafRequest, MembershipLeafResponse,
-    MembershipLeaves, MessageAccepted, MlsMessageBytes, Padded, Params, PrivacyPassIssueRequest,
-    PrivacyPassIssueResponse, PushBind, PushClass, PushHandle, PushPlatform, PushRelayConfig,
-    PushRelayInfo, PushRelayKeyConfig, PushRelayKeyId, PushRequest, PushToken, PushTokenPlaintext,
-    ReadBoard, Record, RecordRandomness, RecordTag, Redacted, RegisterRequest, RegisterResponse,
-    RelayId, RelayRef, RelayUrl, RevokeCommitment, RlnAuth, RlnScope, RootEpoch, SealedAsk,
-    SealedBeacon, SealedGrant, SealedLocationFrame, SealedPush, SealedPushBlob, SealedSnapshot,
-    SecretBytes, SecretText, SeenSegment, SegmentHash, SegmentInfo, SequenceNumber, ServerId,
-    SizeClass, Slashing, SpeedCentimetresPerSecond, Subscription, SubscriptionId, TimeToLive,
-    Urgency,
+    LocationPlaintext, MailboxId, MailboxMessage, MailboxMessages, MailboxSpec, MapHostUrl,
+    MeetPoint, MeetPointLabel, MeetupMessage, MembershipIndex, MembershipLeafRequest,
+    MembershipLeafResponse, MembershipLeaves, MessageAccepted, MlsMessageBytes, Padded, Params,
+    PrivacyPassIssueRequest, PrivacyPassIssueResponse, PushBind, PushClass, PushHandle,
+    PushPlatform, PushRelayConfig, PushRelayInfo, PushRelayKeyConfig, PushRelayKeyId, PushRequest,
+    PushToken, PushTokenPlaintext, ReadBoard, Record, RecordRandomness, RecordTag, Redacted,
+    RegisterRequest, RegisterResponse, RelayId, RelayRef, RelayUrl, RevokeCommitment, RlnAuth,
+    RlnScope, RootEpoch, SealedAsk, SealedBeacon, SealedGrant, SealedLocationFrame, SealedPush,
+    SealedPushBlob, SealedSnapshot, SecretBytes, SecretText, SeenSegment, SegmentHash, SegmentInfo,
+    SequenceNumber, ServerId, SizeClass, Slashing, SpeedCentimetresPerSecond, Subscription,
+    SubscriptionId, TimeToLive, Urgency,
 };
 use pingers_time::{Bucket, UnixSeconds};
 use proptest::array::uniform;
@@ -537,9 +537,23 @@ pub(crate) fn params() -> impl Strategy<Value = Params> {
         ],
         text(30),
         unix_seconds(),
+        option::of(relay_url().prop_filter_map("map host", |url| {
+            MapHostUrl::new(url.as_str().to_owned()).ok()
+        })),
     )
         .prop_map(
-            |(credentials, slashing, ratio, page_records, ohttp, push, custom, operator, time)| {
+            |(
+                credentials,
+                slashing,
+                ratio,
+                page_records,
+                ohttp,
+                push,
+                custom,
+                operator,
+                time,
+                map_host,
+            )| {
                 Params {
                     anonymous_credentials: credentials,
                     rln_slashing: slashing,
@@ -550,6 +564,7 @@ pub(crate) fn params() -> impl Strategy<Value = Params> {
                     custom_push_relays: custom,
                     server_operator: operator,
                     server_time: time,
+                    map_host,
                 }
             },
         )

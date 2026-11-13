@@ -23,6 +23,8 @@ enum class Route(val dark: Boolean = false) {
     Compass(dark = true),
     LocationRequest,
     MeetupEnded,
+    /** Downloaded maps and the areas on offer (the region picker). */
+    MapRegions,
 }
 
 /**

@@ -69,15 +69,45 @@ Nothing in this crate. See "Notes for pingers-meetup-session" for what the calle
   sender is visible to members, not the server), and that a single grant-sized frame followed
   or did not ("Not now" is silent, by design); generation changes show that some rotation
   happened.
+- **Grants and asks are stored** in the group log (`Delivery::Stored`, no wake), like chat and
+  the meet point, so a member whose live channel was down when one was sent gets it when it
+  reads the log after reconnecting (an ephemeral grant was simply lost: the member who
+  approved believed they were sharing while the requester never got the key; after a
+  rotation, likewise). They stay HPKE-sealed to the recipient's grant key with no recipient
+  field, padded to the 256 B class; dummy grants are stored exactly like real ones.
+- **What the server sees, per member event** (stored 256 B messages with no wake, in the log
+  and on the channels): `start` N−1 (N members); a rotation or a setting change N−1; a
+  membership change one per newcomer, or N−1 (newcomers included) if anyone left, which
+  rotates; an ask 1; an
+  "Allow" 1 (an automatic re-grant to a holder who asks again, 1); "Not now" 0. Counts depend
+  only on the event and the group size, never on the setting or on who holds the key. These
+  are exactly the off-cadence 256 B frames the server already saw when grants were ephemeral:
+  same events, counts, sizes and timing. What changes: (1) they are marked stored rather than
+  ephemeral, so they no longer blend with board-hash frames (`BoardSeen`, still ephemeral and
+  sent at protocol-fixed moments the server can already place); (2) they stay in the log
+  until the Meetup ends (MLS-encrypted, deleted with the group); (3) one sent while this
+  device's channel is down is posted through the log rather than dropped, so the count shows
+  where it used to vanish, still independent of grantees. None of this tells the server or
+  members whether, or with whom, a member shares. They never wake anyone: a push would show
+  that a real grant or ask was aimed at an absent member.
+- **Delivered twice, or late.** A copy read from the log after the live one changes nothing:
+  within one generation the later end wins in either order (a sender only ever extends an end
+  within a generation); a grant of a generation older than the newest this device has seen
+  from that sender, in a frame or a grant, is ignored, even when no key is held (so a member
+  rotated away does not get an old key back by replaying the log).
 - **"Until the Meetup ends"** is written as `expires_at = u64::MAX` in the grant plaintext and
   read back as `ExactLocation::Shared { expires: None }`.
 - **Asks** are accepted only if the requester inside equals the MLS sender and `asked_at` is
-  less than `ASK_EXPIRY` old; duplicates (same request id) prompt once. A member who already
-  holds the key and asks again is re-sent its grant without a prompt. Expiry is counted from
-  receipt; expired requests are refused when answered (`UnknownRequest`) and purged on any tick.
-  "Not now" returns no outputs and keeps no state.
+  less than `ASK_EXPIRY` old, also when read late from the log. A request id is acted on once
+  (prompt, automatic grant or drop): ids are remembered until `asked_at + ASK_EXPIRY`, whatever
+  the answer, so a copy from the log never prompts again or triggers another grant. A member
+  who already holds the key and asks again (a new id) is re-sent its grant without a prompt.
+  A pending request lapses `ASK_EXPIRY` after `asked_at` (after receipt if the sender's clock
+  is ahead); expired requests are refused when answered (`UnknownRequest`) and purged on any
+  tick. "Not now" returns no outputs and keeps nothing but the request id until it expires,
+  the same as an unanswered request.
 - **Grants** are trial-opened with the grant context of the MLS sender; a grant for an older
-  generation than the one held is ignored; a frame of a newer generation than the one held
+  generation than the newest seen is ignored (see "Delivered twice, or late"); a frame of a newer generation than the one held
   means this device was rotated away (`LocationAccessChanged(Private)`). A held key past its
   end gives no compass even before the next tick.
 - **`BoardSeen`** (added to pingers-proto) carries the segment hashes each member sends first;
@@ -107,6 +137,8 @@ Nothing in this crate. See "Notes for pingers-meetup-session" for what the calle
   outputs of `start` with the first `handle`.
 - Pad every `Send` frame to its `SizeClass::MEETUP_FRAME` class before MLS encryption; location,
   grant, ask and board frames are all 256 B.
+- Honour `delivery`: stored frames (grants and asks included) must reach the group log even
+  when the live channel is down, and the log must be read after every reconnect.
 - Send `Cadence(Live)` when the Meetup screen or compass opens and `Cadence(Background)` when
   it closes or the app backgrounds. A viewer's compass only gets 2 s updates from peers that
   are themselves live; making peers follow a viewer would need a signal that reveals who is

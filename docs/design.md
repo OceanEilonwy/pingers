@@ -23,7 +23,7 @@ One design, shipped as the initial release. There are no stages. Where a mechani
 | Post-quantum | TLS: X25519MLKEM768 via rustls/aws-lc-rs. MLS: suite 0x0003 default. | Setting: X-Wing suite per Party |
 | Storage | Server: a handful of tables of opaque bytes; board in memory only. Push relay: no database. Client: SQLCipher, key in Keychain/Keystore. | None |
 
-Three services, three operators: the **Pingers server** (self-hosted), the **OHTTP relay** (hides IP addresses from the server) and the **push relay** (hides push tokens from the server). For official app builds the push relay is run by the app publisher (B.4.9).
+Four services: the **Pingers server** (self-hosted), the **OHTTP relay** (hides IP addresses from the server), the **push relay** (hides push tokens from the server) and the **map host** (serves whole region map packs; B.12, "Map host"). For official app builds the push relay and the default map host are run by the app publisher (B.4.9).
 
 Definitions used throughout:
 
@@ -567,6 +567,7 @@ enum MeetPoint { Fixed { lat_e7: i32, lon_e7: i32, label: Option<String>, lampor
 ```
 
 - `Location` and `KeepAlive` are sent **ephemeral**: forwarded to members holding a live channel (chunked OHTTP) and dropped otherwise; never stored, never pushed.
+- `LocationGrant` and `LocationAsk` are **stored** in the group log until the Meetup ends, but never pushed (no wake). Reason (decided 2026-11-13): sent ephemeral, a grant or ask sent while the recipient's live channel was down was silently lost, so a member who approved believed they were sharing while the requester never got the key, and new grants after a rotation could vanish the same way. Stored, they reach a member catching up from the log after reconnecting. They wake nobody, because a push would show that a real grant or ask was aimed at an absent member.
 - `Chat` and `MeetPoint` are stored in the group log until the Meetup ends. They reach members over the live stream, which every Meetup member holds while the app runs its background location session. A member whose stream is not connected is woken through its sealed subscription (B.4.9).
 - Threads are one level deep (`parent` points to a root message).
 - Compass: computed on device from own fix and heading plus the target's last `Location` or the meet point. Optional later: UWB (Nearby Interaction / Jetpack UWB) discovery tokens exchanged over this channel for close-range bearing.
@@ -612,7 +613,11 @@ Plus a local allow-list `always_allow (party_id, member_sig_pk)`: requests from 
 
 **Revocation and expiry.** Revoking a person, a 15-minute grant expiring, a granted member leaving `G`, or the setting changing to `Nobody` all cause the sender to **rotate**: `lk_gen += 1`, a fresh random `LK_self`, and new grants to the people who still hold access. Frames under the new generation are unreadable to the revoked member. Positions the revoked member already received cannot be taken back; the UI says so ("Chloé may have seen where you were until now").
 
-**Uniform traffic.** A member sends `SealedLocation` frames at the same cadence and size whether they have granted zero, one or everyone. With no grantees and no GPS need, the frame is random bytes of the correct length under a fresh `lk_gen` that nobody holds. Grants and asks are padded to the 256 B size class, same as location frames. Result: neither the server nor other members can tell whether, or with whom, a member shares, except the grantee itself.
+**Uniform traffic.** A member sends `SealedLocation` frames at the same cadence and size whether they have granted zero, one or everyone. With no grantees and no GPS need, the frame is random bytes of the correct length under the current `lk_gen`, which nobody holds. Grants and asks are padded to the 256 B size class, same as location frames. A rotation, a setting change and joining always send exactly one grant-sized message per other member (real grants or dummies sealed to throwaway keys), and a membership change one per newcomer.
+
+Grants and asks, real and dummy, are stored messages (B.6). The server therefore sees, per member event, a count of stored 256 B messages with no wake: N−1 for joining, a rotation or a setting change; one per newcomer for a membership change; one for an ask; one for "Allow", none for "Not now". The counts depend only on the event and the group size. These are the same events, counts, sizes and timing the server saw when grants were ephemeral; what is new is that they are marked stored, are kept (MLS-encrypted) until the Meetup ends, and are posted instead of dropped when the sender's channel is down. Result: neither the server nor other members can tell whether, or with whom, a member shares, except the grantee itself.
+
+**Late and repeated delivery.** A grant or ask can arrive twice (live, then from the log) or late. Within one generation the later `expires_at` wins in any order; a grant older than the newest generation seen from its sender is ignored. An ask is acted on once per `req_id`, and expires 10 minutes after its own `ts`, even when read late from the log.
 
 **Meet point.** `MeetPoint::FollowMember` becomes `MeetPoint::AtMember { leaf }`, which members accept only when `sender_leaf == leaf`: only a member can make their own live position the meet point ("Meet at me"). Doing so implicitly grants everyone in `G` for as long as it stays the meet point (the UI confirms this first). `MeetPoint::Fixed` is unaffected. The meet-point screen shows distances only for members whose location the viewer can decrypt.
 
@@ -742,6 +747,14 @@ A `Router` holds one transport per class. Anonymous and stream requests are neve
 - Requests are padded to fixed size buckets (board syncs are already fixed at 4 records). Responses are not all small: a board page is up to 256 KiB, and a relay carries the whole board for every device (B.4.3). Confirm the relay's size limits and bandwidth terms before relying on it.
 - Identified and anonymous requests never share a connection, and the core orders them with a short random gap. This blunts, but does not remove, timing correlation by the server (A.2).
 - HPKE suite: X25519 / HKDF-SHA256 / AES-128-GCM. Move to an X-Wing HPKE suite once the code points are settled (B.8).
+
+**Map host** (decided 2026-11-13). Maps come from a fourth service, separate from the server and the relays: `pingers-map-host`, a public static host of whole region packs (PMTiles extracts of the Protomaps basemap, OpenStreetMap data), each with a place-name search index and a manifest carrying sizes and SHA-256s. The app downloads a pack whole, verifies it, and renders offline with MapLibre Native; "Search a place" runs on the phone over the pack's index. No request ever names the part of the map on screen or a search term.
+
+- **Which host.** Publisher-hosted by default; highest priority first, the app uses a user override (Advanced), then the host the user's Pingers server advertises (`map_host` in `/v1/params`), then the publisher's built-in default. The chain applies per region: if the chosen host does not carry an area, that area alone comes from the next host.
+- **What the map host learns:** the device's IP address and the names of the regions it downloads, and when. If "Download maps through privacy relay" is on, not the IP: the download goes through the OHTTP relay (status: not yet implemented, see `android/docs/maps.md`; with the setting on, the app refuses to download rather than going direct). Never viewports, zoom levels, searches, Parties, Spots or locations.
+- **Fallback hosts** learn the same for the regions they serve, and every host in the chain sees the catalog request (which says only that the address uses Pingers maps). "What your server sees" says so.
+- **Region size** is the remaining signal: a pack names an area, so smaller packs (a city) say more than larger ones (a state). Operators split large countries into sub-regions to keep downloads small; the app never downloads a pack automatically.
+- **Operators** choose what to host with an allow-list of regions and a disk budget (`max_disk`), and may run a cache mode that cuts allow-listed regions from the upstream Protomaps build on first request. Cutting fetches byte ranges from the upstream build host, which then learns the map host's IP and which regions it cuts, not anything about users.
 
 **Future transports**, recorded so the interface fits them:
 
@@ -873,7 +886,8 @@ struct RlnAuth {                 // 265 B
 GET  /v1/params            -> Params { anon_auth: Vec<Rln|PP>, rln_slashing: bool, cover_read_ratio: f32, board_page_records: u32,
                                        ohttp_relays: Vec<Url>,
                                        push_relays: Vec<PushRelayInfo { relay_id, url, key_config_hash, operator: String }>,
-                                       allow_custom_push_relays: bool, server_operator: String, server_time }
+                                       allow_custom_push_relays: bool, server_operator: String, server_time,
+                                       map_host: Option<Url> }   // the map host this server recommends (B.12)
 
 // --- accounts (Acct) ---
 POST /v1/accounts          RegisterReq  { sig_pk: [u8;32], proof: Sig, reg_code: Option<String> } -> { account_id }
@@ -958,7 +972,7 @@ The relay opens `blob` with `info = "pingers/v1/push" ‖ bind`, reads `platform
 - Invite and reply mailboxes are anonymous like any other: the server sees them used and sees the group gain a subscription, without accounts.
 - A link is a bearer capability: revoke by deleting the invite mailbox.
 
-**Map tiles**: not served by this API. Tile fetches reveal the viewport to whoever serves them. Recommendation: MapLibre Native on both platforms with region packs (PMTiles extracts per metro or country) downloaded whole from a static host, so no per-view request exists. Do not range-request PMTiles for the visible area unless through the OHTTP relay. MapKit and Google Maps SDK send viewports to Apple and Google; if used, say so in the privacy text. The compass screen needs no map.
+**Map tiles**: not served by this API. Tile fetches reveal the viewport to whoever serves them. Decided (2026-11-13): MapLibre Native with region packs (PMTiles extracts of the Protomaps basemap, per city, state or country) downloaded whole from the map host (B.12, "Map host"), so no per-view request exists. Never range-request PMTiles for the visible area. No MapKit or Google Maps SDK. The compass screen needs no map.
 
 ---
 

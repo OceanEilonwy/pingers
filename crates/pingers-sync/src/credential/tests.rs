@@ -108,7 +108,7 @@ fn root_epochs_are_whole_hours() {
     assert_eq!(root_epoch(UnixSeconds::new(7_201)), 2);
 }
 
-fn identity(live_from: u64) -> Result<RlnIdentity, AnonError> {
+fn identity(live_from: u32) -> Result<RlnIdentity, AnonError> {
     Ok(RlnIdentity {
         secret: RlnSecret::generate(&mut seeded_rng(1))?,
         leaf: TreePosition::new(0),

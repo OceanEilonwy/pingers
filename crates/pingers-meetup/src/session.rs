@@ -11,8 +11,8 @@ use pingers_crypto::{
 use pingers_geo::{Bearing, Coordinate, Fix, Meters};
 use pingers_proto::{
     AccuracyMeters, ChatBody, ChatMessageId, Delivery, Epoch, GroupId, LeafIndex,
-    LocationPlaintext, LocationRequestId, MeetPoint, MeetupMessage, SealedAsk, SealedGrant,
-    SealedLocationFrame, SeenSegment, Urgency,
+    LocationGeneration, LocationPlaintext, LocationRequestId, MeetPoint, MeetupMessage, SealedAsk,
+    SealedGrant, SealedLocationFrame, SeenSegment, Urgency,
 };
 use pingers_time::UnixSeconds;
 use rand_core::CryptoRng;
@@ -21,9 +21,10 @@ use crate::board::{Agreement, BoardCheck};
 use crate::cadence::{BACKGROUND_FRAME_INTERVAL, Cadence};
 use crate::chat::{Recorded, Threads};
 use crate::convert::rounded;
-use crate::requests::{Received, Requests, expiry_from};
+use crate::requests::{Requests, Sighting, expiry_from};
 use crate::sharing::{
-    FrameContext, GrantEnd, MeetAtMe, Padding, Plan, Roster, Rotation, Sharing, ephemeral,
+    FrameContext, GrantEnd, MeetAtMe, Padding, Plan, Roster, Rotation, Sharing, consent, ephemeral,
+    stored,
 };
 use crate::{
     AllowListChoice, AlwaysAllow, AskBack, CadenceMode, CompassReading, CompassTarget,
@@ -152,7 +153,8 @@ pub enum MeetupInput {
 pub struct OutgoingFrame {
     /// The frame (pad it to its size class before MLS encryption).
     pub message: MeetupMessage,
-    /// Stored (chat, meet point) or ephemeral (location, keep-alive, grants, asks).
+    /// Stored (chat, meet point, snapshots, grants, asks) or ephemeral (location, board
+    /// hashes).
     pub delivery: Delivery,
     /// Whether to wake members whose live channel is down.
     pub wake: Option<Urgency>,
@@ -254,7 +256,7 @@ struct Origin {
 
 /// A peer's key this device holds, and the last position it opened.
 struct HeldKey {
-    generation: pingers_proto::LocationGeneration,
+    generation: LocationGeneration,
     key: LocationKey,
     end: GrantEnd,
     last: Option<PeerLocation>,
@@ -264,6 +266,10 @@ struct HeldKey {
 struct PeerState {
     last_heard: UnixSeconds,
     held: Option<HeldKey>,
+    /// The newest generation of this peer's key seen in any frame or grant. A grant of an
+    /// older one is stale (it may come late from the group log) and is ignored, even when
+    /// no key is held.
+    newest: LocationGeneration,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -332,6 +338,7 @@ impl MeetupSession {
                     PeerState {
                         last_heard: joined_at,
                         held: None,
+                        newest: LocationGeneration::new(0),
                     },
                 )
             })
@@ -462,7 +469,7 @@ impl MeetupSession {
 
     /// The generation of this device's current location key.
     #[cfg(test)]
-    pub(crate) const fn generation(&self) -> pingers_proto::LocationGeneration {
+    pub(crate) const fn generation(&self) -> LocationGeneration {
         self.sharing.generation()
     }
 
@@ -649,6 +656,7 @@ impl MeetupSession {
         let Some(peer) = self.peers.get_mut(&sender) else {
             return;
         };
+        peer.newest = peer.newest.max(frame.generation);
         let Some(held) = peer.held.as_mut() else {
             return;
         };
@@ -695,24 +703,30 @@ impl MeetupSession {
         let Ok(opened) = open_location_grant(&self.own_grant_key, &context, sealed) else {
             return;
         };
-        let end = GrantEnd::from_wire(opened.expires_at);
-        if end.has_lapsed(step.now) {
-            return;
-        }
         let Some(peer) = self.peers.get_mut(&sender) else {
             return;
         };
+        // A grant can arrive twice (live, then again from the group log) and late (after a
+        // newer rotation): an older generation than any seen is stale.
+        if opened.generation < peer.newest {
+            return;
+        }
+        peer.newest = opened.generation;
         let previous = peer.held.take();
-        if let Some(held) = previous.as_ref()
-            && opened.generation < held.generation
-        {
+        let same_generation = previous
+            .as_ref()
+            .filter(|held| held.generation == opened.generation);
+        let previous_end = previous.as_ref().map(|held| held.end);
+        // Within one generation the sender only ever extends an end, so the later end wins
+        // whatever order the copies arrive in.
+        let end = same_generation.map_or(GrantEnd::from_wire(opened.expires_at), |held| {
+            held.end.max(GrantEnd::from_wire(opened.expires_at))
+        });
+        let last = same_generation.and_then(|held| held.last);
+        if end.has_lapsed(step.now) {
             peer.held = previous;
             return;
         }
-        let previous_end = previous.as_ref().map(|held| held.end);
-        let last = previous
-            .filter(|held| held.generation == opened.generation)
-            .and_then(|held| held.last);
         peer.held = Some(HeldKey {
             generation: opened.generation,
             key: opened.key,
@@ -739,10 +753,16 @@ impl MeetupSession {
         let Ok(ask) = open_location_ask(&self.own_grant_key, &self.group, sealed) else {
             return Ok(());
         };
-        // The requester inside must be the MLS sender, and the ask must still be live.
-        if ask.requester != sender || expiry_from(ask.asked_at)? <= step.now {
+        // The requester inside must be the MLS sender.
+        if ask.requester != sender {
             return Ok(());
         }
+        // The ask must still be live by its own timestamp (it may be read late from the
+        // group log), and is acted on once however often it arrives.
+        let Sighting::New { expires } = self.requests.sight(ask.request, ask.asked_at, step.now)?
+        else {
+            return Ok(());
+        };
         if self.sharing.visibility() == LocationVisibility::Nobody {
             return Ok(());
         }
@@ -760,7 +780,8 @@ impl MeetupSession {
             }
             self.sharing.resend(sender);
             self.push_reconcile(Padding::ChangesOnly, Rotation::IfRevoked, step)?;
-        } else if self.requests.receive(ask.request, sender, step.now)? == Received::New {
+        } else {
+            self.requests.hold(ask.request, sender, expires);
             step.outputs
                 .push(MeetupOutput::Event(MeetupEvent::LocationRequested {
                     from: sender,
@@ -818,6 +839,7 @@ impl MeetupSession {
                 PeerState {
                     last_heard: step.now,
                     held: None,
+                    newest: LocationGeneration::new(0),
                 },
             );
         }
@@ -1017,7 +1039,7 @@ impl MeetupSession {
         let sealed = seal_location_ask(&member.grant_key, &ask, step.rng)?;
         self.requests.sent(target, expiry_from(step.now)?);
         step.outputs
-            .push(send(ephemeral(MeetupMessage::LocationAsk(sealed))));
+            .push(send(consent(MeetupMessage::LocationAsk(sealed))));
         Ok(())
     }
 
@@ -1058,15 +1080,6 @@ impl MeetupSession {
 
 const fn send(frame: OutgoingFrame) -> MeetupOutput {
     MeetupOutput::Send(frame)
-}
-
-/// A frame kept in the group log until the Meetup ends.
-const fn stored(message: MeetupMessage, wake: Option<Urgency>) -> OutgoingFrame {
-    OutgoingFrame {
-        message,
-        delivery: Delivery::Stored,
-        wake,
-    }
 }
 
 /// This device's fix in the wire's units. Accuracy saturates at 65,535 m.

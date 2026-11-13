@@ -48,6 +48,8 @@ interface PingersRepository {
     fun setSpotName(name: String)
     fun setSpotShape(shape: ShapeKind)
     fun setSpotRadius(radiusM: Int)
+    /** Moves the Spot (and the editor's map) to [to]: a dragged map or a place found by search. */
+    fun moveSpot(to: Coordinate)
     fun saveSpot()
 
     // Draw area, the point-by-point polygon editor
