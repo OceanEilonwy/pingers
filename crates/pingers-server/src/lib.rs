@@ -34,11 +34,13 @@
 #![forbid(unsafe_code)]
 
 mod accounts;
+mod admin;
 mod board_routes;
 mod config;
 mod credential;
 mod dispatch;
 mod error;
+mod forwarded;
 mod gateway;
 mod groups;
 mod http;
@@ -48,6 +50,8 @@ mod mailbox_routes;
 mod metrics;
 mod quota_routes;
 mod route;
+#[cfg(unix)]
+mod signal;
 mod tasks;
 mod wire;
 
@@ -70,11 +74,15 @@ use rand_chacha::ChaCha20Rng;
 use rand_core::{Rng as _, SeedableRng as _};
 use zeroize::Zeroizing;
 
+pub use crate::admin::{Command, OhttpSecret, new_ohttp_secret, os_ohttp_secret, pins};
 pub use crate::config::{
     AddressList, CertificateSource, ConfigError, Database, Logging, OhttpKeys, RelayAllowList,
-    Required, ServerConfig,
+    Required, ServedKey, ServerConfig,
 };
 pub use crate::error::ServerError;
+pub use crate::forwarded::TrustedProxies;
+#[cfg(unix)]
+pub use crate::signal::StopSignals;
 pub use crate::live::{
     DeliveryLive, KEEP_ALIVE_CHUNK, KEEP_ALIVE_INTERVAL, LIVE_BUFFER, LiveBackend, LiveChannel,
     LiveFrame, LiveRefused,
@@ -151,6 +159,7 @@ pub(crate) struct Shared {
     pub(crate) gateway: Gateway,
     pub(crate) served_config: KeyConfig,
     pub(crate) relays: RelayAllowList,
+    pub(crate) trusted_proxies: TrustedProxies,
     pub(crate) metrics_access: AddressList,
     pub(crate) metrics: Metrics,
     pub(crate) request_timeout: Duration,
@@ -200,7 +209,7 @@ pub fn load_config(path: &Path) -> Result<ServerConfig, ServerError> {
 }
 
 /// A seed from the operating system's random number generator.
-fn os_seed() -> Result<RngSeed, ServerError> {
+pub(crate) fn os_seed() -> Result<RngSeed, ServerError> {
     let mut bytes = Zeroizing::new([0_u8; 32]);
     std::fs::File::open("/dev/urandom")
         .and_then(|mut source| source.read_exact(bytes.as_mut_slice()))
@@ -208,7 +217,34 @@ fn os_seed() -> Result<RngSeed, ServerError> {
     Ok(RngSeed::from_bytes(bytes))
 }
 
-/// Runs the server on `listener` until `shutdown` completes, with the production timer, a
+/// The server's two bound listeners.
+pub struct Listeners {
+    /// The public API (`listen`): identified and public routes. `POST /ohttp` is 404 here.
+    pub public: tokio::net::TcpListener,
+    /// The gateway (`[ohttp] listen`): `POST /ohttp` and `GET /v1/ohttp/config`, nothing else.
+    /// Only the OHTTP relay should be able to connect to it.
+    pub gateway: tokio::net::TcpListener,
+}
+
+impl Listeners {
+    /// Binds `config.listen` and `config.gateway_listen`.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Listen`] or [`ServerError::ListenGateway`] if an address cannot be bound.
+    pub async fn bind(config: &ServerConfig) -> Result<Self, ServerError> {
+        Ok(Self {
+            public: tokio::net::TcpListener::bind(config.listen)
+                .await
+                .map_err(ServerError::Listen)?,
+            gateway: tokio::net::TcpListener::bind(config.gateway_listen)
+                .await
+                .map_err(ServerError::ListenGateway)?,
+        })
+    }
+}
+
+/// Runs the server on `listeners` until `shutdown` completes, with the production timer, a
 /// generator seeded by the operating system, and [`DeliveryLive`]. The binary passes
 /// [`pingers_time::SystemClock`]. Must be called inside a tokio runtime.
 ///
@@ -218,7 +254,7 @@ fn os_seed() -> Result<RngSeed, ServerError> {
 /// [`serve_with`].
 pub async fn serve(
     config: ServerConfig,
-    listener: tokio::net::TcpListener,
+    listeners: Listeners,
     clock: impl Clock + 'static,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServerError> {
@@ -228,7 +264,7 @@ pub async fn serve(
         seed: os_seed()?,
         live: DeliveryLive,
     };
-    serve_with(config, outside, listener, shutdown).await
+    serve_with(config, outside, listeners, shutdown).await
 }
 
 /// The push relay client's extra trust roots.
@@ -306,7 +342,7 @@ fn quota(config: &ServerConfig, clock: &Arc<dyn Clock>) -> Result<Quota, ServerE
 pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
     config: ServerConfig,
     outside: Outside<C, T, L>,
-    listener: tokio::net::TcpListener,
+    listeners: Listeners,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServerError> {
     let Outside {
@@ -349,6 +385,7 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
         gateway: Gateway::new(config.ohttp_keys.into_keys()),
         served_config,
         relays: config.relays,
+        trusted_proxies: config.trusted_proxies,
         metrics_access: config.metrics,
         metrics: Metrics::default(),
         request_timeout: config.request_timeout,
@@ -393,7 +430,7 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
             }))
         }
     };
-    http::accept_loop(listener, http::router(Arc::clone(&shared)), shutdown).await;
+    http::accept_loop(listeners, &shared, shutdown).await;
     shared.tasks.abort_all();
     if let Some(reporter) = reporter {
         reporter.abort();

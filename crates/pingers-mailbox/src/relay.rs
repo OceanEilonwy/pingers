@@ -3,8 +3,11 @@
 
 use core::future::Future;
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use pingers_proto::{PushRequest, RelayId, RelayRef, RelayUrl};
+
+use crate::MailboxError;
 
 /// The path of the relay's push endpoint, relative to its URL.
 pub const PUSH_PATH: &str = "/v1/push";
@@ -34,11 +37,85 @@ impl core::fmt::Debug for RelayCredential {
     }
 }
 
+/// Where this server calls a configured push relay: an `https://` URL, or an `http://` URL
+/// whose host is a loopback address literal (a relay on the same machine, reached without
+/// leaving the host). Only the operator's configuration makes these; a device's custom relay
+/// is a [`RelayUrl`] and never resolves to a target (see [`ListedRelays`]), so no request can
+/// make the server call a plain-text or local address.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PushRelayUrl {
+    url: String,
+}
+
+impl PushRelayUrl {
+    /// Checks the scheme and, for `http://`, that the host is in `127.0.0.0/8` or is `[::1]`,
+    /// with an optional port. Host names, even `localhost`, are refused: a resolver could send
+    /// them elsewhere.
+    ///
+    /// # Errors
+    ///
+    /// [`MailboxError::RelayUrl`] for any other URL.
+    pub fn new(url: String) -> Result<Self, MailboxError> {
+        if url.starts_with("https://") {
+            return Ok(Self { url });
+        }
+        let authority = url
+            .strip_prefix("http://")
+            .and_then(|rest| rest.split(['/', '?', '#']).next())
+            .ok_or(MailboxError::RelayUrl)?;
+        if is_loopback_authority(authority) {
+            Ok(Self { url })
+        } else {
+            Err(MailboxError::RelayUrl)
+        }
+    }
+
+    /// The URL.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.url
+    }
+}
+
+impl From<RelayUrl> for PushRelayUrl {
+    fn from(url: RelayUrl) -> Self {
+        Self {
+            url: url.as_str().to_owned(),
+        }
+    }
+}
+
+/// Whether `authority` (`host[:port]`) names a loopback address literal. User info is refused
+/// along with everything else that is not an address.
+fn is_loopback_authority(authority: &str) -> bool {
+    let (address, port) = if let Some(bracketed) = authority.strip_prefix('[') {
+        let Some((host, rest)) = bracketed.split_once(']') else {
+            return false;
+        };
+        let port = match rest.strip_prefix(':') {
+            Some(port) => Some(port),
+            None if rest.is_empty() => None,
+            None => return false,
+        };
+        (host.parse::<Ipv6Addr>().map(IpAddr::V6), port)
+    } else {
+        let (host, port) = match authority.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        };
+        (host.parse::<Ipv4Addr>().map(IpAddr::V4), port)
+    };
+    let port_is_valid = port.is_none_or(|port| {
+        port.bytes().all(|byte| byte.is_ascii_digit()) && port.parse::<u16>().is_ok()
+    });
+    port_is_valid && address.is_ok_and(|address| address.is_loopback())
+}
+
 /// Everything needed to call one relay (design C.1 `push_relay`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RelayTarget {
     /// The relay's base URL.
-    pub url: RelayUrl,
+    pub url: PushRelayUrl,
     /// This server's credential at the relay.
     pub credential: RelayCredential,
 }
@@ -142,9 +219,56 @@ mod tests {
 
     fn target() -> Result<RelayTarget, pingers_proto::ProtoError> {
         Ok(RelayTarget {
-            url: RelayUrl::new(String::from("https://push.example"))?,
+            url: RelayUrl::new(String::from("https://push.example"))?.into(),
             credential: RelayCredential::new(String::from("s3cret")),
         })
+    }
+
+    #[test]
+    fn push_relay_urls_are_https_or_plain_http_to_a_loopback_address() {
+        for accepted in [
+            "https://push.example",
+            "https://push.example:8443/base",
+            "http://127.0.0.1",
+            "http://127.0.0.1:9472",
+            "http://127.1.2.3:9472/base?x#y",
+            "http://[::1]",
+            "http://[::1]:9472/",
+        ] {
+            assert_eq!(
+                PushRelayUrl::new(accepted.to_owned())
+                    .map(|url| url.as_str().to_owned())
+                    .ok(),
+                Some(accepted.to_owned()),
+                "{accepted}"
+            );
+        }
+        for refused in [
+            "http://push.example",
+            "http://localhost:9472",
+            "http://10.0.0.5:9472",
+            "http://128.0.0.1",
+            "http://[::2]:9472",
+            "http://[::ffff:127.0.0.1]",
+            "http://user@127.0.0.1",
+            "http://127.0.0.1:",
+            "http://127.0.0.1:port",
+            "http://127.0.0.1:65536",
+            "http://127.0.0.1:+80",
+            "http://[::1]x",
+            "http://[::1",
+            "http://",
+            "ftp://127.0.0.1",
+            "127.0.0.1:9472",
+        ] {
+            assert!(
+                matches!(
+                    PushRelayUrl::new(refused.to_owned()),
+                    Err(MailboxError::RelayUrl)
+                ),
+                "{refused}"
+            );
+        }
     }
 
     #[test]

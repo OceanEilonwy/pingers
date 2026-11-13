@@ -31,8 +31,9 @@ use zeroize::Zeroizing;
 
 use crate::live::next_data;
 use crate::{
-    AddressList, CountsReport, DeliveryLive, LiveChannel, LiveFrame, LiveRefused, Metrics,
-    OhttpKeys, Outside, RelayAllowList, Required, RngSeed, ServerConfig, serve_with,
+    AddressList, CountsReport, DeliveryLive, Listeners, LiveChannel, LiveFrame, LiveRefused,
+    Metrics, OhttpKeys, Outside, RelayAllowList, Required, RngSeed, ServedKey, ServerConfig,
+    TrustedProxies, serve_with,
 };
 
 type TestError = Box<dyn std::error::Error + Send + Sync>;
@@ -74,7 +75,10 @@ impl LiveChannel for Echo {
 }
 
 struct Running {
+    /// The public listener.
     address: SocketAddr,
+    /// The gateway listener, where the relay connects.
+    gateway: SocketAddr,
     config: KeyConfig,
     clock: ManualClock,
     stop: Option<oneshot::Sender<()>>,
@@ -93,6 +97,7 @@ impl Running {
 
 struct Setup {
     relay: IpAddr,
+    trusted_proxies: Vec<IpAddr>,
     metrics: Vec<IpAddr>,
     push_relays: pingers_mailbox::ListedRelays,
 }
@@ -101,27 +106,39 @@ impl Default for Setup {
     fn default() -> Self {
         Self {
             relay: LOOPBACK,
+            trusted_proxies: Vec::new(),
             metrics: Vec::new(),
             push_relays: pingers_mailbox::ListedRelays::default(),
         }
     }
 }
 
-async fn start(setup: Setup, live: impl LiveChannel) -> Result<Running, TestError> {
-    let key = GatewayKey::generate(1, &mut rng(1))?;
-    let config = key.config();
-    let server_config = ServerConfig {
+/// A configuration with one gateway key and both listeners on loopback.
+fn configured(setup: Setup) -> Result<ServerConfig, TestError> {
+    Ok(ServerConfig {
         metrics: AddressList::new(setup.metrics),
         push_relays: setup.push_relays,
+        trusted_proxies: TrustedProxies::new(setup.trusted_proxies),
         ..ServerConfig::new(Required {
             listen: SocketAddr::new(LOOPBACK, 0),
             server_id: server_id()?,
-            ohttp_keys: OhttpKeys::new(vec![key])?,
+            ohttp_keys: OhttpKeys::new(vec![GatewayKey::generate(1, &mut rng(1))?])?,
+            gateway_listen: SocketAddr::new(LOOPBACK, 0),
             relays: RelayAllowList::new(vec![setup.relay])?,
         })
-    };
-    let listener = tokio::net::TcpListener::bind(server_config.listen).await?;
-    let address = listener.local_addr()?;
+    })
+}
+
+async fn start(setup: Setup, live: impl LiveChannel) -> Result<Running, TestError> {
+    run(configured(setup)?, live).await
+}
+
+/// Serves `server_config` on its listeners, with the manual clock and a fixed seed.
+async fn run(server_config: ServerConfig, live: impl LiveChannel) -> Result<Running, TestError> {
+    let config = server_config.ohttp_keys.served().clone();
+    let listeners = Listeners::bind(&server_config).await?;
+    let address = listeners.public.local_addr()?;
+    let gateway = listeners.gateway.local_addr()?;
     let clock = ManualClock::new(UnixSeconds::new(1_800_000_000));
     let outside = Outside {
         clock: clock.clone(),
@@ -130,11 +147,12 @@ async fn start(setup: Setup, live: impl LiveChannel) -> Result<Running, TestErro
         live,
     };
     let (stop, stopped) = oneshot::channel::<()>();
-    let task = tokio::spawn(serve_with(server_config, outside, listener, async move {
+    let task = tokio::spawn(serve_with(server_config, outside, listeners, async move {
         let _ = stopped.await;
     }));
     Ok(Running {
         address,
+        gateway,
         config,
         clock,
         stop: Some(stop),

@@ -120,7 +120,7 @@ impl Fixture {
 
 fn target() -> Result<RelayTarget, pingers_proto::ProtoError> {
     Ok(RelayTarget {
-        url: RelayUrl::new(String::from("https://push.example"))?,
+        url: RelayUrl::new(String::from("https://push.example"))?.into(),
         credential: RelayCredential::new(String::from("credential")),
     })
 }

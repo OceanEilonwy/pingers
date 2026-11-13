@@ -98,7 +98,7 @@ impl Stack {
         let push_relays = ListedRelays::new([(
             PUSH_RELAY_ID,
             RelayTarget {
-                url: RelayUrl::new(PUSH_RELAY_URL.to_owned())?,
+                url: RelayUrl::new(PUSH_RELAY_URL.to_owned())?.into(),
                 credential: RelayCredential::new("pingers-e2e".to_owned()),
             },
         )]);

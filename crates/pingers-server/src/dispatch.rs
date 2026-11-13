@@ -93,19 +93,22 @@ async fn blocking(shared: &Arc<Shared>, request: &BinaryRequest, handler: Blocki
         .unwrap_or_else(|_| Reply::status(StatusCode::INTERNAL_SERVER_ERROR))
 }
 
+/// `GET /v1/ohttp/config`: the served key config (`application/ohttp-keys`, one config).
+pub(crate) fn key_config_reply(shared: &Shared) -> Reply {
+    Reply {
+        status: StatusCode::OK,
+        content_type: Some(OHTTP_KEYS),
+        headers: Vec::new(),
+        body: shared.served_config.encoded().to_vec(),
+    }
+}
+
 /// One call per route, to the crate that owns it. Anonymous routes that take an Anon
 /// credential check it first (`credential.rs`); Cap routes (board pages and revokes, mailbox
 /// reads and deletes) carry their capability instead.
 async fn dispatch(shared: &Arc<Shared>, route: Route, request: &BinaryRequest) -> Reply {
     let handler: Blocking = match route {
-        Route::OhttpConfig => {
-            return Reply {
-                status: StatusCode::OK,
-                content_type: Some(OHTTP_KEYS),
-                headers: Vec::new(),
-                body: shared.served_config.encoded().to_vec(),
-            };
-        }
+        Route::OhttpConfig => return key_config_reply(shared),
         Route::BoardPage => return board_routes::page(shared, request),
         Route::BoardRevokeLease => return board_routes::revoke(shared, request),
         Route::CreateMailbox => return either(mailbox_routes::register(shared, request).await),

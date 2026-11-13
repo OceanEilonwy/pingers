@@ -296,7 +296,7 @@ pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started,
         push_relays: ListedRelays::new([(
             HARNESS_PUSH_RELAY_ID,
             RelayTarget {
-                url: push_url,
+                url: push_url.into(),
                 credential: RelayCredential::new(credential),
             },
         )]),

@@ -104,7 +104,7 @@ pub(crate) async fn post_ohttp(
         Some(OHTTP_CHUNKED_REQUEST) => Channel::ObliviousStream,
         _ => Channel::Oblivious,
     };
-    if !relay_allowed(&shared, peer) {
+    if !relay_allowed(&shared, peer, &headers) {
         // A client that reached the gateway directly would have shown it its address.
         return status(&shared, channel, StatusCode::FORBIDDEN);
     }
@@ -115,8 +115,13 @@ pub(crate) async fn post_ohttp(
     }
 }
 
-fn relay_allowed(shared: &Shared, peer: SocketAddr) -> bool {
-    shared.relays.allows(peer.ip())
+/// Whether the request came from an allowed relay: the connection's peer, or, when that peer
+/// is a trusted proxy, the client its `X-Forwarded-For` names.
+fn relay_allowed(shared: &Shared, peer: SocketAddr, headers: &HeaderMap) -> bool {
+    shared
+        .trusted_proxies
+        .client(peer.ip(), headers)
+        .is_some_and(|client| shared.relays.allows(client))
 }
 
 async fn one_shot(shared: &Arc<Shared>, mut body: Body) -> Response {

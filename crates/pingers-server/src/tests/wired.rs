@@ -281,7 +281,7 @@ async fn a_post_answers_at_once_and_its_wake_goes_to_the_relay() -> TestResult {
     let relays = ListedRelays::new([(
         RelayId::new(1),
         RelayTarget {
-            url: RelayUrl::new(format!("https://{}", relay_socket.local_addr()?))?,
+            url: RelayUrl::new(format!("https://{}", relay_socket.local_addr()?))?.into(),
             credential: RelayCredential::new("credential".to_owned()),
         },
     )]);
@@ -484,7 +484,7 @@ async fn push_urls_join_the_relay_and_the_push_path() -> TestResult {
         ),
     ] {
         let target = RelayTarget {
-            url: RelayUrl::new(url.to_owned())?,
+            url: RelayUrl::new(url.to_owned())?.into(),
             credential: RelayCredential::new("credential".to_owned()),
         };
         assert_eq!(push_url(&target), expected);
@@ -493,7 +493,7 @@ async fn push_urls_join_the_relay_and_the_push_path() -> TestResult {
     let clock = ManualClock::new(UnixSeconds::new(1));
     let relay = HttpPushRelay::new(Arc::new(clock), Duration::from_secs(10), Vec::new())?;
     let target = RelayTarget {
-        url: RelayUrl::new("https://127.0.0.1:1".to_owned())?,
+        url: RelayUrl::new("https://127.0.0.1:1".to_owned())?.into(),
         credential: RelayCredential::new("credential".to_owned()),
     };
     assert_eq!(
