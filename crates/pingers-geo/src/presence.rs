@@ -5,7 +5,7 @@ use core::time::Duration;
 
 use pingers_time::UnixSeconds;
 
-use crate::{Fence, Fix, GeoError, entry_accuracy_limit, exit_buffer};
+use crate::{Fence, Fix, GeoError, Meters, entry_accuracy_limit, exit_buffer};
 
 /// Where the device stands with respect to one Spot (design F.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -113,9 +113,11 @@ pub struct PresenceSnapshot {
 ///   later qualifying fixes under 30 s after it neither confirm nor restart it. A fix outside
 ///   the fence clears it, so the two confirming fixes are never separated by an outside fix.
 ///   An inside fix with poor accuracy changes nothing.
-/// - **Confirming fix while Inside:** any fix not beyond the exit buffer. It also clears any
-///   exit evidence. Exit fixes must be strictly beyond the buffer; their order with the OS
-///   exit event does not matter.
+/// - **Confirming fix while Inside:** any fix not beyond the exit buffer. Only a fix inside
+///   the fence also clears exit evidence; one in the band between the fence and the buffer
+///   leaves a pending OS exit or fix beyond standing. Exit fixes must be strictly beyond the
+///   buffer; their order with the OS exit event does not matter, and an OS enter event or
+///   (for a circle) OS dwell clears the evidence too.
 /// - **OS dwell** confirms entry only for a circle, whose OS region is the fence itself. A
 ///   polygon's OS region is its inflated enclosing circle, so dwelling there does not show the
 ///   device is inside the polygon; for a polygon, dwell counts as an OS enter event.
@@ -370,10 +372,14 @@ impl SpotPresence {
                 }
             }
             PresenceState::Inside => {
-                if self.fence.distance_outside(fix.coordinate) > exit_buffer(radius) {
+                let beyond = self.fence.distance_outside(fix.coordinate);
+                if beyond > exit_buffer(radius) {
                     self.record_exit_evidence(ExitEvidence::FixBeyond, at);
-                } else {
+                } else if beyond == Meters::ZERO {
                     self.confirm(at);
+                } else {
+                    // In the hysteresis band: still present, but no evidence of being back.
+                    self.progress.confirmed_at = at;
                 }
             }
             PresenceState::Suppressed => {}
@@ -406,7 +412,7 @@ mod tests {
 
     use super::*;
     use crate::testing::{offset, polygon_around};
-    use crate::{Circle, Coordinate, Meters};
+    use crate::{Circle, Coordinate};
 
     /// A 200 m Spot: exit buffer 50 m, entry accuracy limit 100 m.
     const RADIUS: u32 = 200;
@@ -754,6 +760,19 @@ mod tests {
             PresenceChange::Unchanged
         );
         assert_eq!(presence.state(), PresenceState::Inside);
+        Ok(())
+    }
+
+    #[test]
+    fn a_fix_in_the_buffer_band_leaves_an_os_exit_pending() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        let _ = presence.handle(PresenceInput::OsExit { at: time(100) })?;
+        let _ = presence.handle(fix(249.0, 10, 110)?)?;
+        // 251 m is 51 m beyond: with the OS exit still standing, this confirms the exit.
+        assert_eq!(
+            presence.handle(fix(251.0, 10, 120)?)?,
+            changed(PresenceState::Inside, PresenceState::Outside, 120)
+        );
         Ok(())
     }
 
@@ -1127,7 +1146,7 @@ mod tests {
                     }
                     seconds = seconds.saturating_add(gap);
                     if let Step::Fix { north, accuracy } = step
-                        && north.abs() <= 199.0
+                        && north.abs() <= 200.5
                         && accuracy <= 100
                     {
                         good_inside_fixes.push(seconds);

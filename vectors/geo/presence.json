@@ -1,0 +1,134 @@
+{
+  "name": "geo/presence",
+  "description": "The per-Spot presence state machine (design F.2, pingers-geo SpotPresence). Each vector starts Outside at `start` with the given fence and applies `steps` in order; `after` gives the state after each step, or the error the step must return (the state is then unchanged). The circle is 200 m, so the entry accuracy limit is 100 m and the exit buffer 50 m. Fix positions: [48.85, 2.35] is the centre, [48.852239308, 2.35] is 249 m north (49 m beyond the fence), [48.852257294, 2.35] is 251 m north (51 m beyond), [48.852697961, 2.35] is 300 m north.",
+  "vectors": [
+    {
+      "name": "two-good-fixes-30-s-apart-enter",
+      "inputs": {
+        "fence": { "circle": { "center": [48.85, 2.35], "radius_meters": 200 } },
+        "start": 10000,
+        "steps": [
+          { "input": "fix", "at": 10000, "position": [48.85, 2.35], "accuracy_meters": 10 },
+          { "input": "fix", "at": 10029, "position": [48.85, 2.35], "accuracy_meters": 10 },
+          { "input": "fix", "at": 10030, "position": [48.85, 2.35], "accuracy_meters": 10 }
+        ]
+      },
+      "expected": { "after": ["Candidate", "Candidate", "Inside"] }
+    },
+    {
+      "name": "drive-through-times-out",
+      "inputs": {
+        "fence": { "circle": { "center": [48.85, 2.35], "radius_meters": 200 } },
+        "start": 10000,
+        "steps": [
+          { "input": "fix", "at": 10000, "position": [48.85, 2.35], "accuracy_meters": 10 },
+          { "input": "fix", "at": 10040, "position": [48.852697961, 2.35], "accuracy_meters": 10 },
+          { "input": "tick", "at": 10179 },
+          { "input": "tick", "at": 10180 }
+        ]
+      },
+      "expected": { "after": ["Candidate", "Candidate", "Candidate", "Outside"] }
+    },
+    {
+      "name": "poor-accuracy-never-confirms",
+      "inputs": {
+        "fence": { "circle": { "center": [48.85, 2.35], "radius_meters": 200 } },
+        "start": 10000,
+        "steps": [
+          { "input": "fix", "at": 10000, "position": [48.85, 2.35], "accuracy_meters": 101 },
+          { "input": "fix", "at": 10060, "position": [48.85, 2.35], "accuracy_meters": 101 },
+          { "input": "fix", "at": 10120, "position": [48.85, 2.35], "accuracy_meters": 100 },
+          { "input": "fix", "at": 10150, "position": [48.85, 2.35], "accuracy_meters": 100 }
+        ]
+      },
+      "expected": { "after": ["Candidate", "Candidate", "Candidate", "Inside"] }
+    },
+    {
+      "name": "os-exit-needs-a-fix-beyond-the-buffer",
+      "inputs": {
+        "fence": { "circle": { "center": [48.85, 2.35], "radius_meters": 200 } },
+        "start": 10000,
+        "steps": [
+          { "input": "fix", "at": 10000, "position": [48.85, 2.35], "accuracy_meters": 10 },
+          { "input": "fix", "at": 10030, "position": [48.85, 2.35], "accuracy_meters": 10 },
+          { "input": "os_exit", "at": 10100 },
+          { "input": "fix", "at": 10110, "position": [48.852239308, 2.35], "accuracy_meters": 10 },
+          { "input": "fix", "at": 10120, "position": [48.852257294, 2.35], "accuracy_meters": 10 }
+        ]
+      },
+      "expected": { "after": ["Candidate", "Inside", "Inside", "Inside", "Outside"] }
+    },
+    {
+      "name": "two-fixes-beyond-the-buffer-exit",
+      "inputs": {
+        "fence": { "circle": { "center": [48.85, 2.35], "radius_meters": 200 } },
+        "start": 10000,
+        "steps": [
+          { "input": "os_enter", "at": 10000 },
+          { "input": "os_dwell", "at": 10090 },
+          { "input": "fix", "at": 10200, "position": [48.852697961, 2.35], "accuracy_meters": 10 },
+          { "input": "fix", "at": 10210, "position": [48.852697961, 2.35], "accuracy_meters": 10 }
+        ]
+      },
+      "expected": { "after": ["Candidate", "Inside", "Inside", "Outside"] }
+    },
+    {
+      "name": "inside-times-out-after-an-hour",
+      "inputs": {
+        "fence": { "circle": { "center": [48.85, 2.35], "radius_meters": 200 } },
+        "start": 10000,
+        "steps": [
+          { "input": "os_dwell", "at": 10000 },
+          { "input": "fix", "at": 11000, "position": [48.852239308, 2.35], "accuracy_meters": 10 },
+          { "input": "tick", "at": 14599 },
+          { "input": "tick", "at": 14600 }
+        ]
+      },
+      "expected": { "after": ["Inside", "Inside", "Inside", "Outside"] }
+    },
+    {
+      "name": "suppressed-ignores-fixes-and-resumes-outside",
+      "inputs": {
+        "fence": { "circle": { "center": [48.85, 2.35], "radius_meters": 200 } },
+        "start": 10000,
+        "steps": [
+          { "input": "os_dwell", "at": 10000 },
+          { "input": "suppress", "at": 10010 },
+          { "input": "fix", "at": 10020, "position": [48.85, 2.35], "accuracy_meters": 10 },
+          { "input": "fix", "at": 10060, "position": [48.85, 2.35], "accuracy_meters": 10 },
+          { "input": "resume", "at": 10070 },
+          { "input": "fix", "at": 10080, "position": [48.85, 2.35], "accuracy_meters": 10 }
+        ]
+      },
+      "expected": { "after": ["Inside", "Suppressed", "Suppressed", "Suppressed", "Outside", "Candidate"] }
+    },
+    {
+      "name": "stale-input-is-rejected",
+      "inputs": {
+        "fence": { "circle": { "center": [48.85, 2.35], "radius_meters": 200 } },
+        "start": 10000,
+        "steps": [
+          { "input": "fix", "at": 10100, "position": [48.85, 2.35], "accuracy_meters": 10 },
+          { "input": "os_exit", "at": 10099 },
+          { "input": "fix", "at": 10130, "position": [48.85, 2.35], "accuracy_meters": 10 }
+        ]
+      },
+      "expected": { "after": ["Candidate", { "error": "StaleInput" }, "Inside"] }
+    },
+    {
+      "name": "dwell-in-a-polygon-region-is-only-a-candidate",
+      "inputs": {
+        "fence": {
+          "polygon": [[48.85, 2.35], [48.85, 2.354], [48.853, 2.354], [48.853, 2.35]]
+        },
+        "start": 10000,
+        "steps": [
+          { "input": "os_dwell", "at": 10090 },
+          { "input": "fix", "at": 10100, "position": [48.8515, 2.352], "accuracy_meters": 20 },
+          { "input": "fix", "at": 10130, "position": [48.8515, 2.352], "accuracy_meters": 20 }
+        ]
+      },
+      "expected": { "after": ["Candidate", "Candidate", "Inside"] }
+    }
+  ]
+}

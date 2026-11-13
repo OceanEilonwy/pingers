@@ -169,7 +169,7 @@ impl Polygon {
         &self.vertices
     }
 
-    /// Whether `point` is inside or on the polygon. A point within a micrometre of an edge
+    /// Whether `point` is inside or on the polygon. A point within a centimetre of an edge
     /// counts as on it.
     #[must_use]
     pub fn contains(&self, point: Coordinate) -> bool {
@@ -714,7 +714,7 @@ mod tests {
                 // A circle round the star's centre through its farthest vertex also covers
                 // every vertex, so the minimal one is no larger.
                 let farthest = star.rays.iter().map(|&[_, length]| length).fold(0.0, f64::max);
-                prop_assert!(circle.radius().get() <= farthest + 1e-3);
+                prop_assert!(circle.radius().get() <= farthest + 0.02);
                 // No circle covering two vertices is smaller than half their distance.
                 let widest = polygon.vertices().iter().flat_map(|first| {
                     polygon.vertices().iter().map(move |second| distance(*first, *second).get())

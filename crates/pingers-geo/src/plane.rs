@@ -17,9 +17,11 @@ use core::fmt;
 use crate::measure::EARTH_RADIUS_METERS;
 use crate::{Coordinate, GeoError, bearing, distance};
 
-/// Two points closer than this are treated as touching when checking self-intersection, and a
-/// point this close to an edge counts as on the boundary (inside).
-pub(crate) const TOUCH_TOLERANCE_METERS: f64 = 1e-6;
+/// Two points closer than this are treated as touching when checking self-intersection, a
+/// polygon whose vertices all lie this close to one line is degenerate, and a
+/// point this close to an edge counts as on the boundary (inside). A centimetre absorbs the
+/// rounding of coordinates stored to 7 decimal places, and is far below GPS accuracy.
+pub(crate) const TOUCH_TOLERANCE_METERS: f64 = 0.01;
 
 /// A position in metres east and north of a projection origin. `Debug` is redacted: with the
 /// origin, it is a location.
@@ -526,7 +528,7 @@ mod tests {
         ])));
         assert!(!is_collinear(&ring(&[
             [0.0, 0.0],
-            [50.0, 0.001],
+            [50.0, 0.05],
             [100.0, 0.0]
         ])));
         assert!(is_collinear(&[]));
@@ -581,7 +583,7 @@ mod tests {
                 .iter()
                 .map(|vertex| circle.center.distance_to(*vertex))
                 .fold(0.0, f64::max);
-            prop_assert!(farthest <= circle.radius + 1e-6);
+            prop_assert!(farthest <= circle.radius + 0.02);
             prop_assert!(farthest >= circle.radius - 1e-6);
             let widest = planar
                 .iter()
