@@ -100,9 +100,12 @@ android {
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // The publisher's map host, the last link of the map host chain (a user override, then
-        // the host the Pingers server advertises, then this). A placeholder until the publisher
-        // decides who hosts: `-PpingersMapHost=https://maps.example.org`.
-        val mapHost = (project.findProperty("pingersMapHost") as String?) ?: "https://maps.pingers.invalid"
+        // the host the Pingers server advertises, then this). Deployment configuration, never
+        // source: CI sets PINGERS_MAP_HOST, or pass `-PpingersMapHost=https://maps.example.org`.
+        // Unset, it is a host that never resolves, so a local build contacts nobody's server.
+        val mapHost = providers.gradleProperty("pingersMapHost")
+            .orElse(providers.environmentVariable("PINGERS_MAP_HOST"))
+            .getOrElse("https://maps.pingers.invalid")
         buildConfigField("String", "MAP_HOST", "\"$mapHost\"")
     }
 
