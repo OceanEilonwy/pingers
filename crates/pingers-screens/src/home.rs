@@ -5,7 +5,7 @@
 use pingers_gate::{GateDecision, LocationSharing, SuppressReason};
 use pingers_proto::{GroupId, PartyId};
 
-use crate::common::{Initials, Name, PartyColour, Person};
+use crate::common::{Initials, Name, PartyColour, Person, people};
 use crate::snapshot::{ClientSnapshot, Meetup, PauseInFocus};
 
 /// The Home screen.
@@ -139,7 +139,7 @@ pub fn home(snapshot: &ClientSnapshot) -> Home {
     let settings = &snapshot.settings;
     let live_meetup = snapshot.meetups.iter().find_map(|meetup| {
         let names = meetup_names(snapshot, meetup)?;
-        let mut people = meetup.people();
+        let mut people = people(meetup);
         people.rotate_left(1);
         Some(LiveMeetupCard {
             meetup: meetup.id,
@@ -153,7 +153,7 @@ pub fn home(snapshot: &ClientSnapshot) -> Home {
         .iter()
         .map(|party| PartyRow {
             id: party.id,
-            initials: party.name.initials(),
+            initials: Initials::of(&party.name),
             name: party.name.clone(),
             colour: party.colour,
             members: party.members.len(),
