@@ -305,6 +305,12 @@ fn leaver_proposes_and_another_member_commits() -> TestResult {
     assert!(!group_c.roster().contains_key(&b.public_key()));
     let sealed = group_c.seal_application(&padded(b"bye B")?, &mut rng)?;
     assert_eq!(application(group_a.process(&sealed)?)?.0, LeafIndex::new(2));
+    // The committed proposal is gone from storage too: reloaded groups can seal.
+    drop((group_a, group_c));
+    for device in [&a, &c] {
+        let mut reloaded = device.context().party_group(&group_id(1))?;
+        reloaded.seal_application(&padded(b"after reload")?, &mut rng)?;
+    }
     Ok(())
 }
 
