@@ -268,6 +268,25 @@ mod tests {
     }
 
     #[test]
+    fn peer_naming_our_own_record_does_not_make_us_wait() {
+        // Equal randomness only arises from a replayed or forged record; waiting on it would
+        // leave both sides waiting, so the poster creates.
+        let knock = knock_from(Some(record(5)));
+        assert_eq!(
+            decide_knock(
+                &knock,
+                &LIVE,
+                &KnockSituation {
+                    own_record: &record(5),
+                    knocked_records: &[record(5)],
+                    current_meetup: None
+                }
+            ),
+            KnockDecision::Accept(Admission::CreateMeetup)
+        );
+    }
+
+    #[test]
     fn smaller_peer_record_we_did_not_knock_is_accepted() {
         let knock = knock_from(Some(record(2)));
         assert_eq!(
