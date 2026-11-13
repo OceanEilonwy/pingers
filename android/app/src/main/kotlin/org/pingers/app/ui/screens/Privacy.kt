@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.pingers.app.CoreInfo
 import org.pingers.app.Navigator
 import org.pingers.app.R
 import org.pingers.app.Route
@@ -235,7 +236,7 @@ private val points = listOf(
 )
 
 @Composable
-fun SecurityScreen(nav: Navigator) {
+fun SecurityScreen(core: CoreInfo, nav: Navigator) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val docNote = stringResource(R.string.sec_doc_soon)
     Page(
@@ -280,9 +281,17 @@ fun SecurityScreen(nav: Navigator) {
         }
         Text(stringResource(R.string.sec_hood), style = heading(20.sp), modifier = Modifier.padding(start = 4.dp, top = 12.dp).semantics { heading() })
         Card(padding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)) {
-            stringArrayResource(R.array.sec_hood_items).forEachIndexed { i, item ->
+            val hood = stringArrayResource(R.array.sec_hood_items).map { item ->
+                item.split("|", limit = 2).let { it[0] to it.getOrElse(1) { "" } }
+            } + listOfNotNull(
+                stringResource(R.string.sec_core) to stringResource(R.string.sec_core_version, core.version),
+                core.bucket?.let { b ->
+                    stringResource(R.string.sec_bucket) to
+                        stringResource(R.string.sec_bucket_value, b.index.toString(), (b.lengthSeconds / 60u).toInt())
+                },
+            )
+            hood.forEachIndexed { i, (k, v) ->
                 if (i > 0) RowDivider()
-                val (k, v) = item.split("|", limit = 2).let { it[0] to it.getOrElse(1) { "" } }
                 Row(Modifier.padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(k, style = body(14.sp), modifier = Modifier.weight(1f))
                     Text(v, style = body(14.sp, color = Pc.Muted), textAlign = TextAlign.End, modifier = Modifier.weight(1f))

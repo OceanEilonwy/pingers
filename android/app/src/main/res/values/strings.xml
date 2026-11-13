@@ -251,6 +251,11 @@
         <item>Fallback rate limiting|Privacy Pass · RFC 9578</item>
         <item>Post-quantum option|X-Wing hybrid</item>
     </string-array>
+    <!-- Rows the Rust core fills in, after sec_hood_items -->
+    <string name="sec_core">Pingers core</string>
+    <string name="sec_core_version">Core %1$s</string>
+    <string name="sec_bucket">Current time bucket</string>
+    <string name="sec_bucket_value">#%1$s · %2$d min</string>
     <string name="sec_read_doc">Read the design document</string>
     <string name="sec_doc_soon">The design document link arrives with the first release.</string>
 
@@ -277,8 +282,8 @@
         <item quantity="one">Only the %1$d person here can see this meetup.</item>
         <item quantity="other">Only the %1$d people here can see this meetup.</item>
     </plurals>
-    <string name="meetup_shared_with">Your exact spot: shared with %1$s</string>
-    <string name="meetup_shared_nobody">Your exact spot: private</string>
+    <string name="meetup_shared_with">Your exact spot: shared with %1$s.</string>
+    <string name="meetup_shared_nobody">Your exact spot: private.</string>
     <string name="meetup_manage">Manage</string>
     <string name="meet_at">Meet at %1$s</string>
     <string name="meet_point_default">the pin</string>

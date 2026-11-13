@@ -22,6 +22,7 @@ ignore = [
   { id = "RUSTSEC-2024-0384", reason = "instant unmaintained: via rln's unconditional sled, unreachable from pingers-anon. No fix upstream." },
   { id = "RUSTSEC-2024-0436", reason = "paste unmaintained: widely used build-time macro crate. No fix upstream." },
   { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 unmaintained: build-time macro dependency. No fix upstream." },
+  { id = "RUSTSEC-2026-0374", reason = "basic-toml unmaintained: via askama in uniffi_bindgen 0.32, which renders the bindings at build time only; the shipped library parses no TOML. Re-check on the next uniffi release." },
 ]
 
 [licenses]
