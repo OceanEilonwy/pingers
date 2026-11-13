@@ -3,6 +3,15 @@
 //!
 //! ```toml
 //! listen = "0.0.0.0:8080"
+//! server_id = "https://pingers.example"   # this server's origin: RLN proofs and account
+//!                                  # registrations are bound to it
+//! server_operator = "Example Ltd"  # optional, shown in /v1/params (default: server_id)
+//! registration_codes = ["<code>"]  # optional: without it anyone may register an account
+//! ohttp_relay_urls = ["https://relay.example/ohttp"]   # advertised in /v1/params
+//! delivery_db = "/var/lib/pingers/groups.sqlite"       # optional: without it, in memory
+//! quota_db = "/var/lib/pingers/quota.sqlite"           # optional: without it, in memory
+//! push_relay_ca = "/etc/pingers/push-relay-ca.pem"     # optional: extra trust roots for
+//!                                  # the push relays' TLS certificates (still https only)
 //! logging = "off"                  # or "counts": request totals every counts_interval_s
 //! counts_interval_s = 3600
 //! request_timeout_s = 30           # how long a client may take to send a request body
@@ -25,6 +34,8 @@
 //! relay_id = 1                     # what devices name in RelayRef::Listed
 //! url = "https://push.example"
 //! credential = "<the bearer credential this relay issued to this server>"
+//! key_config_hash = "<64 hex>"     # optional, with operator: listed in /v1/params
+//! operator = "Push Relay Ltd"
 //! ```
 //!
 //! The relay-only rule (design B.12) is an address allow-list: the relay leg runs on a private
@@ -38,7 +49,7 @@ use std::time::Duration;
 
 use pingers_mailbox::{ListedRelays, RelayCredential, RelayTarget};
 use pingers_ohttp::{GatewayKey, KeyConfig, OhttpError};
-use pingers_proto::{RelayId, RelayUrl};
+use pingers_proto::{KeyConfigHash, PushRelayInfo, RelayId, RelayUrl, SecretText, ServerId};
 use serde::Deserialize;
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -80,6 +91,18 @@ pub enum ConfigError {
     /// A push relay URL is not `https://`.
     #[error("configuration: push_relays.url must start with https://")]
     RelayUrl,
+    /// `server_id` is not an `https://` origin.
+    #[error("configuration: server_id must be an https:// origin")]
+    ServerId,
+    /// An `ohttp_relay_urls` entry is not `https://`.
+    #[error("configuration: ohttp_relay_urls must start with https://")]
+    OhttpRelayUrl,
+    /// A push relay's `key_config_hash` is not 64 hex digits, or only one of
+    /// `key_config_hash` and `operator` is given.
+    #[error(
+        "configuration: push_relays.key_config_hash must be 64 hex digits, given with operator"
+    )]
+    RelayInfo,
     /// A duration or count is zero.
     #[error("configuration: {field} must be positive")]
     OutOfRange {
@@ -207,6 +230,23 @@ impl core::fmt::Debug for OhttpKeys {
 pub struct ServerConfig {
     /// Where the binary listens (the library is handed a bound listener instead).
     pub listen: SocketAddr,
+    /// This server's origin. RLN external nullifiers and registration proofs commit to it.
+    pub server_id: ServerId,
+    /// Who runs the server, as published in `/v1/params`.
+    pub server_operator: String,
+    /// Codes that allow `POST /v1/accounts`; empty means anyone may register (design B.1).
+    pub registration_codes: Vec<SecretText>,
+    /// The OHTTP relays advertised in `/v1/params`.
+    pub ohttp_relay_urls: Vec<RelayUrl>,
+    /// The push relays advertised in `/v1/params` (those configured with a key hash and an
+    /// operator).
+    pub advertised_push_relays: Vec<PushRelayInfo>,
+    /// Extra trust roots for the push relays' TLS certificates, besides the system's.
+    pub push_relay_ca: Option<CertificateSource>,
+    /// Where group logs, subscriptions and snapshots are kept.
+    pub delivery_store: Database,
+    /// Where the membership tree, issuer keys and spent tokens are kept.
+    pub quota_store: Database,
     /// Whether anything is written.
     pub logging: Logging,
     /// How long a client may take to send a whole request body (one-shot requests, the head
@@ -219,7 +259,7 @@ pub struct ServerConfig {
     /// Who may `GET /metrics`; empty means the route does not exist.
     pub metrics: AddressList,
     /// Where mailboxes are kept.
-    pub mailbox_store: MailboxStore,
+    pub mailbox_store: Database,
     /// Posts one mailbox accepts per bucket (pingers-mailbox's `PostsPerBucket`).
     pub mailbox_posts_per_bucket: NonZeroU32,
     /// The push relays mailbox wakes are forwarded to.
@@ -230,28 +270,64 @@ pub struct ServerConfig {
     pub expire_interval: Duration,
 }
 
-/// Where mailboxes are kept.
+/// Where one of the server's stores is kept.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MailboxStore {
+pub enum Database {
     /// In memory: lost on restart.
     Memory,
     /// An SQLite file.
     File(PathBuf),
 }
 
+/// PEM certificates to trust as roots.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CertificateSource {
+    /// A PEM file, read when the server starts.
+    File(PathBuf),
+    /// PEM text (the in-process harness's test CA).
+    Pem(Vec<u8>),
+}
+
+/// What every configuration must name.
+#[derive(Debug)]
+pub struct Required {
+    /// Where the binary listens.
+    pub listen: SocketAddr,
+    /// This server's origin.
+    pub server_id: ServerId,
+    /// The gateway's keys.
+    pub ohttp_keys: OhttpKeys,
+    /// Who may `POST /ohttp`.
+    pub relays: RelayAllowList,
+}
+
 impl ServerConfig {
-    /// A configuration with the given keys and relays, logging off, no metrics, mailboxes in
-    /// memory, no push relays, and the file defaults for everything else.
+    /// A configuration with the required fields, logging off, no metrics, every store in
+    /// memory, open registration, no push relays, and the file defaults for everything else.
     #[must_use]
-    pub fn new(listen: SocketAddr, ohttp_keys: OhttpKeys, relays: RelayAllowList) -> Self {
+    pub fn new(required: Required) -> Self {
+        let Required {
+            listen,
+            server_id,
+            ohttp_keys,
+            relays,
+        } = required;
         Self {
             listen,
+            server_operator: server_id.as_str().to_owned(),
+            server_id,
+            registration_codes: Vec::new(),
+            ohttp_relay_urls: Vec::new(),
+            advertised_push_relays: Vec::new(),
+            push_relay_ca: None,
+            delivery_store: Database::Memory,
+            quota_store: Database::Memory,
             logging: Logging::Off,
             request_timeout: Duration::from_secs(default_request_timeout()),
             ohttp_keys,
             relays,
             metrics: AddressList::default(),
-            mailbox_store: MailboxStore::Memory,
+            mailbox_store: Database::Memory,
             mailbox_posts_per_bucket: DEFAULT_POSTS_PER_BUCKET,
             push_relays: ListedRelays::default(),
             push_timeout: Duration::from_secs(default_push_timeout()),
@@ -270,6 +346,15 @@ const DEFAULT_POSTS_PER_BUCKET: NonZeroU32 = match NonZeroU32::new(60) {
 #[serde(deny_unknown_fields)]
 struct File {
     listen: SocketAddr,
+    server_id: String,
+    server_operator: Option<String>,
+    #[serde(default)]
+    registration_codes: Vec<String>,
+    #[serde(default)]
+    ohttp_relay_urls: Vec<String>,
+    delivery_db: Option<PathBuf>,
+    quota_db: Option<PathBuf>,
+    push_relay_ca: Option<PathBuf>,
     #[serde(default)]
     logging: FileLogging,
     #[serde(default = "default_counts_interval")]
@@ -295,6 +380,8 @@ struct FilePushRelay {
     relay_id: u16,
     url: String,
     credential: String,
+    key_config_hash: Option<String>,
+    operator: Option<String>,
 }
 
 const fn default_push_timeout() -> u64 {
@@ -305,9 +392,16 @@ const fn default_expire_interval() -> u64 {
     60
 }
 
-fn push_relays(relays: Vec<FilePushRelay>) -> Result<ListedRelays, ConfigError> {
+/// The configured relays, and those of them to advertise.
+struct PushRelays {
+    listed: ListedRelays,
+    advertised: Vec<PushRelayInfo>,
+}
+
+fn push_relays(relays: Vec<FilePushRelay>) -> Result<PushRelays, ConfigError> {
     let mut seen = Vec::with_capacity(relays.len());
     let mut listed = Vec::with_capacity(relays.len());
+    let mut advertised = Vec::new();
     for relay in relays {
         if seen.contains(&relay.relay_id) {
             return Err(ConfigError::DuplicateRelayId {
@@ -316,6 +410,18 @@ fn push_relays(relays: Vec<FilePushRelay>) -> Result<ListedRelays, ConfigError> 
         }
         seen.push(relay.relay_id);
         let url = RelayUrl::new(relay.url).map_err(|_| ConfigError::RelayUrl)?;
+        match (relay.key_config_hash, relay.operator) {
+            (None, None) => {}
+            (Some(hash), Some(operator)) => advertised.push(PushRelayInfo {
+                relay_id: RelayId::new(relay.relay_id),
+                url: url.clone(),
+                key_config_hash: KeyConfigHash::from_bytes(
+                    crate::wire::hex_array(&hash).ok_or(ConfigError::RelayInfo)?,
+                ),
+                operator,
+            }),
+            (Some(_), None) | (None, Some(_)) => return Err(ConfigError::RelayInfo),
+        }
         listed.push((
             RelayId::new(relay.relay_id),
             RelayTarget {
@@ -324,7 +430,10 @@ fn push_relays(relays: Vec<FilePushRelay>) -> Result<ListedRelays, ConfigError> 
             },
         ));
     }
-    Ok(ListedRelays::new(listed))
+    Ok(PushRelays {
+        listed: ListedRelays::new(listed),
+        advertised,
+    })
 }
 
 #[derive(Default, Deserialize)]
@@ -388,23 +497,41 @@ impl ServerConfig {
             .into_iter()
             .map(gateway_key)
             .collect::<Result<Vec<_>, _>>()?;
+        let server_id = ServerId::new(file.server_id).map_err(|_| ConfigError::ServerId)?;
+        let push = push_relays(file.push_relays)?;
         Ok(Self {
             listen: file.listen,
+            server_operator: file
+                .server_operator
+                .unwrap_or_else(|| server_id.as_str().to_owned()),
+            server_id,
+            registration_codes: file
+                .registration_codes
+                .into_iter()
+                .map(SecretText::new)
+                .collect(),
+            ohttp_relay_urls: file
+                .ohttp_relay_urls
+                .into_iter()
+                .map(|url| RelayUrl::new(url).map_err(|_| ConfigError::OhttpRelayUrl))
+                .collect::<Result<_, _>>()?,
+            advertised_push_relays: push.advertised,
+            push_relay_ca: file.push_relay_ca.map(CertificateSource::File),
+            delivery_store: file.delivery_db.map_or(Database::Memory, Database::File),
+            quota_store: file.quota_db.map_or(Database::Memory, Database::File),
             logging,
             request_timeout: positive_seconds("request_timeout_s", file.request_timeout_s)?,
             ohttp_keys: OhttpKeys::new(keys)?,
             relays: RelayAllowList::new(file.ohttp.relays)?,
             metrics: AddressList::new(file.metrics.allow),
-            mailbox_store: file
-                .mailbox_db
-                .map_or(MailboxStore::Memory, MailboxStore::File),
+            mailbox_store: file.mailbox_db.map_or(Database::Memory, Database::File),
             mailbox_posts_per_bucket: match file.mailbox_posts_per_bucket {
                 None => DEFAULT_POSTS_PER_BUCKET,
                 Some(count) => NonZeroU32::new(count).ok_or(ConfigError::OutOfRange {
                     field: "mailbox_posts_per_bucket",
                 })?,
             },
-            push_relays: push_relays(file.push_relays)?,
+            push_relays: push.listed,
             push_timeout: positive_seconds("push_timeout_s", file.push_timeout_s)?,
             expire_interval: positive_seconds("expire_interval_s", file.expire_interval_s)?,
         })

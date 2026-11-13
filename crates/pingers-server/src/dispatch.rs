@@ -2,13 +2,14 @@
 //! From a decoded request to the crate that answers it. No logic of its own (architecture §3):
 //! the channel check of design B.12, then one call per route.
 
+use std::sync::Arc;
+
 use axum::http::StatusCode;
 use pingers_ohttp::{BinaryRequest, BinaryResponse, Header, OhttpError};
 
-use crate::Shared;
 use crate::route::{Channel, Resolved, Route, resolve};
 use crate::wire::either;
-use crate::{board_routes, mailbox_routes};
+use crate::{LiveRoute, Shared, board_routes, groups, mailbox_routes, quota_routes};
 
 /// RFC 9458 key config media type.
 pub(crate) const OHTTP_KEYS: &str = "application/ohttp-keys";
@@ -18,6 +19,8 @@ pub(crate) const OHTTP_KEYS: &str = "application/ohttp-keys";
 pub(crate) struct Reply {
     pub(crate) status: StatusCode,
     pub(crate) content_type: Option<&'static str>,
+    /// Further response headers (a new group session).
+    pub(crate) headers: Vec<(&'static str, String)>,
     pub(crate) body: Vec<u8>,
 }
 
@@ -27,8 +30,15 @@ impl Reply {
         Self {
             status,
             content_type: None,
+            headers: Vec::new(),
             body: Vec::new(),
         }
+    }
+
+    /// The reply with one more header.
+    pub(crate) fn with_header(mut self, name: &'static str, value: String) -> Self {
+        self.headers.push((name, value));
+        self
     }
 
     /// The reply as an inner Binary HTTP response.
@@ -42,6 +52,10 @@ impl Reply {
                     value: content_type.as_bytes().to_vec(),
                 })
                 .into_iter()
+                .chain(self.headers.into_iter().map(|(name, value)| Header {
+                    name: name.to_owned(),
+                    value: value.into_bytes(),
+                }))
                 .collect(),
             body: self.body,
         })
@@ -50,7 +64,11 @@ impl Reply {
 
 /// Answers a request that arrived on `channel` (direct or one-shot OHTTP; the live channel
 /// has its own path through the gateway).
-pub(crate) async fn answer(shared: &Shared, channel: Channel, request: &BinaryRequest) -> Reply {
+pub(crate) async fn answer(
+    shared: &Arc<Shared>,
+    channel: Channel,
+    request: &BinaryRequest,
+) -> Reply {
     match resolve(&request.method, &request.path) {
         Resolved::NotFound => Reply::status(StatusCode::NOT_FOUND),
         Resolved::MethodNotAllowed => Reply::status(StatusCode::METHOD_NOT_ALLOWED),
@@ -63,57 +81,70 @@ pub(crate) async fn answer(shared: &Shared, channel: Channel, request: &BinaryRe
     }
 }
 
-/// One call per route, to the crate that owns it.
-///
-/// Anonymous routes are served without checking the RLN proof or Privacy Pass token yet:
-/// that check is pingers-quota's, which has no API on main.
-async fn dispatch(shared: &Shared, route: Route, request: &BinaryRequest) -> Reply {
-    match route {
-        Route::OhttpConfig => Reply {
-            status: StatusCode::OK,
-            content_type: Some(OHTTP_KEYS),
-            body: shared.served_config.encoded().to_vec(),
+/// A route handler that may block (SQLite, proof verification).
+type Blocking = fn(&Shared, &BinaryRequest) -> Result<Reply, Reply>;
+
+/// Runs `handler` on the blocking pool.
+async fn blocking(shared: &Arc<Shared>, request: &BinaryRequest, handler: Blocking) -> Reply {
+    let shared = Arc::clone(shared);
+    let request = request.clone();
+    tokio::task::spawn_blocking(move || either(handler(&shared, &request)))
+        .await
+        .unwrap_or_else(|_| Reply::status(StatusCode::INTERNAL_SERVER_ERROR))
+}
+
+/// One call per route, to the crate that owns it. Anonymous routes that take an Anon
+/// credential check it first (`credential.rs`); Cap routes (board pages and revokes, mailbox
+/// reads and deletes) carry their capability instead.
+async fn dispatch(shared: &Arc<Shared>, route: Route, request: &BinaryRequest) -> Reply {
+    let handler: Blocking = match route {
+        Route::OhttpConfig => {
+            return Reply {
+                status: StatusCode::OK,
+                content_type: Some(OHTTP_KEYS),
+                headers: Vec::new(),
+                body: shared.served_config.encoded().to_vec(),
+            };
+        }
+        Route::BoardPage => return board_routes::page(shared, request),
+        Route::BoardRevokeLease => return board_routes::revoke(shared, request),
+        Route::CreateMailbox => return either(mailbox_routes::register(shared, request).await),
+        Route::PostToMailbox => return either(mailbox_routes::post(shared, request).await),
+        Route::ReadMailbox => return either(mailbox_routes::read(shared, request).await),
+        Route::DeleteMailbox => return either(mailbox_routes::delete(shared, request).await),
+        Route::Live => match &shared.live {
+            LiveRoute::Groups => groups::uplink,
+            // A split channel's uplink frame; the chunked exchange goes through the gateway.
+            LiveRoute::Custom(channel) => return live_uplink(channel.as_ref(), request),
         },
-        Route::BoardSync => board_routes::sync(shared, request),
-        Route::BoardPage => board_routes::page(shared, request),
-        Route::BoardRevokeLease => board_routes::revoke(shared, request),
-        Route::CreateMailbox => either(mailbox_routes::register(shared, request).await),
-        Route::PostToMailbox => either(mailbox_routes::post(shared, request).await),
-        Route::ReadMailbox => either(mailbox_routes::read(shared, request).await),
-        Route::DeleteMailbox => either(mailbox_routes::delete(shared, request).await),
-        // A split channel's uplink frame; the chunked exchange goes through the gateway.
-        Route::Live => live_uplink(shared, request),
-        // Waiting on pingers-delivery (group logs, subscriptions; the live channel is
-        // `LiveChannel`).
-        Route::CreateGroup
-        | Route::Commit
-        | Route::PutSubscription
-        | Route::DeleteSubscription
-        | Route::PostGroupMessage
-        | Route::ReadGroupMessages
-        | Route::GroupState
-        | Route::DeleteGroup
-        // Waiting on pingers-quota (accounts gate leaf registration and token issuance; the
-        // membership tree; Privacy Pass).
-        | Route::CreateAccount
-        | Route::Auth
-        | Route::DeleteAccount
-        | Route::RlnLeaf
-        | Route::RlnLeaves
-        | Route::PrivacyPassIssue
-        | Route::PrivacyPassKeys
-        // Waiting on pingers-quota, whose credential policy it publishes.
-        | Route::Params => Reply::status(StatusCode::NOT_IMPLEMENTED),
-    }
+        Route::BoardSync => board_routes::sync,
+        Route::CreateGroup => groups::create,
+        Route::Commit => groups::commit,
+        Route::PutSubscription => groups::put_subscription,
+        Route::DeleteSubscription => groups::delete_subscription,
+        Route::PostGroupMessage => groups::post,
+        Route::ReadGroupMessages => groups::read,
+        Route::GroupState => groups::state,
+        Route::DeleteGroup => groups::delete,
+        Route::Params => quota_routes::params,
+        Route::CreateAccount => quota_routes::create_account,
+        Route::Auth => quota_routes::auth,
+        Route::DeleteAccount => quota_routes::delete_account,
+        Route::RlnLeaf => quota_routes::rln_leaf,
+        Route::RlnLeaves => quota_routes::rln_leaves,
+        Route::PrivacyPassIssue => quota_routes::issue,
+        Route::PrivacyPassKeys => quota_routes::keys,
+    };
+    blocking(shared, request, handler).await
 }
 
 /// `POST /v1/groups/{id}/live` as a one-shot request: one uplink frame of a split channel.
-fn live_uplink(shared: &Shared, request: &BinaryRequest) -> Reply {
+fn live_uplink(channel: &dyn crate::LiveChannel, request: &BinaryRequest) -> Reply {
     if request.body.is_empty() {
         return Reply::status(StatusCode::BAD_REQUEST);
     }
     let frame = crate::LiveFrame::new(request.body.clone());
-    match shared.live.send(request, frame) {
+    match channel.send(request, frame) {
         Ok(()) => Reply::status(StatusCode::ACCEPTED),
         Err(crate::LiveRefused::NoChannel) => Reply::status(StatusCode::NOT_FOUND),
         Err(crate::LiveRefused::NotWired) => Reply::status(StatusCode::NOT_IMPLEMENTED),

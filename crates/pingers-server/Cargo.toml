@@ -12,11 +12,17 @@ layer = 5
 
 [dependencies]
 pingers-board-store = { workspace = true }
-pingers-delivery = { workspace = true }
+# Group logs persist in SQLite (in memory when no file is configured).
+pingers-delivery = { workspace = true, features = ["sqlite"] }
 # Mailboxes persist in SQLite (in memory when no file is configured).
 pingers-mailbox = { workspace = true, features = ["sqlite"] }
 pingers-ohttp = { workspace = true }
-pingers-quota = { workspace = true }
+# The membership tree, issuer keys and spent tokens persist in SQLite (likewise).
+pingers-quota = { workspace = true, features = ["sqlite"] }
+# The request digest an RLN proof's `x` must match, and the id commitment type.
+pingers-anon = { workspace = true }
+# Constant-time comparison of registration codes.
+subtle = { workspace = true }
 pingers-time = { workspace = true }
 # Mailbox read keys (the Cap credential) are pingers-crypto types.
 pingers-crypto = { workspace = true }
@@ -42,6 +48,8 @@ zeroize = { workspace = true }
 # The in-process harness and its OHTTP relay (integration tests only: the testkit depends on
 # this crate's library, so unit tests would see a second copy of its types).
 pingers-testkit = { workspace = true, features = ["harness"] }
+# Proofs and tokens for the credential tests.
+pingers-anon = { workspace = true, features = ["prover"] }
 pingers-time = { workspace = true, features = ["test-util"] }
 
 [lints]
