@@ -12,10 +12,10 @@
 //!   whole board. Prints the board size, the bytes of one read and one upload, and the daily
 //!   totals they imply. Knocks are planned but not generated yet.
 //!
-//! Until the L3 crates land only `--dry-run` runs: the timeline is replayed without clients
-//! and expectations are skipped. The runner calls the `ScenarioDriver` trait in
-//! `scenario/runner.rs`; `scenario/client_driver.rs` implements it over pingers-client and
-//! needs only the real crates to build each device's client from.
+//! `--dry-run` replays the timeline without clients. Without it each device gets a real
+//! pingers-client `Client` through `scenario/client_driver.rs`; until the L3 crates land the
+//! clients run on testkit's `FakeCrates` and expectations are skipped. Protocol-level runs
+//! against the real server live in pingers-e2e.
 #![forbid(unsafe_code)]
 
 mod args;
@@ -25,14 +25,17 @@ mod scenario;
 
 use std::fs;
 use std::io::{self, Write as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::Context as _;
+use pingers_client::ClientError;
+use pingers_testkit::FakeCrates;
 
 use crate::args::{Command, LoadMode, RunMode};
 use crate::config::{Config, Target};
-use crate::scenario::{Checks, DryRunDriver};
+use crate::scenario::{Checks, ClientDriver, DryRunDriver};
 
 fn main() -> ExitCode {
     match run(std::env::args().skip(1)) {
@@ -128,10 +131,32 @@ fn run_scenarios<'text>(
                 let mut driver = DryRunDriver::default();
                 runtime.block_on(scenario::run(&scenario, &mut driver, Checks::Skip))?
             }
-            RunMode::Client => anyhow::bail!(
-                "the client driver has no L3 crates to build clients from yet (target: {}); use --dry-run",
-                describe(&config.target)
-            ),
+            RunMode::Client => {
+                if !matches!(config.target, Target::InProcess) {
+                    anyhow::bail!(
+                        "client runs use the in-process harness only so far (target: {})",
+                        describe(&config.target)
+                    );
+                }
+                let directory = ScratchDirectory::new()?;
+                // TODO(wave 3): build the real pingers-parties, pingers-sync, pingers-wake and
+                // pingers-meetup-session against the in-process harness once they land, and
+                // evaluate expectations. Until then each client runs on testkit's FakeCrates,
+                // which record calls and raise no events, so expectations are skipped.
+                let mut driver =
+                    ClientDriver::new(directory.path().to_path_buf(), |_device, _database| {
+                        FakeCrates::new()
+                            .map(|fakes| fakes.crates())
+                            .map_err(|_invalid| ClientError::Internal)
+                    });
+                let report =
+                    runtime.block_on(scenario::run(&scenario, &mut driver, Checks::Skip))?;
+                writeln!(
+                    out,
+                    "{name}: clients ran on stand-in L3 crates (FakeCrates); expectations are skipped until the real crates land"
+                )?;
+                report
+            }
         };
         failed |= report.failed();
         writeln!(out, "{report}")?;
@@ -143,6 +168,33 @@ fn run_scenarios<'text>(
     })
 }
 
+/// A fresh directory for one run's client databases, removed on drop.
+struct ScratchDirectory(PathBuf);
+
+impl ScratchDirectory {
+    fn new() -> anyhow::Result<Self> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "pingers-cli-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&path).with_context(|| format!("creating {}", path.display()))?;
+        Ok(Self(path))
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for ScratchDirectory {
+    fn drop(&mut self) {
+        // Best effort: a leftover temporary directory fails nothing.
+        drop(fs::remove_dir_all(&self.0));
+    }
+}
+
 fn describe(target: &Target) -> String {
     match target {
         Target::InProcess => String::from("in-process harness"),
@@ -152,4 +204,27 @@ fn describe(target: &Target) -> String {
 
 fn read(path: &Path) -> anyhow::Result<String> {
     fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use super::*;
+
+    fn arguments(line: &str) -> Vec<String> {
+        line.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn the_bundled_scenarios_run_on_clients() -> anyhow::Result<()> {
+        assert_eq!(run(arguments("e2e all"))?, ExitCode::SUCCESS);
+        Ok(())
+    }
+
+    #[test]
+    fn the_bundled_scenarios_still_dry_run() -> anyhow::Result<()> {
+        assert_eq!(run(arguments("e2e g4 --dry-run"))?, ExitCode::SUCCESS);
+        Ok(())
+    }
 }

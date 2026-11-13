@@ -32,7 +32,8 @@ Commands:
   help                              Show this text
 
 --dry-run replays a timeline on the fake platforms without clients and skips
-expectations. Without it a client driver is needed (pingers-client, wave 3).
+expectations. Without it every device runs a pingers-client Client; until the
+L3 crates land those clients use stand-in crates and expectations are skipped.
 load runs N simulated devices (one lease of 4 records each) against the
 in-process server and relay, then measures one full board read and one upload.
 The scenario format is described in crates/pingers-cli/scenarios/README.md.
