@@ -28,6 +28,13 @@ impl AsRef<[u8]> for SymKey {
     }
 }
 
+// Pingers patch: symmetric keys (exported secrets, PRKs, AEAD keys) are zeroed on drop.
+impl Drop for SymKey {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.0);
+    }
+}
+
 impl std::fmt::Debug for SymKey {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // Pingers patch: the unsafe-print-secrets feature is removed.
