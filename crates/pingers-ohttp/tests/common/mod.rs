@@ -82,15 +82,12 @@ impl rand_core::TryRng for ReplayRng {
 
     fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Infallible> {
         for byte in destination {
-            match self.bytes.get(self.position) {
-                Some(next) => {
-                    *byte = *next;
-                    self.position = self.position.saturating_add(1);
-                }
-                None => {
-                    *byte = 0;
-                    self.overdrawn = true;
-                }
+            if let Some(next) = self.bytes.get(self.position) {
+                *byte = *next;
+                self.position = self.position.saturating_add(1);
+            } else {
+                *byte = 0;
+                self.overdrawn = true;
             }
         }
         Ok(())

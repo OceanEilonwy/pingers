@@ -1,0 +1,119 @@
+{
+  "description": "Chunked OHTTP (draft-ietf-ohai-chunked-ohttp-08, design B.4.9) with AES-128-GCM. The preamble is the request header plus one chunk holding the known-length Binary HTTP request head; every later chunk is one frame. Failure cases give a whole request or response stream; an empty non-final chunk is a decryption error (draft-08 section 6).",
+  "name": "ohttp/chunked",
+  "vectors": [
+    {
+      "expected": {
+        "binary_request_head": "0004504f535405687474707300302f76312f67726f7570732f30303131323233333434353536363737383839396161626263636464656566662f6c6976651a0d617574686f72697a6174696f6e0b67726f75702d746f6b656e",
+        "preamble": "010020000100011045e1e902b78d7f74c668716b022bd513378d552a526d6533ef16e286749c3d40695946da6066a04b6110c4945a377184022f8bf3b3faf6b9d5f8835613e94b5126f2d2180d4f481258362979eec8fae2e0ec1c6eb653192e4694d7dd23c5af6696afa6606a1371e043ca74a9ebb846df4655fbac963848bd5673242656c5361cace9743761cd24976c49",
+        "request_chunk_0_framed": "24bf5c76aa12c0d8b7ca56b8890bd0fb13003281f75dc6f82eba1bca381a8a4820c6b4dfec",
+        "request_chunk_1_framed": "4110755b882f65f9e59908db2f3c8c8f92f622900d87055c49e8997de4c0739e79b0d00ed1a6f3e18f2c01072212387f27064c14238ab2c5ddd704310b60a9476f5b9cf2bff673152a5f15c876fb12881823f2e4f2134b08778ff7ad2df13633a5330425923cbc7f29d9775dde2f0c7f126a452a728b07905049ef3a3c683574f0c4028141a90afd3599703c955b03201c7a11b1667b1e74fd5b1b7ba53db80db933cc9a40b0a18518dbe90a6d943dbd3666bff05c0527f878ed0d8af42614ccb6dfa805540a6898cf138bb3fbc4f50b221c3c6df08c64f3c0467f5586a45d347ebe47659cbcbd962963fbdbff754c6d52ea0d6fbbeb20c77ced9e87d3819562db70155a8014dbe4563953e7323049719f26",
+        "request_final_chunk_framed": "0039eb8e9ff0d208a9edd26854f698683a2bed9f",
+        "response_chunk_0_framed": "411075286128bd18a2d0bde117ed74b90f294cf0a3f3d59419b922c1c32a8546940f6218088fae9b73d49968869bba542e7083a92d42024c10a611378998272927699f1d2c53f5a7c5b90e09adec9f2f2d2a8efd8afb7e9c043bfcbeaa4d711577878375eb471e18c8577eb78b2fd6fbc5a054b06737595ec14a1356ec8b19312e2ba4e537eca42476a90f13ae4566357c6597ace2f9f95227e52a52e961e097021d10b91315be86e2af1160d089a97244510c1f71126e39c58da21bba68bdfab5cf17f8b69d75f450203006e701484f548a9568edda0458130632f979e3043ab46923f90d542f29efbf5e4386f5e3ccc29af37426acfbe2ffd064294f163efe32577af974bb34b82959a3c712eeda0262e6",
+        "response_final_chunk_framed": "001135e1b72d4c90c9781f6cebbeb2cf47",
+        "response_preamble": "e0e1e2e3e4e5e6e7e8e9eaebecedeeef"
+      },
+      "inputs": {
+        "encapsulation_randomness": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "gateway_secret_key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "header_name": "authorization",
+        "header_value": "67726f75702d746f6b656e",
+        "key_id": 1,
+        "method": "POST",
+        "path": "/v1/groups/00112233445566778899aabbccddeeff/live",
+        "request_chunk_0": "101112131415161718191a1b1c1d1e1f20212223",
+        "request_chunk_1": "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+        "request_final_chunk": "627965",
+        "response_chunk_0": "505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+        "response_final_chunk": "",
+        "response_nonce": "e0e1e2e3e4e5e6e7e8e9eaebecedeeef"
+      },
+      "name": "live-channel"
+    },
+    {
+      "expected": {
+        "error": "EmptyNonFinalChunk"
+      },
+      "inputs": {
+        "encapsulation_randomness": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "gateway_secret_key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "header_name": "authorization",
+        "header_value": "67726f75702d746f6b656e",
+        "key_id": 1,
+        "method": "POST",
+        "path": "/v1/groups/00112233445566778899aabbccddeeff/live",
+        "request_stream": "010020000100011045e1e902b78d7f74c668716b022bd513378d552a526d6533ef16e286749c3d40695946da6066a04b6110c4945a377184022f8bf3b3faf6b9d5f8835613e94b5126f2d2180d4f481258362979eec8fae2e0ec1c6eb653192e4694d7dd23c5af6696afa6606a1371e043ca74a9ebb846df4655fbac963848bd5673242656c5361cace9743761cd24976c4915c93f05d463b4103a22d4a58adfba075b2f27b724d11005f8b8cc4324ccea16c8ccab2dbac96a003efc8f8dfffaff0db3a0eaacf7eb048e71d5c4",
+        "response_nonce": "e0e1e2e3e4e5e6e7e8e9eaebecedeeef"
+      },
+      "name": "empty-non-final-request-chunk"
+    },
+    {
+      "expected": {
+        "error": "EmptyNonFinalChunk"
+      },
+      "inputs": {
+        "encapsulation_randomness": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "gateway_secret_key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "header_name": "authorization",
+        "header_value": "67726f75702d746f6b656e",
+        "key_id": 1,
+        "method": "POST",
+        "path": "/v1/groups/00112233445566778899aabbccddeeff/live",
+        "response_nonce": "e0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+        "response_stream": "e0e1e2e3e4e5e6e7e8e9eaebecedeeef15430b52168c012a7c1027be448b886b89ae36ee712010c6fa6affb0f52573429b6890c5257b740073496f787519729b133399244d2f4c932db817"
+      },
+      "name": "empty-non-final-response-chunk"
+    },
+    {
+      "expected": {
+        "error": "Truncated"
+      },
+      "inputs": {
+        "encapsulation_randomness": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "gateway_secret_key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "header_name": "authorization",
+        "header_value": "67726f75702d746f6b656e",
+        "key_id": 1,
+        "method": "POST",
+        "path": "/v1/groups/00112233445566778899aabbccddeeff/live",
+        "request_stream": "010020000100011045e1e902b78d7f74c668716b022bd513378d552a526d6533ef16e286749c3d40695946da6066a04b6110c4945a377184022f8bf3b3faf6b9d5f8835613e94b5126f2d2180d4f481258362979eec8fae2e0ec1c6eb653192e4694d7dd23c5af6696afa6606a1371e043ca74a9ebb846df4655fbac963848bd5673242656c5361cace9743761cd24976c4915c93f05d463b4103a22d4a58adfba075b2f27b724d1",
+        "response_nonce": "e0e1e2e3e4e5e6e7e8e9eaebecedeeef"
+      },
+      "name": "request-without-final-chunk"
+    },
+    {
+      "expected": {
+        "error": "OpenFailed"
+      },
+      "inputs": {
+        "encapsulation_randomness": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "gateway_secret_key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "header_name": "authorization",
+        "header_value": "67726f75702d746f6b656e",
+        "key_id": 1,
+        "method": "POST",
+        "path": "/v1/groups/00112233445566778899aabbccddeeff/live",
+        "request_stream": "010020000100011045e1e902b78d7f74c668716b022bd513378d552a526d6533ef16e286749c3d40695946da6066a04b6110c4945a377184022f8bf3b3faf6b9d5f8835613e94b5126f2d2180d4f481258362979eec8fae2e0ec1c6eb653192e4694d7dd23c5af6696afa6606a1371e043ca74a9ebb846df4655fbac963848bd5673242656c5361cace9743761cd24976c4900c93f05d463b4103a22d4a58adfba075b2f27b724d1",
+        "response_nonce": "e0e1e2e3e4e5e6e7e8e9eaebecedeeef"
+      },
+      "name": "non-final-chunk-relabelled-final"
+    },
+    {
+      "expected": {
+        "error": "OpenFailed"
+      },
+      "inputs": {
+        "encapsulation_randomness": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "gateway_secret_key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "header_name": "authorization",
+        "header_value": "67726f75702d746f6b656e",
+        "key_id": 1,
+        "method": "POST",
+        "path": "/v1/groups/00112233445566778899aabbccddeeff/live",
+        "response_nonce": "e0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+        "response_stream": "e0e1e2e3e4e5e6e7e8e9eaebecedeeef1663077e6178904b9b8ce8fb789173b4cbef54f22a19c215431041089d5d9e5a7ebe157a49a3f392e8b0ca8414007fc96e5111609eeff18995c8f294411c"
+      },
+      "name": "reordered-response-chunks"
+    }
+  ]
+}

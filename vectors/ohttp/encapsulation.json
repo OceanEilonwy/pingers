@@ -1,0 +1,87 @@
+{
+  "description": "RFC 9458 request and response encapsulation with X25519 / HKDF-SHA256 / AES-128-GCM (design B.12), Binary HTTP in known-length form with trailing empty sections omitted. encapsulation_randomness is the 32 bytes HPKE turns into the ephemeral key (DeriveKeyPair); response_nonce is the 16-byte response nonce.",
+  "name": "ohttp/encapsulation",
+  "vectors": [
+    {
+      "expected": {
+        "binary_request": "0004504f5354056874747073000e2f76312f626f6172642f73796e63260d617574686f72697a6174696f6e1750726976617465546f6b656e20746f6b656e3d3030666605a101820102",
+        "binary_response": "0140c81e0c636f6e74656e742d74797065106170706c69636174696f6e2f63626f720180",
+        "encapsulated_request": "010020000100017af03df159e2d75751c1a88eb5a9e87988f138dce7596ebda3ad7f0bb04a873413b92e3507e4be6c1694dc0e75044270017a91868a2e55adb7a7318ca30fb969146d804af187f0e62ef0e46fc81e9a803e7a7f912260f48066a8972c16ab26705b6c46b069c0841add2d28b59f73d7204989c348a4b3afdb7c",
+        "encapsulated_response": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfe0485173e95c68b0a25eca54facedd1c232186011dfdc2536ec2efe10f44e3d3a2621ed5985a4f35e50c17325b0ae9d66322650f",
+        "key_config": "01002079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a000400010001",
+        "key_config_hash": "ef31fee4f671244372d2136d8931a40a0de2b1ec305cb428df582a3461a414b4"
+      },
+      "inputs": {
+        "encapsulation_randomness": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+        "gateway_secret_key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "header_name": "authorization",
+        "header_value": "50726976617465546f6b656e20746f6b656e3d30306666",
+        "key_id": 1,
+        "method": "POST",
+        "path": "/v1/board/sync",
+        "request_body": "a101820102",
+        "response_body": "80",
+        "response_header_name": "content-type",
+        "response_header_value": "6170706c69636174696f6e2f63626f72",
+        "response_nonce": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+        "response_status": 200
+      },
+      "name": "post-with-header-and-body"
+    },
+    {
+      "expected": {
+        "binary_request": "000347455405687474707300102f76312f6f687474702f636f6e666967",
+        "binary_response": "014194",
+        "encapsulated_request": "010020000100019e1e855b21e05a429ba515e8a1eff218ac2444c9d9fc32fffc7a40f4e752eb443b6c18dca2e5a50b6b9a33472d3372bc5bd1e4f9a1c1ad2f83a08b3264311ee128a94c2eba37462158a344836f",
+        "encapsulated_response": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedfb61387c5452d34b8fc7f8d6d729f9d0e5fcd0c",
+        "key_config": "01002079a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a000400010001",
+        "key_config_hash": "ef31fee4f671244372d2136d8931a40a0de2b1ec305cb428df582a3461a414b4"
+      },
+      "inputs": {
+        "encapsulation_randomness": "909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "gateway_secret_key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "key_id": 1,
+        "method": "GET",
+        "path": "/v1/ohttp/config",
+        "request_body": "",
+        "response_body": "",
+        "response_nonce": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+        "response_status": 404
+      },
+      "name": "get-bare"
+    },
+    {
+      "expected": {
+        "error": "UnknownKeyId"
+      },
+      "inputs": {
+        "encapsulated_request": "070020000100017af03df159e2d75751c1a88eb5a9e87988f138dce7596ebda3ad7f0bb04a873413b92e3507e4be6c1694dc0e75044270017a91868a2e55adb7a7318ca30fb969146d804af187f0e62ef0e46fc81e9a803e7a7f912260f48066a8972c16ab26705b6c46b069c0841add2d28b59f73d7204989c348a4b3afdb7c",
+        "gateway_secret_key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "key_id": 1
+      },
+      "name": "unknown-key-id"
+    },
+    {
+      "expected": {
+        "error": "UnsupportedSuite"
+      },
+      "inputs": {
+        "encapsulated_request": "010020000100037af03df159e2d75751c1a88eb5a9e87988f138dce7596ebda3ad7f0bb04a873413b92e3507e4be6c1694dc0e75044270017a91868a2e55adb7a7318ca30fb969146d804af187f0e62ef0e46fc81e9a803e7a7f912260f48066a8972c16ab26705b6c46b069c0841add2d28b59f73d7204989c348a4b3afdb7c",
+        "gateway_secret_key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "key_id": 1
+      },
+      "name": "chacha20-poly1305-suite"
+    },
+    {
+      "expected": {
+        "error": "OpenFailed"
+      },
+      "inputs": {
+        "encapsulated_request": "010020000100017af03df159e2d75751c1a88eb5a9e87988f138dce7596ebda3ad7f0bb04a873413b92e3507e4be6c1694dc0e75044270017a91868a2e55adb7a7318ca30fb969146d804af187f0e62ef0e46fc81e9a803e7a7f912260f48066a8972c16ab26705b6c46b069c0841add2d28b59f73d7204989c348a4b3afdb7d",
+        "gateway_secret_key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "key_id": 1
+      },
+      "name": "tampered-ciphertext"
+    }
+  ]
+}

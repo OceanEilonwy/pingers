@@ -447,3 +447,6 @@ impl RequestChunkDecoder {
         open_final(|sealed, last| start.opener.open(sealed, last), &sealed)
     }
 }
+
+#[cfg(test)]
+mod tests;
