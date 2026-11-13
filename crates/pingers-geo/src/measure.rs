@@ -265,7 +265,10 @@ mod tests {
         assert_eq!(Meters::constant(0.0), Meters::ZERO);
         assert_eq!(Meters::constant(-1.0), Meters::ZERO);
         assert_eq!(Meters::constant(f64::NAN), Meters::ZERO);
-        assert_eq!(Meters::constant(f64::INFINITY), Meters::new(f64::MAX).unwrap_or(Meters::ZERO));
+        assert_eq!(
+            Meters::constant(f64::INFINITY),
+            Meters::new(f64::MAX).unwrap_or(Meters::ZERO)
+        );
     }
 
     #[test]
