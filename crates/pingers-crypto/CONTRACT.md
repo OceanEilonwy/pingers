@@ -59,7 +59,8 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
 - **AAD and info encodings** use big-endian integers: `be32` for leaf indexes and generations.
 - **Labels not in the design**: `pingers/v1/lk-ask` (HPKE info for asks, with the group id),
   `pingers/v1/grp-request` (group request signatures), `pingers/v1/register` (registration
-  proof). The design gives no label for these; domain separation needs one.
+  proof), `pingers/v1/sub-bind` (subscription binds). The design gives no label for these;
+  domain separation needs one.
 - **Grant public keys are variable-length bytes** so the X-Wing variant (feature `x-wing`)
   fits the same type.
 - **Snapshots, join requests and knocks** carry a random 24-byte XChaCha20 nonce in front of
@@ -79,9 +80,11 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
   (optional), and hpke-rs's `hazmat` feature (to read derived private-key bytes).
 - **Push relay `key_id`** is not sealed or bound: the 320-byte blob has no room, and the design
   puts only `bind` in `info`.
-- **Mailbox and subscription binds share the `pingers/v1/push-bind` label** (design D says
-  "as for a mailbox"); ids are 16 random bytes, so the two namespaces do not collide in
-  practice.
+- **Subscription binds have their own label**, `pingers/v1/sub-bind` (design D says "as for a
+  mailbox"). Mailbox binds keep the design's `pingers/v1/push-bind`. With one shared label a
+  subscription and a mailbox whose ids had the same bytes would have the same bind, so a blob
+  registered for one would open when presented for the other; the labels rule that out by
+  construction instead of relying on random ids.
 - **Join key** is `HKDF-Expand(invite_secret, "join", 32)` without an Extract step: the invite
   secret is already 32 uniform bytes, as `PR_e` is for the Spot keys.
 - **Group request signature input** uses `be32` length prefixes for method and path.

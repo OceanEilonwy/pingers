@@ -49,8 +49,12 @@ pub(crate) const KNOCK_SIGNATURE: &[u8] = b"pingers/v1/knock";
 pub(crate) const MAILBOX: &[u8] = b"pingers/v1/mbox";
 /// HPKE info prefix of sealed push tokens (design B.4.9).
 pub(crate) const PUSH: &[u8] = b"pingers/v1/push";
-/// Push bind derivation (design B.4.9).
+/// Push bind derivation for mailboxes (design B.4.9).
 pub(crate) const PUSH_BIND: &[u8] = b"pingers/v1/push-bind";
+/// Push bind derivation for group subscriptions. Decision: the design reuses the mailbox
+/// label ("as for a mailbox"); a separate label keeps a subscription bind from ever equalling
+/// a mailbox bind.
+pub(crate) const SUBSCRIPTION_BIND: &[u8] = b"pingers/v1/sub-bind";
 /// HPKE info prefix of location grants (design B.6.1).
 pub(crate) const LOCATION_GRANT: &[u8] = b"pingers/v1/lk-grant";
 /// HPKE info prefix of location asks. Decision: the design gives none.
@@ -64,7 +68,7 @@ pub(crate) const REGISTRATION: &[u8] = b"pingers/v1/register";
 
 /// Every private label, so tests can check they are distinct and vectors can name them.
 #[cfg(test)]
-pub(crate) const ALL: [&[u8]; 15] = [
+pub(crate) const ALL: [&[u8]; 16] = [
     SPOT,
     TAG,
     SEAL,
@@ -75,6 +79,7 @@ pub(crate) const ALL: [&[u8]; 15] = [
     MAILBOX,
     PUSH,
     PUSH_BIND,
+    SUBSCRIPTION_BIND,
     LOCATION_GRANT,
     LOCATION_ASK,
     INVITE_JOIN,

@@ -6,7 +6,7 @@
 use pingers_proto::{
     Epoch, GroupId, KeyPackageBytes, LeafIndex, LocationGeneration, LocationRequestId, MailboxId,
     PartyId, PushTokenPlaintext, Record, RecordRandomness, RecordTag, SealedAsk, SealedBeacon,
-    SealedGrant, SealedLocationFrame, SealedSnapshot, ServerId, SizeClass, SpotId,
+    SealedGrant, SealedLocationFrame, SealedSnapshot, ServerId, SizeClass, SpotId, SubscriptionId,
 };
 use pingers_testkit::seeded_rng;
 use pingers_time::{Bucket, UnixSeconds};
@@ -19,9 +19,10 @@ use crate::{
     LocationGrant, LocationKey, LogAuthKeyPair, PresenceRoot, PushBind, PushRelayPrivateKey,
     SEALED_LOCATION_LENGTH, StateKey, derive_knock_key, derive_meetup_psk, derive_seal_key,
     derive_spot_key, derive_tag_key, dummy_location, open_join_request, open_knock, open_location,
-    open_location_ask, open_location_grant, open_state_snapshot, record_tag, seal_join_request,
-    seal_knock, seal_location_ask, seal_location_grant, sign_group_request, sign_knock,
-    sign_registration, tag_matches, verify_group_request, verify_knock, verify_registration,
+    open_location_ask, open_location_grant, open_state_snapshot, push_bind_for_mailbox,
+    push_bind_for_subscription, record_tag, seal_join_request, seal_knock, seal_location_ask,
+    seal_location_grant, sign_group_request, sign_knock, sign_registration, tag_matches,
+    verify_group_request, verify_knock, verify_registration,
 };
 
 fn root(byte: u8) -> PresenceRoot {
@@ -466,6 +467,26 @@ fn push_blob_for_one_mailbox_does_not_open_for_another() -> Result<(), TestError
     );
     assert!(matches!(
         crate::mailbox::open_push_padded(&private, &PushBind::from_bytes([2; 32]), &blob),
+        Err(CryptoError::OpenFailed)
+    ));
+    Ok(())
+}
+
+#[test]
+fn a_subscription_bind_never_equals_the_mailbox_bind_of_the_same_bytes() -> Result<(), TestError> {
+    // With one shared label these were equal, so a blob registered for a subscription would
+    // open when the server presented it for a mailbox with the same id bytes.
+    let id = [9; 16];
+    let mailbox = push_bind_for_mailbox(&MailboxId::from_bytes(id));
+    let subscription = push_bind_for_subscription(&SubscriptionId::from_bytes(id));
+    assert_ne!(mailbox, subscription);
+    let private = PushRelayPrivateKey::generate(&mut seeded_rng(1));
+    let public = private.public_key(1)?;
+    let padded = [7; PushTokenPlaintext::PADDED_SIZE];
+    let blob =
+        crate::mailbox::seal_push_padded(&public, &subscription, &padded, &mut seeded_rng(2))?;
+    assert!(matches!(
+        crate::mailbox::open_push_padded(&private, &mailbox, &blob),
         Err(CryptoError::OpenFailed)
     ));
     Ok(())

@@ -54,19 +54,21 @@ impl PushBind {
 /// `bind = SHA-256("pingers/v1/push-bind" || mailbox_id)`.
 #[must_use]
 pub fn push_bind_for_mailbox(mailbox: &MailboxId) -> PushBind {
-    push_bind(mailbox.as_bytes())
+    push_bind(labels::PUSH_BIND, mailbox.as_bytes())
 }
 
-/// The bind of a group subscription: as for a mailbox, with the subscription id in place of
-/// the mailbox id (design D).
+/// The bind of a group subscription: `SHA-256("pingers/v1/sub-bind" || subscription_id)`.
+/// The design says "as for a mailbox"; its own label means a subscription bind never equals
+/// the bind of a mailbox whose id has the same bytes, so a blob registered for one cannot be
+/// presented as the other.
 #[must_use]
 pub fn push_bind_for_subscription(subscription: &SubscriptionId) -> PushBind {
-    push_bind(subscription.as_bytes())
+    push_bind(labels::SUBSCRIPTION_BIND, subscription.as_bytes())
 }
 
-fn push_bind(id: &[u8; 16]) -> PushBind {
+fn push_bind(label: &[u8], id: &[u8; 16]) -> PushBind {
     let digest = Sha256::new()
-        .chain_update(labels::PUSH_BIND)
+        .chain_update(label)
         .chain_update(id)
         .finalize();
     let mut bind = [0; 32];
