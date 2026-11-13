@@ -365,6 +365,26 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         Ok(self.store.head(group)?.auth_key)
     }
 
+    /// The keys of the group's earlier epochs, newest first. A request signed with one is
+    /// from a member (or a removed member) that has not applied the later commits: the server
+    /// lets it read the log to catch up, and answers its commit with the conflict.
+    ///
+    /// # Errors
+    ///
+    /// [`DeliveryError::UnknownGroup`]; storage errors.
+    pub fn past_auth_keys(&self, group: &GroupId) -> Result<Vec<GroupAuthKey>, DeliveryError> {
+        self.store.past_auth_keys(group)
+    }
+
+    /// The epoch the next commit must be made in.
+    ///
+    /// # Errors
+    ///
+    /// [`DeliveryError::UnknownGroup`]; storage errors.
+    pub fn head_epoch(&self, group: &GroupId) -> Result<Epoch, DeliveryError> {
+        Ok(self.store.head(group)?.head_epoch)
+    }
+
     /// `PUT /v1/groups/{id}/subs/{sub_id}`: a member renews or replaces its own subscription.
     ///
     /// # Errors

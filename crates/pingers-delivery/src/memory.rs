@@ -26,6 +26,7 @@ pub struct MemoryDeliveryStore {
 struct Group {
     head_epoch: Epoch,
     auth_key: GroupAuthKey,
+    past_keys: Vec<GroupAuthKey>,
     lifetime: GroupLifetime,
     idle_expires_at: UnixSeconds,
     log: Vec<GroupLogEntry>,
@@ -91,6 +92,7 @@ impl DeliveryStore for MemoryDeliveryStore {
             Group {
                 head_epoch: epoch,
                 auth_key: group.auth_key,
+                past_keys: Vec::new(),
                 lifetime: group.lifetime,
                 idle_expires_at: group.idle_expires_at,
                 log: Vec::new(),
@@ -113,6 +115,10 @@ impl DeliveryStore for MemoryDeliveryStore {
                 lifetime: found.lifetime,
             })
         })
+    }
+
+    fn past_auth_keys(&self, group: &GroupId) -> Result<Vec<GroupAuthKey>, DeliveryError> {
+        self.with_group(group, |found| Ok(found.past_keys.clone()))
     }
 
     fn touch(&self, group: &GroupId, idle_expires_at: UnixSeconds) -> Result<(), DeliveryError> {
@@ -149,6 +155,7 @@ impl DeliveryStore for MemoryDeliveryStore {
             }
             let sequence = found.push(commit.epoch, ContentType::Commit, commit.commit)?;
             found.head_epoch = commit.next_epoch;
+            found.past_keys.insert(0, found.auth_key);
             found.auth_key = commit.next_auth_key;
             found.idle_expires_at = idle_expires_at;
             if let Some(state) = commit.state {

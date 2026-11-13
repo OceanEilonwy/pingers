@@ -770,6 +770,26 @@ fn a_group_uploaded_after_its_first_commit_starts_at_that_epoch(
     Ok(())
 }
 
+fn earlier_epochs_keys_are_kept_newest_first(store: impl DeliveryStore) -> Result<(), TestError> {
+    let world = World::new(store, &[])?;
+    assert_eq!(world.delivery.past_auth_keys(&world.group)?, vec![]);
+    let _first = world.commit(0, Urgency::Quiet)?;
+    let _second = world.commit(1, Urgency::Quiet)?;
+    // A losing commit changes nothing.
+    let _lost = world.commit(0, Urgency::Quiet)?;
+    assert_eq!(
+        world.delivery.past_auth_keys(&world.group)?,
+        vec![commit_request(0, Urgency::Quiet).next_auth_key, auth_key(0)]
+    );
+    assert_eq!(world.delivery.head_epoch(&world.group)?, Epoch::new(2));
+    world.delivery.delete_group(&world.group)?;
+    assert!(matches!(
+        world.delivery.past_auth_keys(&world.group),
+        Err(DeliveryError::UnknownGroup)
+    ));
+    Ok(())
+}
+
 fn delete_removes_the_group_and_closes_its_channels(
     store: impl DeliveryStore,
 ) -> Result<(), TestError> {
@@ -965,6 +985,7 @@ for_each_store!(
     writes_postpone_expiry,
     reads_and_live_channels_postpone_expiry,
     party_groups_stay_idle_for_half_a_year,
+    earlier_epochs_keys_are_kept_newest_first,
     a_group_uploaded_after_its_first_commit_starts_at_that_epoch,
     delete_removes_the_group_and_closes_its_channels,
     expiry_leaves_other_groups_alone,

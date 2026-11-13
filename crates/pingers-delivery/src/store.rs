@@ -118,6 +118,14 @@ pub trait DeliveryStore: Send + Sync {
     /// [`DeliveryError::UnknownGroup`]; storage errors.
     fn head(&self, group: &GroupId) -> Result<GroupHead, DeliveryError>;
 
+    /// The log-auth keys of the group's earlier epochs, newest first: a member that missed a
+    /// commit still signs with one of them until it has read and applied that commit.
+    ///
+    /// # Errors
+    ///
+    /// [`DeliveryError::UnknownGroup`]; storage errors.
+    fn past_auth_keys(&self, group: &GroupId) -> Result<Vec<GroupAuthKey>, DeliveryError>;
+
     /// Moves the group's idle expiry to `idle_expires_at`.
     ///
     /// # Errors
@@ -137,7 +145,8 @@ pub trait DeliveryStore: Send + Sync {
         idle_expires_at: UnixSeconds,
     ) -> Result<SequenceNumber, DeliveryError>;
 
-    /// Appends a commit, advances the head epoch, swaps the auth key, replaces the snapshot if
+    /// Appends a commit, advances the head epoch, swaps the auth key (keeping the old one
+    /// among the past keys), replaces the snapshot if
     /// one is given and applies the subscription changes, all at once and only if
     /// `commit.epoch` is the head epoch. Otherwise writes nothing and reports the head.
     ///

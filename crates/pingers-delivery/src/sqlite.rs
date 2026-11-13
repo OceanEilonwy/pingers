@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS grp_sub (
     PRIMARY KEY (group_id, sub_id)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS grp_sub_expiry ON grp_sub (expires_at);
+CREATE TABLE IF NOT EXISTS grp_past_key (
+    group_id BLOB NOT NULL,
+    epoch    INTEGER NOT NULL,
+    auth_pk  BLOB NOT NULL,
+    PRIMARY KEY (group_id, epoch)
+) STRICT;
 CREATE TABLE IF NOT EXISTS grp_state (
     group_id BLOB PRIMARY KEY,
     epoch    INTEGER NOT NULL,
@@ -277,6 +283,25 @@ impl DeliveryStore for SqliteDeliveryStore {
         self.transact(|transaction| head_of(transaction, group))
     }
 
+    fn past_auth_keys(&self, group: &GroupId) -> Result<Vec<GroupAuthKey>, DeliveryError> {
+        self.transact(|transaction| {
+            head_of(transaction, group)?;
+            let mut statement = transaction.prepare(
+                "SELECT auth_pk FROM grp_past_key WHERE group_id = ?1 ORDER BY epoch DESC",
+            )?;
+            let rows = statement.query_map([group.as_bytes().as_slice()], |row| {
+                row.get::<_, Vec<u8>>(0)
+            })?;
+            rows.map(|row| {
+                let bytes = row?;
+                Ok(GroupAuthKey::from_bytes(bytes.try_into().map_err(
+                    |_| DeliveryError::CorruptField { field: "auth_pk" },
+                )?))
+            })
+            .collect()
+        })
+    }
+
     fn touch(&self, group: &GroupId, idle_expires_at: UnixSeconds) -> Result<(), DeliveryError> {
         self.transact(|transaction| set_idle(transaction, group, idle_expires_at))
     }
@@ -322,6 +347,14 @@ impl DeliveryStore for SqliteDeliveryStore {
                     content_type: ContentType::Commit,
                     body: &commit.commit,
                 },
+            )?;
+            transaction.execute(
+                "INSERT INTO grp_past_key (group_id, epoch, auth_pk) VALUES (?1, ?2, ?3)",
+                params![
+                    group.as_bytes().as_slice(),
+                    head.head_epoch.get(),
+                    head.auth_key.as_bytes().as_slice()
+                ],
             )?;
             transaction.execute(
                 "UPDATE grp SET head_epoch = ?2, auth_pk = ?3, idle_expires_at = ?4
@@ -502,6 +535,7 @@ fn delete_children(transaction: &Transaction<'_>, id: &[u8]) -> Result<(), Deliv
     transaction.execute("DELETE FROM grp_msg WHERE group_id = ?1", [id])?;
     transaction.execute("DELETE FROM grp_sub WHERE group_id = ?1", [id])?;
     transaction.execute("DELETE FROM grp_state WHERE group_id = ?1", [id])?;
+    transaction.execute("DELETE FROM grp_past_key WHERE group_id = ?1", [id])?;
     Ok(())
 }
 
