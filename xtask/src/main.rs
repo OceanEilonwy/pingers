@@ -23,7 +23,23 @@ use std::process::{Command, ExitCode};
 use anyhow::{Context as _, Result, bail};
 
 /// Crates that do I/O or need an async runtime; forbidden below L2 (architecture §2).
-const IO_CRATES: [&str; 4] = ["tokio", "hyper", "reqwest", "rusqlite"];
+const IO_CRATES: [&str; 5] = ["tokio", "hyper", "reqwest", "rusqlite", "sled"];
+
+/// An I/O crate a pure crate may link because nothing in Pingers can reach it.
+struct IoException {
+    package: &'static str,
+    io_crate: &'static str,
+}
+
+/// Each exception names its reason here and in `deny.toml`.
+const IO_EXCEPTIONS: [IoException; 1] = [
+    // rln 3.x depends on sled unconditionally on every non-wasm target; pingers-anon never
+    // constructs rln's PmTree (it keeps its own in-memory tree), so no sled code runs.
+    IoException {
+        package: "pingers-anon",
+        io_crate: "sled",
+    },
+];
 
 /// The highest layer whose crates must stay free of I/O.
 const LAST_PURE_LAYER: u8 = 1;
@@ -60,7 +76,7 @@ fn run() -> Result<Outcome> {
                 "usage: cargo xtask <command>\n\n\
                  commands:\n  \
                  layers  check the layer rule and the I/O ban below L2\n  \
-                 ci      fmt --check, clippy -D warnings, test, layers, deny (if installed)"
+                 ci      fmt --check, clippy -D warnings, test, layers, deny"
             )?;
             Ok(Outcome::Failed)
         }
@@ -249,7 +265,9 @@ fn check_transitive_io(
 ) -> Result<()> {
     let output = Command::new("cargo")
         .current_dir(root)
-        .args(["tree", "--quiet", "--package", &manifest.name])
+        // Every feature: a crate's optional sides (pingers-anon's prover, verifier, issuer)
+        // must be pure too.
+        .args(["tree", "--quiet", "--all-features", "--package", &manifest.name])
         .args([
             "--edges",
             "normal,build",
@@ -273,6 +291,11 @@ fn check_transitive_io(
         .lines()
         .filter_map(|line| line.split_whitespace().next())
         .filter(|package| IO_CRATES.contains(package))
+        .filter(|package| {
+            !IO_EXCEPTIONS.iter().any(|exception| {
+                exception.package == manifest.name && exception.io_crate == *package
+            })
+        })
         .collect();
     found.sort_unstable();
     found.dedup();
@@ -438,19 +461,20 @@ fn run_ci(root: &Path) -> Result<Outcome> {
         return Ok(Outcome::Failed);
     }
 
+    // Not optional: the advisory ignores and the licence allow-list are only checked here.
     let deny_installed = Command::new("cargo")
         .args(["deny", "--version"])
         .output()
         .is_ok_and(|output| output.status.success());
-    if deny_installed {
-        if run_cargo(root, &["deny", "check"])? == Outcome::Failed {
-            return Ok(Outcome::Failed);
-        }
-    } else {
+    if !deny_installed {
         writeln!(
             io::stdout(),
-            "ci: cargo-deny is not installed; skipping `cargo deny check`"
+            "ci: cargo-deny is not installed (`cargo install --locked cargo-deny`)"
         )?;
+        return Ok(Outcome::Failed);
+    }
+    if run_cargo(root, &["deny", "check"])? == Outcome::Failed {
+        return Ok(Outcome::Failed);
     }
 
     writeln!(io::stdout(), "ci: all checks passed")?;
