@@ -100,9 +100,9 @@ android {
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // The publisher's map host, the last link of the map host chain (a user override, then
-        // the host the Pingers server advertises, then this). A placeholder until the publisher
-        // decides who hosts: `-PpingersMapHost=https://maps.example.org`.
-        val mapHost = (project.findProperty("pingersMapHost") as String?) ?: "https://maps.pingers.invalid"
+        // the host the Pingers server advertises, then this). Builds for another publisher
+        // override it: `-PpingersMapHost=https://maps.example.org`.
+        val mapHost = (project.findProperty("pingersMapHost") as String?) ?: "https://maps.pingers.hollingworth.xyz"
         buildConfigField("String", "MAP_HOST", "\"$mapHost\"")
     }
 
