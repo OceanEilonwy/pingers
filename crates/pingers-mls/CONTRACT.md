@@ -121,13 +121,17 @@ A narrow wrapper over OpenMLS 0.9. No other crate touches OpenMLS types.
 - **Storage failures**: the group handle may be ahead of the store after `MlsError::Storage`;
   callers drop it, roll back, and reload.
 - **`MlsError::NotImplemented`** is no longer returned; kept so the variant list is unchanged.
-- **Mutation testing** (`cargo mutants -p pingers-mls`): 14 survivors, all justified. 13 are
-  adapter methods OpenMLS 0.9.2 calls only from APIs the wrapper never uses: the signature key
+- **Mutation testing** (`cargo mutants -p pingers-mls`): 283 mutants, 163 caught, 95
+  unviable, 25 missed, all justified. 11 are the per-group `delete_*` adapter methods
+  (`delete_tree`, `delete_group_state`, ..., `delete_encryption_epoch_key_pairs`), which only
+  `MlsGroup::delete` calls; `delete_group` uses `delete_prefix` instead, and tests check that
+  it leaves storage empty. 13 are adapter methods OpenMLS 0.9.2 calls only from APIs the
+  wrapper never uses: the signature key
   store (`write/read/delete_signature_key_pair`, application-managed), update-proposal leaves
   (`append_own_leaf_node`, `own_leaf_nodes`, `delete_own_leaf_nodes`,
   `write/read/delete_encryption_key_pair`, used only by `propose_self_update`), single
   proposal removal (`remove_proposal` and its `remove_from_list` helper, two mutants, used only
   by `remove_pending_proposal`), and `queued_proposal_refs` (loading reads
   `queued_proposals`). They are implemented so the adapter stays a complete
-  `StorageProvider`. The 14th replaces `Provider::crypto` with a fresh backend, which is
+  `StorageProvider`. The last replaces `Provider::crypto` with a fresh backend, which is
   equivalent: the crypto backend holds no state the wrapper relies on.
