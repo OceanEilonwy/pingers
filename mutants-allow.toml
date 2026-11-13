@@ -25,3 +25,7 @@ reason = "equivalent until pingers-sync is wired into the client: with a runtime
 [[mutant]]
 name = "crates/pingers-client/src/real/meetups.rs: replace <impl MeetupPort for Meetups>::leave -> Result<(), PortError> with Ok(())"
 reason = "equivalent until pingers-sync is wired into the client: no Meetup can go live (admit stops at the GroupLogs stub), so leave always finds none and answers Ok(()). Remove when a Meetup can go live in the client."
+
+[[mutant]]
+name = "crates/pingers-client/src/real/meetups.rs: replace post_welcome -> Result<(), PortError> with Ok(())"
+reason = "unreachable until pingers-sync is wired into the client: admit only posts a Welcome after creating or extending a Meetup, which the GroupLogs stub never lets happen. post_welcome itself is the WAITING(pingers-sync) stub. Remove when post_to_mailbox is wired."
