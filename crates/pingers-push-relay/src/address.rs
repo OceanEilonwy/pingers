@@ -99,9 +99,8 @@ fn embedded_ipv4(address: Ipv6Addr) -> Embedded {
     match segments {
         // ::ffff:a.b.c.d mapped, and 64:ff9b::/96 NAT64, which reaches the embedded address.
         [0, 0, 0, 0, 0, 0xffff, _, _] | [0x0064, 0xff9b, 0, 0, 0, 0, _, _] => Embedded::V4(tail()),
-        // ::a.b.c.d compatible (deprecated), except :: and ::1, which are judged as IPv6.
-        [0, 0, 0, 0, 0, 0, high, _] if high != 0 => Embedded::Refused,
-        [0, 0, 0, 0, 0, 0, 0, low] if low > 1 => Embedded::Refused,
+        // ::a.b.c.d compatible (deprecated), with :: and ::1 in the same /96: never public.
+        [0, 0, 0, 0, 0, 0, _, _] => Embedded::Refused,
         // 2002:a.b.c.d::/48 6to4.
         [0x2002, high, low, ..] => {
             let [a, b] = high.to_be_bytes();

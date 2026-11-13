@@ -141,6 +141,20 @@ mod tests {
     }
 
     #[test]
+    fn the_wrapped_message_is_returned_unchanged() -> Result<(), ProtoError> {
+        let bytes = vec![0, 1, 0x7f, 0, 49];
+        assert_eq!(
+            PrivacyPassIssueRequest::new(bytes.clone())?.token_request(),
+            bytes.as_slice()
+        );
+        assert_eq!(
+            PrivacyPassIssueResponse::new(bytes.clone())?.token_response(),
+            bytes.as_slice()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn empty_messages_are_refused() {
         assert!(matches!(
             PrivacyPassIssueRequest::new(Vec::new()),

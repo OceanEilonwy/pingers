@@ -25,6 +25,13 @@ fn global_unicast_addresses_are_public() {
         "::ffff:8.8.8.8",
         "64:ff9b::808:808",
         "2002:808:808::1",
+        // Neighbours of reserved ranges that are not themselves reserved.
+        "198.51.1.1",
+        "198.1.100.1",
+        "2a00::1",
+        "100:1::1",
+        "64:ff9c:1::1",
+        "2001:4860:1::1",
     ] {
         assert!(public(address), "{address} should be public");
     }
@@ -175,6 +182,8 @@ async fn the_client_does_not_connect_to_a_name_that_resolves_to_loopback() -> Te
     let port = listener.local_addr()?.port();
     let client = reqwest::Client::builder()
         .dns_resolver(resolver())
+        // Bounds the test if the resolver ever lets the connection through.
+        .timeout(core::time::Duration::from_secs(5))
         .build()?;
     let result = client
         .post(format!("http://rebind.example:{port}/up"))

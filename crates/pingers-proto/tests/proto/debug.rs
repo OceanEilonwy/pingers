@@ -97,3 +97,82 @@ fn wire_secrets_stay_out_of_debug_and_compare_by_content() {
     assert_eq!(replacement(1), replacement(1));
     assert_ne!(replacement(1), replacement(2));
 }
+
+#[test]
+fn structs_holding_secrets_compare_every_field() -> Result<(), ProtoError> {
+    use pingers_proto::{
+        AuthResponse, InvitePayload, InviteUses, InviterFingerprint, MailboxId, RegisterRequest,
+        SecretBytes, SecretText, ServerId,
+    };
+    use pingers_time::UnixSeconds;
+
+    let register = RegisterRequest {
+        signature_key: [1; 32],
+        proof: [2; 64],
+        registration_code: Some(SecretText::new(String::from("code"))),
+    };
+    let mut other = register.clone();
+    assert_eq!(register, other);
+    other.signature_key = [9; 32];
+    assert_ne!(register, other);
+    let mut other = register.clone();
+    other.proof = [9; 64];
+    assert_ne!(register, other);
+    let mut other = register.clone();
+    other.registration_code = Some(SecretText::new(String::from("cods")));
+    assert_ne!(register, other);
+    other.registration_code = None;
+    assert_ne!(register, other);
+
+    let auth = AuthResponse {
+        bearer: SecretText::new(String::from("bearer")),
+        server_time: UnixSeconds::new(5),
+    };
+    let mut other = auth.clone();
+    assert_eq!(auth, other);
+    other.server_time = UnixSeconds::new(6);
+    assert_ne!(auth, other);
+    let mut other = auth.clone();
+    other.bearer = SecretText::new(String::from("bearex"));
+    assert_ne!(auth, other);
+
+    let invite = InvitePayload {
+        server: ServerId::new(String::from("https://a.example"))?,
+        invite_mailbox: MailboxId::from_bytes([1; 16]),
+        invite_secret: SecretBytes::new([2; 32]),
+        inviter_fingerprint: InviterFingerprint::from_bytes([3; 8]),
+        expires: UnixSeconds::new(4),
+        uses: InviteUses::Single,
+    };
+    assert_eq!(invite, invite.clone());
+    let variants = [
+        InvitePayload {
+            server: ServerId::new(String::from("https://b.example"))?,
+            ..invite.clone()
+        },
+        InvitePayload {
+            invite_mailbox: MailboxId::from_bytes([9; 16]),
+            ..invite.clone()
+        },
+        InvitePayload {
+            invite_secret: SecretBytes::new([9; 32]),
+            ..invite.clone()
+        },
+        InvitePayload {
+            inviter_fingerprint: InviterFingerprint::from_bytes([9; 8]),
+            ..invite.clone()
+        },
+        InvitePayload {
+            expires: UnixSeconds::new(9),
+            ..invite.clone()
+        },
+        InvitePayload {
+            uses: InviteUses::Multiple,
+            ..invite.clone()
+        },
+    ];
+    for variant in &variants {
+        assert_ne!(&invite, variant);
+    }
+    Ok(())
+}
