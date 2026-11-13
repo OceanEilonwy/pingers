@@ -53,21 +53,36 @@ impl MlsStorage for Session {
         })
         .map_err(|error| storage_error(&error))
     }
+
+    fn delete_prefix(&self, prefix: &[u8]) -> Result<(), StorageError> {
+        // `substr` on a BLOB compares bytes, so this matches exactly the keys that start with
+        // `prefix`, with no LIKE wildcards or collation to worry about.
+        self.with(|connection| {
+            connection.execute(
+                "DELETE FROM mls_kv WHERE substr(key, 1, length(?1)) = ?1",
+                [prefix],
+            )?;
+            Ok(())
+        })
+        .map_err(|error| storage_error(&error))
+    }
 }
 
 /// The trait's error kinds carry no sources (pingers-mls's decision), so detail is lost here
-/// by design: corrupt stored bytes are `Corrupt`, everything else `Unavailable`.
+/// by design: corrupt stored bytes are `Corrupt`; a database that can't be used right now
+/// (locked, busy, wrong key, newer schema, poisoned lock) is `Unavailable`; a database that was
+/// reached but refused the operation is `Failed`.
 fn storage_error(error: &StoreError) -> StorageError {
     match error {
         StoreError::Corrupt { .. } => StorageError::Corrupt,
+        StoreError::Database(_)
+        | StoreError::OutOfRange { .. }
+        | StoreError::NotFound { .. }
+        | StoreError::InvalidText { .. } => StorageError::Failed,
         StoreError::WrongKey
         | StoreError::Busy
         | StoreError::Lock(_)
-        | StoreError::Database(_)
         | StoreError::NewerSchema { .. }
-        | StoreError::OutOfRange { .. }
-        | StoreError::NotFound { .. }
-        | StoreError::InvalidText { .. }
         | StoreError::Poisoned => StorageError::Unavailable,
     }
 }
@@ -129,10 +144,38 @@ mod tests {
     }
 
     #[test]
+    fn delete_prefix_removes_exactly_the_keys_under_it() -> Result<(), TestError> {
+        let fixture = Fixture::new()?;
+        let storage: &dyn MlsStorage = &fixture.session;
+        storage.write(b"group/1/epoch", b"a")?;
+        storage.write(b"group/1/tree", b"b")?;
+        storage.write(b"group/10/tree", b"c")?;
+        storage.write(b"group/2/tree", b"d")?;
+        // `%` and `_` are LIKE wildcards; a prefix containing them must still match literally.
+        storage.write(b"g%/x", b"e")?;
+        storage.write(b"gz/x", b"f")?;
+        storage.delete_prefix(b"group/1/")?;
+        assert!(storage.read(b"group/1/epoch")?.is_none());
+        assert!(storage.read(b"group/1/tree")?.is_none());
+        assert!(storage.read(b"group/10/tree")?.is_some());
+        assert!(storage.read(b"group/2/tree")?.is_some());
+        storage.delete_prefix(b"g%")?;
+        assert!(storage.read(b"g%/x")?.is_none());
+        assert!(storage.read(b"gz/x")?.is_some());
+        // Matching nothing is not an error.
+        storage.delete_prefix(b"nothing/")?;
+        Ok(())
+    }
+
+    #[test]
     fn errors_map_to_trait_kinds() {
         assert_eq!(
             storage_error(&StoreError::Corrupt { field: "x" }),
             StorageError::Corrupt
+        );
+        assert_eq!(
+            storage_error(&StoreError::OutOfRange { field: "x" }),
+            StorageError::Failed
         );
         assert_eq!(storage_error(&StoreError::Busy), StorageError::Unavailable);
         assert_eq!(
