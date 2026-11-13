@@ -88,21 +88,35 @@ class PlatformDeviceTest {
         assertTrue(shell("dumpsys activity services ${context.packageName}").contains("isForeground=true"))
         modes.set(LocationMode.IDLE)
         assertTrue("service did not stop", waitFor(10) { !LocationService.running })
+
+        // Stopped before it reached startForeground: Android kills an app whose service does
+        // that, so the stop must wait for the start.
+        modes.set(LocationMode.MEETUP_BACKGROUND)
+        modes.set(LocationMode.IDLE)
+        Thread.sleep(2_000)
+        assertTrue("service still running", waitFor(10) { !LocationService.running })
     }
 
     @Test
     fun geofenceFiresOnMockLocation() {
         // Westminster Bridge; the host holds the emulator's GPS there.
         val geofences = Geofences(context, SecureStore(context), responsivenessMillis = 0)
-        geofences.replaceAll(listOf(OsRegion("spot-bridge", 51.5007, -0.1246, 200f)))
+        // A fresh id each run, so Play services can't match it to an earlier registration.
+        val id = "spot-bridge-${System.currentTimeMillis()}"
+        geofences.replaceAll(listOf(OsRegion(id, 51.5007, -0.1246, 200f)))
         Log.i("PingersTest", "PINGERS_GEOFENCE_READY")
+        // On an idle emulator Play services' geofencer may not compute a location for many
+        // minutes; an app holding location updates (as in a Meetup) makes it evaluate at once.
+        val modes = AndroidPlatform.get(context).modes
+        modes.set(LocationMode.MEETUP_FOREGROUND)
         try {
-            val event = sink.await<RecordingSink.Geofenced>(240)
+            val event = sink.await<RecordingSink.Geofenced>(300)
             assertNotNull("no geofence transition reached the sink", event)
-            assertEquals(listOf("spot-bridge"), event!!.ids)
+            assertEquals(listOf(id), event!!.ids)
             assertTrue(event.transition == GeofenceTransition.ENTER || event.transition == GeofenceTransition.DWELL)
             Log.i("PingersTest", "PINGERS_GEOFENCE ${event.transition}")
         } finally {
+            modes.set(LocationMode.IDLE)
             geofences.replaceAll(emptyList())
         }
     }

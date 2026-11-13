@@ -35,6 +35,13 @@ class LocationService : Service() {
             Log.w(TAG, "foreground refused: ${e.message}")
             stopSelf()
         }
+        // A stop asked for while this start was on its way: Android requires startForeground
+        // first, so the stop happens here.
+        val stop = synchronized(lock) {
+            pendingStarts = (pendingStarts - 1).coerceAtLeast(0)
+            stopWanted && pendingStarts == 0
+        }
+        if (stop) stopSelf()
         // Not restarted after a kill: the core sets the mode again at its next wake.
         return START_NOT_STICKY
     }
@@ -48,6 +55,10 @@ class LocationService : Service() {
         private const val TAG = "PingersService"
         private const val EXTRA_MEETUP = "meetup"
 
+        private val lock = Any()
+        private var pendingStarts = 0
+        private var stopWanted = false
+
         /** Whether the service is in the foreground now (this process). */
         @Volatile
         var running: Boolean = false
@@ -59,7 +70,11 @@ class LocationService : Service() {
          * working on wakes alone.
          */
         fun start(context: Context, meetup: Boolean): Boolean = try {
-            ContextCompat.startForegroundService(context, Intent(context, LocationService::class.java).putExtra(EXTRA_MEETUP, meetup))
+            synchronized(lock) {
+                ContextCompat.startForegroundService(context, Intent(context, LocationService::class.java).putExtra(EXTRA_MEETUP, meetup))
+                pendingStarts++
+                stopWanted = false
+            }
             true
         } catch (e: IllegalStateException) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && e is ForegroundServiceStartNotAllowedException) {
@@ -73,8 +88,21 @@ class LocationService : Service() {
             false
         }
 
+        /**
+         * Stops the service. A service started with startForegroundService must reach
+         * startForeground before it stops, or Android kills the app; so while a start is still
+         * on its way the stop is left to [onStartCommand].
+         */
         fun stop(context: Context) {
-            context.stopService(Intent(context, LocationService::class.java))
+            val now = synchronized(lock) {
+                if (pendingStarts > 0) {
+                    stopWanted = true
+                    false
+                } else {
+                    true
+                }
+            }
+            if (now) context.stopService(Intent(context, LocationService::class.java))
         }
     }
 }
