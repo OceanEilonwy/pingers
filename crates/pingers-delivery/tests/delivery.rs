@@ -13,9 +13,9 @@ use pingers_delivery::{
 };
 use pingers_proto::{
     AppMessage, CommitRequest, CommitResponse, ContentType, CreateGroup, Delivery as Mode, Epoch,
-    GroupAuthKey, GroupId, LiveFrame, MlsMessageBytes, ProtoError, PushHandle, RelayId, RelayRef,
-    SealedPush, SealedPushBlob, SealedSnapshot, SequenceNumber, Subscription, SubscriptionId,
-    TimeToLive, Urgency,
+    GroupAuthKey, GroupId, LiveFrame, MlsMessageBytes, ProtoError, PushHandle, PushRelayKeyId,
+    RelayId, RelayRef, SealedPush, SealedPushBlob, SealedSnapshot, SequenceNumber, Subscription,
+    SubscriptionId, TimeToLive, Urgency,
 };
 use pingers_testkit::{ManualClock, seeded_rng, test_clock};
 
@@ -46,6 +46,7 @@ fn subscription(tag: u8, lifetime: Duration) -> Result<Subscription, TestError> 
         id: SubscriptionId::from_bytes([tag; 16]),
         push: SealedPush {
             relay: RelayRef::Listed(RelayId::new(1)),
+            key_id: PushRelayKeyId::new(1),
             blob: SealedPushBlob::from_bytes([tag; 320]),
             urgency: Urgency::Quiet,
             handle: PushHandle::from_bytes([tag; 8]),

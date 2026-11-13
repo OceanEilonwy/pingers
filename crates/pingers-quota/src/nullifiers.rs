@@ -100,7 +100,9 @@ impl Nullifiers {
                 Ok(Admission::Fresh)
             }
             NullifierOutcome::Replay => Ok(Admission::Replay),
-            NullifierOutcome::Conflict => Err(QuotaError::NullifierReused),
+            // `NullifierOutcome` is non-exhaustive: an outcome this server doesn't know is
+            // rejected like a conflict, never admitted.
+            NullifierOutcome::Conflict | _ => Err(QuotaError::NullifierReused),
         }
     }
 
