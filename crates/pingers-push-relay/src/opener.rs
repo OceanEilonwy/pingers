@@ -48,17 +48,17 @@ impl TokenOpener for CryptoOpener {
     }
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "CryptoError is non-exhaustive and its stub-only variants disappear as it is \
+              implemented; everything that is not about the blob is the relay's own failure"
+)]
 fn classify(error: &CryptoError) -> OpenError {
     match error {
         CryptoError::OpenFailed => OpenError::DoesNotOpen,
         CryptoError::Encoding(_) | CryptoError::WrongLength { .. } => OpenError::Malformed,
-        // InvalidKey is the relay's own key; Internal and NotImplemented are not the blob's
-        // fault either. CryptoError is non-exhaustive, so new variants land here too.
-        CryptoError::BadSignature
-        | CryptoError::InvalidKey
-        | CryptoError::Internal
-        | CryptoError::NotImplemented
-        | _ => OpenError::Unavailable,
+        // InvalidKey is the relay's own key; Internal is not the blob's fault either.
+        _ => OpenError::Unavailable,
     }
 }
 
