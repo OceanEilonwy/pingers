@@ -1,14 +1,46 @@
 package org.pingers.app.data
 
+import kotlin.math.PI
+import kotlin.math.cos
+
 /*
- * What each screen shows: one plain data class per screen, no behaviour. They are
- * shaped after what the Rust crate pingers-screens will publish, so that the FFI
- * work can replace FakeRepository with a mapping from the generated UniFFI records
- * without touching the composables.
+ * What each screen shows: one plain data class per screen, no behaviour. They follow the
+ * view models of the Rust crate pingers-screens field for field (typed ids, coordinates,
+ * enums, the can* and problem fields), so CoreRepository maps the generated UniFFI records
+ * onto them one to one and FakeRepository fills them with the canvas's example.
  *
- * Positions on the placeholder map are in map units (the canvas's 390-wide
- * artboard, 1 unit = 2 m). When MapLibre arrives they become coordinates.
+ * Positions are WGS84 coordinates. The placeholder map still draws in its own units (the
+ * canvas's 390-wide artboard); each map screen carries a MapFrame that places coordinates
+ * on it. When MapLibre arrives the frame becomes its camera.
  */
+
+// ---------------------------------------------------------------- Ids
+
+/** A Party (pingers-proto PartyId, as hex). */
+@JvmInline value class PartyId(val hex: String)
+
+/** A Spot of a Party. */
+@JvmInline value class SpotId(val hex: String)
+
+/** A Meetup (its MLS group). */
+@JvmInline value class MeetupId(val hex: String)
+
+/** An invite this device made. */
+@JvmInline value class InviteId(val hex: String)
+
+/** A chat message. */
+@JvmInline value class MessageId(val hex: String)
+
+/** A request to see someone's exact location. */
+@JvmInline value class RequestId(val hex: String)
+
+/** A member of a Party or Meetup: their leaf in its group. */
+@JvmInline value class MemberId(val leaf: Long)
+
+/** An exclusion zone, stored on this device only. */
+@JvmInline value class ZoneId(val row: Long)
+
+// ---------------------------------------------------------------- Common
 
 /** Avatar background tints from the canvas, so the palette stays in the theme. */
 enum class Tint { Peach, Sky, Sage, Butter, Lilac, Mint, Stone }
@@ -16,12 +48,50 @@ enum class Tint { Peach, Sky, Sage, Butter, Lilac, Mint, Stone }
 /** The five party colours offered on New party. */
 enum class PartyColour { Blue, Orange, Ink, Teal, Plum }
 
-data class Person(val id: String, val name: String, val initials: String, val tint: Tint, val isMe: Boolean = false)
+data class Person(val id: MemberId, val name: String, val initials: String, val tint: Tint, val isMe: Boolean = false)
 
+/** A WGS84 position in degrees. */
+data class Coordinate(val latitude: Double, val longitude: Double)
+
+/** A point on the placeholder map, in its units. */
 data class MapPoint(val x: Float, val y: Float)
+
+/**
+ * Places coordinates on the placeholder map: [origin] sits at [originAt], and one map unit is
+ * [metresPerUnit] metres (the canvas's scale is 2). Equirectangular, which is exact enough at
+ * the scale of a park.
+ */
+data class MapFrame(val origin: Coordinate, val originAt: MapPoint, val metresPerUnit: Float = 2f) {
+    private val metresPerDegreeLon get() = METRES_PER_DEGREE * cos(origin.latitude * PI / 180)
+
+    fun toMap(c: Coordinate): MapPoint = MapPoint(
+        originAt.x + ((c.longitude - origin.longitude) * metresPerDegreeLon / metresPerUnit).toFloat(),
+        originAt.y - ((c.latitude - origin.latitude) * METRES_PER_DEGREE / metresPerUnit).toFloat(),
+    )
+
+    fun toCoordinate(p: MapPoint): Coordinate = Coordinate(
+        origin.latitude - (p.y - originAt.y) * metresPerUnit / METRES_PER_DEGREE,
+        origin.longitude + (p.x - originAt.x) * metresPerUnit / metresPerDegreeLon,
+    )
+
+    /** A length in metres, in map units. */
+    fun units(metres: Double): Float = (metres / metresPerUnit).toFloat()
+
+    private companion object {
+        const val METRES_PER_DEGREE = 111_320.0
+    }
+}
+
+/** A Spot's or zone's shape. */
+sealed interface Fence {
+    data class Circle(val center: Coordinate, val radiusM: Double) : Fence
+    data class Polygon(val vertices: List<Coordinate>) : Fence
+}
 
 /** How private a party's setup is, from who runs the server and the two relays. */
 enum class PrivacyLevel { Full, Reduced }
+
+enum class Direction { N, NE, E, SE, S, SW, W, NW }
 
 // ---------------------------------------------------------------- Home
 
@@ -33,12 +103,23 @@ data class HomeState(
     val alert: CoPresenceAlert?,
 )
 
-data class SharingSummary(val on: Boolean, val partyCount: Int, val pausesInFocus: Boolean, val exclusionZones: Int)
+/** Whether this device shares its presence now. */
+sealed interface Sharing {
+    data object On : Sharing
+    data object Off : Sharing
 
-data class LiveMeetupCard(val meetupId: String, val partyName: String, val spotName: String, val people: List<Person>)
+    /** Switched on but suppressed; [because] is worded by the core ("Sleep Focus is on"). */
+    data class Paused(val because: String) : Sharing
+}
+
+data class SharingSummary(val sharing: Sharing, val partyCount: Int, val pausesInFocus: Boolean, val exclusionZones: Int) {
+    val on: Boolean get() = sharing != Sharing.Off
+}
+
+data class LiveMeetupCard(val meetupId: MeetupId, val partyName: String, val spotName: String, val people: List<Person>)
 
 data class PartyRow(
-    val id: String,
+    val id: PartyId,
     val name: String,
     val initials: String,
     val colour: PartyColour,
@@ -53,7 +134,11 @@ data class NewPartyState(
     val name: String,
     val colour: PartyColour,
     val server: String,
-    val privacy: PrivacyLevel,
+    /** Null while the server or relay hasn't said who runs it. */
+    val privacy: PrivacyLevel?,
+    val canCreate: Boolean,
+    /** Why the last Create failed, worded by the core. */
+    val error: String? = null,
 )
 
 enum class Reachability { Checking, Reachable, Unreachable }
@@ -61,7 +146,8 @@ enum class Reachability { Checking, Reachable, Unreachable }
 enum class PushRelayChoice { Official, Custom }
 
 data class AdvancedState(
-    val privacy: PrivacyLevel,
+    /** Null while checking. */
+    val privacy: PrivacyLevel?,
     val server: String,
     val serverCheck: Reachability,
     val relay: String,
@@ -71,17 +157,18 @@ data class AdvancedState(
 )
 
 sealed interface Invitation {
-    val id: String
+    val id: InviteId
 
-    data class Opened(override val id: String, val person: Person, val code: String) : Invitation
-    data class Pending(override val id: String, val sharedHoursAgo: Int, val expiresInHours: Int) : Invitation
-    data class Joined(override val id: String, val person: Person) : Invitation
+    data class Opened(override val id: InviteId, val person: Person, val code: String) : Invitation
+    data class Pending(override val id: InviteId, val sharedHoursAgo: Int, val expiresInHours: Int) : Invitation
+    data class Joined(override val id: InviteId, val person: Person) : Invitation
 }
 
 data class InviteState(
     val partyName: String,
-    val link: String,
-    val expiresInHours: Int,
+    /** Null until a link has been made. */
+    val link: String?,
+    val expiresInHours: Int?,
     val invitations: List<Invitation>,
 )
 
@@ -102,19 +189,18 @@ sealed interface SpotShape {
     data class Area(val hectares: Float) : SpotShape
 }
 
-data class SpotRow(val id: String, val name: String, val shape: SpotShape, val inMeetup: Boolean)
-
-data class MapCircle(val center: MapPoint, val radius: Float, val small: Boolean = false)
+data class SpotRow(val id: SpotId, val name: String, val shape: SpotShape, val fence: Fence, val inMeetup: Boolean)
 
 data class PartyState(
-    val id: String,
+    val id: PartyId,
     val name: String,
     val members: List<Person>,
     val spots: List<SpotRow>,
-    /** The party's Spots on the card map, in its 350x230 units. */
-    val mapSpots: List<MapCircle>,
+    /** Places the Spots on the card map (350x230 units). */
+    val mapFrame: MapFrame,
     val server: String,
     val privacy: PrivacyLevel,
+    val meetup: MeetupId?,
 )
 
 // ---------------------------------------------------------------- Spots and privacy
@@ -126,25 +212,31 @@ data class SpotEditorState(
     val name: String,
     val shape: ShapeKind,
     val radiusM: Int,
+    /** 100 m: OS geofences are unreliable below it (design E.2). */
     val minRadiusM: Int,
     val maxRadiusM: Int,
     val areaHectares: Float?,
+    val canSave: Boolean,
 )
+
+/** What is wrong with a drawn area. */
+enum class ShapeProblem { Crossing, NoArea, TooLarge }
 
 /** What the draw-area editor tells the user to do next. */
 sealed interface DrawHint {
     data object FirstPoint : DrawHint
     data object KeepTapping : DrawHint
     data object CloseShape : DrawHint
+    data class Fix(val problem: ShapeProblem) : DrawHint
     data class Selected(val number: Int) : DrawHint
     data object Adjust : DrawHint
 }
 
 data class DrawAreaState(
     val spotName: String,
-    val points: List<MapPoint>,
+    val points: List<Coordinate>,
     /** Where a "+" sits on each edge of a closed shape, to insert a point after that index. */
-    val midpoints: List<MapPoint>,
+    val midpoints: List<Coordinate>,
     val closed: Boolean,
     val selected: Int?,
     /** The first point is shown larger and orange while it can close the shape. */
@@ -152,7 +244,10 @@ data class DrawAreaState(
     val canUndo: Boolean,
     val canDelete: Boolean,
     val areaM2: Float?,
+    val problem: ShapeProblem?,
+    val canUse: Boolean,
     val hint: DrawHint,
+    val mapFrame: MapFrame,
 )
 
 sealed interface ZoneShape {
@@ -161,15 +256,15 @@ sealed interface ZoneShape {
 }
 
 data class ZoneRow(
-    val id: String,
+    val id: ZoneId,
     val name: String,
     val shape: ZoneShape,
-    /** When the zone applies, as the core words it; null means always, for all parties. */
+    /** When and for whom the zone applies, as the core words it; null means always, for all parties. */
     val schedule: String?,
-    val labelAt: MapPoint,
+    val labelAt: Coordinate,
 )
 
-data class ExclusionZonesState(val zones: List<ZoneRow>, val hideTrail: Boolean, val me: MapPoint)
+data class ExclusionZonesState(val zones: List<ZoneRow>, val hideTrail: Boolean, val me: Coordinate?, val mapFrame: MapFrame)
 
 enum class Visibility { AskEachTime, Everyone, Nobody }
 
@@ -196,36 +291,41 @@ data class ServerViewState(
 
 // ---------------------------------------------------------------- Meetup
 
-data class CoPresenceAlert(val meetupId: String, val partyName: String, val others: List<String>, val spotName: String)
+data class CoPresenceAlert(val meetupId: MeetupId, val partyName: String, val others: List<String>, val spotName: String)
 
-data class MeetPoint(val label: String, val setBy: String, val distanceM: Int, val at: MapPoint)
+/** The meet point card. [distanceM] and [at] are null until both positions are known. */
+data class MeetPoint(val label: String, val setBy: String, val distanceM: Int?, val at: Coordinate?)
 
 /** What a member's exact location looks like to me. */
 sealed interface PeerLocation {
-    data class Shared(val distanceM: Int, val direction: Direction, val at: MapPoint) : PeerLocation
+    /**
+     * [distanceM] and [direction] are null until this device has a fix. [updated] is
+     * "Updated 40 s ago" / "Updated just now", from pingers-screens and pingers-words.
+     */
+    data class Shared(val distanceM: Int?, val direction: Direction?, val at: Coordinate, val updated: String?) : PeerLocation
     data object Private : PeerLocation
     data object Asked : PeerLocation
 }
 
-enum class Direction { N, NE, E, SE, S, SW, W, NW }
-
 data class MeetupMember(val person: Person, val location: PeerLocation)
 
 data class MeetupState(
-    val id: String,
+    val id: MeetupId,
     val partyName: String,
     val spotName: String,
     val hereCount: Int,
     val meetPoint: MeetPoint?,
     val members: List<MeetupMember>,
-    val me: MapPoint,
+    /** Null until this device has a fix. */
+    val me: Coordinate?,
     val chatCount: Int,
     /** Whom my exact spot is shared with. */
     val sharedWith: List<String>,
+    val mapFrame: MapFrame,
 )
 
 data class ChatMessage(
-    val id: String,
+    val id: MessageId,
     val author: Person,
     val body: String,
     val replies: List<ChatMessage> = emptyList(),
@@ -245,35 +345,60 @@ data class ChatState(
     val replyingTo: ChatMessage?,
 )
 
-enum class MeetPointMode { Pin, AtPerson, Midpoint }
+/** How the meet point is chosen: a dropped pin, "At me" (my live position), or the midpoint. */
+enum class MeetPointMode { Pin, AtMe, Midpoint }
 
 data class MeetPointDistance(val name: String, val distanceM: Int?)
 
 data class MeetPointState(
     val mode: MeetPointMode,
     val label: String,
-    val pin: MapPoint,
+    /** Where the dropped pin is. */
+    val pin: Coordinate,
+    /** Where the meet point would be in this mode; null if not known (no fix yet). */
+    val point: Coordinate?,
     val distances: List<MeetPointDistance>,
-    val members: List<Pair<Person, MapPoint>>,
+    val members: List<Pair<Person, Coordinate>>,
+    val canShare: Boolean,
+    val mapFrame: MapFrame,
 )
 
-sealed interface CompassTarget {
-    val id: String
-
-    data class Place(override val id: String, val label: String) : CompassTarget
-    data class Member(override val id: String, val name: String, val locked: Boolean) : CompassTarget
+/** What the compass points at. */
+sealed interface CompassSelection {
+    data object MeetPoint : CompassSelection
+    data class Member(val id: MemberId) : CompassSelection
 }
 
-data class CompassState(
-    val targets: List<CompassTarget>,
-    val selected: String,
-    val targetLabel: String,
+sealed interface CompassTarget {
+    val selection: CompassSelection
+
+    data class Place(val label: String) : CompassTarget {
+        override val selection: CompassSelection get() = CompassSelection.MeetPoint
+    }
+
+    data class Member(val id: MemberId, val name: String, val locked: Boolean) : CompassTarget {
+        override val selection: CompassSelection get() = CompassSelection.Member(id)
+    }
+}
+
+/** Where the target is from here. */
+data class CompassReading(
     /** From me to the target, degrees clockwise from true north. */
     val bearingDeg: Float,
     val direction: Direction,
     val distanceM: Int,
     val walkMinutes: Int,
-    val gpsAccuracyM: Int,
+    /** "Updated 40 s ago" / "Updated just now", under the distance. */
+    val updated: String?,
+)
+
+data class CompassState(
+    val targets: List<CompassTarget>,
+    val selected: CompassSelection,
+    val targetLabel: String,
+    /** Null until both positions are known. */
+    val reading: CompassReading?,
+    val gpsAccuracyM: Int?,
     /** Who sees that I'm heading over. */
     val watchers: List<String>,
 )
@@ -281,6 +406,8 @@ data class CompassState(
 enum class ShareScope { ThisMeetup, FifteenMinutes }
 
 data class LocationRequestState(
+    val id: RequestId,
+    val meetupId: MeetupId,
     val from: Person,
     val spotName: String,
     val partyName: String,

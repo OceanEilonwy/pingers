@@ -30,7 +30,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
+import org.pingers.app.data.CoreRepositories
+import org.pingers.app.data.CoreRepository
 import org.pingers.app.data.FakeRepository
 import org.pingers.app.data.PingersRepository
 import org.pingers.app.ui.screens.AcceptInviteScreen
@@ -58,7 +63,8 @@ import org.pingers.app.ui.theme.PingersTheme
 class MainActivity : ComponentActivity() {
     private val nav = Navigator()
 
-    // The one repository. FakeRepository until the Rust core is wired in.
+    // The one repository: the Rust core's. Debug builds launched with `--ez fake true` use
+    // FakeRepository instead, for the canvas screenshots (android/docs/screenshots).
     private lateinit var repo: PingersRepository
 
     /** A notification action or join link waiting for the UI. */
@@ -70,7 +76,11 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
-        repo = FakeRepository(resources, lifecycleScope)
+        repo = if (debuggable(this) && intent.getBooleanExtra(EXTRA_FAKE, false)) {
+            FakeRepository(resources, lifecycleScope)
+        } else {
+            CoreRepositories.get(applicationContext).also(::follow)
+        }
         pending = intent
         setContent {
             PingersTheme {
@@ -83,9 +93,28 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         pending = intent
     }
+
+    /** Routes the core's events while this activity is started. */
+    private fun follow(core: CoreRepository) {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                core.events.collect { event ->
+                    when (event) {
+                        is CoreRepository.Event.MeetupStarted -> {
+                            event.alert?.let { if (CoPresenceNotifier.canPost(this@MainActivity)) CoPresenceNotifier.post(this@MainActivity, it) }
+                            nav.go(Route.Alert)
+                        }
+                        CoreRepository.Event.LocationRequested -> nav.go(Route.LocationRequest)
+                        CoreRepository.Event.MeetupEnded -> nav.reset(Route.MeetupEnded)
+                    }
+                }
+            }
+        }
+    }
 }
 
 private const val EXTRA_SCREEN = "screen"
+private const val EXTRA_FAKE = "fake"
 
 private fun debuggable(context: android.content.Context) =
     context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
@@ -107,7 +136,10 @@ private fun App(repo: PingersRepository, nav: Navigator, pending: Intent?, consu
                 repo.hideMeHere()
                 nav.reset(Route.Home)
             }
-            intent.action == Intent.ACTION_VIEW && intent.data != null -> nav.go(Route.AcceptInvite)
+            intent.action == Intent.ACTION_VIEW && intent.data != null -> {
+                (repo as? CoreRepository)?.openInvite(intent.dataString.orEmpty())
+                nav.go(Route.AcceptInvite)
+            }
             // Debug builds only: `adb shell am start -n ... --es screen Compass` opens a screen
             // directly, for screenshots (android/docs/screenshots).
             debuggable(context) && intent.hasExtra(EXTRA_SCREEN) ->
