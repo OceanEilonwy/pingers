@@ -271,6 +271,23 @@ mod tests {
     }
 
     #[test]
+    fn polygon_round_trips_exactly() -> Result<(), TestError> {
+        let vertices = vec![
+            Coordinate::new(48.0, 2.0)?,
+            Coordinate::new(48.0, 2.001)?,
+            Coordinate::new(48.001, 2.001)?,
+            Coordinate::new(48.001, 2.0)?,
+        ];
+        let fence = Fence::Polygon(Polygon::new(vertices)?);
+        let bytes = encode_fence(&fence)?;
+        // version, kind, be16 count = 4, then four 16-byte vertices.
+        assert_eq!(bytes.get(..4), Some(&[1, 1, 0, 4][..]));
+        assert_eq!(bytes.len(), 4 + 4 * 16);
+        assert_eq!(decode_fence(&bytes, "test")?, fence);
+        Ok(())
+    }
+
+    #[test]
     fn polygon_with_too_few_vertices_is_corrupt() {
         // version, polygon, count 0: rejected by pingers-geo's constructor whatever it does.
         assert!(decode_fence(&[1, 1, 0, 0], "test").is_err());
