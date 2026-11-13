@@ -1,0 +1,62 @@
+[package]
+name = "pingers-ohttp-fuzz"
+description = "Fuzz targets for pingers-ohttp's decoders and chunk framing (cargo fuzz, nightly)."
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace: cargo fuzz needs nightly and sanitizer flags the main workspace must not get.
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = { version = "0.4.13", features = ["arbitrary-derive"] }
+pingers-ohttp = { path = ".." }
+pingers-testkit = { path = "../../pingers-testkit" }
+zeroize = "1.9.1"
+
+[[bin]]
+name = "key_config"
+path = "fuzz_targets/key_config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "binary_message"
+path = "fuzz_targets/binary_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gateway_decapsulate"
+path = "fuzz_targets/gateway_decapsulate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chunked_request_stream"
+path = "fuzz_targets/chunked_request_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chunked_response_stream"
+path = "fuzz_targets/chunked_response_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chunk_round_trip"
+path = "fuzz_targets/chunk_round_trip.rs"
+test = false
+doc = false
+bench = false
