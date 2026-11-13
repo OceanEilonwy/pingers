@@ -63,8 +63,20 @@ The first line of every `.rs` file is the SPDX header:
 
 Run `cargo xtask ci` before pushing. It runs, in order: `cargo fmt --check`,
 `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test`,
-`cargo xtask layers` and `cargo deny check`. CI also runs `cargo mutants` on changed crates and
-the fuzz targets for a short time.
+`cargo xtask layers` and `cargo deny check`. It stays quick enough to run on every change.
+
+Before asking for review, run `cargo xtask ci --full`. It runs everything `ci` does, then:
+
+- `cargo mutants` on every crate with a file changed since `main` (the merge base, working
+  tree included). Each surviving or timed-out mutant fails the run unless
+  [`mutants-allow.toml`](mutants-allow.toml) lists it with a reason, normally that it is
+  equivalent. An entry that no longer survives in a crate that was mutated also fails, so the
+  file cannot go stale. Kill a new survivor with a test rather than listing it.
+- every fuzz target under `crates/*/fuzz` for 10 seconds, with `cargo +nightly fuzz run`.
+
+Options: `--base <ref>` measures changes against another branch or commit, and
+`--fuzz-seconds <n>` changes the time box. It needs `cargo-mutants`, `cargo-fuzz` and a nightly
+toolchain. Mutating a large crate takes a while; results land in `target/xtask-mutants/`.
 
 Changing anything listed as fixed in a crate's `CONTRACT.md` changes an interface other crates
 build against: say so in the pull request and update the contract in the same change.

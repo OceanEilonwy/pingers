@@ -11,7 +11,12 @@
 //!   Library crates may not depend on `anyhow` (style guide §4).
 //! - `cargo xtask ci`: the checks CI runs on every pull request, in order, stopping at the
 //!   first failure.
+//! - `cargo xtask ci --full [--base <ref>] [--fuzz-seconds <n>]`: `ci`, then `cargo mutants`
+//!   on the crates changed since `<ref>` (default `main`) and every fuzz target for `<n>`
+//!   seconds (default 10). See [`full`].
 #![forbid(unsafe_code)]
+
+mod full;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -65,22 +70,72 @@ enum Outcome {
     Failed,
 }
 
+const USAGE: &str = "usage: cargo xtask <command>\n\n\
+                     commands:\n  \
+                     layers  check the layer rule and the I/O ban below L2\n  \
+                     ci      fmt --check, clippy -D warnings, test, layers, deny\n  \
+                     ci --full [--base <ref>] [--fuzz-seconds <n>]\n          \
+                     ci, then cargo mutants on crates changed since <ref> (main) and\n          \
+                     every fuzz target for <n> seconds (10); survivors must be listed\n          \
+                     with a reason in mutants-allow.toml";
+
 fn run() -> Result<Outcome> {
-    let command = std::env::args().nth(1);
-    match command.as_deref() {
-        Some("layers") => check_layers(&workspace_root()?),
-        Some("ci") => run_ci(&workspace_root()?),
-        _ => {
-            writeln!(
-                io::stderr(),
-                "usage: cargo xtask <command>\n\n\
-                 commands:\n  \
-                 layers  check the layer rule and the I/O ban below L2\n  \
-                 ci      fmt --check, clippy -D warnings, test, layers, deny"
-            )?;
-            Ok(Outcome::Failed)
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let (command, options) = arguments
+        .split_first()
+        .map_or((None, &[][..]), |(command, rest)| {
+            (Some(command.as_str()), rest)
+        });
+    match command {
+        Some("layers") if options.is_empty() => check_layers(&workspace_root()?),
+        Some("ci") => match parse_ci_options(options) {
+            Some(CiMode::Fast) => run_ci(&workspace_root()?),
+            Some(CiMode::Full(full)) => {
+                let root = workspace_root()?;
+                if run_ci(&root)? == Outcome::Failed {
+                    return Ok(Outcome::Failed);
+                }
+                let outcome = full::run_full(&root, &full)?;
+                if outcome == Outcome::Passed {
+                    writeln!(io::stdout(), "ci: full checks passed")?;
+                }
+                Ok(outcome)
+            }
+            None => usage(),
+        },
+        _ => usage(),
+    }
+}
+
+fn usage() -> Result<Outcome> {
+    writeln!(io::stderr(), "{USAGE}")?;
+    Ok(Outcome::Failed)
+}
+
+/// Which `ci` to run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CiMode {
+    /// The checks every pull request runs.
+    Fast,
+    /// Those, then mutation testing and fuzzing.
+    Full(full::FullOptions),
+}
+
+/// Parses the options after `ci`; `None` for anything not understood.
+fn parse_ci_options(options: &[String]) -> Option<CiMode> {
+    let mut full = None::<full::FullOptions>;
+    let mut options = options.iter();
+    while let Some(option) = options.next() {
+        match option.as_str() {
+            "--full" => {
+                full.get_or_insert_with(full::FullOptions::default);
+            }
+            "--base" => full.as_mut()?.base.clone_from(options.next()?),
+            "--fuzz-seconds" => full.as_mut()?.fuzz_seconds = options.next()?.parse().ok()?,
+            _ => return None,
         }
     }
+    Some(full.map_or(CiMode::Fast, CiMode::Full))
 }
 
 fn workspace_root() -> Result<PathBuf> {
@@ -505,4 +560,38 @@ fn run_cargo(root: &Path, arguments: &[&str]) -> Result<Outcome> {
 fn announce(step: &str) -> Result<()> {
     writeln!(io::stdout(), "ci: running `{step}`")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(options: &[&str]) -> Option<CiMode> {
+        let options: Vec<String> = options.iter().map(|option| (*option).to_owned()).collect();
+        parse_ci_options(&options)
+    }
+
+    #[test]
+    fn plain_ci_stays_fast_and_full_takes_options() {
+        assert_eq!(parse(&[]), Some(CiMode::Fast));
+        assert_eq!(
+            parse(&["--full"]),
+            Some(CiMode::Full(full::FullOptions::default()))
+        );
+        assert_eq!(
+            parse(&["--full", "--base", "origin/main", "--fuzz-seconds", "3"]),
+            Some(CiMode::Full(full::FullOptions {
+                base: "origin/main".into(),
+                fuzz_seconds: 3,
+            }))
+        );
+    }
+
+    #[test]
+    fn options_without_full_or_a_value_are_refused() {
+        assert_eq!(parse(&["--base", "main"]), None);
+        assert_eq!(parse(&["--full", "--fuzz-seconds"]), None);
+        assert_eq!(parse(&["--full", "--fuzz-seconds", "soon"]), None);
+        assert_eq!(parse(&["--fast"]), None);
+    }
 }

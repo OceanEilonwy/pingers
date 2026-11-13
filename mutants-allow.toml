@@ -1,0 +1,11 @@
+# Surviving mutants that `cargo xtask ci --full` accepts.
+#
+# Each entry names one mutant as `cargo mutants` prints it in `mutants.out/missed.txt` (or
+# `timeout.txt`), with or without its `:line:column`, and says why no test should kill it:
+# usually that the mutant is equivalent (no input can tell it apart). "Hard to test" is not a
+# reason; write the test. An entry for a crate that was mutated but that no longer survives
+# fails the run, so remove it when a test starts killing it.
+#
+# [[mutant]]
+# name = "crates/pingers-example/src/lib.rs: replace | with ^ in write_varint"
+# reason = "the operands share no set bits, so OR and XOR agree for every input"
