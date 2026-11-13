@@ -12,16 +12,27 @@ layer = 2
 
 [dependencies]
 pingers-ohttp = { workspace = true }
+pingers-proto = { workspace = true }
 pingers-time = { workspace = true }
 async-trait = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
+rand_core = { workspace = true }
 rustls = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+tokio-rustls = { workspace = true }
+webpki-roots = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["test-util"] }
+pingers-testkit = { workspace = true }
+pingers-time = { workspace = true, features = ["test-util"] }
+rcgen = { workspace = true }
+tokio = { workspace = true, features = ["test-util", "net"] }
+# The reference relay's own source is compiled into the integration tests (tests/integration);
+# its configuration parser needs these.
+serde = { workspace = true }
+toml = { workspace = true }
 
 [lints]
 workspace = true

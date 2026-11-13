@@ -1,19 +1,49 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Router and OHTTP client.
 //!
-//! Getting bytes to the server (architecture §3, design B.12): the [`Transport`] trait and the
-//! router by [`PrivacyClass`]; anonymous and stream traffic never goes direct. The OHTTP client
-//! over HTTP/2 (`hyper` + `rustls` with X25519MLKEM768), the chunked live channel with reconnect,
-//! the split-channel fallback, and relay selection and health are implemented here by the
-//! crate's owner. Tor and mixnets would be new `Transport` implementations here, nowhere else.
+//! Getting bytes to the server (architecture §3, design B.12):
+//! - the [`Transport`] trait and the [`Router`] by [`PrivacyClass`]; anonymous and stream
+//!   traffic never goes direct, and with no relay reachable it is not sent at all
+//!   ([`TransportError::NoRelay`]);
+//! - [`OhttpTransport`]: OHTTP over HTTP/2 (`hyper` + `rustls`, TLS 1.3 offering the
+//!   X25519MLKEM768 hybrid key exchange first), a fresh HPKE context per request, relay
+//!   selection and health, and the gateway key config fetched through the relay and checked
+//!   against the pin;
+//! - the chunked live channel ([`Transport::stream`]): keep-alives, reconnects with backoff and
+//!   a fresh HPKE context, and the split-channel fallback for relays that cannot stream full
+//!   duplex (design B.4.9);
+//! - [`DirectTransport`]: HTTPS for the `Identified` class only.
+//!
+//! Every network step has a deadline from the injected [`Timer`](pingers_time::Timer), and
+//! every spawned task has an owner that aborts it when dropped. Tor and mixnets would be new
+//! `Transport` implementations here, nowhere else.
 //!
 //! This is also the lowest crate with tokio, so it owns the production [`TokioTimer`].
 #![forbid(unsafe_code)]
 
-use std::time::Duration;
+mod direct;
+mod endpoint;
+mod http;
+mod live;
+mod ohttp;
+mod relay;
+mod router;
+mod timer;
+mod tls;
 
 use pingers_ohttp::{BinaryRequest, BinaryResponse, OhttpError};
-use pingers_time::{MonotonicTime, Sleep, Timer};
+
+pub use direct::{DirectConfig, DirectTransport};
+pub use live::{KEEP_ALIVE_CHUNK, MAX_FRAME_BYTES};
+pub use ohttp::{LiveSettings, OhttpConfig, OhttpTransport, Timeouts};
+pub use relay::{Backoff, KeyPin, Relay};
+pub use router::{Router, Routes};
+pub use timer::TokioTimer;
+pub use tls::TlsRoots;
+
+/// The randomness an [`OhttpTransport`] draws HPKE keys and nonces from. Production passes an
+/// OS-seeded CSPRNG; tests pass a seeded one (style guide §6).
+pub type TransportRng = Box<dyn rand_core::CryptoRng + Send>;
 
 /// How a request may travel (design B.12).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -60,7 +90,9 @@ pub enum TransportError {
         /// The status code.
         status: u16,
     },
-    /// Encapsulation failed, or the relay's key config does not match the pin.
+    /// Encapsulation failed, a chunk did not open, or the relay's key config does not match
+    /// the pin ([`OhttpError::KeyMismatch`]: raise `RelayKeyMismatch`; the transport refuses
+    /// all anonymous traffic until [`OhttpTransport::repin`]).
     #[error("OHTTP failed")]
     Ohttp(#[from] OhttpError),
     /// The connection failed.
@@ -69,25 +101,56 @@ pub enum TransportError {
     /// The live stream closed.
     #[error("stream closed")]
     StreamClosed,
+    /// A configured URL is not usable (not absolute, wrong scheme, or not TLS where TLS is
+    /// required).
+    #[error("invalid URL")]
+    InvalidUrl,
+    /// A request or frame cannot be carried: a malformed method or header, a stream request
+    /// with a body, or a frame that is empty, too large or a keep-alive.
+    #[error("invalid request")]
+    InvalidRequest,
+    /// A trusted root certificate could not be parsed, or TLS could not be configured.
+    #[error("invalid certificate")]
+    InvalidCertificate,
+    /// A response was larger than allowed.
+    #[error("response too large")]
+    TooLarge,
 }
 
 /// One long-lived bidirectional exchange: the Meetup live channel. Each frame is one padded
 /// live frame. Cancellation-safe: dropping a pending `receive` loses no frame.
+///
+/// Reconnects are handled inside: a dropped exchange is re-opened with a fresh HPKE context
+/// after a backoff, and frames in flight at that moment may be lost (they are ephemeral, or
+/// stored in the group log). Dropping the stream aborts it at once; [`DuplexStream::close`]
+/// ends it cleanly with a final chunk.
 #[async_trait::async_trait]
 pub trait DuplexStream: Send {
     /// Sends one frame.
     ///
     /// # Errors
     ///
-    /// [`TransportError::StreamClosed`] or [`TransportError::Connection`].
+    /// [`TransportError::StreamClosed`] once the channel has ended;
+    /// [`TransportError::InvalidRequest`] for an empty frame, one above [`MAX_FRAME_BYTES`],
+    /// or one equal to [`KEEP_ALIVE_CHUNK`].
     async fn send(&mut self, frame: Vec<u8>) -> Result<(), TransportError>;
 
     /// The next incoming frame, or `None` when the gateway ended the stream.
     ///
     /// # Errors
     ///
-    /// [`TransportError::Ohttp`] if a chunk fails to open (including truncation).
+    /// [`TransportError::Ohttp`] if a chunk fails to open; when reconnecting has failed
+    /// [`LiveSettings::max_reconnects`] times in a row, the last reconnect error (for example
+    /// [`TransportError::NoRelay`]), or [`OhttpError::KeyMismatch`] at once. After an error,
+    /// [`TransportError::StreamClosed`].
     async fn receive(&mut self) -> Result<Option<Vec<u8>>, TransportError>;
+
+    /// Ends the stream: sends the final chunk and waits for the exchange to finish.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Timeout`] if it did not finish in time (it is aborted then).
+    async fn close(&mut self) -> Result<(), TransportError>;
 }
 
 /// A way to reach the server (design B.12). The router holds one per privacy class.
@@ -116,69 +179,4 @@ pub trait Transport: Send + Sync {
 
     /// What this transport is.
     fn kind(&self) -> TransportKind;
-}
-
-/// The production [`Timer`], over tokio's clock. Must be created and used inside a tokio
-/// runtime. Tests use `pingers_time::ManualClock` instead.
-#[derive(Clone, Copy, Debug)]
-pub struct TokioTimer {
-    origin: tokio::time::Instant,
-}
-
-impl TokioTimer {
-    /// A timer whose origin is now.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            origin: tokio_now(),
-        }
-    }
-}
-
-impl Default for TokioTimer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Timer for TokioTimer {
-    fn now(&self) -> MonotonicTime {
-        MonotonicTime::from_elapsed(tokio_now().saturating_duration_since(self.origin))
-    }
-
-    fn sleep_until(&self, deadline: MonotonicTime) -> Sleep<'_> {
-        let instant = self
-            .origin
-            .checked_add(deadline.elapsed())
-            .unwrap_or_else(|| far_future(self.origin));
-        Box::pin(tokio::time::sleep_until(instant))
-    }
-}
-
-#[expect(
-    clippy::disallowed_methods,
-    reason = "TokioTimer is the one production reader of tokio's monotonic clock"
-)]
-fn tokio_now() -> tokio::time::Instant {
-    tokio::time::Instant::now()
-}
-
-/// About thirty years after `origin`: a deadline that will not arrive, for overflowing inputs.
-fn far_future(origin: tokio::time::Instant) -> tokio::time::Instant {
-    origin
-        .checked_add(Duration::from_hours(24 * 365 * 30))
-        .unwrap_or(origin)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test(start_paused = true)]
-    async fn sleep_completes_when_tokio_time_advances() {
-        let timer = TokioTimer::new();
-        let deadline = timer.now().saturating_add(Duration::from_secs(5));
-        timer.sleep_until(deadline).await;
-        assert!(timer.now() >= deadline);
-    }
 }
