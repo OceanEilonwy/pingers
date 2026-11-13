@@ -3642,11 +3642,17 @@ dependencies = [
 name = "pingers-parties"
 version = "0.1.0"
 dependencies = [
+ "pingers-crypto",
  "pingers-geo",
  "pingers-mls",
+ "pingers-presence",
  "pingers-proto",
  "pingers-store",
+ "pingers-time",
+ "rand_chacha 0.10.0",
+ "rand_core 0.10.1",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]
