@@ -288,12 +288,15 @@ impl Driver {
             }
             let wake = self.shared.deadline(self.shared.backoff.delay(failures));
             loop {
+                // Frames already queued when the backoff ends are taken first, so the kept
+                // frames are always the newest ones sent before the reconnect.
                 tokio::select! {
-                    () = self.shared.timer.sleep_until(wake) => break,
+                    biased;
                     frame = self.outgoing.recv() => match frame {
                         Some(frame) => self.keep_pending(frame),
                         None => return Err(None),
                     },
+                    () = self.shared.timer.sleep_until(wake) => break,
                 }
             }
         }

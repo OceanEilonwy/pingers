@@ -21,7 +21,7 @@ use pingers_ohttp::{
     OhttpError,
 };
 use pingers_testkit::seeded_rng;
-use pingers_time::{ManualClock, UnixSeconds};
+use pingers_time::{ManualClock, MonotonicTime, Timer, UnixSeconds};
 use pingers_transport::{
     KEEP_ALIVE_CHUNK, KeyPin, OhttpConfig, OhttpTransport, Relay, TlsRoots, TransportError,
 };
@@ -85,28 +85,39 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Lets real time pass, so loopback I/O can happen between manual clock steps.
+/// Lets real time pass, so loopback I/O can happen while a test polls a condition.
 #[expect(
     clippy::disallowed_methods,
     reason = "the network under test is real; only the transport's timers are manual"
 )]
-pub(crate) async fn real_pause() {
+async fn real_pause() {
     tokio::time::sleep(Duration::from_millis(10)).await;
 }
 
-/// Runs `future` to completion, advancing `clock` by `step` between short real pauses, so
-/// timers the code under test sleeps on fire whenever it gets to them.
-pub(crate) async fn advancing<F: Future>(
+/// The monotonic time `elapsed` after `clock`'s current reading.
+pub(crate) fn after(clock: &ManualClock, elapsed: Duration) -> MonotonicTime {
+    Timer::now(clock).saturating_add(elapsed)
+}
+
+/// Runs `future` to completion, moving `clock` to each of `deadlines` in turn, but only once
+/// the code under test is parked on that deadline. Time never moves while real I/O is still
+/// in flight, so a slow machine cannot fire a timeout the test did not mean to.
+pub(crate) async fn advancing_through<F: Future>(
     clock: &ManualClock,
-    step: Duration,
+    deadlines: &[MonotonicTime],
     future: F,
 ) -> Result<F::Output, TestError> {
     let mut future = std::pin::pin!(future);
+    let mut deadlines = deadlines.iter().copied().peekable();
     tokio::time::timeout(STEP, async {
         loop {
             tokio::select! {
                 output = &mut future => return output,
-                () = real_pause() => clock.advance(step),
+                () = real_pause() => {
+                    if let Some(deadline) = deadlines.next_if(|d| clock.is_sleeping_until(*d)) {
+                        clock.advance(deadline.saturating_duration_since(Timer::now(clock)));
+                    }
+                }
             }
         }
     })
