@@ -64,7 +64,8 @@ Highest priority first, per region:
    must fill `map_host` from a `map_host = "https://…"` line in its config, and pingers-ffi must
    pass it to the shell (a `Snapshot` field or a `Core` call);
 3. the publisher's default, `BuildConfig.MAP_HOST`, set with `-PpingersMapHost=https://…`
-   (`https://maps.pingers.hollingworth.xyz` for the publisher's builds).
+   or the `PINGERS_MAP_HOST` environment variable in CI. Deployment configuration, never source;
+   unset, it is `https://maps.pingers.invalid`, which never resolves.
 
 The picker fetches `catalog.json` from every host in the chain and offers each region from the
 first host that lists it (`resolveRegions`), so a host that lacks an area hands only that area
@@ -127,7 +128,7 @@ Debug builds allow plain HTTP to `10.0.2.2` and `localhost` only
 
 ## Open decisions
 
-- ~~Who hosts the default packs~~: decided 2026-11-13, `maps.pingers.hollingworth.xyz`.
+- ~~Who hosts the default packs~~: the publisher, configured per build through `PINGERS_MAP_HOST`.
 - **Shell network calls.** The design says the shells make no network calls (design E.1); pack
   downloads are an exception made in the shell (plain HTTPS, whole files). Moving them into the
   core would also give the relay path for free.
