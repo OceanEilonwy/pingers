@@ -4,8 +4,12 @@
 use pingers_gate::{GateDecision, LocationSharing, SuppressReason};
 use pingers_meetup::LocationVisibility;
 
+use crate::ScreenError;
 use crate::clock::LocalTime;
-use crate::snapshot::{ClientSnapshot, PauseInFocus, Toggle, WakePushes};
+use crate::common::Name;
+use crate::snapshot::{
+    ClientSnapshot, PauseInFocus, QuietHoursPreference, Toggle, WakePushes, daily_window,
+};
 
 /// Quiet hours as the row shows them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +65,36 @@ pub fn privacy(snapshot: &ClientSnapshot) -> Privacy {
     }
 }
 
+/// Quiet hours as the user set them: the switch and a window picked on the clock.
+///
+/// # Errors
+///
+/// [`ScreenError::EmptyWindow`] if the window starts where it ends; [`ScreenError::InvalidTime`]
+/// for a time outside the day.
+pub fn quiet_hours(
+    state: Toggle,
+    from: LocalTime,
+    to: LocalTime,
+) -> Result<QuietHoursPreference, ScreenError> {
+    let window = daily_window(from.minute_of_day()?, to.minute_of_day()?)?;
+    Ok(QuietHoursPreference { state, window })
+}
+
+/// The name this device's user goes by in Parties they create or join.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct YourName {
+    /// The name, once set.
+    pub name: Option<Name>,
+}
+
+/// The name this device's user goes by.
+#[must_use]
+pub fn your_name(snapshot: &ClientSnapshot) -> YourName {
+    YourName {
+        name: snapshot.display_name.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
@@ -96,6 +130,41 @@ mod tests {
         );
         snapshot.gate = GateDecision::Suppress(SuppressReason::LocationSharingOff);
         assert_eq!(privacy(&snapshot).paused_because, None);
+        Ok(())
+    }
+
+    #[test]
+    fn quiet_hours_take_the_picked_window_and_switch() -> Result<(), ScreenError> {
+        let set = quiet_hours(Toggle::On, LocalTime::new(22, 30)?, LocalTime::new(6, 45)?)?;
+        assert_eq!(set.state, Toggle::On);
+        assert_eq!(
+            (set.window.start().get(), set.window.end().get()),
+            (1_350, 405)
+        );
+        let off = quiet_hours(Toggle::Off, LocalTime::new(22, 30)?, LocalTime::new(6, 45)?)?;
+        assert_eq!(off.state, Toggle::Off);
+        Ok(())
+    }
+
+    #[test]
+    fn quiet_hours_that_start_when_they_end_are_refused() -> Result<(), ScreenError> {
+        let seven = LocalTime::new(7, 0)?;
+        assert_eq!(
+            quiet_hours(Toggle::On, seven, seven),
+            Err(ScreenError::EmptyWindow)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn your_name_is_the_one_set_on_this_device() -> Result<(), FixtureError> {
+        let mut snapshot = fixtures::snapshot()?;
+        assert_eq!(
+            your_name(&snapshot).name.as_ref().map(Name::as_str),
+            Some("Sam")
+        );
+        snapshot.display_name = None;
+        assert_eq!(your_name(&snapshot), YourName { name: None });
         Ok(())
     }
 }

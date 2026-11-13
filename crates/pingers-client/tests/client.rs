@@ -167,6 +167,7 @@ async fn open_builds_the_crates_and_publishes_their_sections() -> Result<(), Tes
     fakes.set_parties(PartiesSection {
         parties: Vec::new(),
         join_preview: None,
+        display_name: Some(Name::new("Sam")?),
     });
     let mut pipeline = fakes_pipeline(&fakes).await?;
     pipeline.gate = GateDecision::Suppress(SuppressReason::Paused);
@@ -196,6 +197,7 @@ async fn open_builds_the_crates_and_publishes_their_sections() -> Result<(), Tes
         location_requests: Vec::new(),
         ended_meetup: None,
         join_preview: None,
+        display_name: Some(Name::new("Sam")?),
         own_position: pipeline.own_position,
         fallbacks: vec![Fallback::PrivacyPassOnly],
         relay: RelayStatus::KeyMismatch,
@@ -315,6 +317,15 @@ async fn party_commands_reach_parties_and_republish() -> Result<(), TestError> {
     );
 
     let reads = rig.fakes.section_reads();
+    client.cancel_invite(PARTY, invite).await?;
+    rig.expect_last(&CrateCall::CancelInvite(PARTY, invite), reads);
+
+    let reads = rig.fakes.section_reads();
+    client.set_display_name(name("Sam")?).await?;
+    rig.expect_last(&CrateCall::SetDisplayName(name("Sam")?), reads);
+    assert_eq!(client.snapshot().display_name, Some(name("Sam")?));
+
+    let reads = rig.fakes.section_reads();
     client.remove_member(PARTY, PEER).await?;
     rig.expect_last(&CrateCall::RemoveMember(PARTY, PEER), reads);
 
@@ -395,6 +406,23 @@ async fn settings_reach_wake_and_push_settings_reach_sync_with_the_tokens() -> R
     let reads = rig.fakes.section_reads();
     client.push_tokens_changed().await?;
     rig.expect_last(&CrateCall::PushTokensChanged(tokens), reads);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_reachability_check_reaches_sync_and_answers_its_status() -> Result<(), TestError> {
+    let rig = rig().await?;
+    rig.fakes.set_server(ServerSection {
+        fallbacks: Vec::new(),
+        relay: RelayStatus::Unreachable,
+    });
+    let reads = rig.fakes.section_reads();
+    assert_eq!(
+        rig.client.check_reachability().await?,
+        RelayStatus::Unreachable
+    );
+    rig.expect_last(&CrateCall::CheckReachability, reads);
+    assert_eq!(rig.client.snapshot().relay, RelayStatus::Unreachable);
     Ok(())
 }
 

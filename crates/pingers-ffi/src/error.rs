@@ -68,7 +68,8 @@ impl From<ScreenError> for CoreError {
             | ScreenError::UnknownMeetup
             | ScreenError::UnknownMember
             | ScreenError::NoMeetPoint
-            | ScreenError::UnknownLocationRequest => Self::NotFound { reason },
+            | ScreenError::UnknownLocationRequest
+            | ScreenError::UnknownZone => Self::NotFound { reason },
             _ => Self::Invalid { reason },
         }
     }

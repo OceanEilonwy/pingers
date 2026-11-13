@@ -14,13 +14,16 @@ use std::sync::Arc;
 
 use pingers_client::ports::{self, Foreground, GeofenceTransition};
 use pingers_client::{Client, ClientConfig, ClientError};
+use pingers_screens as screens;
 
 use crate::CoreError;
 use crate::callbacks::{Events, EventsAdapter, Platform, PlatformAdapter};
 use crate::geo::{Coordinate, Fence, Fix};
-use crate::ids::{LocationRequestId, MeetupId, MemberId, MessageId, PartyId, SpotId};
+use crate::ids::{
+    InviteId, LocationRequestId, MeetupId, MemberId, MessageId, PartyId, SpotId, ZoneId,
+};
 use crate::snapshot::Snapshot;
-use crate::views::{AnswerDraft, PartyColour, Visibility};
+use crate::views::{AnswerDraft, PartyColour, RelayCheck, TimeOfDay, Visibility, ZoneTimes};
 
 impl From<ClientError> for CoreError {
     #[expect(
@@ -28,7 +31,11 @@ impl From<ClientError> for CoreError {
         reason = "ClientError is non-exhaustive; a new error is reported as unavailable"
     )]
     fn from(error: ClientError) -> Self {
-        let reason = error.to_string();
+        let reason = match &error {
+            // Say what the call waits for, so the app's log names the missing piece.
+            ClientError::Unavailable(waiting) => format!("{error}: {waiting}"),
+            _ => error.to_string(),
+        };
         match error {
             ClientError::Platform(_)
             | ClientError::NoDatabaseKey
@@ -106,6 +113,17 @@ pub enum SettingChange {
         /// The choice.
         visibility: Visibility,
     },
+}
+
+/// Quiet hours as the user set them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct QuietHoursDraft {
+    /// Whether they apply.
+    pub on: bool,
+    /// Where the window starts.
+    pub from: TimeOfDay,
+    /// Where it ends (past midnight if earlier than `from`).
+    pub to: TimeOfDay,
 }
 
 /// A meet point to share, as pingers-meetup's `MeetPointDraft` takes it.
@@ -323,6 +341,57 @@ impl Core {
         Ok(self.client.accept_invite().await?.into())
     }
 
+    /// Admits the person who opened `invite`, once the inviter saw the same code on both
+    /// screens (Invite people's "Verify").
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Invalid`] for an id that is not one; [`CoreError::Unavailable`] until
+    /// pingers-sync delivers join requests; [`CoreError::Network`].
+    pub async fn verify_invite(&self, party: PartyId, invite: InviteId) -> Result<(), CoreError> {
+        Ok(self
+            .client
+            .decide_join(
+                (&party).try_into()?,
+                (&invite).try_into()?,
+                ports::JoinDecision::Admit,
+            )
+            .await?)
+    }
+
+    /// Cancels an invite that has not been opened yet (Invite people's ✕).
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Invalid`] for an id that is not one; [`CoreError::Network`] if the invite
+    /// is not this Party's.
+    pub async fn cancel_invite(&self, party: PartyId, invite: InviteId) -> Result<(), CoreError> {
+        Ok(self
+            .client
+            .cancel_invite((&party).try_into()?, (&invite).try_into()?)
+            .await?)
+    }
+
+    /// Sets the name this device's user goes by in Parties they create or join from now on.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Invalid`] for an empty or too long name; [`CoreError::Storage`].
+    pub async fn set_display_name(&self, name: String) -> Result<(), CoreError> {
+        let name = pingers_client::snapshot::Name::new(&name)?;
+        Ok(self.client.set_display_name(name).await?)
+    }
+
+    /// Checks whether this device reaches its server through the privacy relay. The answer
+    /// is only the outcome, and the snapshot's "What your server sees" shows it too.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Unavailable`] until pingers-sync merges.
+    pub async fn check_reachability(&self) -> Result<RelayCheck, CoreError> {
+        Ok(self.client.check_reachability().await?.into())
+    }
+
     /// Leaves a Party.
     ///
     /// # Errors
@@ -400,6 +469,43 @@ impl Core {
             }
         };
         Ok(self.client.change_setting(change).await?)
+    }
+
+    /// Sets quiet hours: on or off, and the daily window.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Invalid`] if the window starts where it ends ("The start and end times must
+    /// differ.") or a time is not on a 24-hour clock; [`CoreError::Storage`].
+    pub async fn set_quiet_hours(&self, quiet_hours: QuietHoursDraft) -> Result<(), CoreError> {
+        let preference = screens::settings::quiet_hours(
+            if quiet_hours.on {
+                pingers_client::snapshot::Toggle::On
+            } else {
+                pingers_client::snapshot::Toggle::Off
+            },
+            quiet_hours.from.try_into()?,
+            quiet_hours.to.try_into()?,
+        )?;
+        Ok(self
+            .client
+            .change_setting(ports::SettingChange::QuietHours(preference))
+            .await?)
+    }
+
+    /// Sets when an exclusion zone applies.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::NotFound`] for a zone that is gone; [`CoreError::Invalid`] for a window
+    /// that starts where it ends or a time not on a 24-hour clock; [`CoreError::Storage`].
+    pub async fn set_zone_times(&self, zone: ZoneId, times: ZoneTimes) -> Result<(), CoreError> {
+        let zones =
+            screens::zones::with_times(&self.client.snapshot(), zone.into(), times.try_into()?)?;
+        Ok(self
+            .client
+            .change_setting(ports::SettingChange::Zones(zones))
+            .await?)
     }
 
     /// Wake-up pushes on (`on` true) or "No wake-up pushes (maximum privacy)".
@@ -597,14 +703,17 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex, PoisonError};
 
-    use super::{Core, InstanceConfig, NewPartyDraft, SettingChange};
+    use pingers_client::ports::{self, JoinDecision, ServerSection};
+    use pingers_testkit::{CrateCall, FakeCrates};
+
+    use super::{Core, InstanceConfig, NewPartyDraft, QuietHoursDraft, SettingChange};
     use crate::CoreError;
     use crate::callbacks::{
         Events, FixQuality, FocusState, LocationMode, Notice, OsRegion, Platform, PlatformError,
         PushTokens,
     };
-    use crate::ids::{LocationRequestId, MeetupId, MemberId, PartyId};
-    use crate::views::PartyColour;
+    use crate::ids::{InviteId, LocationRequestId, MeetupId, MemberId, PartyId, ZoneId};
+    use crate::views::{PartyColour, RelayStatus, TimeOfDay, ZoneDays, ZoneTimes};
 
     /// The app's side, as Kotlin would implement it: a secure store holding a database key.
     #[derive(Default)]
@@ -680,11 +789,165 @@ mod tests {
     }
 
     async fn open(name: &str) -> Result<Arc<Core>, CoreError> {
+        let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
+        open_on(name, &fakes).await
+    }
+
+    /// A core over `fakes`, so a test can script them and read the calls.
+    async fn open_on(name: &str, fakes: &FakeCrates) -> Result<Arc<Core>, CoreError> {
         let app = Arc::new(App::default());
         app.secure_store_put("pingers.database-key".into(), vec![7; 32])
             .map_err(|_| CoreError::invalid("store"))?;
-        let fakes = pingers_testkit::FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
-        Core::open_with(db_path(name), app.clone(), app, move |_| Ok(fakes.crates())).await
+        let crates = fakes.crates();
+        Core::open_with(db_path(name), app.clone(), app, move |_| Ok(crates)).await
+    }
+
+    const PARTY_HEX: &str = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+
+    #[tokio::test]
+    async fn invites_are_verified_and_cancelled_through_the_client() -> Result<(), CoreError> {
+        let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
+        let core = open_on("invites", &fakes).await?;
+        let party = PartyId {
+            hex: PARTY_HEX.into(),
+        };
+        let invite = InviteId {
+            hex: "09".repeat(16),
+        };
+        let mailbox = pingers_proto::MailboxId::from_bytes([9; 16]);
+        let party_id = pingers_proto::PartyId::from_bytes([0xa1; 16]);
+        core.verify_invite(party.clone(), invite.clone()).await?;
+        assert_eq!(
+            fakes.calls().last(),
+            Some(&CrateCall::DecideJoin(
+                party_id,
+                mailbox,
+                JoinDecision::Admit
+            ))
+        );
+        core.cancel_invite(party.clone(), invite).await?;
+        assert_eq!(
+            fakes.calls().last(),
+            Some(&CrateCall::CancelInvite(party_id, mailbox))
+        );
+        let short = InviteId { hex: "09".into() };
+        assert!(matches!(
+            core.cancel_invite(party, short).await,
+            Err(CoreError::Invalid { .. })
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_display_name_is_trimmed_stored_and_shown() -> Result<(), CoreError> {
+        let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
+        let core = open_on("name", &fakes).await?;
+        assert_eq!(core.snapshot().your_name().name, None);
+        core.set_display_name("  Sam ".into()).await?;
+        assert_eq!(core.snapshot().your_name().name.as_deref(), Some("Sam"));
+        let calls = fakes.calls();
+        let Some(CrateCall::SetDisplayName(name)) = calls.last() else {
+            return Err(CoreError::invalid("no call"));
+        };
+        assert_eq!(name.as_str(), "Sam");
+        assert!(matches!(
+            core.set_display_name("   ".into()).await,
+            Err(CoreError::Invalid { .. })
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_reachability_check_answers_only_the_outcome() -> Result<(), CoreError> {
+        let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
+        let core = open_on("reach", &fakes).await?;
+        fakes.set_server(ServerSection {
+            fallbacks: Vec::new(),
+            relay: pingers_client::snapshot::RelayStatus::KeyMismatch,
+        });
+        let check = core.check_reachability().await?;
+        assert_eq!(check.status, RelayStatus::KeyMismatch);
+        assert!(
+            check
+                .text
+                .starts_with("The privacy relay's key doesn't match")
+        );
+        assert_eq!(fakes.calls().last(), Some(&CrateCall::CheckReachability));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn quiet_hours_and_zone_times_reach_the_client_checked() -> Result<(), CoreError> {
+        let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
+        let core = open_on("times", &fakes).await?;
+        let time = |hour, minute| TimeOfDay { hour, minute };
+        core.set_quiet_hours(QuietHoursDraft {
+            on: true,
+            from: time(22, 30),
+            to: time(6, 45),
+        })
+        .await?;
+        let calls = fakes.calls();
+        let Some(CrateCall::ChangeSetting(ports::SettingChange::QuietHours(set))) = calls.last()
+        else {
+            return Err(CoreError::invalid("no quiet hours"));
+        };
+        assert_eq!(set.state, pingers_client::snapshot::Toggle::On);
+        assert_eq!(
+            (set.window.start().get(), set.window.end().get()),
+            (1_350, 405)
+        );
+        let empty = core
+            .set_quiet_hours(QuietHoursDraft {
+                on: false,
+                from: time(7, 0),
+                to: time(7, 0),
+            })
+            .await;
+        let Err(CoreError::Invalid { reason }) = empty else {
+            return Err(CoreError::invalid("an empty window was taken"));
+        };
+        assert_eq!(reason, "The start and end times must differ.");
+        assert!(matches!(
+            core.set_quiet_hours(QuietHoursDraft {
+                on: true,
+                from: time(24, 0),
+                to: time(7, 0),
+            })
+            .await,
+            Err(CoreError::Invalid { .. })
+        ));
+
+        let mut pipeline = pingers_client::ports::WakePort::section(&fakes)
+            .await
+            .map_err(CoreError::from)?;
+        let fixture =
+            pingers_screens::fixtures::snapshot().map_err(|_| CoreError::invalid("fixture"))?;
+        pipeline.zones.clone_from(&fixture.zones);
+        fakes.set_pipeline(pipeline);
+        core.on_wake().await?;
+        let weekends = ZoneTimes::Window {
+            days: ZoneDays::Weekends,
+            from: time(9, 0),
+            to: time(17, 0),
+        };
+        core.set_zone_times(ZoneId { row: 2 }, weekends).await?;
+        let calls = fakes.calls();
+        let Some(CrateCall::ChangeSetting(ports::SettingChange::Zones(zones))) = calls.last()
+        else {
+            return Err(CoreError::invalid("no zones"));
+        };
+        assert_eq!(zones.first(), fixture.zones.first());
+        let times = zones
+            .get(1)
+            .map(|zone| ZoneTimes::from(zone.schedule.times));
+        assert_eq!(times, Some(weekends));
+        assert!(matches!(
+            core.set_zone_times(ZoneId { row: 9 }, ZoneTimes::Always)
+                .await,
+            Err(CoreError::NotFound { .. })
+        ));
+        Ok(())
     }
 
     #[tokio::test]
@@ -735,6 +998,23 @@ mod tests {
             .map_err(|_| CoreError::invalid("store"))?;
         let core = Core::open(db_path("real"), instance(), app.clone(), app).await?;
         assert!(core.snapshot().home().parties.is_empty(), "a fresh store");
+        // What waits on pingers-sync says so, rather than claiming an answer.
+        let Err(CoreError::Unavailable { reason }) = core.check_reachability().await else {
+            return Err(CoreError::invalid("a check without pingers-sync"));
+        };
+        assert_eq!(reason, "unavailable: waits on pingers-sync");
+        let party = PartyId {
+            hex: PARTY_HEX.into(),
+        };
+        let invite = InviteId {
+            hex: "09".repeat(16),
+        };
+        assert!(matches!(
+            core.verify_invite(party, invite).await,
+            Err(CoreError::Unavailable { .. })
+        ));
+        core.set_display_name("Sam".into()).await?;
+        assert_eq!(core.snapshot().your_name().name.as_deref(), Some("Sam"));
         Ok(())
     }
 

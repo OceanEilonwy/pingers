@@ -17,5 +17,5 @@ pub use pingers_client::snapshot::{
     LocationRequest, MeetPlace, MeetPointSnapshot, Meetup, MeetupPeer, MeetupSelf, Member,
     OwnPosition, Party, PartyConfig, PauseInFocus, PeerAccess, PostQuantum, PushRelay,
     PushRelayKind, QuietHoursPreference, RelayStatus, SafetyCode, Service, Settings, Spot, Toggle,
-    WakePushes, ZoneId, ZoneParties, ZoneSchedule, ZoneTimes,
+    WakePushes, ZoneId, ZoneParties, ZoneSchedule, ZoneTimes, daily_window,
 };

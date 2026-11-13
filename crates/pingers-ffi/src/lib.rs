@@ -33,7 +33,8 @@ pub use callbacks::{
     PushPlatform, PushTokens,
 };
 pub use core::{
-    Core, GeofenceEvent, InstanceConfig, MeetPointChoice, NewPartyDraft, SettingChange, SpotToSave,
+    Core, GeofenceEvent, InstanceConfig, MeetPointChoice, NewPartyDraft, QuietHoursDraft,
+    SettingChange, SpotToSave,
 };
 pub use error::CoreError;
 pub use geo::{Coordinate, Fence, Fix};

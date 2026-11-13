@@ -11,9 +11,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use async_trait::async_trait;
 use pingers_geo::Fence;
 use pingers_parties::{
-    INVITE_LIFETIME, InviteStatus as PartiesInviteStatus, Myself, NewParty, NewSpot, Outbound,
-    PartiesError, PartyLifecycle, PartySettings, PostQuantum as PartiesPostQuantum, RelayChoice,
-    SpotEdit, SpotShape,
+    INVITE_LIFETIME, InviteId, InviteStatus as PartiesInviteStatus, Myself, NewParty, NewSpot,
+    Outbound, PartiesError, PartyLifecycle, PartySettings, PostQuantum as PartiesPostQuantum,
+    RelayChoice, SpotEdit, SpotShape,
 };
 use pingers_proto::{InviteUses, LeafIndex, MailboxId, PartyId, ServerId, SpotId};
 use pingers_store::{MemberName, Party as StoredParty, PartyName, Session, SpotName};
@@ -37,7 +37,14 @@ pub(crate) struct Parties {
     outbox: Arc<Outbox>,
     /// The last invite link made per Party, for the snapshot's share sheet. In memory only:
     /// the link holds the invite secret, and pingers-parties does not hand it out again.
-    links: Mutex<HashMap<PartyId, InviteLink>>,
+    links: Mutex<HashMap<PartyId, SharedLink>>,
+}
+
+/// An invite link and the invite it opens, so cancelling the invite withdraws the link.
+#[derive(Clone)]
+struct SharedLink {
+    invite: MailboxId,
+    link: InviteLink,
 }
 
 impl Parties {
@@ -49,7 +56,7 @@ impl Parties {
         }
     }
 
-    fn links(&self) -> std::sync::MutexGuard<'_, HashMap<PartyId, InviteLink>> {
+    fn links(&self) -> std::sync::MutexGuard<'_, HashMap<PartyId, SharedLink>> {
         self.links.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -101,8 +108,53 @@ impl PartiesPort for Parties {
             url: InviteUrl::new(created.link.as_str()).map_err(|_invalid| corrupt())?,
             expires_at: created.expires,
         };
-        self.links().insert(party, link.clone());
+        let shared = SharedLink {
+            invite: created.invite.mailbox(),
+            link: link.clone(),
+        };
+        self.links().insert(party, shared);
         Ok(link)
+    }
+
+    async fn cancel_invite(&self, party: PartyId, invite: MailboxId) -> Result<(), ClientError> {
+        let outbound = self
+            .backend
+            .store(move |session, clock, _rng| {
+                let lifecycle = PartyLifecycle::new(session, clock);
+                let invite = InviteId::for_mailbox(invite);
+                // pingers-parties finds an invite by its mailbox alone; check it is this Party's.
+                if !lifecycle
+                    .invites(&party)?
+                    .iter()
+                    .any(|summary| summary.invite == invite)
+                {
+                    return Err(PartiesError::UnknownInvite.into());
+                }
+                Ok(lifecycle.revoke_invite(invite)?)
+            })
+            .await?;
+        let mut links = self.links();
+        if links
+            .get(&party)
+            .is_some_and(|shared| shared.invite == invite)
+        {
+            links.remove(&party);
+        }
+        drop(links);
+        self.outbox.push([outbound]);
+        Ok(())
+    }
+
+    async fn set_display_name(&self, name: Name) -> Result<(), ClientError> {
+        self.backend
+            .store(move |session, _clock, _rng| {
+                // Checked as pingers-parties checks a member name, so a join cannot fail on it.
+                let name = MemberName::new(name.as_str().to_owned())?;
+                records::write(session, &Key::DisplayName, |writer| {
+                    writer.text(name.as_str());
+                })
+            })
+            .await
     }
 
     async fn open_invite(&self, _link: InviteUrl, _my_name: Name) -> Result<(), ClientError> {
@@ -207,21 +259,30 @@ impl PartiesPort for Parties {
     }
 
     async fn section(&self) -> Result<PartiesSection, ClientError> {
-        let links = self.links().clone();
-        let parties = self
+        let links: HashMap<PartyId, InviteLink> = self
+            .links()
+            .iter()
+            .map(|(party, shared)| (*party, shared.link.clone()))
+            .collect();
+        let (parties, display_name) = self
             .backend
             .store(move |session, clock, _rng| {
-                session
+                let parties = session
                     .parties()
                     .list()?
                     .into_iter()
                     .map(|row| party(session, clock, &row, &links))
-                    .collect::<Result<Vec<_>, _>>()
+                    .collect::<Result<Vec<_>, _>>()?;
+                let display_name = records::read(session, &Key::DisplayName, |reader| {
+                    name_of(&reader.text()?)
+                })?;
+                Ok((parties, display_name))
             })
             .await?;
         Ok(PartiesSection {
             parties,
             join_preview: None,
+            display_name,
         })
     }
 }

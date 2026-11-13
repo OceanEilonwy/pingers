@@ -238,6 +238,22 @@ pub fn party_subtitle(language: Language) -> String {
     "What this party's server can see".into()
 }
 
+/// What a reachability check found: whether this phone reached its server through the privacy
+/// relay. It names no host and no address, only the outcome.
+#[must_use]
+pub fn relay_check(language: Language, status: RelayStatus) -> String {
+    let Language::English = language;
+    match status {
+        RelayStatus::Reachable => "Your server answered through the privacy relay.".into(),
+        RelayStatus::Unreachable => "Your server didn't answer through the privacy relay. \
+                                     Check-ins wait until it does; nothing anonymous is sent \
+                                     without it."
+            .into(),
+        // The same words as the note "What your server sees" shows for it.
+        RelayStatus::KeyMismatch => note(language, Note::RelayKeyMismatch),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
@@ -398,6 +414,22 @@ mod tests {
         let text = server_sees(EN, &screen(&snapshot, fixtures::climbing_crew())?);
         assert_eq!(text.notes, [note(EN, Note::RelayKeyMismatch)]);
         Ok(())
+    }
+
+    #[test]
+    fn a_reachability_check_says_only_how_it_went() {
+        assert_eq!(
+            relay_check(EN, RelayStatus::Reachable),
+            "Your server answered through the privacy relay."
+        );
+        assert!(
+            relay_check(EN, RelayStatus::Unreachable)
+                .starts_with("Your server didn't answer through the privacy relay.")
+        );
+        assert_eq!(
+            relay_check(EN, RelayStatus::KeyMismatch),
+            note(EN, Note::RelayKeyMismatch)
+        );
     }
 
     #[test]

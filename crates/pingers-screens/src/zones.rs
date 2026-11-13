@@ -3,8 +3,12 @@
 
 use pingers_geo::{Coordinate, Fence, Meters};
 
+use crate::ScreenError;
+use crate::clock::LocalTime;
 use crate::common::Name;
-use crate::snapshot::{ClientSnapshot, HideTrail, ZoneId, ZoneParties, ZoneTimes};
+use crate::snapshot::{
+    ClientSnapshot, Days, ExclusionZone, HideTrail, ZoneId, ZoneParties, ZoneTimes, daily_window,
+};
 
 /// A zone's shape as its row describes it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -90,13 +94,58 @@ pub fn exclusion_zones(snapshot: &ClientSnapshot) -> ExclusionZones {
     }
 }
 
+/// When a zone applies, as the user picked it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZoneTimesDraft {
+    /// All the time.
+    Always,
+    /// On these days, from one time to another (past midnight if `to` is earlier).
+    Window {
+        /// Which days.
+        days: Days,
+        /// Where the window starts.
+        from: LocalTime,
+        /// Where it ends.
+        to: LocalTime,
+    },
+}
+
+/// Every exclusion zone, with `zone`'s times replaced by `times`: the whole list, as
+/// pingers-client stores it.
+///
+/// # Errors
+///
+/// [`ScreenError::UnknownZone`]; [`ScreenError::EmptyWindow`] for a window that starts where it
+/// ends; [`ScreenError::InvalidTime`] for a time outside the day.
+pub fn with_times(
+    snapshot: &ClientSnapshot,
+    zone: ZoneId,
+    times: ZoneTimesDraft,
+) -> Result<Vec<ExclusionZone>, ScreenError> {
+    let times = match times {
+        ZoneTimesDraft::Always => ZoneTimes::Always,
+        ZoneTimesDraft::Window { days, from, to } => ZoneTimes::Window {
+            days,
+            window: daily_window(from.minute_of_day()?, to.minute_of_day()?)?,
+        },
+    };
+    let mut zones = snapshot.zones.clone();
+    zones
+        .iter_mut()
+        .find(|candidate| candidate.id == zone)
+        .ok_or(ScreenError::UnknownZone)?
+        .schedule
+        .times = times;
+    Ok(zones)
+}
+
 #[cfg(test)]
 mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
     use super::*;
     use crate::fixtures::{self, FixtureError};
-    use crate::snapshot::{Days, ZoneSchedule};
+    use crate::snapshot::ZoneSchedule;
 
     #[test]
     fn zones_read_like_the_canvas() -> Result<(), FixtureError> {
@@ -149,6 +198,57 @@ mod tests {
         };
         let names: Vec<_> = names.iter().map(Name::as_str).collect();
         assert_eq!(names, ["Uni flat"]);
+        Ok(())
+    }
+
+    #[test]
+    fn new_times_replace_only_that_zones_times() -> Result<(), FixtureError> {
+        let snapshot = fixtures::snapshot()?;
+        let draft = ZoneTimesDraft::Window {
+            days: Days::Weekends,
+            from: LocalTime::new(9, 0)?,
+            to: LocalTime::new(17, 0)?,
+        };
+        let zones = with_times(&snapshot, ZoneId::new(1), draft)?;
+        let [home, work] = zones.as_slice() else {
+            return Err(FixtureError::Missing);
+        };
+        let ZoneTimes::Window { days, window } = home.schedule.times else {
+            return Err(FixtureError::Missing);
+        };
+        assert_eq!(days, Days::Weekends);
+        assert_eq!((window.start().get(), window.end().get()), (540, 1_020));
+        assert_eq!(home.schedule.parties, ZoneParties::All);
+        let before = snapshot.zones.first().ok_or(FixtureError::Missing)?;
+        assert_eq!((&home.name, &home.fence), (&before.name, &before.fence));
+        assert_eq!(Some(work), snapshot.zones.get(1));
+
+        let always = with_times(&snapshot, ZoneId::new(2), ZoneTimesDraft::Always)?;
+        assert_eq!(
+            always.get(1).map(|zone| zone.schedule.times),
+            Some(ZoneTimes::Always)
+        );
+        assert_eq!(always.first(), snapshot.zones.first());
+        Ok(())
+    }
+
+    #[test]
+    fn times_for_a_missing_zone_or_an_empty_window_are_refused() -> Result<(), FixtureError> {
+        let snapshot = fixtures::snapshot()?;
+        assert_eq!(
+            with_times(&snapshot, ZoneId::new(9), ZoneTimesDraft::Always),
+            Err(ScreenError::UnknownZone)
+        );
+        let nine = LocalTime::new(9, 0)?;
+        let empty = ZoneTimesDraft::Window {
+            days: Days::EveryDay,
+            from: nine,
+            to: nine,
+        };
+        assert_eq!(
+            with_times(&snapshot, ZoneId::new(1), empty),
+            Err(ScreenError::EmptyWindow)
+        );
         Ok(())
     }
 }

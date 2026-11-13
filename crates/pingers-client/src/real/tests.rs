@@ -38,7 +38,7 @@ use super::wake_ports::{Lens, region_id, region_text};
 use super::{Backend, Outside, wake_codec};
 use crate::ports::{
     AllowListChange, JoinDecision, PartiesPort as _, PartyDraft, SettingChange, SpotDraft,
-    WakePort as _,
+    SyncPort as _, WakePort as _,
 };
 use crate::snapshot::{
     DailyWindow, Days, ExclusionZone, HideTrail, Name, PartyColour, PauseInFocus, PostQuantum,
@@ -530,6 +530,11 @@ async fn party_commands_reach_pingers_parties_and_the_store() -> TestResult {
         ));
     }
 
+    assert!(matches!(
+        super::sync::Sync.check_reachability().await,
+        Err(ClientError::Unavailable(crate::Unavailable::Sync))
+    ));
+
     parties.leave_party(party).await?;
     let colour_kept = session(&store, move |session| {
         super::records::read(session, &super::records::Key::Colour(&party), |reader| {
@@ -538,5 +543,108 @@ async fn party_commands_reach_pingers_parties_and_the_store() -> TestResult {
     })
     .await?;
     assert_eq!(colour_kept, None, "leaving deletes the colour record");
+    Ok(())
+}
+
+/// Pools an invite mailbox, as pingers-sync will.
+async fn pool_invite_mailbox(store: &Store, fill: u8) -> Result<(), ClientError> {
+    session(store, move |session| {
+        session.mailboxes().insert(&pingers_store::Mailbox {
+            read_key: pingers_crypto::MailboxReadKey::from_bytes(Zeroizing::new([fill; 32])),
+            purpose: pingers_store::MailboxPurpose::Invite,
+            state: pingers_store::MailboxState::Pooled,
+            push: None,
+            expires_at: UnixSeconds::new(1_900_000_000),
+        })?;
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+async fn cancelling_an_invite_revokes_it_and_withdraws_its_link() -> TestResult {
+    let store = store()?;
+    let outbox = Arc::new(Outbox::default());
+    let parties = Parties::new(Arc::clone(&store.backend), Arc::clone(&outbox));
+    let draft = |name: &str| -> Result<PartyDraft, Box<dyn std::error::Error>> {
+        Ok(PartyDraft {
+            name: Name::new(name)?,
+            my_name: Name::new("Sam")?,
+            colour: PartyColour::Blue,
+            post_quantum: PostQuantum::Off,
+        })
+    };
+    let crew = parties.create_party(draft("Crew")?).await?;
+    let flat = parties.create_party(draft("Flat")?).await?;
+    for fill in [1, 2, 3] {
+        pool_invite_mailbox(&store, fill).await?;
+    }
+    parties.create_invite(crew).await?;
+    parties.create_invite(crew).await?;
+    parties.create_invite(flat).await?;
+    let invites = |section: &crate::ports::PartiesSection, party: PartyId| {
+        section
+            .parties
+            .iter()
+            .find(|shown| shown.id == party)
+            .map(|shown| {
+                shown
+                    .invites
+                    .iter()
+                    .map(|invite| invite.id)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    let before = parties.section().await?;
+    // Newest first: the second invite made is the one whose link is on show.
+    let [newest, oldest] = invites(&before, crew)[..] else {
+        return Err("two invites".into());
+    };
+    let [flats] = invites(&before, flat)[..] else {
+        return Err("one invite".into());
+    };
+
+    // Another Party's invite cannot be cancelled through this one.
+    assert!(matches!(
+        parties.cancel_invite(crew, flats).await,
+        Err(ClientError::Parties(
+            pingers_parties::PartiesError::UnknownInvite
+        ))
+    ));
+    // Cancelling the older invite keeps the newer link on show.
+    parties.cancel_invite(crew, oldest).await?;
+    let after = parties.section().await?;
+    assert_eq!(invites(&after, crew), [newest]);
+    let link_of = |section: &crate::ports::PartiesSection, party: PartyId| {
+        section
+            .parties
+            .iter()
+            .find(|shown| shown.id == party)
+            .and_then(|shown| shown.invite_link.clone())
+    };
+    assert!(link_of(&after, crew).is_some());
+    // Cancelling the invite on show withdraws its link; the other Party's stays.
+    parties.cancel_invite(crew, newest).await?;
+    let last = parties.section().await?;
+    assert!(invites(&last, crew).is_empty());
+    assert_eq!(link_of(&last, crew), None);
+    assert!(link_of(&last, flat).is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_display_name_is_kept_in_the_store() -> TestResult {
+    let store = store()?;
+    let parties = Parties::new(Arc::clone(&store.backend), Arc::new(Outbox::default()));
+    assert_eq!(parties.section().await?.display_name, None);
+    parties.set_display_name(Name::new("Sam")?).await?;
+    parties.set_display_name(Name::new("Samira")?).await?;
+    // A fresh adapter on the same store reads it back.
+    let again = Parties::new(Arc::clone(&store.backend), Arc::new(Outbox::default()));
+    assert_eq!(
+        again.section().await?.display_name,
+        Some(Name::new("Samira")?)
+    );
     Ok(())
 }

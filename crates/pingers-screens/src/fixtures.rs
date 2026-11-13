@@ -500,6 +500,7 @@ pub fn snapshot() -> Result<ClientSnapshot, FixtureError> {
             spot_count: 3,
             safety_code: SafetyCode::new("4821 0937 5512")?,
         }),
+        display_name: Some(name("Sam")?),
         own_position: Some(OwnPosition {
             fix: Fix {
                 coordinate: sam_position()?,
