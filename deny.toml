@@ -8,9 +8,14 @@ all-features = true
 version = 2
 yanked = "deny"
 # Each entry needs a reason and is re-examined when the crate that pulls it in is implemented.
+# Every entry below was re-checked on 2026-11-13 (wave 3) against the lock file and the newest
+# releases: each advisory still matches a crate in Cargo.lock (cargo deny reports none as
+# unmatched), and no upgrade available today removes it. openmls_rust_crypto 0.6.0 (latest)
+# still pins hpke-rs 0.7 and hpke-rs-rust-crypto 0.7 although 0.8 exists; rln 3.1.0 (latest)
+# still pins arkworks 0.5 although 0.6 exists; uniffi 0.32.2 is the latest uniffi.
 ignore = [
-  { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 timing issues: via p256 in hpke-rs-rust-crypto (openmls_rust_crypto). pingers-mls runs only suite 0x0003 (and 0x004D with x-wing), and parse_key_package refuses any other suite before OpenMLS verifies a signature, so no P-256 code runs; the inputs would be public anyway. Re-checked 2026-11-13." },
-  # rln entries, re-checked 2026-11-13 with pingers-anon implemented. sled cannot be removed:
+  { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 timing issues: via p256 in hpke-rs-rust-crypto 0.7 (openmls_rust_crypto 0.6, which has no release on 0.8). pingers-mls runs only suite 0x0003 (and 0x004D with x-wing), and parse_key_package refuses any other suite before OpenMLS verifies a signature, so no P-256 code runs; the inputs would be public anyway." },
+  # rln entries, re-checked with pingers-anon implemented. sled cannot be removed:
   # rln 3.x lists it as a non-optional dependency for every non-wasm target (with the
   # `compression` feature that pulls zstd-safe 4), and every zerokit_utils release does the same,
   # so no feature set or older rln avoids it. pingers-anon never constructs rln's PmTree (it has
@@ -20,9 +25,9 @@ ignore = [
   { id = "RUSTSEC-2024-0388", reason = "derivative unmaintained: via rln (arkworks 0.5). No fix upstream." },
   { id = "RUSTSEC-2025-0057", reason = "fxhash unmaintained: via rln's unconditional sled, unreachable from pingers-anon. No fix upstream." },
   { id = "RUSTSEC-2024-0384", reason = "instant unmaintained: via rln's unconditional sled, unreachable from pingers-anon. No fix upstream." },
-  { id = "RUSTSEC-2024-0436", reason = "paste unmaintained: widely used build-time macro crate. No fix upstream." },
-  { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 unmaintained: build-time macro dependency. No fix upstream." },
-  { id = "RUSTSEC-2026-0374", reason = "basic-toml unmaintained: via askama in uniffi_bindgen 0.32, which renders the bindings at build time only; the shipped library parses no TOML. Re-check on the next uniffi release." },
+  { id = "RUSTSEC-2024-0436", reason = "paste unmaintained: a proc macro (no run-time code) used by ark-ff 0.5 under rln. No fix upstream." },
+  { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 unmaintained: a proc macro (no run-time code) used by hax-lib-macros 0.3 under libcrux-sha3, under hpke-rs 0.7 (openmls_rust_crypto). No fix upstream." },
+  { id = "RUSTSEC-2026-0374", reason = "basic-toml unmaintained: via askama_derive 0.16 in uniffi_bindgen 0.32.2 (latest), which renders the bindings at build time only; the shipped library parses no TOML. Re-check on the next uniffi release." },
 ]
 
 [licenses]
