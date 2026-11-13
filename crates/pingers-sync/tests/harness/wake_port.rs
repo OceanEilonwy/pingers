@@ -152,7 +152,7 @@ async fn a_knock_carries_an_alert_subscription_only_with_wake_pushes_on() -> Tes
     Ok(())
 }
 
-fn new_lease(world: &World, fill: u8) -> NewLease {
+pub(crate) fn new_lease(world: &World, fill: u8) -> NewLease {
     let revoke_key = RevokeKey::from_bytes(Zeroizing::new([fill; 32]));
     NewLease {
         lease: Lease {

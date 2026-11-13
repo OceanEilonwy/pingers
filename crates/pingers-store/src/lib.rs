@@ -76,6 +76,13 @@
 //!   OHTTP key configuration.
 //! - **`spot.created_by` is the creator's account key**, not a leaf index, because leaves are
 //!   reused after removals.
+//! - **pingers-sync's state survives a restart** (schema version 3): `request_queue` holds
+//!   unsent anonymous requests as opaque [`RequestBytes`] (encoded by pingers-sync, without
+//!   their credential), `board_upload` the last upload's lease id and revoke key, and
+//!   `own_group_entry` the log positions of this device's own group entries until a pull
+//!   passes them. Queued requests and own positions carry their group, and triggers delete
+//!   them when that Meetup ends or that Party is deleted (a cascade included), so no group
+//!   request outlives its group (style guide §8). None of these tables is in design C.2.
 //! - **Unsigned values past `i64::MAX`** are refused ([`StoreError::OutOfRange`]), never
 //!   wrapped.
 //!
@@ -130,6 +137,10 @@ pub use repo::relay::{
 };
 pub use repo::spot::{
     ExclusionZone, ExclusionZones, Presence, Spot, SpotPresenceRecord, SpotStatus, Spots,
+};
+pub use repo::sync::{
+    BoardUploads, LastUpload, NewQueuedRequest, OwnGroupEntries, Pushed, QueueCapacity,
+    QueuedRequest, RequestBytes, RequestQueue,
 };
 pub use types::{
     Avatar, FallbackReason, MemberName, OperatorName, PartyName, SpotName, TokenKeyId, TreeLevel,

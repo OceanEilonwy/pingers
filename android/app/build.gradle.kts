@@ -26,6 +26,58 @@ val googleServicesJson: Provider<RegularFile> = providers.gradleProperty("pinger
     .map { layout.projectDirectory.file(File(it).absolutePath) }
 val firebasePackage = "org.pingers.app"
 
+// Release (upload) signing, from the environment only: never a file in the repository, never a
+// Gradle property that could sit in a checked-in gradle.properties. PINGERS_KEYSTORE_PATH is a
+// PKCS12 keystore (CI decodes PINGERS_KEYSTORE_BASE64 into a temporary file and points this at
+// it), PINGERS_KEYSTORE_PASSWORD unlocks both the store and the key (PKCS12 has one password),
+// and PINGERS_KEY_ALIAS names the key. Without all three a release build stops at
+// checkReleaseSigning; it is never signed with the debug key. See docs/release.md.
+val releaseKeystorePath: String? = providers.environmentVariable("PINGERS_KEYSTORE_PATH").orNull
+val releaseKeystorePassword: String? = providers.environmentVariable("PINGERS_KEYSTORE_PASSWORD").orNull
+val releaseKeyAlias: String? = providers.environmentVariable("PINGERS_KEY_ALIAS").orNull
+val signingProblems: List<String> = buildList {
+    if (releaseKeystorePath.isNullOrBlank()) {
+        add(
+            if (providers.environmentVariable("PINGERS_KEYSTORE_BASE64").isPresent) {
+                "PINGERS_KEYSTORE_PATH is unset (PINGERS_KEYSTORE_BASE64 is set: decode it into a " +
+                    "temporary file outside the checkout and point PINGERS_KEYSTORE_PATH at it)"
+            } else {
+                "PINGERS_KEYSTORE_PATH is unset"
+            },
+        )
+    } else if (!File(releaseKeystorePath).isFile) {
+        add("PINGERS_KEYSTORE_PATH does not name a file: $releaseKeystorePath")
+    }
+    if (releaseKeystorePassword.isNullOrEmpty()) add("PINGERS_KEYSTORE_PASSWORD is unset")
+    if (releaseKeyAlias.isNullOrBlank()) add("PINGERS_KEY_ALIAS is unset")
+}
+
+/** Fails a release build that has no signing key, before anything is compiled. */
+abstract class CheckReleaseSigning : DefaultTask() {
+    @get:Input
+    abstract val problems: ListProperty<String>
+
+    @TaskAction
+    fun check() {
+        val problems = problems.get()
+        if (problems.isNotEmpty()) {
+            throw GradleException(
+                "Release builds must be signed with the Pingers upload key, and it is not configured:\n" +
+                    problems.joinToString("\n") { "  - $it" } +
+                    "\nSet PINGERS_KEYSTORE_PATH, PINGERS_KEYSTORE_PASSWORD and PINGERS_KEY_ALIAS, or run " +
+                    "`cargo xtask release-android`. See android/docs/release.md.",
+            )
+        }
+    }
+}
+
+val checkReleaseSigning = tasks.register<CheckReleaseSigning>("checkReleaseSigning") {
+    description = "Fails unless the release signing key is configured in the environment."
+    problems.set(signingProblems)
+    // Never up to date: it must run, and fail, on every release build without a key.
+    outputs.upToDateWhen { false }
+}
+
 /** A cargo command that writes one directory, so AGP can take it as generated sources. */
 abstract class CargoTask : Exec() {
     @get:OutputDirectory
@@ -167,6 +219,18 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            if (signingProblems.isEmpty()) {
+                storeFile = File(releaseKeystorePath!!)
+                storeType = "PKCS12"
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeystorePassword
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
@@ -175,6 +239,8 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // The upload key or nothing: without it checkReleaseSigning fails the build.
+            if (signingProblems.isEmpty()) signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -229,6 +295,13 @@ fun cargoNdk(name: String, profile: String) = tasks.register<CargoTask>("cargoNd
 
 val cargoNdkDebug = cargoNdk("debug", "dev")
 val cargoNdkRelease = cargoNdk("release", "android")
+
+// Every release variant checks for the signing key first, so a release build without it stops
+// before cargo or the compiler run, with the reason.
+tasks.configureEach {
+    if (Regex("pre\\w*ReleaseBuild").matches(name)) dependsOn(checkReleaseSigning)
+}
+cargoNdkRelease.configure { dependsOn(checkReleaseSigning) }
 
 androidComponents {
     onVariants { variant ->

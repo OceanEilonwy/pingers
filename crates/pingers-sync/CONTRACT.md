@@ -13,7 +13,7 @@ B.4.9, B.12, D, E.2). L3: tokio (spawn_blocking, select), no detached tasks.
   privacy class, `Route::credential()` the RLN scope of the anonymous credential (writes only).
 - `SyncEngine::send(request, Sending { policy, budget }) -> Outcome::{Answered(Response),
   Queued(NotSentReason), Dropped(NotSentReason)}`; `flush_queue(budget) -> FlushReport`;
-  `queued()`; `open_live(ApiRequest::live(..)) -> Box<dyn DuplexStream>`.
+  `queued()` (async, counts the store's queue); `open_live(ApiRequest::live(..)) -> Box<dyn DuplexStream>`.
 - `QueuePolicy::{Drop, KeepUntil(UnixSeconds)}`; `Sending::{or_drop, or_keep_until}`.
 - `WakeBudget::{UNLIMITED, from_now(timer, left)}`; `MIN_REQUEST_TIME` (2 s).
 - Credentials: `ProcessRole::{MainApp, Extension}`, `CredentialPolicy { accepted,
@@ -66,20 +66,26 @@ B.4.9, B.12, D, E.2). L3: tokio (spawn_blocking, select), no detached tasks.
   a bucket (450 s) it is used unchanged; beyond that every credentialed request fails with
   `SyncError::ClockSkew` (raise `Notice::ClockSkew`) until a server time within range is
   observed. Reads still go.
-- **Revoke keys** of the last upload are held in memory: pingers-store's lease table wants
-  every slot's Spot and knock mailbox, which only pingers-wake knows. After a restart the first
-  upload does not name the old lease, which then expires by itself.
+- **Revoke keys** of the last upload are kept in pingers-store's `board_upload` table (lease id
+  and revoke key, one row), not its `lease` table, which wants every slot's Spot and knock
+  mailbox that only pingers-wake knows. The first upload after a restart replaces the old
+  lease.
 - **Pool**: knock mailboxes are sealed with `WakePush::knock`, reply and invite mailboxes and
   knock subscriptions with `WakePush::alert`. `take_mailbox_for_lease` hands out only
   mailboxes that outlive the lease (`start + 4` buckets).
 - **Root epoch** = `unix seconds / 3600`, as pingers-quota computes it.
-- **Queue** is in memory (32 entries, oldest dropped when full): pingers-store has no
-  table for it yet. Reads, board syncs, mailbox registrations and commits are never queued.
+- **Queue** is pingers-store's `request_queue` table (32 entries by default, oldest dropped
+  when full), so it survives a restart and is shared by the app's processes. An entry is the
+  request's route code and Binary HTTP encoding, without a credential (attached when sent),
+  zeroed in memory; a group message also names its group, so ending that Meetup or deleting
+  that Party deletes it. An entry is taken off the queue before it is sent: a crash mid-send
+  loses it rather than sending it twice. Reads, board syncs, mailbox registrations and
+  commits are never queued.
 - **Own entries** are not handed back: the positions of this engine's accepted commits and
-  stored messages (also those sent from the queue) are remembered, and `pull_group` calls
-  `GroupLogOwner::skip_own(sequence)` for them instead of `apply`. The set is in memory; after
-  a restart an own entry not yet pulled would reach `apply` (the owner should treat that
-  error as consumed, or pingers-store could keep the positions).
+  stored messages (also those sent from the queue) are kept in pingers-store's
+  `own_group_entry` table, and `pull_group` calls `GroupLogOwner::skip_own(sequence)` for them
+  instead of `apply`, also after a restart. Positions up to the last entry of each pulled page
+  are then forgotten.
 - **Epochs** are the owner's: the loop never assumes a group starts at epoch 0 or 1.
 - **Commits**: pull, `prepare_commit`, post; on 409 `commit_rejected(head_epoch)`, pull
   again (which applies the winner) and retry, up to `CommitAttempts` (3). The 200 and 409
