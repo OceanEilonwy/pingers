@@ -17,9 +17,23 @@ pingers-mailbox = { workspace = true }
 pingers-ohttp = { workspace = true }
 pingers-quota = { workspace = true }
 pingers-time = { workspace = true }
+# The production Timer (TokioTimer) for request timeouts and the counts report.
+pingers-transport = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
-tokio = { workspace = true }
+hex = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true, features = ["server", "service"] }
+rand_chacha = { workspace = true }
+rand_core = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["net", "signal"] }
+toml = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+pingers-time = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true
