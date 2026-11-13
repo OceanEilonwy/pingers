@@ -7,6 +7,9 @@ use crate::config::ConfigError;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ServerError {
+    /// The binary was started without a configuration path.
+    #[error("usage: pingers-server <config.toml>")]
+    Usage,
     /// The configuration file cannot be read.
     #[error("cannot read the configuration file")]
     ReadConfig(#[source] std::io::Error),
@@ -16,4 +19,10 @@ pub enum ServerError {
     /// The operating system's random number generator cannot be read.
     #[error("cannot read the operating system's random number generator")]
     Entropy(#[source] std::io::Error),
+    /// The async runtime cannot be started.
+    #[error("cannot start the runtime")]
+    Runtime(#[source] std::io::Error),
+    /// The listen address cannot be bound.
+    #[error("cannot bind the listen address")]
+    Listen(#[source] std::io::Error),
 }

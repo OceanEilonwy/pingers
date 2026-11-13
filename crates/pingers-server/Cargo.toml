@@ -19,7 +19,6 @@ pingers-quota = { workspace = true }
 pingers-time = { workspace = true }
 # The production Timer (TokioTimer) for request timeouts and the counts report.
 pingers-transport = { workspace = true }
-anyhow = { workspace = true }
 axum = { workspace = true }
 hex = { workspace = true }
 hyper = { workspace = true }

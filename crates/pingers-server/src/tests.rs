@@ -252,7 +252,7 @@ async fn direct_post_to_the_gateway_from_a_non_relay_is_refused() -> TestResult 
     let server = start(
         Setup {
             relay: OTHER_LOOPBACK,
-            ..Setup::default()
+            metrics: vec![OTHER_LOOPBACK],
         },
         Echo,
     )
@@ -282,7 +282,175 @@ async fn direct_post_to_the_gateway_from_a_non_relay_is_refused() -> TestResult 
         opened.map(|response| response.body),
         Some(server.config.encoded().to_vec())
     );
+    // Each refusal is counted on the channel it was meant for.
+    let metrics = send(
+        &mut relay,
+        request(Method::GET, "/metrics", None, Body::empty())?,
+    )
+    .await?;
+    let text = String::from_utf8(read_all(metrics).await?)?;
+    for expected in [
+        "{channel=\"ohttp\",outcome=\"client_error\"} 1",
+        "{channel=\"ohttp\",outcome=\"ok\"} 1",
+        "{channel=\"ohttp_chunked\",outcome=\"client_error\"} 1",
+    ] {
+        assert!(text.contains(expected), "{expected}\n{text}");
+    }
     server.stop().await
+}
+
+/// Records the member's frames and answers with a fixed script.
+struct Scripted {
+    inbound: Arc<Mutex<Option<mpsc::Receiver<LiveFrame>>>>,
+    outbound: Arc<Mutex<Option<mpsc::Sender<LiveFrame>>>>,
+}
+
+impl LiveChannel for Scripted {
+    fn open(
+        &self,
+        _request: &BinaryRequest,
+        inbound: mpsc::Receiver<LiveFrame>,
+    ) -> Result<mpsc::Receiver<LiveFrame>, LiveRefused> {
+        let (sender, receiver) = mpsc::channel(4);
+        if let (Ok(mut kept_inbound), Ok(mut kept_outbound)) =
+            (self.inbound.lock(), self.outbound.lock())
+        {
+            *kept_inbound = Some(inbound);
+            *kept_outbound = Some(sender);
+        }
+        Ok(receiver)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn empty_frames_are_dropped_in_both_directions() -> TestResult {
+    let inbound = Arc::new(Mutex::new(None));
+    let outbound = Arc::new(Mutex::new(None));
+    let server = start(
+        Setup::default(),
+        Scripted {
+            inbound: Arc::clone(&inbound),
+            outbound: Arc::clone(&outbound),
+        },
+    )
+    .await?;
+    let (sender, mut client, mut body) = open_live(&server, "/v1/groups/g1/live").await?;
+
+    // The member sends one frame and an empty final chunk: the channel sees only the frame.
+    sender.send(Bytes::from(
+        client.seal_chunk(b"a", ChunkPosition::NonFinal)?,
+    ))?;
+    sender.send(Bytes::from(client.seal_chunk(&[], ChunkPosition::Final)?))?;
+    drop(sender);
+    let mut member_frames = inbound
+        .lock()
+        .map_err(|_| "lock")?
+        .take()
+        .ok_or("channel not opened")?;
+    let first = tokio::time::timeout(STEP, member_frames.recv()).await?;
+    assert_eq!(first, Some(LiveFrame::new(b"a".to_vec())));
+    assert_eq!(
+        tokio::time::timeout(STEP, member_frames.recv()).await?,
+        None
+    );
+
+    // The channel sends an empty frame and a real one: the member sees only the real one.
+    let to_member = outbound
+        .lock()
+        .map_err(|_| "lock")?
+        .take()
+        .ok_or("channel not opened")?;
+    to_member.send(LiveFrame::new(Vec::new())).await?;
+    to_member.send(LiveFrame::new(b"x".to_vec())).await?;
+    drop(to_member);
+    let mut decoder = client.response_decoder();
+    let mut opened = Vec::new();
+    while let Some(bytes) = tokio::time::timeout(STEP, next_data(&mut body)).await?? {
+        opened.extend(decoder.feed(&bytes)?);
+    }
+    assert_eq!(
+        opened,
+        [OpenedChunk {
+            payload: b"x".to_vec(),
+            position: ChunkPosition::NonFinal,
+        }]
+    );
+    assert_eq!(
+        decoder.finish()?,
+        Some(OpenedChunk {
+            payload: Vec::new(),
+            position: ChunkPosition::Final,
+        })
+    );
+    server.stop().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_runs_with_the_production_parts_until_shutdown() -> TestResult {
+    let key = GatewayKey::generate(1, &mut rng(7))?;
+    let config = key.config();
+    let server_config = ServerConfig {
+        listen: SocketAddr::new(LOOPBACK, 0),
+        logging: Logging::Off,
+        request_timeout: REQUEST_TIMEOUT,
+        ohttp_keys: OhttpKeys::new(vec![key])?,
+        relays: RelayAllowList::new(vec![LOOPBACK])?,
+        metrics: AddressList::default(),
+    };
+    let listener = tokio::net::TcpListener::bind(server_config.listen).await?;
+    let address = listener.local_addr()?;
+    let (stop, stopped) = oneshot::channel::<()>();
+    let task = tokio::spawn(crate::serve(
+        server_config,
+        listener,
+        ManualClock::new(UnixSeconds::new(1)),
+        async move {
+            let _ = stopped.await;
+        },
+    ));
+    let mut client = connect(address, LOOPBACK).await?;
+    let response = send(
+        &mut client,
+        request(Method::GET, "/v1/ohttp/config", None, Body::empty())?,
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(read_all(response).await?, config.encoded());
+    // Response sealing draws on the generator seeded by the operating system.
+    let (_, opened) = oblivious(&mut client, &config, &inner("GET", "/v1/ohttp/config")).await?;
+    assert_eq!(inner_status(opened.as_ref()), Some(200));
+    let _ = stop.send(());
+    tokio::time::timeout(STEP, task).await???;
+    Ok(())
+}
+
+#[test]
+fn load_config_reads_the_file_or_says_why_not() -> TestResult {
+    let directory =
+        std::env::temp_dir().join(format!("pingers-server-test-{}", std::process::id()));
+    std::fs::create_dir_all(&directory)?;
+    let path = directory.join("server.toml");
+    std::fs::write(
+        &path,
+        "listen = \"127.0.0.1:8080\"\n[ohttp]\nrelays = [\"10.0.0.5\"]\n\
+         [[ohttp.keys]]\nkey_id = 2\n\
+         secret = \"0303030303030303030303030303030303030303030303030303030303030303\"\n",
+    )?;
+    let loaded = crate::load_config(&path)?;
+    assert_eq!(loaded.ohttp_keys.served().key_id(), 2);
+    std::fs::write(&path, "listen = 1\n")?;
+    assert!(matches!(
+        crate::load_config(&path),
+        Err(crate::ServerError::Config(
+            crate::ConfigError::Syntax { .. }
+        ))
+    ));
+    std::fs::remove_dir_all(&directory)?;
+    assert!(matches!(
+        crate::load_config(&path),
+        Err(crate::ServerError::ReadConfig(_))
+    ));
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
