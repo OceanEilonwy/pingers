@@ -306,9 +306,10 @@ impl Sharing {
         let mut frames = Vec::new();
         for (leaf, member) in roster.others {
             let wanted = desired.get(leaf).copied();
-            let changed = wanted.is_some() && wanted != previous.get(leaf).copied();
             let frame = match wanted {
-                Some(end) if changed => self.grant(roster, Target { member, end }, rng)?,
+                Some(end) if previous.get(leaf) != Some(&end) => {
+                    self.grant(roster, Target { member, end }, rng)?
+                }
                 Some(_) | None if padded.contains(leaf) => self.dummy_grant(roster, rng)?,
                 Some(_) | None => continue,
             };
@@ -410,7 +411,46 @@ pub(crate) const fn ephemeral(message: MeetupMessage) -> OutgoingFrame {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use pingers_crypto::open_location;
+    use pingers_proto::{AccuracyMeters, E7Coordinate};
+    use pingers_testkit::seeded_rng;
+
     use super::*;
+
+    #[test]
+    fn with_no_holders_even_a_known_position_goes_out_as_a_dummy() -> Result<(), MeetupError> {
+        let mut rng = seeded_rng(1);
+        let sharing = Sharing::new(
+            LocationVisibility::AskEachTime,
+            AlwaysAllow::default(),
+            &mut rng,
+        );
+        let group = GroupId::from_bytes([1; 32]);
+        let context = FrameContext {
+            group: &group,
+            epoch: Epoch::new(1),
+            sender: LeafIndex::new(0),
+        };
+        let position = LocationPlaintext {
+            position: E7Coordinate::new(1, 1)?,
+            accuracy: AccuracyMeters::new(5),
+            heading: None,
+            speed: None,
+            taken_at: UnixSeconds::new(1),
+        };
+        let frame = sharing.location_frame(context, Some(&position), &mut rng)?;
+        let aad = LocationAad {
+            group: &group,
+            epoch: Epoch::new(1),
+            sender: LeafIndex::new(0),
+            generation: sharing.generation(),
+        };
+        // Not even the device's own key opens it: there is no position inside.
+        assert!(open_location(&sharing.key, &aad, &frame).is_err());
+        Ok(())
+    }
 
     #[test]
     fn meetup_end_round_trips_through_the_wire_value() {

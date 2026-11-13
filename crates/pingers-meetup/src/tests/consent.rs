@@ -495,11 +495,134 @@ fn a_repeated_ask_prompts_once() -> TestResult {
 #[test]
 fn a_holder_who_asks_again_gets_the_key_again() -> TestResult {
     let mut net = chloe_sees_ben(21)?;
+    net.advance(60)?;
     net.take_sent(BEN)?;
     net.take_events(BEN)?;
+    net.take_events(CHLOE)?;
     net.act(CHLOE, MeetupAction::AskLocation(BEN))?;
     assert!(net.take_events(BEN)?.is_empty());
     assert_eq!(count(&net.take_sent(BEN)?, "grant"), 1);
+    // The same key again: no access change, and the last position is kept for the compass.
+    assert!(net.take_events(CHLOE)?.is_empty());
+    let observer = crate::Observer {
+        fix: pingers_geo::Fix {
+            coordinate: pingers_geo::Coordinate::new(0.0, 0.0)?,
+            accuracy: pingers_geo::Meters::from_whole(5),
+            taken_at: net.now,
+        },
+        heading: None,
+    };
+    assert!(
+        net.session(CHLOE)?
+            .compass(crate::CompassTarget::Member(BEN), &observer, net.now)
+            .is_some()
+    );
+    Ok(())
+}
+
+#[test]
+fn a_first_grant_raises_one_access_change() -> TestResult {
+    let mut net = chloe_sees_ben(30)?;
+    let changes = net
+        .take_events(CHLOE)?
+        .into_iter()
+        .filter(|event| matches!(event, MeetupEvent::LocationAccessChanged { .. }))
+        .count();
+    assert_eq!(changes, 1);
+    Ok(())
+}
+
+#[test]
+fn a_new_grant_of_the_same_generation_updates_the_end() -> TestResult {
+    let mut net = Net::new(&asking(3), 31)?;
+    let first = net.ask(CHLOE, BEN)?;
+    let second = net.ask(CHLOE, BEN)?;
+    for (request, scope) in [
+        (first, GrantScope::FifteenMinutes),
+        (second, GrantScope::ThisMeetup),
+    ] {
+        net.act(
+            BEN,
+            MeetupAction::AnswerRequest {
+                request,
+                answer: allow(scope),
+            },
+        )?;
+    }
+    assert_eq!(
+        net.access(CHLOE, BEN)?,
+        ExactLocation::Shared { expires: None }
+    );
+    Ok(())
+}
+
+#[test]
+fn an_old_grant_arriving_after_a_rotation_is_ignored() -> TestResult {
+    let mut net = chloe_sees_ben(32)?;
+    let old_grant = net
+        .device(BEN)?
+        .sent
+        .iter()
+        .rev()
+        .find_map(|sent| match &sent.frame.message {
+            MeetupMessage::LocationGrant(grant) => Some(grant.clone()),
+            _ => None,
+        })
+        .ok_or(super::TestError::Setup("no grant"))?;
+    net.act(BEN, MeetupAction::RevokeLocation(ALICE))?;
+    net.deliver(BEN, CHLOE, MeetupMessage::LocationGrant(old_grant))?;
+    net.take_events(CHLOE)?;
+    net.advance(60)?;
+    assert_eq!(positions_from(&net.take_events(CHLOE)?, BEN), 1);
+    Ok(())
+}
+
+#[test]
+fn a_member_who_leaves_takes_pending_requests_with_them() -> TestResult {
+    let mut net = Net::new(&asking(3), 33)?;
+    let request = net.ask(CHLOE, BEN)?;
+    net.act(BEN, MeetupAction::AskLocation(ALICE))?;
+    net.remove(CHLOE)?;
+    net.remove(ALICE)?;
+    assert_eq!(net.session(BEN)?.pending_request(ALICE, net.now), None);
+    assert!(matches!(
+        net.act(
+            BEN,
+            MeetupAction::AnswerRequest {
+                request,
+                answer: allow(GrantScope::ThisMeetup),
+            },
+        ),
+        Err(super::TestError::Meetup(MeetupError::UnknownRequest))
+    ));
+    Ok(())
+}
+
+#[test]
+fn a_newcomer_on_a_freed_leaf_inherits_no_approval_or_revoke() -> TestResult {
+    let mut net = Net::new(&asking(3), 34)?;
+    net.grant(CHLOE, BEN, GrantScope::ThisMeetup)?;
+    net.remove(CHLOE)?;
+    // Someone new gets Chloé's leaf: Chloé's approval does not carry over.
+    net.add(CHLOE, &Setup::with(LocationVisibility::AskEachTime))?;
+    assert!(!net.session(BEN)?.shares_with(CHLOE));
+    // Someone new gets Alice's leaf after Alice was revoked: the revoke does not carry over.
+    net.act(
+        BEN,
+        MeetupAction::SetVisibility(LocationVisibility::Everyone),
+    )?;
+    net.act(BEN, MeetupAction::RevokeLocation(ALICE))?;
+    net.remove(ALICE)?;
+    net.add(ALICE, &Setup::with(LocationVisibility::AskEachTime))?;
+    assert!(net.session(BEN)?.shares_with(ALICE));
+    Ok(())
+}
+
+#[test]
+fn someone_elses_meet_at_me_grants_nothing() -> TestResult {
+    let mut net = Net::new(&asking(3), 35)?;
+    net.act(CHLOE, MeetupAction::SetMeetPoint(MeetPointDraft::AtMe))?;
+    assert!(!net.session(BEN)?.shares_with(ALICE));
     Ok(())
 }
 

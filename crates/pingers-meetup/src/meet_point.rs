@@ -154,6 +154,19 @@ mod tests {
     }
 
     #[test]
+    fn the_same_write_twice_is_applied_once() {
+        let mut register = MeetPointRegister::new();
+        assert_eq!(
+            register.apply(LeafIndex::new(1), at_member(1, 3)),
+            MeetPointUpdate::Applied
+        );
+        assert_eq!(
+            register.apply(LeafIndex::new(1), at_member(1, 3)),
+            MeetPointUpdate::Ignored
+        );
+    }
+
+    #[test]
     fn cleared_meet_point_reads_as_none() {
         let mut register = MeetPointRegister::new();
         assert_eq!(

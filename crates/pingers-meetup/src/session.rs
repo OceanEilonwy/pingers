@@ -604,16 +604,10 @@ impl MeetupSession {
                 meet_point,
                 lamport,
             } => {
-                let point = match meet_point {
-                    // Only that member may make its position the meet point; it re-sends its
-                    // own `AtMember` to newcomers itself.
-                    Some(MeetPoint::AtMember { leaf, .. }) if leaf != sender => None,
-                    Some(point) => Some(point),
-                    None => Some(MeetPoint::Cleared { lamport }),
-                };
-                if let Some(point) = point {
-                    self.apply_meet_point(sender, point, step)?;
-                }
+                // The register accepts an `AtMember` only from that member, so a snapshot
+                // cannot vouch for someone else's; the owner re-sends its own to newcomers.
+                let point = meet_point.unwrap_or(MeetPoint::Cleared { lamport });
+                self.apply_meet_point(sender, point, step)?;
             }
             MeetupMessage::BoardSeen { segments } => {
                 if self.board.peer_seen(sender, segments) == Agreement::Equivocation {
@@ -668,9 +662,7 @@ impl MeetupSession {
                 }));
             return;
         }
-        if frame.generation < held.generation {
-            return;
-        }
+        // An older generation's frame fails to open: the generation is in the associated data.
         let aad = LocationAad {
             group: &group,
             epoch,

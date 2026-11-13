@@ -105,3 +105,18 @@ pub enum ExactLocation {
     /// Not held: no pin, distance or bearing is shown or computed.
     Private,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inserting_twice_lists_the_member_once() {
+        let member = AccountPublicKey::from_bytes([3; 32]);
+        let mut list = AlwaysAllow::default();
+        list.insert(member);
+        list.insert(member);
+        assert_eq!(list.members(), &[member]);
+        assert!(list.contains(&member));
+    }
+}
