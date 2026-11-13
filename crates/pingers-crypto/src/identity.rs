@@ -7,9 +7,8 @@ use ed25519_dalek::SigningKey;
 use pingers_proto::AccountId;
 use sha2::{Digest as _, Sha256};
 
-use crate::CryptoError;
 use crate::secret::{random_secret, secret_key};
-use crate::stub::not_implemented;
+use crate::{CryptoError, labels, primitives};
 
 secret_key!(
     /// The account's Ed25519 secret key (32-byte seed).
@@ -104,7 +103,42 @@ pub fn sign_registration(
     signing_key: &AccountSigningKey,
     server: &pingers_proto::ServerId,
 ) -> Result<Signature, CryptoError> {
-    not_implemented((signing_key, server))
+    let message = registration_message(&signing_key.public_key(), server);
+    Ok(Signature(primitives::ed25519_sign(
+        signing_key.expose_bytes(),
+        &message,
+    )))
+}
+
+/// Checks a registration proof (server side).
+///
+/// # Errors
+///
+/// [`CryptoError::BadSignature`] if it does not verify for this key and server.
+pub fn verify_registration(
+    public_key: &AccountPublicKey,
+    server: &pingers_proto::ServerId,
+    signature: &Signature,
+) -> Result<(), CryptoError> {
+    primitives::ed25519_verify(
+        public_key.as_bytes(),
+        &registration_message(public_key, server),
+        signature.as_bytes(),
+    )
+}
+
+/// `"pingers/v1/register" || public key || server origin`. The origin is the only
+/// variable-length field and comes last, so no length prefix is needed.
+fn registration_message(
+    public_key: &AccountPublicKey,
+    server: &pingers_proto::ServerId,
+) -> Vec<u8> {
+    [
+        labels::REGISTRATION,
+        public_key.as_bytes(),
+        server.as_str().as_bytes(),
+    ]
+    .concat()
 }
 
 #[cfg(test)]

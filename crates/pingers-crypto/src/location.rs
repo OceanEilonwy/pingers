@@ -5,14 +5,16 @@ use core::fmt;
 
 use pingers_proto::{
     Epoch, GroupId, LeafIndex, LocationGeneration, LocationPlaintext, LocationRequestId, SealedAsk,
-    SealedGrant, SealedLocationFrame,
+    SealedGrant, SealedLocationFrame, WireDecode as _, WireEncode as _,
 };
 use pingers_time::UnixSeconds;
 use rand_core::CryptoRng;
+use zeroize::Zeroizing;
 
-use crate::CryptoError;
+use crate::hpke::{self, Recipient, Suite};
+use crate::primitives::{self, GCM_NONCE_LENGTH, TAG_LENGTH};
 use crate::secret::{random_secret, secret_key};
-use crate::stub::not_implemented;
+use crate::{CryptoError, labels};
 
 secret_key!(
     /// A member's location key `LK_self` for one generation (design B.6.1). AES-256-GCM.
@@ -26,7 +28,8 @@ random_secret!(LocationKey);
 
 secret_key!(
     /// The secret half of a member's per-Meetup grant key pair (X25519 HPKE; X-Wing under the
-    /// `x-wing` feature). `from_bytes` and `expose_bytes` are public for pingers-store.
+    /// `x-wing` feature, where these 32 bytes are the X-Wing seed). `from_bytes` and
+    /// `expose_bytes` are public for pingers-store.
     GrantSecretKey,
     32,
     pub
@@ -34,6 +37,8 @@ secret_key!(
 
 /// The public half of a grant key pair, published in the `pingers_grant_key` leaf extension
 /// of a member's Meetup `KeyPackage` (design B.6.1). `Debug` does not print it.
+///
+/// 32 bytes for X25519, 1,216 for X-Wing; the length selects the HPKE suite when sealing.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct GrantPublicKey(Vec<u8>);
 
@@ -66,14 +71,65 @@ pub struct GrantKeyPair {
 }
 
 impl GrantKeyPair {
-    /// Generates a key pair.
+    /// Generates an X25519 key pair: RFC 9180 `DeriveKeyPair` over 32 bytes from `rng`.
     ///
     /// # Errors
     ///
     /// [`CryptoError::Internal`] if key generation fails.
     pub fn generate(rng: &mut impl CryptoRng) -> Result<Self, CryptoError> {
-        not_implemented(rng)
+        Self::generate_for(Suite::Grant, rng)
     }
+
+    /// Generates an X-Wing key pair, for Meetups of post-quantum Parties (design B.8).
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::Internal`] if key generation fails.
+    #[cfg(feature = "x-wing")]
+    pub fn generate_x_wing(rng: &mut impl CryptoRng) -> Result<Self, CryptoError> {
+        Self::generate_for(Suite::GrantXWing, rng)
+    }
+
+    fn generate_for(suite: Suite, rng: &mut impl CryptoRng) -> Result<Self, CryptoError> {
+        let mut ikm = Zeroizing::new([0; 32]);
+        rng.fill_bytes(ikm.as_mut_slice());
+        Self::derive(suite, &ikm)
+    }
+
+    /// RFC 9180 `DeriveKeyPair(ikm)`.
+    fn derive(suite: Suite, ikm: &[u8; 32]) -> Result<Self, CryptoError> {
+        let pair = hpke::derive_key_pair(suite, ikm)?;
+        Ok(Self {
+            secret: GrantSecretKey::from_bytes(pair.secret),
+            public: GrantPublicKey::from_bytes(pair.public),
+        })
+    }
+}
+
+/// The grant suites this build supports.
+const GRANT_SUITES: &[Suite] = &[
+    Suite::Grant,
+    #[cfg(feature = "x-wing")]
+    Suite::GrantXWing,
+];
+
+/// The suite a sealed grant or ask was made with, told apart by its length: the encapsulated
+/// key is 32 bytes for X25519 and 1,120 for X-Wing.
+fn suite_for_sealed(sealed_length: usize, plaintext_length: usize) -> Result<Suite, CryptoError> {
+    GRANT_SUITES
+        .iter()
+        .copied()
+        .find(|suite| suite.overhead().checked_add(plaintext_length) == Some(sealed_length))
+        .ok_or(CryptoError::OpenFailed)
+}
+
+/// The suite of a recipient public key, told apart by its length.
+fn suite_for_public_key(public_key: &GrantPublicKey) -> Result<Suite, CryptoError> {
+    GRANT_SUITES
+        .iter()
+        .copied()
+        .find(|suite| suite.public_key_length() == public_key.as_bytes().len())
+        .ok_or(CryptoError::InvalidKey)
 }
 
 /// The associated data of a sealed location: `group_id || be64(epoch) || be32(sender_leaf)
@@ -94,19 +150,104 @@ pub struct LocationAad<'group> {
 /// frames both have exactly this length, so they cannot be told apart.
 pub const SEALED_LOCATION_LENGTH: usize = 80;
 
+/// The padded plaintext inside a sealed location: `be16(length) || encoding || zero bytes`,
+/// the padding format of pingers-proto.
+const PADDED_LOCATION_LENGTH: usize = SEALED_LOCATION_LENGTH - TAG_LENGTH;
+/// The length prefix of the padded plaintext.
+const LENGTH_PREFIX: usize = 2;
+
+/// `group_id || be64(epoch) || be32(sender_leaf) || be32(lk_gen)`.
+fn location_aad(aad: &LocationAad<'_>) -> Vec<u8> {
+    [
+        aad.group.as_bytes().as_slice(),
+        &aad.epoch.get().to_be_bytes(),
+        &aad.sender.get().to_be_bytes(),
+        &aad.generation.get().to_be_bytes(),
+    ]
+    .concat()
+}
+
+fn pad_location(encoded: &[u8]) -> Result<Zeroizing<[u8; PADDED_LOCATION_LENGTH]>, CryptoError> {
+    let too_long = || CryptoError::WrongLength {
+        expected: PADDED_LOCATION_LENGTH - LENGTH_PREFIX,
+        actual: encoded.len(),
+    };
+    let length = u16::try_from(encoded.len()).map_err(|_overflow| too_long())?;
+    let mut padded = Zeroizing::new([0; PADDED_LOCATION_LENGTH]);
+    let (prefix, body) = padded.split_at_mut(LENGTH_PREFIX);
+    prefix.copy_from_slice(&length.to_be_bytes());
+    body.get_mut(..encoded.len())
+        .ok_or_else(too_long)?
+        .copy_from_slice(encoded);
+    Ok(padded)
+}
+
+fn unpad_location(padded: &[u8]) -> Result<&[u8], CryptoError> {
+    let bad_padding = || CryptoError::Encoding(pingers_proto::ProtoError::BadPadding);
+    let (length, body) = padded
+        .split_first_chunk::<LENGTH_PREFIX>()
+        .ok_or_else(bad_padding)?;
+    let (encoded, padding) = body
+        .split_at_checked(usize::from(u16::from_be_bytes(*length)))
+        .ok_or_else(bad_padding)?;
+    if padding.iter().any(|byte| *byte != 0) {
+        return Err(bad_padding());
+    }
+    Ok(encoded)
+}
+
+fn seal_padded_location(
+    key: &LocationKey,
+    aad: &LocationAad<'_>,
+    padded: &[u8; PADDED_LOCATION_LENGTH],
+    nonce: [u8; GCM_NONCE_LENGTH],
+) -> Result<SealedLocationFrame, CryptoError> {
+    let ciphertext =
+        primitives::aes_gcm_seal(key.expose_bytes(), &nonce, &location_aad(aad), padded)?;
+    Ok(SealedLocationFrame {
+        generation: aad.generation,
+        nonce,
+        ciphertext,
+    })
+}
+
+fn open_padded_location(
+    key: &LocationKey,
+    aad: &LocationAad<'_>,
+    frame: &SealedLocationFrame,
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    if frame.ciphertext.len() != SEALED_LOCATION_LENGTH {
+        return Err(CryptoError::WrongLength {
+            expected: SEALED_LOCATION_LENGTH,
+            actual: frame.ciphertext.len(),
+        });
+    }
+    primitives::aes_gcm_open(
+        key.expose_bytes(),
+        &frame.nonce,
+        &location_aad(aad),
+        &frame.ciphertext,
+    )
+}
+
 /// Seals a position under the sender's location key. The plaintext is padded to a fixed
 /// length first, so optional fields do not change the ciphertext length.
 ///
 /// # Errors
 ///
 /// [`CryptoError::Encoding`] if the plaintext cannot be encoded;
+/// [`CryptoError::WrongLength`] if its encoding does not fit the padded length;
 /// [`CryptoError::Internal`] if the AEAD fails.
 pub fn seal_location(
     key: &LocationKey,
     frame: &LocationToSeal<'_>,
     rng: &mut impl CryptoRng,
 ) -> Result<SealedLocationFrame, CryptoError> {
-    not_implemented((key, frame, rng))
+    let encoded = Zeroizing::new(frame.location.encode().map_err(CryptoError::Encoding)?);
+    let padded = pad_location(&encoded)?;
+    let mut nonce = [0; GCM_NONCE_LENGTH];
+    rng.fill_bytes(&mut nonce);
+    seal_padded_location(key, &frame.aad, &padded, nonce)
 }
 
 /// A position and the associated data that binds it to its frame.
@@ -136,18 +277,21 @@ pub fn dummy_location(
     }
 }
 
-/// Opens a peer's sealed location with the key they granted.
+/// Opens a peer's sealed location with the key they granted. The generation bound in the
+/// associated data is `aad.generation`, so a frame of another generation does not open.
 ///
 /// # Errors
 ///
 /// [`CryptoError::OpenFailed`] if the frame is not sealed under this key (including dummy
-/// frames); [`CryptoError::Encoding`] if the plaintext is malformed.
+/// frames); [`CryptoError::WrongLength`] if the ciphertext is not
+/// [`SEALED_LOCATION_LENGTH`] bytes; [`CryptoError::Encoding`] if the plaintext is malformed.
 pub fn open_location(
     key: &LocationKey,
     aad: &LocationAad<'_>,
     frame: &SealedLocationFrame,
 ) -> Result<LocationPlaintext, CryptoError> {
-    not_implemented((key, aad, frame))
+    let padded = open_padded_location(key, aad, frame)?;
+    LocationPlaintext::decode(unpad_location(&padded)?).map_err(CryptoError::Encoding)
 }
 
 /// The HPKE info of a grant: `"pingers/v1/lk-grant" || group_id || be32(sender_leaf)`.
@@ -182,7 +326,46 @@ pub struct OpenedGrant {
     pub expires_at: UnixSeconds,
 }
 
-/// Seals a grant to one member's grant key. Carries no recipient field.
+/// `be32(lk_gen) || LK_self || be64(expires_at)`.
+const GRANT_PLAINTEXT_LENGTH: usize = 4 + LocationKey::LENGTH + 8;
+
+/// `"pingers/v1/lk-grant" || group_id || be32(sender_leaf)`.
+fn grant_info(context: &GrantContext<'_>) -> Vec<u8> {
+    [
+        labels::LOCATION_GRANT,
+        context.group.as_bytes().as_slice(),
+        &context.sender.get().to_be_bytes(),
+    ]
+    .concat()
+}
+
+fn grant_plaintext(grant: &LocationGrant<'_>) -> Zeroizing<Vec<u8>> {
+    let mut plaintext = Zeroizing::new(Vec::with_capacity(GRANT_PLAINTEXT_LENGTH));
+    plaintext.extend_from_slice(&grant.generation.get().to_be_bytes());
+    plaintext.extend_from_slice(grant.key.expose_bytes());
+    plaintext.extend_from_slice(&grant.expires_at.get().to_be_bytes());
+    plaintext
+}
+
+fn parse_grant(plaintext: &[u8]) -> Result<OpenedGrant, CryptoError> {
+    let wrong_length = || CryptoError::WrongLength {
+        expected: GRANT_PLAINTEXT_LENGTH,
+        actual: plaintext.len(),
+    };
+    let (generation, rest) = plaintext
+        .split_first_chunk::<4>()
+        .ok_or_else(wrong_length)?;
+    let (key, rest) = rest.split_first_chunk::<32>().ok_or_else(wrong_length)?;
+    let expires_at: &[u8; 8] = rest.try_into().map_err(|_length| wrong_length())?;
+    Ok(OpenedGrant {
+        generation: LocationGeneration::new(u32::from_be_bytes(*generation)),
+        key: LocationKey::from_bytes(Zeroizing::new(*key)),
+        expires_at: UnixSeconds::new(u64::from_be_bytes(*expires_at)),
+    })
+}
+
+/// Seals a grant to one member's grant key. Carries no recipient field. The HPKE suite
+/// follows the key: X25519 for 32-byte keys, X-Wing for 1,216-byte keys (feature `x-wing`).
 ///
 /// # Errors
 ///
@@ -193,7 +376,17 @@ pub fn seal_location_grant(
     grant: &LocationGrant<'_>,
     rng: &mut impl CryptoRng,
 ) -> Result<SealedGrant, CryptoError> {
-    not_implemented((recipient, grant, rng))
+    let suite = suite_for_public_key(recipient)?;
+    hpke::seal(
+        Recipient {
+            suite,
+            public_key: recipient.as_bytes(),
+        },
+        &grant_info(&grant.context),
+        &grant_plaintext(grant),
+        rng,
+    )
+    .map(SealedGrant::from_bytes)
 }
 
 /// Trial-opens a grant with this member's grant key. Most grants are for someone else, so
@@ -208,7 +401,14 @@ pub fn open_location_grant(
     context: &GrantContext<'_>,
     sealed: &SealedGrant,
 ) -> Result<OpenedGrant, CryptoError> {
-    not_implemented((own_key, context, sealed))
+    let suite = suite_for_sealed(sealed.as_bytes().len(), GRANT_PLAINTEXT_LENGTH)?;
+    let plaintext = hpke::open(
+        suite,
+        own_key.expose_bytes(),
+        &grant_info(context),
+        sealed.as_bytes(),
+    )?;
+    parse_grant(&plaintext)
 }
 
 /// An ask: the group it is bound to (through the HPKE info), and what it carries,
@@ -225,6 +425,41 @@ pub struct LocationAsk {
     pub asked_at: UnixSeconds,
 }
 
+/// `be32(requester_leaf) || req_id || be64(ts)`.
+const ASK_PLAINTEXT_LENGTH: usize = 4 + LocationRequestId::LENGTH + 8;
+
+/// `"pingers/v1/lk-ask" || group_id`.
+fn ask_info(group: &GroupId) -> Vec<u8> {
+    [labels::LOCATION_ASK, group.as_bytes().as_slice()].concat()
+}
+
+fn ask_plaintext(ask: &LocationAsk) -> Vec<u8> {
+    [
+        ask.requester.get().to_be_bytes().as_slice(),
+        ask.request.as_bytes(),
+        &ask.asked_at.get().to_be_bytes(),
+    ]
+    .concat()
+}
+
+fn parse_ask(group: &GroupId, plaintext: &[u8]) -> Result<LocationAsk, CryptoError> {
+    let wrong_length = || CryptoError::WrongLength {
+        expected: ASK_PLAINTEXT_LENGTH,
+        actual: plaintext.len(),
+    };
+    let (requester, rest) = plaintext
+        .split_first_chunk::<4>()
+        .ok_or_else(wrong_length)?;
+    let (request, rest) = rest.split_first_chunk::<16>().ok_or_else(wrong_length)?;
+    let asked_at: &[u8; 8] = rest.try_into().map_err(|_length| wrong_length())?;
+    Ok(LocationAsk {
+        group: *group,
+        requester: LeafIndex::new(u32::from_be_bytes(*requester)),
+        request: LocationRequestId::from_bytes(*request),
+        asked_at: UnixSeconds::new(u64::from_be_bytes(*asked_at)),
+    })
+}
+
 /// Seals an ask to the target's grant key, with HPKE info
 /// `"pingers/v1/lk-ask" || group_id`.
 ///
@@ -237,7 +472,17 @@ pub fn seal_location_ask(
     ask: &LocationAsk,
     rng: &mut impl CryptoRng,
 ) -> Result<SealedAsk, CryptoError> {
-    not_implemented((target, ask, rng))
+    let suite = suite_for_public_key(target)?;
+    hpke::seal(
+        Recipient {
+            suite,
+            public_key: target.as_bytes(),
+        },
+        &ask_info(&ask.group),
+        &ask_plaintext(ask),
+        rng,
+    )
+    .map(SealedAsk::from_bytes)
 }
 
 /// Trial-opens an ask with this member's grant key.
@@ -251,5 +496,12 @@ pub fn open_location_ask(
     group: &GroupId,
     sealed: &SealedAsk,
 ) -> Result<LocationAsk, CryptoError> {
-    not_implemented((own_key, group, sealed))
+    let suite = suite_for_sealed(sealed.as_bytes().len(), ASK_PLAINTEXT_LENGTH)?;
+    let plaintext = hpke::open(
+        suite,
+        own_key.expose_bytes(),
+        &ask_info(group),
+        sealed.as_bytes(),
+    )?;
+    parse_ask(group, &plaintext)
 }

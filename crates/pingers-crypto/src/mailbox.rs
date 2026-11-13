@@ -5,10 +5,9 @@ use pingers_proto::{MailboxId, PushTokenPlaintext, SealedPushBlob, SubscriptionI
 use rand_core::CryptoRng;
 use sha2::{Digest as _, Sha256};
 
-use crate::CryptoError;
-use crate::labels;
+use crate::hpke::{self, Recipient, Suite};
 use crate::secret::{random_secret, secret_key};
-use crate::stub::not_implemented;
+use crate::{CryptoError, labels};
 
 secret_key!(
     /// A mailbox's 32-byte read key: the capability to read it (design B.4.9). Stays on the
@@ -124,6 +123,20 @@ secret_key!(
     32,
     pub
 );
+random_secret!(PushRelayPrivateKey);
+
+impl PushRelayPrivateKey {
+    /// The matching public key, for the relay's published key config.
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::Internal`] if the X25519 base-point multiplication fails (it cannot for
+    /// a 32-byte key).
+    pub fn public_key(&self, key_id: u8) -> Result<PushRelayPublicKey, CryptoError> {
+        let public = hpke::public_key(Suite::PushRelay, self.expose_bytes())?;
+        Ok(PushRelayPublicKey::new(key_id, public))
+    }
+}
 
 /// Seals a push token to the relay: `HPKE.Seal(pk, info = "pingers/v1/push" || bind,
 /// padded plaintext)`, giving exactly 320 bytes. Fresh randomness every time, so two blobs
@@ -138,7 +151,52 @@ pub fn seal_push_token(
     token: &PushTokenToSeal<'_>,
     rng: &mut impl CryptoRng,
 ) -> Result<SealedPushBlob, CryptoError> {
-    not_implemented((relay_key, token, rng))
+    let padded = zeroize::Zeroizing::new(
+        token
+            .plaintext
+            .encode_padded()
+            .map_err(CryptoError::Encoding)?,
+    );
+    let sealed = hpke::seal(
+        Recipient {
+            suite: Suite::PushRelay,
+            public_key: relay_key.public_key(),
+        },
+        &push_info(&token.bind),
+        padded.as_slice(),
+        rng,
+    )?;
+    push_blob(&sealed)
+}
+
+/// `"pingers/v1/push" || bind`.
+fn push_info(bind: &PushBind) -> Vec<u8> {
+    [labels::PUSH, bind.as_bytes()].concat()
+}
+
+fn push_blob(sealed: &[u8]) -> Result<SealedPushBlob, CryptoError> {
+    let bytes: [u8; SealedPushBlob::SIZE] =
+        sealed.try_into().map_err(|_length| CryptoError::Internal)?;
+    Ok(SealedPushBlob::from_bytes(bytes))
+}
+
+/// Opens a blob to its padded plaintext, before proto decodes it.
+fn open_push_padded(
+    relay_key: &PushRelayPrivateKey,
+    bind: &PushBind,
+    blob: &SealedPushBlob,
+) -> Result<zeroize::Zeroizing<[u8; PushTokenPlaintext::PADDED_SIZE]>, CryptoError> {
+    let plaintext = hpke::open(
+        Suite::PushRelay,
+        relay_key.expose_bytes(),
+        &push_info(bind),
+        blob.as_bytes(),
+    )?;
+    let padded: [u8; PushTokenPlaintext::PADDED_SIZE] = plaintext
+        .as_slice()
+        .try_into()
+        .map_err(|_length| CryptoError::Internal)?;
+    Ok(zeroize::Zeroizing::new(padded))
 }
 
 /// A push token and the mailbox or subscription it is bound to.
@@ -161,5 +219,6 @@ pub fn open_push_token(
     bind: &PushBind,
     blob: &SealedPushBlob,
 ) -> Result<PushTokenPlaintext, CryptoError> {
-    not_implemented((relay_key, bind, blob))
+    let padded = open_push_padded(relay_key, bind, blob)?;
+    PushTokenPlaintext::decode_padded(&padded).map_err(CryptoError::Encoding)
 }

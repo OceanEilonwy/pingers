@@ -21,22 +21,26 @@
 mod board;
 mod error;
 mod group;
+mod hpke;
 mod identity;
 mod invite;
 mod labels;
 mod location;
 mod mailbox;
 mod presence;
+mod primitives;
 mod secret;
-mod stub;
 
 pub use board::{RevokeKey, revoke_commitment, segment_hash};
 pub use error::CryptoError;
 pub use group::{
     GroupRequest, LogAuthKeyPair, StateKey, open_state_snapshot, seal_state_snapshot,
-    sign_group_request,
+    sign_group_request, verify_group_request,
 };
-pub use identity::{AccountPublicKey, AccountSigningKey, Signature, account_id, sign_registration};
+pub use identity::{
+    AccountPublicKey, AccountSigningKey, Signature, account_id, sign_registration,
+    verify_registration,
+};
 pub use invite::{InviteSecret, open_join_request, seal_join_request};
 pub use labels::ExporterLabel;
 pub use location::{

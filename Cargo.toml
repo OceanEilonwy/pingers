@@ -61,6 +61,10 @@ sha2 = "0.11.1"
 aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "alloc", "zeroize"] }
 chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "zeroize"] }
 hpke-rs = { version = "0.8.0", features = ["rustcrypto"] }
+# The HPKE provider trait, so pingers-crypto can feed hpke-rs caller-supplied randomness.
+hpke-rs-crypto = { version = "0.8.0", default-features = false }
+# X-Wing KEM for post-quantum grant keys (pingers-crypto feature `x-wing`, design B.8).
+x-wing = { version = "0.1.1", default-features = false, features = ["zeroize"] }
 ed25519-dalek = { version = "3.0.0", features = ["zeroize"] }
 x25519-dalek = { version = "3.0.0", features = ["zeroize", "static_secrets"] }
 
