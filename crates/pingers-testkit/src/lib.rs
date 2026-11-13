@@ -35,7 +35,8 @@
 //!    in `tests/`, not from `#[cfg(test)]` modules: integration tests link the crate's normal
 //!    library, the same copy the testkit sees. pingers-time should not use it at all.
 //! 3. **Feature `client`** adds pingers-client (L3) and pingers-meetup (L1, for
-//!    `ExactLocation`) and implements `pingers_client::Platform` and `pingers_client::Events`.
+//!    `ExactLocation`) and implements `pingers_client::Platform` and `pingers_client::Events`,
+//!    plus [`FakeCrates`], recording stand-ins for the client's L3 ports.
 //!    Only crates at or above the composition root turn it on: pingers-client's integration
 //!    tests, pingers-screens, pingers-ffi, pingers-cli. CI builds with `--all-features`, so a
 //!    lower crate that uses the testkit may compile pingers-client in its test build; that is
@@ -54,6 +55,8 @@
 #[cfg(feature = "client")]
 mod client;
 #[cfg(feature = "client")]
+mod crates;
+#[cfg(feature = "client")]
 mod events;
 mod fixtures;
 pub mod harness;
@@ -62,6 +65,8 @@ mod rng;
 mod time;
 mod vectors;
 
+#[cfg(feature = "client")]
+pub use crates::{CrateCall, CrateName, FakeCrates, FakeCratesError};
 #[cfg(feature = "client")]
 pub use events::{EventAssertion, EventKind, NoticeKind, RecordedEvent, RecordingEvents};
 pub use fixtures::{FixtureError, MemberFixture, PartyBuilder, PartyFixture, SpotFixture};

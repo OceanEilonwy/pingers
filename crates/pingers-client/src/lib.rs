@@ -9,9 +9,25 @@
 //! **Rule: no domain logic.** Each method delegates to one crate. If a change here needs a
 //! domain `if`, it belongs in a named crate instead. Size budget: under 500 lines.
 //!
-//! This scaffold fixes the two traits the shell implements (adapted from design E.1 to the
-//! split crates, Android only) and the [`Notice`] vocabulary. The async API is the owner's.
+//! - [`Platform`] and [`Events`]: the two traits the shell implements (design E.1, adapted to
+//!   the split crates, Android only), and the [`Notice`] vocabulary.
+//! - [`Client`]: the async API. [`Client::open`] reads the database key from the platform's
+//!   secure store, opens the store and builds the [`Crates`] over it.
+//! - [`ports`]: what the client calls on each L3 crate.
+//! - [`snapshot`]: the [`ClientSnapshot`](snapshot::ClientSnapshot) every call republishes.
+//!
+//! Commands report changes through the snapshot ([`Client::subscribe`]); [`Events`] carries
+//! what the pipeline found on its own.
 #![forbid(unsafe_code)]
+
+mod client;
+mod error;
+pub mod ports;
+pub mod snapshot;
+
+pub use client::{Client, ClientConfig};
+pub use error::ClientError;
+pub use ports::Crates;
 
 use std::time::Duration;
 

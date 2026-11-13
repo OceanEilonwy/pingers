@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The crate's error type. pingers-words says each one to the user.
 
+use pingers_client::snapshot::SnapshotError;
 use pingers_geo::GeoError;
 
 /// Why a view model could not be built, or a value for one was rejected. Never carries names,
@@ -55,5 +56,21 @@ pub enum ScreenError {
 impl From<GeoError> for ScreenError {
     fn from(error: GeoError) -> Self {
         Self::Shape(error)
+    }
+}
+
+impl From<SnapshotError> for ScreenError {
+    fn from(error: SnapshotError) -> Self {
+        match error {
+            SnapshotError::UnknownParty => Self::UnknownParty,
+            SnapshotError::UnknownMeetup => Self::UnknownMeetup,
+            SnapshotError::UnknownMember => Self::UnknownMember,
+            SnapshotError::InvalidName => Self::InvalidName,
+            SnapshotError::InvalidHost => Self::InvalidHost,
+            SnapshotError::InvalidOperator => Self::InvalidOperator,
+            SnapshotError::InvalidSafetyCode => Self::InvalidSafetyCode,
+            SnapshotError::InvalidInviteLink => Self::InvalidInviteLink,
+            SnapshotError::EmptyWindow => Self::EmptyWindow,
+        }
     }
 }
