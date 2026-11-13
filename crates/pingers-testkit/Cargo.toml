@@ -22,12 +22,16 @@ client = ["dep:pingers-client", "dep:pingers-meetup"]
 harness = [
   "dep:pingers-server",
   "dep:pingers-push-relay",
+  "dep:pingers-mailbox",
   "dep:pingers-ohttp",
   "dep:pingers-crypto",
   "dep:axum",
   "dep:hyper",
   "dep:hyper-util",
   "dep:tokio",
+  "dep:rcgen",
+  "dep:rustls",
+  "dep:tokio-rustls",
 ]
 
 [dependencies]
@@ -40,12 +44,18 @@ pingers-client = { workspace = true, optional = true }
 pingers-meetup = { workspace = true, optional = true }
 pingers-crypto = { workspace = true, optional = true }
 pingers-ohttp = { workspace = true, optional = true }
+# The server's push relay list (`ListedRelays`) for the harness push relay.
+pingers-mailbox = { workspace = true, optional = true }
 # The binaries' library targets have no workspace entry (nothing else depends on them).
 pingers-push-relay = { path = "../pingers-push-relay", optional = true }
 pingers-server = { path = "../pingers-server", optional = true }
 axum = { workspace = true, optional = true }
 hyper = { workspace = true, optional = true }
-hyper-util = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true, features = ["server", "service"] }
+# The harness push relay serves TLS with a certificate from a test CA (`RelayUrl` is https only).
+rcgen = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+tokio-rustls = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["net"], optional = true }
 hex = { workspace = true }
 rand_chacha = { workspace = true }
@@ -54,6 +64,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 zeroize = { workspace = true }
+
+[dev-dependencies]
+# An HTTPS client trusting the test CA, for the harness tests that call the push relay.
+reqwest = { workspace = true }
 
 [lints]
 workspace = true
