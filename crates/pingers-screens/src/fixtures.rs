@@ -35,6 +35,9 @@ pub enum FixtureError {
     /// A screens value.
     #[error(transparent)]
     Screen(#[from] ScreenError),
+    /// A snapshot value.
+    #[error(transparent)]
+    Snapshot(#[from] pingers_client::snapshot::SnapshotError),
     /// A geometry value.
     #[error(transparent)]
     Geo(#[from] GeoError),
@@ -188,7 +191,7 @@ pub fn square(origin: Coordinate, side: f64) -> Result<Polygon, GeoError> {
 }
 
 fn name(text: &str) -> Result<Name, ScreenError> {
-    Name::new(text)
+    Ok(Name::new(text)?)
 }
 
 fn members(names: &[&str], me_at: u32) -> Result<Vec<Member>, ScreenError> {

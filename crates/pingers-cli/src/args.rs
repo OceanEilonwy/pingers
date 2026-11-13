@@ -7,6 +7,12 @@ use core::time::Duration;
 use std::path::PathBuf;
 
 use crate::load::LoadPlan;
+
+/// Records one simulated device keeps on the board: one lease (design B.4.2).
+const RECORDS_PER_DEVICE: NonZeroU32 = match NonZeroU32::new(4) {
+    Some(records) => records,
+    None => NonZeroU32::MIN,
+};
 use crate::scenario::{BUILTINS, Builtin, builtin};
 
 /// The help text.
@@ -20,12 +26,16 @@ Commands:
   scenario check FILE               Validate a scenario file
   scenario run FILE [--dry-run]     Run a scenario file
   e2e NAME|all [--dry-run]          Run the bundled design scenarios (g3 to g7)
-  load --board-size RECORDS [--knock-rate PER_MINUTE] [--duration SECONDS]
-       [--seed N] [--plan-only]     Generate load against the server
+  load --board-size RECORDS | --devices N [--knock-rate PER_MINUTE]
+       [--duration SECONDS] [--seed N] [--plan-only]
+                                    Generate load against the server
   help                              Show this text
 
 --dry-run replays a timeline on the fake platforms without clients and skips
-expectations. Without it a client driver is needed (pingers-client, wave 3).
+expectations. Without it every device runs a pingers-client Client; until the
+L3 crates land those clients use stand-in crates and expectations are skipped.
+load runs N simulated devices (one lease of 4 records each) against the
+in-process server and relay, then measures one full board read and one upload.
 The scenario format is described in crates/pingers-cli/scenarios/README.md.
 ";
 
@@ -201,6 +211,19 @@ fn load(arguments: &mut impl Iterator<Item = String>) -> Result<Command, ArgsErr
                     |text| text.parse::<NonZeroU32>().ok(),
                 )?);
             }
+            "--devices" => {
+                let devices: NonZeroU32 =
+                    value(arguments, "--devices", "a positive device count", |text| {
+                        text.parse::<NonZeroU32>().ok()
+                    })?;
+                board_records = Some(devices.checked_mul(RECORDS_PER_DEVICE).ok_or(
+                    ArgsError::Value {
+                        flag: "--devices",
+                        expected: "at most 1073741823 devices",
+                        value: devices.to_string(),
+                    },
+                )?);
+            }
             "--knock-rate" => {
                 knocks_per_minute =
                     value(arguments, "--knock-rate", "knocks per minute", |text| {
@@ -230,7 +253,7 @@ fn load(arguments: &mut impl Iterator<Item = String>) -> Result<Command, ArgsErr
         }
     }
     let plan = LoadPlan {
-        board_records: board_records.ok_or(ArgsError::Missing("--board-size"))?,
+        board_records: board_records.ok_or(ArgsError::Missing("--board-size or --devices"))?,
         knocks_per_minute,
         duration,
         seed,
@@ -384,7 +407,10 @@ mod tests {
 
     #[test]
     fn load_rejects_missing_and_invalid_values() {
-        assert_eq!(command("load"), Err(ArgsError::Missing("--board-size")));
+        assert_eq!(
+            command("load"),
+            Err(ArgsError::Missing("--board-size or --devices"))
+        );
         assert!(matches!(
             command("load --board-size 0"),
             Err(ArgsError::Value {

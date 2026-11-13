@@ -8,7 +8,7 @@ use pingers_proto::{GroupId, LeafIndex, MeetPointLabel};
 
 use crate::ScreenError;
 use crate::clock::{LocalClock, LocalTime, Minutes};
-use crate::common::{Direction, Name, Person};
+use crate::common::{Direction, Name, Person, person};
 use crate::home::meetup_names;
 use crate::snapshot::{ChatEntry, ClientSnapshot, MeetPlace, Meetup, PeerAccess};
 
@@ -144,12 +144,12 @@ pub fn meetup(snapshot: &ClientSnapshot, id: GroupId) -> Result<MeetupView, Scre
                     label: Some(label), ..
                 } => MeetPointName::Label(label.clone()),
                 MeetPlace::Fixed { label: None, .. } => MeetPointName::Pin,
-                MeetPlace::AtMember(leaf) => MeetPointName::AtMember(meetup.person(*leaf)?),
+                MeetPlace::AtMember(leaf) => MeetPointName::AtMember(person(meetup, *leaf)?),
             };
             let at = meet_point_position(snapshot, meetup);
             Some(MeetPointCard {
                 name,
-                set_by: meetup.person(point.set_by)?,
+                set_by: person(meetup, point.set_by)?,
                 distance: at.and_then(from_me),
                 at,
             })

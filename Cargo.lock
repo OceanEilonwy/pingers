@@ -426,6 +426,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-compat"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c97d7ff3c25d6c10d64170c12acaf5d4245e76dece3779c1d92b153a64f11df"
+dependencies = [
+ "futures-core",
+ "futures-io",
+ "once_cell",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1653,6 +1666,12 @@ name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
+
+[[package]]
+name = "futures-io"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53c0fa8157de1303bfffdaa1cc2a673bfffb60102f76b0ef4441659124373fed"
 
 [[package]]
 name = "futures-sink"
@@ -3385,9 +3404,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "pingers-client",
+ "pingers-e2e",
  "pingers-gate",
  "pingers-geo",
  "pingers-proto",
+ "pingers-store",
  "pingers-testkit",
  "pingers-time",
  "serde",
@@ -3401,6 +3422,7 @@ dependencies = [
 name = "pingers-client"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "pingers-gate",
  "pingers-geo",
  "pingers-meetup",
@@ -3409,10 +3431,12 @@ dependencies = [
  "pingers-proto",
  "pingers-store",
  "pingers-sync",
+ "pingers-testkit",
  "pingers-time",
  "pingers-transport",
  "pingers-wake",
  "thiserror",
+ "tokio",
  "zeroize",
 ]
 
@@ -3453,15 +3477,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "pingers-e2e"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "hex",
+ "hyper",
+ "hyper-util",
+ "pingers-crypto",
+ "pingers-delivery",
+ "pingers-geo",
+ "pingers-mailbox",
+ "pingers-mls",
+ "pingers-ohttp",
+ "pingers-presence",
+ "pingers-proto",
+ "pingers-server",
+ "pingers-testkit",
+ "pingers-time",
+ "pingers-transport",
+ "rand_chacha 0.10.0",
+ "rand_core 0.10.1",
+ "rusqlite",
+ "thiserror",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "pingers-ffi"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "pingers-client",
+ "pingers-gate",
+ "pingers-geo",
+ "pingers-meetup",
+ "pingers-proto",
  "pingers-screens",
+ "pingers-store",
+ "pingers-testkit",
  "pingers-time",
  "pingers-words",
  "thiserror",
+ "tokio",
  "uniffi",
+ "zeroize",
 ]
 
 [[package]]
@@ -3519,11 +3580,22 @@ dependencies = [
 name = "pingers-meetup-session"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "hex",
+ "pingers-crypto",
+ "pingers-geo",
  "pingers-meetup",
  "pingers-mls",
+ "pingers-ohttp",
+ "pingers-proto",
  "pingers-store",
+ "pingers-testkit",
+ "pingers-time",
  "pingers-transport",
+ "rand_core 0.10.1",
  "thiserror",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -3582,11 +3654,17 @@ dependencies = [
 name = "pingers-parties"
 version = "0.1.0"
 dependencies = [
+ "pingers-crypto",
  "pingers-geo",
  "pingers-mls",
+ "pingers-presence",
  "pingers-proto",
  "pingers-store",
+ "pingers-time",
+ "rand_chacha 0.10.0",
+ "rand_core 0.10.1",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]
@@ -3622,7 +3700,9 @@ dependencies = [
 name = "pingers-push-relay"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "axum",
+ "base64",
  "hex",
  "pingers-crypto",
  "pingers-proto",
@@ -3630,6 +3710,7 @@ dependencies = [
  "pingers-time",
  "pingers-transport",
  "rand_core 0.10.1",
+ "rcgen",
  "reqwest",
  "serde",
  "serde_json",
@@ -3726,6 +3807,7 @@ dependencies = [
 name = "pingers-testkit"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "hex",
  "hyper",
@@ -3783,12 +3865,17 @@ dependencies = [
 name = "pingers-wake"
 version = "0.1.0"
 dependencies = [
+ "pingers-crypto",
  "pingers-gate",
  "pingers-geo",
- "pingers-parties",
  "pingers-presence",
- "pingers-sync",
+ "pingers-proto",
+ "pingers-testkit",
+ "pingers-time",
+ "rand_core 0.10.1",
  "thiserror",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -5541,6 +5628,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7530ae8efeaaa488622865966763fe0294832779fff80508c36d69c6a874a6a"
 dependencies = [
  "anyhow",
+ "async-compat",
  "bytes",
  "once_cell",
  "static_assertions",

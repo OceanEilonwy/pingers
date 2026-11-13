@@ -14,77 +14,100 @@ import org.pingers.app.R
 /**
  * The canvas's example data (Climbing crew meeting at Riverside Park), with just
  * enough behaviour for every control to respond. Nothing leaves the phone and
- * nothing is stored. To be replaced by a repository over the Rust core.
+ * nothing is stored. The app runs on CoreRepository; this one backs previews,
+ * screenshots and the UI's own development.
  */
 class FakeRepository(private val res: Resources, private val scope: CoroutineScope) : PingersRepository {
 
-    private val me = Person("me", "You", "You", Tint.Sage, isMe = true)
-    private val ana = Person("ana", "Ana", "AN", Tint.Peach)
-    private val ben = Person("ben", "Ben", "BE", Tint.Butter)
-    private val chloe = Person("chloe", "Chloé", "CH", Tint.Sky)
-    private val dev = Person("dev", "Dev", "DE", Tint.Lilac)
-    private val eli = Person("eli", "Eli", "EL", Tint.Mint)
+    /** The canvas's map: Riverside Park's middle at the centre of the 390-wide artboard, 2 m a unit. */
+    private val frame = MapFrame(Coordinate(51.5390, -0.0590), MapPoint(195f, 256f))
+
+    /** A canvas position, as a coordinate. */
+    private fun at(x: Float, y: Float) = frame.toCoordinate(MapPoint(x, y))
+
+    /** The Party card's map (350x230 units, about 6.5 m a unit). */
+    private val cardFrame = MapFrame(Coordinate(51.5390, -0.0590), MapPoint(175f, 115f), metresPerUnit = 6.5f)
+
+    private fun cardCircle(x: Float, y: Float, radiusM: Int) =
+        Fence.Circle(cardFrame.toCoordinate(MapPoint(x, y)), radiusM.toDouble())
+
+    private val me = Person(MemberId(0), "You", "You", Tint.Sage, isMe = true)
+    private val ana = Person(MemberId(1), "Ana", "AN", Tint.Peach)
+    private val ben = Person(MemberId(2), "Ben", "BE", Tint.Butter)
+    private val chloe = Person(MemberId(3), "Chloé", "CH", Tint.Sky)
+    private val dev = Person(MemberId(4), "Dev", "DE", Tint.Lilac)
+    private val eli = Person(MemberId(5), "Eli", "EL", Tint.Mint)
 
     private val server = "pingers.flat7.org"
 
+    private val cc = PartyId("cc")
+    private val uf = PartyId("uf")
+    private val fiveASide = PartyId("5s")
+    private val m1 = MeetupId("m1")
+
     private val parties = listOf(
-        PartyRow("cc", "Climbing crew", "CC", PartyColour.Blue, members = 6, spots = 3, live = true),
-        PartyRow("uf", "Uni flat", "UF", PartyColour.Orange, members = 4, spots = 2, live = false),
-        PartyRow("5s", "Saturday 5-a-side", "5S", PartyColour.Ink, members = 11, spots = 1, live = false),
+        PartyRow(cc, "Climbing crew", "CC", PartyColour.Blue, members = 6, spots = 3, live = true),
+        PartyRow(uf, "Uni flat", "UF", PartyColour.Orange, members = 4, spots = 2, live = false),
+        PartyRow(fiveASide, "Saturday 5-a-side", "5S", PartyColour.Ink, members = 11, spots = 1, live = false),
+    )
+
+    private val wall = Fence.Polygon(
+        listOf(MapPoint(50f, 40f), MapPoint(92f, 36f), MapPoint(95f, 72f), MapPoint(52f, 74f)).map(cardFrame::toCoordinate),
     )
 
     private val partyDetails = mapOf(
-        "cc" to PartyState(
-            id = "cc",
+        cc to PartyState(
+            id = cc,
             name = "Climbing crew",
             members = listOf(me, ana, ben, chloe, dev, eli),
             spots = listOf(
-                SpotRow("riverside", "Riverside Park", SpotShape.Circle(300), inMeetup = true),
-                SpotRow("wall", "The Wall climbing gym", SpotShape.Area(0.4f), inMeetup = false),
-                SpotRow("anas", "Ana's place", SpotShape.Circle(60), inMeetup = false),
+                SpotRow(SpotId("riverside"), "Riverside Park", SpotShape.Circle(300), cardCircle(245f, 150f, 300), inMeetup = true),
+                SpotRow(SpotId("wall"), "The Wall climbing gym", SpotShape.Area(0.4f), wall, inMeetup = false),
+                SpotRow(SpotId("anas"), "Ana's place", SpotShape.Circle(100), cardCircle(210f, 40f, 100), inMeetup = false),
             ),
-            mapSpots = listOf(
-                MapCircle(MapPoint(245f, 150f), 46f),
-                MapCircle(MapPoint(70f, 55f), 30f),
-                MapCircle(MapPoint(210f, 40f), 14f, small = true),
-            ),
+            mapFrame = cardFrame,
             server = server,
             privacy = PrivacyLevel.Full,
+            meetup = m1,
         ),
-        "uf" to PartyState(
-            id = "uf",
+        uf to PartyState(
+            id = uf,
             name = "Uni flat",
             members = listOf(me, dev, eli, ana),
             spots = listOf(
-                SpotRow("flat", "Flat 7", SpotShape.Circle(80), inMeetup = false),
-                SpotRow("library", "Main library", SpotShape.Circle(120), inMeetup = false),
+                SpotRow(SpotId("flat"), "Flat 7", SpotShape.Circle(100), cardCircle(120f, 130f, 100), inMeetup = false),
+                SpotRow(SpotId("library"), "Main library", SpotShape.Circle(120), cardCircle(260f, 60f, 120), inMeetup = false),
             ),
-            mapSpots = listOf(MapCircle(MapPoint(120f, 130f), 26f), MapCircle(MapPoint(260f, 60f), 34f)),
+            mapFrame = cardFrame,
             server = server,
             privacy = PrivacyLevel.Full,
+            meetup = null,
         ),
-        "5s" to PartyState(
-            id = "5s",
+        fiveASide to PartyState(
+            id = fiveASide,
             name = "Saturday 5-a-side",
             members = listOf(me, ben, dev, eli, ana, chloe),
-            spots = listOf(SpotRow("marshes", "Hackney Marshes", SpotShape.Circle(400), inMeetup = false)),
-            mapSpots = listOf(MapCircle(MapPoint(200f, 150f), 52f)),
+            spots = listOf(SpotRow(SpotId("marshes"), "Hackney Marshes", SpotShape.Circle(400), cardCircle(200f, 150f, 400), inMeetup = false)),
+            mapFrame = cardFrame,
             server = server,
             privacy = PrivacyLevel.Full,
+            meetup = null,
         ),
     )
 
     private val _home = MutableStateFlow(
         HomeState(
-            sharing = SharingSummary(on = true, partyCount = 3, pausesInFocus = true, exclusionZones = 2),
-            liveMeetup = LiveMeetupCard("m1", "Climbing crew", "Riverside Park", listOf(ben, chloe, me)),
+            sharing = SharingSummary(Sharing.On, partyCount = 3, pausesInFocus = true, exclusionZones = 2),
+            liveMeetup = LiveMeetupCard(m1, "Climbing crew", "Riverside Park", listOf(ben, chloe, me)),
             parties = parties,
             alert = null,
         ),
     )
     override val home: StateFlow<HomeState> = _home.asStateFlow()
 
-    private val _newParty = MutableStateFlow(NewPartyState("Climbing crew", PartyColour.Blue, server, PrivacyLevel.Full))
+    private val _newParty = MutableStateFlow(
+        NewPartyState("Climbing crew", PartyColour.Blue, server, PrivacyLevel.Full, canCreate = true),
+    )
     override val newParty: StateFlow<NewPartyState> = _newParty.asStateFlow()
 
     private val _advanced = MutableStateFlow(
@@ -106,9 +129,9 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
             link = "https://pingers.flat7.org/join#k7Qx-Climbing-crew",
             expiresInHours = 24,
             invitations = listOf(
-                Invitation.Opened("i1", ben, "4821"),
-                Invitation.Pending("i2", sharedHoursAgo = 2, expiresInHours = 22),
-                Invitation.Joined("i3", chloe),
+                Invitation.Opened(InviteId("i1"), ben, "4821"),
+                Invitation.Pending(InviteId("i2"), sharedHoursAgo = 2, expiresInHours = 22),
+                Invitation.Joined(InviteId("i3"), chloe),
             ),
         ),
     )
@@ -129,26 +152,27 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
     )
     override val acceptInvite: StateFlow<AcceptInviteState> = _acceptInvite.asStateFlow()
 
-    private val _party = MutableStateFlow(partyDetails.getValue("cc"))
+    private val _party = MutableStateFlow(partyDetails.getValue(cc))
     override val party: StateFlow<PartyState> = _party.asStateFlow()
 
     private val _spotEditor = MutableStateFlow(
-        SpotEditorState("Climbing crew", "Riverside Park", ShapeKind.Circle, 300, 40, 1000, areaHectares = null),
+        SpotEditorState("Climbing crew", "Riverside Park", ShapeKind.Circle, 300, 100, 1000, areaHectares = null, canSave = true),
     )
     override val spotEditor: StateFlow<SpotEditorState> = _spotEditor.asStateFlow()
 
     private var editor = PolygonEditor.Example
-    private val _drawArea = MutableStateFlow(editor.state("Riverside Park"))
+    private val _drawArea = MutableStateFlow(editor.state("Riverside Park", frame))
     override val drawArea: StateFlow<DrawAreaState> = _drawArea.asStateFlow()
 
     private val _exclusionZones = MutableStateFlow(
         ExclusionZonesState(
             zones = listOf(
-                ZoneRow("home", "Home", ZoneShape.Circle(150), schedule = null, labelAt = MapPoint(50f, 52f)),
-                ZoneRow("work", "Work", ZoneShape.Area, schedule = "weekdays 08:00–18:00", labelAt = MapPoint(245f, 50f)),
+                ZoneRow(ZoneId(1), "Home", ZoneShape.Circle(150), schedule = null, labelAt = at(50f, 52f)),
+                ZoneRow(ZoneId(2), "Work", ZoneShape.Area, schedule = "weekdays 08:00–18:00", labelAt = at(245f, 50f)),
             ),
             hideTrail = true,
-            me = MapPoint(160f, 160f),
+            me = at(160f, 160f),
+            mapFrame = frame,
         ),
     )
     override val exclusionZones: StateFlow<ExclusionZonesState> = _exclusionZones.asStateFlow()
@@ -179,27 +203,30 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
     )
     override val serverView: StateFlow<ServerViewState> = _serverView.asStateFlow()
 
+    private val bandstand = at(218f, 196f)
+
     private val _meetup = MutableStateFlow(
         MeetupState(
-            id = "m1",
+            id = m1,
             partyName = "Climbing crew",
             spotName = "Riverside Park",
             hereCount = 3,
-            meetPoint = MeetPoint("Meet at the bandstand", "Ben", 85, MapPoint(218f, 196f)),
+            meetPoint = MeetPoint("Meet at the bandstand", "Ben", 85, bandstand),
             members = listOf(
-                MeetupMember(ben, PeerLocation.Shared(120, Direction.NE, MapPoint(268f, 248f))),
+                MeetupMember(ben, PeerLocation.Shared(120, Direction.NE, at(268f, 248f), updated = "Updated 40 s ago")),
                 MeetupMember(chloe, PeerLocation.Private),
             ),
-            me = MapPoint(149f, 291f),
+            me = at(149f, 291f),
             chatCount = 4,
             sharedWith = listOf("Ben"),
+            mapFrame = frame,
         ),
     )
     override val meetup: StateFlow<MeetupState> = _meetup.asStateFlow()
 
     private val firstMessage = ChatMessage(
-        "c1", ben, "Who's up for coffee after? I'm by the bandstand",
-        replies = listOf(ChatMessage("c2", chloe, "Yes! 5 min"), ChatMessage("c3", me, "On my way")),
+        MessageId("c1"), ben, "Who's up for coffee after? I'm by the bandstand",
+        replies = listOf(ChatMessage(MessageId("c2"), chloe, "Yes! 5 min"), ChatMessage(MessageId("c3"), me, "On my way")),
     )
     private var nextMessage = 10
     private val _chat = MutableStateFlow(
@@ -210,7 +237,7 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
                 ChatItem.Joined("Chloé", "14:40"),
                 ChatItem.Message(firstMessage),
                 ChatItem.MeetPointSet(ben, "bandstand"),
-                ChatItem.Message(ChatMessage("c4", me, "I can see you on the compass, 2 min")),
+                ChatItem.Message(ChatMessage(MessageId("c4"), me, "I can see you on the compass, 2 min")),
             ),
             replyingTo = firstMessage,
         ),
@@ -221,23 +248,29 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
         MeetPointState(
             mode = MeetPointMode.Pin,
             label = "Bandstand",
-            pin = MapPoint(195f, 256f),
+            pin = at(195f, 256f),
+            point = at(195f, 256f),
             distances = listOf(MeetPointDistance("You", 60), MeetPointDistance("Ben", 70), MeetPointDistance("Chloé", null)),
-            members = listOf(ben to MapPoint(285f, 267f), chloe to MapPoint(103f, 237f)),
+            members = listOf(ben to at(285f, 267f), chloe to at(103f, 237f)),
+            canShare = true,
+            mapFrame = frame,
         ),
     )
     override val meetPoint: StateFlow<MeetPointState> = _meetPoint.asStateFlow()
 
     private val compassTargets = listOf(
-        CompassTarget.Place("mp", "Bandstand"),
-        CompassTarget.Member("ben", "Ben", locked = false),
-        CompassTarget.Member("chloe", "Chloé", locked = true),
+        CompassTarget.Place("Bandstand"),
+        CompassTarget.Member(ben.id, "Ben", locked = false),
+        CompassTarget.Member(chloe.id, "Chloé", locked = true),
     )
-    private val _compass = MutableStateFlow(compassFor("mp"))
+    private val _compass = MutableStateFlow(compassFor(CompassSelection.MeetPoint))
     override val compass: StateFlow<CompassState> = _compass.asStateFlow()
 
     private val _locationRequest = MutableStateFlow(
-        LocationRequestState(chloe, "Riverside Park", "Climbing crew", ShareScope.ThisMeetup, askBack = true, alwaysAllow = false),
+        LocationRequestState(
+            RequestId("r1"), m1, chloe, "Riverside Park", "Climbing crew", ShareScope.ThisMeetup,
+            askBack = true, alwaysAllow = false,
+        ),
     )
     override val locationRequest: StateFlow<LocationRequestState> = _locationRequest.asStateFlow()
 
@@ -246,7 +279,7 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
 
     // ------------------------------------------------------------ Parties and invites
 
-    override fun openParty(partyId: String) {
+    override fun openParty(partyId: PartyId) {
         partyDetails[partyId]?.let { p ->
             _party.value = p
             _invite.update { it.copy(partyName = p.name) }
@@ -254,7 +287,7 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
         }
     }
 
-    override fun setNewPartyName(name: String) = _newParty.update { it.copy(name = name) }
+    override fun setNewPartyName(name: String) = _newParty.update { it.copy(name = name, canCreate = name.isNotBlank()) }
 
     override fun setNewPartyColour(colour: PartyColour) = _newParty.update { it.copy(colour = colour) }
 
@@ -298,7 +331,7 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
 
     override fun setPostQuantum(on: Boolean) = _advanced.update { it.copy(postQuantum = on) }
 
-    override fun verifyInvite(invitationId: String) = _invite.update { s ->
+    override fun verifyInvite(invitationId: InviteId) = _invite.update { s ->
         s.copy(
             invitations = s.invitations.map {
                 if (it is Invitation.Opened && it.id == invitationId) Invitation.Joined(it.id, it.person) else it
@@ -306,23 +339,23 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
         )
     }
 
-    override fun cancelInvite(invitationId: String) = _invite.update { s ->
+    override fun cancelInvite(invitationId: InviteId) = _invite.update { s ->
         s.copy(invitations = s.invitations.filterNot { it.id == invitationId })
     }
 
-    override fun acceptInvite() = openParty("cc")
+    override fun acceptInvite() = openParty(cc)
 
     override fun declineInvite() = Unit
 
     // ------------------------------------------------------------ Spots
 
-    override fun editSpot(spotId: String?) {
+    override fun editSpot(spotId: SpotId?) {
         val spot = _party.value.spots.firstOrNull { it.id == spotId }
         _spotEditor.update {
             when (val shape = spot?.shape) {
-                null -> it.copy(name = "", shape = ShapeKind.Circle, radiusM = 150, areaHectares = null)
-                is SpotShape.Circle -> it.copy(name = spot.name, shape = ShapeKind.Circle, radiusM = shape.radiusM, areaHectares = null)
-                is SpotShape.Area -> it.copy(name = spot.name, shape = ShapeKind.Area, areaHectares = shape.hectares)
+                null -> it.copy(name = "", shape = ShapeKind.Circle, radiusM = 150, areaHectares = null, canSave = false)
+                is SpotShape.Circle -> it.copy(name = spot.name, shape = ShapeKind.Circle, radiusM = shape.radiusM, areaHectares = null, canSave = true)
+                is SpotShape.Area -> it.copy(name = spot.name, shape = ShapeKind.Area, areaHectares = shape.hectares, canSave = true)
             }
         }
         editor = PolygonEditor.Example
@@ -330,18 +363,18 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
     }
 
     override fun setSpotName(name: String) {
-        _spotEditor.update { it.copy(name = name) }
+        _spotEditor.update { it.copy(name = name, canSave = name.isNotBlank()) }
         publishDraw()
     }
 
     override fun setSpotShape(shape: ShapeKind) = _spotEditor.update { it.copy(shape = shape) }
 
-    override fun setSpotRadius(radiusM: Int) = _spotEditor.update { it.copy(radiusM = radiusM) }
+    override fun setSpotRadius(radiusM: Int) = _spotEditor.update { it.copy(radiusM = radiusM.coerceIn(it.minRadiusM, it.maxRadiusM)) }
 
     override fun saveSpot() = Unit
 
     private fun publishDraw() {
-        _drawArea.value = editor.state(_spotEditor.value.name.ifBlank { res.getString(R.string.spot_unnamed) })
+        _drawArea.value = editor.state(_spotEditor.value.name.ifBlank { res.getString(R.string.spot_unnamed) }, frame)
     }
 
     private fun draw(change: (PolygonEditor) -> PolygonEditor) {
@@ -349,9 +382,9 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
         publishDraw()
     }
 
-    override fun drawTapMap(at: MapPoint) = draw { it.tapMap(at) }
+    override fun drawTapMap(at: Coordinate) = draw { it.tapMap(frame.toMap(at)) }
     override fun drawTapPoint(index: Int) = draw { it.tapPoint(index) }
-    override fun drawDragPoint(index: Int, to: MapPoint) = draw { it.drag(index, to) }
+    override fun drawDragPoint(index: Int, to: Coordinate) = draw { it.drag(index, frame.toMap(to)) }
     override fun drawDragEnd() = draw { it.dragEnd() }
     override fun drawInsertMidpoint(afterIndex: Int) = draw { it.insertMidpoint(afterIndex) }
     override fun drawDeleteSelected() = draw { it.deleteSelected() }
@@ -369,7 +402,7 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
 
     override fun setSharing(on: Boolean) {
         _privacy.update { it.copy(sharing = on) }
-        _home.update { it.copy(sharing = it.sharing.copy(on = on)) }
+        _home.update { it.copy(sharing = it.sharing.copy(sharing = if (on) Sharing.On else Sharing.Off)) }
     }
 
     override fun setPauseInFocus(on: Boolean) {
@@ -389,7 +422,7 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
 
     override fun dismissAlert() = _home.update { it.copy(alert = null) }
 
-    override fun askLocation(memberId: String) = _meetup.update { s ->
+    override fun askLocation(memberId: MemberId) = _meetup.update { s ->
         s.copy(
             members = s.members.map {
                 if (it.person.id == memberId && it.location is PeerLocation.Private) it.copy(location = PeerLocation.Asked) else it
@@ -397,7 +430,7 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
         )
     }
 
-    override fun replyInThread(messageId: String?) = _chat.update { s ->
+    override fun replyInThread(messageId: MessageId?) = _chat.update { s ->
         val target = s.items.filterIsInstance<ChatItem.Message>().map { it.message }.firstOrNull { it.id == messageId }
         s.copy(replyingTo = target)
     }
@@ -405,7 +438,7 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
     override fun sendChat(body: String) {
         val text = body.trim()
         if (text.isEmpty()) return
-        val msg = ChatMessage("n${nextMessage++}", me, text)
+        val msg = ChatMessage(MessageId("n${nextMessage++}"), me, text)
         _chat.update { s ->
             val parent = s.replyingTo
             if (parent == null) {
@@ -424,32 +457,45 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
         _meetup.update { it.copy(chatCount = it.chatCount + 1) }
     }
 
-    override fun setMeetPointMode(mode: MeetPointMode) = _meetPoint.update { it.copy(mode = mode) }
+    override fun setMeetPointMode(mode: MeetPointMode) = _meetPoint.update {
+        val point = when (mode) {
+            MeetPointMode.Pin -> it.pin
+            MeetPointMode.AtMe -> _meetup.value.me
+            MeetPointMode.Midpoint -> at(195f, 256f)
+        }
+        it.copy(mode = mode, point = point, canShare = point != null)
+    }
 
     override fun setMeetPointLabel(label: String) = _meetPoint.update { it.copy(label = label) }
 
-    override fun moveMeetPoint(by: MapPoint) = _meetPoint.update {
-        it.copy(pin = MapPoint(it.pin.x + by.x, it.pin.y + by.y))
+    override fun moveMeetPoint(to: Coordinate) = _meetPoint.update {
+        if (it.mode == MeetPointMode.Pin) it.copy(pin = to, point = to) else it.copy(pin = to)
     }
 
     override fun shareMeetPoint() {
         val label = _meetPoint.value.label.ifBlank { res.getString(R.string.meet_point_default) }
         _meetup.update {
-            it.copy(meetPoint = MeetPoint(res.getString(R.string.meet_at, label), "You", 60, it.meetPoint?.at ?: MapPoint(218f, 196f)))
+            it.copy(meetPoint = MeetPoint(res.getString(R.string.meet_at, label), "You", 60, it.meetPoint?.at ?: bandstand))
         }
     }
 
-    private fun compassFor(id: String): CompassState = when (id) {
-        "ben" -> CompassState(compassTargets, id, "Ben", 40f, Direction.NE, 120, 2, 6, listOf("Ben", "Chloé"))
-        else -> CompassState(compassTargets, "mp", "Bandstand", 42f, Direction.NE, 85, 1, 6, listOf("Ben", "Chloé"))
+    private fun compassFor(selection: CompassSelection): CompassState = when (selection) {
+        CompassSelection.Member(ben.id) -> CompassState(
+            compassTargets, selection, "Ben", CompassReading(40f, Direction.NE, 120, 2, updated = "Updated 40 s ago"),
+            6, listOf("Ben", "Chloé"),
+        )
+        else -> CompassState(
+            compassTargets, CompassSelection.MeetPoint, "Bandstand",
+            CompassReading(42f, Direction.NE, 85, 1, updated = "Updated just now"), 6, listOf("Ben", "Chloé"),
+        )
     }
 
-    override fun selectCompassTarget(targetId: String) {
-        val target = compassTargets.firstOrNull { it.id == targetId } ?: return
-        if (target is CompassTarget.Member && target.locked) {
-            askLocation(target.id)
+    override fun selectCompassTarget(target: CompassSelection) {
+        val chip = compassTargets.firstOrNull { it.selection == target } ?: return
+        if (chip is CompassTarget.Member && chip.locked) {
+            askLocation(chip.id)
         } else {
-            _compass.value = compassFor(targetId)
+            _compass.value = compassFor(target)
         }
     }
 
@@ -468,7 +514,7 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
     }
 
     override fun simulateCoPresence() = _home.update {
-        it.copy(alert = CoPresenceAlert("m1", "Climbing crew", listOf("Ben", "Chloé"), "Riverside Park"))
+        it.copy(alert = CoPresenceAlert(m1, "Climbing crew", listOf("Ben", "Chloé"), "Riverside Park"))
     }
 
     override fun simulateLocationRequest() = _locationRequest.update {

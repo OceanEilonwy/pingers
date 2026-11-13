@@ -42,6 +42,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -83,6 +84,7 @@ import org.pingers.app.data.ChatItem
 import org.pingers.app.data.ChatMessage
 import org.pingers.app.data.ChatState
 import org.pingers.app.data.CoPresenceAlert
+import org.pingers.app.data.CompassSelection
 import org.pingers.app.data.CompassState
 import org.pingers.app.data.CompassTarget
 import org.pingers.app.data.LocationRequestState
@@ -206,20 +208,26 @@ private fun MapAvatar(person: Person, size: Dp, modifier: Modifier = Modifier) {
 fun MeetupScreen(state: MeetupState, repo: PingersRepository, nav: Navigator) {
     val w = words()
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
+        val frame = state.mapFrame
+        val me = state.me?.let(frame::toMap)
+        val meetAt = state.meetPoint?.at?.let(frame::toMap)
         MapBox(Scenes.Meetup, overlay = {
-            state.meetPoint?.let { mp ->
+            if (me != null && meetAt != null) {
                 drawLine(
-                    Pc.Ink, Offset(state.me.x, state.me.y), Offset(mp.at.x, mp.at.y), strokeWidth = 2f,
+                    Pc.Ink, Offset(me.x, me.y), Offset(meetAt.x, meetAt.y), strokeWidth = 2f,
                     pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 5f)),
                 )
             }
         }) { unit ->
-            state.meetPoint?.let { mp -> MeetPin(Modifier.offset(unit * mp.at.x - 18.dp, unit * mp.at.y - 34.dp)) }
+            meetAt?.let { at -> MeetPin(Modifier.offset(unit * at.x - 18.dp, unit * at.y - 34.dp)) }
             state.members.forEach { m ->
                 val loc = m.location
-                if (loc is PeerLocation.Shared) MapAvatar(m.person, 40.dp, Modifier.offset(unit * loc.at.x - 20.dp, unit * loc.at.y - 20.dp))
+                if (loc is PeerLocation.Shared) {
+                    val at = frame.toMap(loc.at)
+                    MapAvatar(m.person, 40.dp, Modifier.offset(unit * at.x - 20.dp, unit * at.y - 20.dp))
+                }
             }
-            MeDot(Modifier.offset(unit * state.me.x - 21.dp, unit * state.me.y - 21.dp))
+            me?.let { at -> MeDot(Modifier.offset(unit * at.x - 21.dp, unit * at.y - 21.dp)) }
         }
         Row(
             Modifier.statusBarsPadding().padding(start = 16.dp, end = 16.dp, top = 12.dp),
@@ -245,12 +253,15 @@ fun MeetupScreen(state: MeetupState, repo: PingersRepository, nav: Navigator) {
                 ) {
                     Icon(PIcons.Flag, null, tint = Pc.OrangeText, modifier = Modifier.size(22.dp))
                     TwoLines(
-                        mp.label, stringResource(R.string.meetup_set_by, mp.setBy, mp.distanceM), Modifier.weight(1f),
+                        mp.label,
+                        mp.distanceM?.let { stringResource(R.string.meetup_set_by, mp.setBy, it) }
+                            ?: stringResource(R.string.meetup_set_by_no_distance, mp.setBy),
+                        Modifier.weight(1f),
                         body(15.sp, 600), body(13.sp, color = Pc.OrangeBrown),
                     )
                     Box(
                         Modifier.size(48.dp).clip(CircleShape).clickable(role = Role.Button) {
-                            repo.selectCompassTarget("mp")
+                            repo.selectCompassTarget(CompassSelection.MeetPoint)
                             nav.go(Route.Compass)
                         },
                         contentAlignment = Alignment.Center,
@@ -260,7 +271,7 @@ fun MeetupScreen(state: MeetupState, repo: PingersRepository, nav: Navigator) {
             Column {
                 state.members.forEach { m ->
                     val loc = m.location
-                    MemberRow(m, if (loc is PeerLocation.Shared) w.direction(loc.direction) else null, repo, nav)
+                    MemberRow(m, if (loc is PeerLocation.Shared) loc.direction?.let { w.direction(it) } else null, repo, nav)
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -280,10 +291,15 @@ private fun MemberRow(m: MeetupMember, direction: String?, repo: PingersReposito
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(m.person.name, style = body(15.sp, 600))
             when (val loc = m.location) {
-                is PeerLocation.Shared -> Text(
-                    stringResource(R.string.meetup_sharing_with_you, loc.distanceM, direction.orEmpty()),
-                    style = body(13.sp, color = Pc.Muted),
-                )
+                is PeerLocation.Shared -> {
+                    Text(
+                        loc.distanceM?.let { stringResource(R.string.meetup_sharing_with_you, it, direction.orEmpty()) }
+                            ?: stringResource(R.string.meetup_sharing_no_distance),
+                        style = body(13.sp, color = Pc.Muted),
+                    )
+                    // "Updated 40 s ago" (user decision), worded by pingers-words.
+                    loc.updated?.let { Text(it, style = body(12.sp, color = Pc.Muted)) }
+                }
                 PeerLocation.Private, PeerLocation.Asked -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Icon(PIcons.Lock, null, tint = Pc.Muted, modifier = Modifier.size(13.dp))
                     Text(
@@ -296,7 +312,7 @@ private fun MemberRow(m: MeetupMember, direction: String?, repo: PingersReposito
         when (m.location) {
             is PeerLocation.Shared -> IconAction(
                 PIcons.Compass, stringResource(R.string.cd_navigate_to, m.person.name),
-                { repo.selectCompassTarget(m.person.id); nav.go(Route.Compass) },
+                { repo.selectCompassTarget(CompassSelection.Member(m.person.id)); nav.go(Route.Compass) },
                 background = Pc.Chip, iconSize = 20.dp,
             )
             PeerLocation.Private -> IconAction(
@@ -515,19 +531,27 @@ fun MeetPointScreen(state: MeetPointState, repo: PingersRepository, nav: Navigat
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val unit = maxWidth / Scenes.MeetPoint.width
             val unitPx = with(density) { unit.toPx() }
-            val pan = MapPoint(PinAt.x - state.pin.x, PinAt.y - state.pin.y)
+            val frame = state.mapFrame
+            val centre = frame.toMap(state.point ?: state.pin)
+            val pan = MapPoint(PinAt.x - centre.x, PinAt.y - centre.y)
             val hint = stringResource(R.string.mp_drag)
+            val current by rememberUpdatedState(state)
             MapBox(
                 Scenes.MeetPoint,
                 Modifier.semantics { contentDescription = hint }.pointerInput(Unit) {
                     detectDragGestures { change, amount ->
                         change.consume()
-                        repo.moveMeetPoint(MapPoint(-amount.x / unitPx, -amount.y / unitPx))
+                        val f = current.mapFrame
+                        val pin = f.toMap(current.pin)
+                        repo.moveMeetPoint(f.toCoordinate(MapPoint(pin.x - amount.x / unitPx, pin.y - amount.y / unitPx)))
                     }
                 },
                 pan = pan,
             ) { u ->
-                state.members.forEach { (p, at) -> MapAvatar(p, 34.dp, Modifier.offset(u * at.x - 17.dp, u * at.y - 17.dp)) }
+                state.members.forEach { (p, c) ->
+                    val at = frame.toMap(c)
+                    MapAvatar(p, 34.dp, Modifier.offset(u * at.x - 17.dp, u * at.y - 17.dp))
+                }
             }
             Canvas(Modifier.fillMaxWidth().height(unit * Scenes.MeetPoint.height)) {
                 drawCircle(Pc.Orange.copy(alpha = 0.14f), 28f * unitPx, Offset(PinAt.x * unitPx, (PinAt.y + 6f) * unitPx))
@@ -541,7 +565,7 @@ fun MeetPointScreen(state: MeetPointState, repo: PingersRepository, nav: Navigat
         BottomSheet(spacing = 14) {
             Text(stringResource(R.string.mp_title), style = heading(22.sp), modifier = Modifier.semantics { heading() })
             Segmented(
-                listOf(stringResource(R.string.mp_pin), stringResource(R.string.mp_person), stringResource(R.string.mp_midpoint)),
+                listOf(stringResource(R.string.mp_pin), stringResource(R.string.mp_at_me), stringResource(R.string.mp_midpoint)),
                 state.mode.ordinal,
                 { repo.setMeetPointMode(MeetPointMode.entries[it]) },
                 fontSize = 13,
@@ -556,7 +580,10 @@ fun MeetPointScreen(state: MeetPointState, repo: PingersRepository, nav: Navigat
                 }
             }
             Spacer(Modifier.height(4.dp))
-            PillButton(stringResource(R.string.mp_share), { repo.shareMeetPoint(); nav.go(Route.Meetup) }, background = Pc.Orange)
+            PillButton(
+                stringResource(R.string.mp_share), { repo.shareMeetPoint(); nav.go(Route.Meetup) },
+                background = Pc.Orange, enabled = state.canShare,
+            )
         }
     }
 }
@@ -567,8 +594,9 @@ fun MeetPointScreen(state: MeetPointState, repo: PingersRepository, nav: Navigat
 fun CompassScreen(state: CompassState, repo: PingersRepository, nav: Navigator) {
     val w = words()
     val heading by rememberHeading()
-    val relative = ((state.bearingDeg - heading) % 360f + 360f) % 360f
-    val aligned = relative < 10f || relative > 350f
+    val reading = state.reading
+    val relative = (((reading?.bearingDeg ?: heading) - heading) % 360f + 360f) % 360f
+    val aligned = reading != null && (relative < 10f || relative > 350f)
     val view = LocalView.current
     LaunchedEffect(aligned) {
         if (aligned) {
@@ -577,7 +605,7 @@ fun CompassScreen(state: CompassState, repo: PingersRepository, nav: Navigator) 
             )
         }
     }
-    val dir = w.direction(state.direction)
+    val dir = reading?.let { w.direction(it.direction) }.orEmpty()
     val measurer = rememberTextMeasurer()
     val north = stringResource(R.string.compass_n)
     Column(
@@ -594,15 +622,16 @@ fun CompassScreen(state: CompassState, repo: PingersRepository, nav: Navigator) 
             IconAction(PIcons.Close, stringResource(R.string.cd_close_compass), { nav.back() }, tint = Color.White, background = Pc.InkRaised, iconSize = 20.dp)
             Spacer(Modifier.weight(1f))
             Text(
-                stringResource(R.string.compass_gps, state.gpsAccuracyM),
+                state.gpsAccuracyM?.let { stringResource(R.string.compass_gps, it) } ?: stringResource(R.string.compass_no_gps),
                 style = body(13.sp, color = Pc.InkSubtle),
                 modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(Pc.InkRaised).padding(horizontal = 12.dp, vertical = 8.dp),
             )
         }
         Row(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            state.targets.forEach { t -> TargetChip(t, t.id == state.selected) { repo.selectCompassTarget(t.id) } }
+            state.targets.forEach { t -> TargetChip(t, t.selection == state.selected) { repo.selectCompassTarget(t.selection) } }
         }
-        val dialLabel = stringResource(R.string.cd_compass_arrow, dir, state.bearingDeg.toInt(), state.targetLabel)
+        val dialLabel = reading?.let { stringResource(R.string.cd_compass_arrow, dir, it.bearingDeg.toInt(), state.targetLabel) }
+            ?: stringResource(R.string.compass_waiting, state.targetLabel)
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
             Canvas(Modifier.size(320.dp).semantics { contentDescription = dialLabel }) {
                 val s = size.width / 320f
@@ -618,7 +647,7 @@ fun CompassScreen(state: CompassState, repo: PingersRepository, nav: Navigator) 
                     val label = measurer.measure(north, TextStyle(fontFamily = Inter, fontSize = 14.sp, color = Pc.InkSubtle, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold))
                     drawText(label, topLeft = Offset(c.x - label.size.width / 2f, c.y - 108f * s - label.size.height / 2f))
                 }
-                rotate(relative, c) {
+                if (reading != null) rotate(relative, c) {
                     drawArc(
                         Pc.Orange.copy(alpha = 0.25f), startAngle = -90f - 11f, sweepAngle = 22f, useCenter = false,
                         topLeft = Offset(c.x - 104f * s, c.y - 104f * s), size = Size(208f * s, 208f * s), style = Stroke(14f * s),
@@ -636,8 +665,14 @@ fun CompassScreen(state: CompassState, repo: PingersRepository, nav: Navigator) 
             }
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(stringResource(R.string.metres, state.distanceM), style = heading(64.sp).copy(color = Color.White, lineHeight = 64.sp))
-            Text(stringResource(R.string.compass_walk, state.walkMinutes, dir), style = body(15.sp, color = Pc.InkSubtle))
+            if (reading != null) {
+                Text(stringResource(R.string.metres, reading.distanceM), style = heading(64.sp).copy(color = Color.White, lineHeight = 64.sp))
+                // "Updated 40 s ago" / "Updated just now" (user decision), worded by pingers-words.
+                reading.updated?.let { Text(it, style = body(13.sp, color = Pc.InkSubtle)) }
+                Text(stringResource(R.string.compass_walk, reading.walkMinutes, dir), style = body(15.sp, color = Pc.InkSubtle))
+            } else {
+                Text(stringResource(R.string.compass_waiting, state.targetLabel), style = body(15.sp, color = Pc.InkSubtle))
+            }
         }
         Text(
             stringResource(R.string.compass_taps) + "\n" + stringResource(R.string.compass_watchers, w.names(state.watchers)),

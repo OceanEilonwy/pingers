@@ -9,7 +9,7 @@ use pingers_proto::{GroupId, LeafIndex};
 
 use crate::ScreenError;
 use crate::clock::Minutes;
-use crate::common::{Direction, Name, Person};
+use crate::common::{Direction, Name, Person, person};
 use crate::meetup::{MeetPointName, meet_point_position};
 use crate::snapshot::{ClientSnapshot, MeetPlace, Meetup, PeerAccess};
 
@@ -80,7 +80,7 @@ fn meet_point_name(meetup: &Meetup) -> Result<Option<MeetPointName>, ScreenError
             label: Some(label), ..
         } => MeetPointName::Label(label.clone()),
         MeetPlace::Fixed { label: None, .. } => MeetPointName::Pin,
-        MeetPlace::AtMember(leaf) => MeetPointName::AtMember(meetup.person(*leaf)?),
+        MeetPlace::AtMember(leaf) => MeetPointName::AtMember(person(meetup, *leaf)?),
     }))
 }
 

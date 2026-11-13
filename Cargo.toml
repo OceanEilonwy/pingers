@@ -111,6 +111,11 @@ rusqlite = { version = "0.42.0", features = ["bundled-sqlcipher-vendored-openssl
 axum = { version = "0.8.9", features = ["http2"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2", "json"] }
 url = "2.5.8"
+# RS256 for the push relay's FCM service-account JWT (RFC 7523): a Google protocol requirement,
+# not a Pingers primitive. Already in the tree as rustls's provider; it zeroizes keys on free.
+aws-lc-rs = { version = "1.19.0", default-features = false, features = ["aws-lc-sys"] }
+# Base64url for that JWT and the service account's PEM key.
+base64 = "0.23.1"
 bytes = "1.12.1"
 uniffi = "0.32.2"
 
@@ -135,8 +140,6 @@ same-layer = [
   { crate = "pingers-crypto", dependency = "pingers-time", reason = "tags, seal keys and the meetup PSK are derived per Bucket" },
   { crate = "pingers-crypto", dependency = "pingers-proto", reason = "keys are derived from proto's identifiers and seal proto's records and beacons" },
   # L3: the architecture's dependency lists put these inside L3.
-  { crate = "pingers-wake", dependency = "pingers-parties", reason = "architecture: wake reads a read-only view of Spots" },
-  { crate = "pingers-wake", dependency = "pingers-sync", reason = "architecture: wake uploads leases and syncs the board through sync" },
   { crate = "pingers-client", dependency = "pingers-parties", reason = "composition root" },
   { crate = "pingers-client", dependency = "pingers-sync", reason = "composition root" },
   { crate = "pingers-client", dependency = "pingers-wake", reason = "composition root" },

@@ -187,6 +187,17 @@ fun DrawScope.spotCircle(center: MapPoint, radius: Float, dashed: Boolean, small
     drawCircle(Pc.Blue, radius, c, style = Stroke(strokeWidth, pathEffect = effect))
 }
 
+/** A drawn-area Spot: [vertices] in scene units. */
+fun DrawScope.spotArea(vertices: List<MapPoint>, alpha: Float = 0.12f) {
+    if (vertices.size < 3) return
+    val path = Path().apply {
+        vertices.forEachIndexed { i, p -> if (i == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y) }
+        close()
+    }
+    drawPath(path, Pc.Blue.copy(alpha = alpha))
+    drawPath(path, Pc.Blue, style = Stroke(2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 5f))))
+}
+
 /** A hatched exclusion zone: [outline] is the zone's shape in scene units. */
 fun DrawScope.hatched(outline: Path) {
     val b = outline.getBounds()

@@ -70,6 +70,7 @@ import org.pingers.app.data.ExclusionZonesState
 import org.pingers.app.data.MapPoint
 import org.pingers.app.data.PingersRepository
 import org.pingers.app.data.ShapeKind
+import org.pingers.app.data.ShapeProblem
 import org.pingers.app.data.SpotEditorState
 import org.pingers.app.data.ZoneShape
 import org.pingers.app.ui.components.Card
@@ -145,7 +146,7 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
                 spotCircle(SpotCentre, radius, dashed = false, strokeWidth = 2.5f, alpha = 0.14f)
                 drawCircle(Pc.Blue, 6f, Offset(SpotCentre.x, SpotCentre.y))
             } else if (drawn.closed) {
-                val path = polygon(drawn.points, close = true)
+                val path = polygon(drawn.points.map(drawn.mapFrame::toMap), close = true)
                 drawPath(path, Pc.Blue.copy(alpha = 0.16f))
                 drawPath(path, Pc.Blue, style = Stroke(2.5f, join = StrokeJoin.Round))
             }
@@ -228,7 +229,7 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
                 }
             }
             LockNote(stringResource(R.string.spot_encrypted, state.partyName))
-            PillButton(stringResource(R.string.spot_save), { repo.saveSpot(); nav.go(Route.Party) })
+            PillButton(stringResource(R.string.spot_save), { repo.saveSpot(); nav.go(Route.Party) }, enabled = state.canSave)
         }
     }
 }
@@ -238,18 +239,30 @@ private fun polygon(points: List<MapPoint>, close: Boolean): Path = Path().apply
     if (close) close()
 }
 
+@Composable
+private fun shapeProblem(problem: ShapeProblem): String = stringResource(
+    when (problem) {
+        ShapeProblem.Crossing -> R.string.draw_problem_crossing
+        ShapeProblem.NoArea -> R.string.draw_problem_no_area
+        ShapeProblem.TooLarge -> R.string.draw_problem_too_large
+    },
+)
+
 // ---------------------------------------------------------------- Draw area
 
 @Composable
 fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator) {
     val density = LocalDensity.current
     val w = words()
+    val frame = state.mapFrame
+    val points = state.points.map(frame::toMap)
+    val current by rememberUpdatedState(state)
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
         MapBox(
             Scenes.DrawArea,
             overlay = {
-                if (state.points.isNotEmpty()) {
-                    val path = polygon(state.points, state.closed)
+                if (points.isNotEmpty()) {
+                    val path = polygon(points, state.closed)
                     if (state.closed) {
                         drawPath(path, Pc.Blue.copy(alpha = 0.16f))
                         drawPath(path, Pc.Blue, style = Stroke(2.5f, join = StrokeJoin.Round))
@@ -262,10 +275,11 @@ fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator
             val unitPx = with(density) { unit.toPx() }
             Box(
                 Modifier.fillMaxSize().pointerInput(Unit) {
-                    detectTapGestures { o -> repo.drawTapMap(MapPoint(o.x / unitPx, o.y / unitPx)) }
+                    detectTapGestures { o -> repo.drawTapMap(current.mapFrame.toCoordinate(MapPoint(o.x / unitPx, o.y / unitPx))) }
                 },
             )
-            state.midpoints.forEachIndexed { i, m ->
+            state.midpoints.forEachIndexed { i, c ->
+                val m = frame.toMap(c)
                 val label = stringResource(R.string.cd_add_point_between, i + 1, (i + 1) % state.points.size + 1)
                 Box(
                     Modifier
@@ -282,7 +296,7 @@ fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator
                     ) { Text("+", style = body(14.sp, 600, Pc.Blue)) }
                 }
             }
-            state.points.forEachIndexed { i, p ->
+            points.forEachIndexed { i, p ->
                 Vertex(i, p, state, unit, unitPx, repo)
             }
         }
@@ -312,6 +326,7 @@ fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator
                     DrawHint.KeepTapping -> stringResource(R.string.draw_hint_keep)
                     DrawHint.CloseShape -> stringResource(R.string.draw_hint_close)
                     is DrawHint.Selected -> stringResource(R.string.draw_hint_selected, h.number)
+                    is DrawHint.Fix -> shapeProblem(h.problem)
                     DrawHint.Adjust -> stringResource(R.string.draw_hint_adjust)
                 },
                 style = body(14.sp, color = Pc.Body, lineHeight = 1.45f),
@@ -328,7 +343,7 @@ fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator
                 SmallButton(stringResource(R.string.draw_clear), repo::drawClear, Modifier.weight(1f))
             }
             if (state.closed) {
-                PillButton(stringResource(R.string.draw_use), { repo.useDrawnArea(); nav.go(Route.SpotEditor) })
+                PillButton(stringResource(R.string.draw_use), { repo.useDrawnArea(); nav.go(Route.SpotEditor) }, enabled = state.canUse)
             } else {
                 PillButton(stringResource(R.string.draw_close_first), {}, background = Pc.Line, content = Pc.Muted, enabled = false)
             }
@@ -354,7 +369,7 @@ private fun Vertex(i: Int, p: MapPoint, state: DrawAreaState, unit: Dp, unitPx: 
             .pointerInput(i) {
                 detectDragGestures(onDragEnd = repo::drawDragEnd, onDragCancel = repo::drawDragEnd) { change, amount ->
                     change.consume()
-                    repo.drawDragPoint(i, MapPoint(point.x + amount.x / unitPx, point.y + amount.y / unitPx))
+                    repo.drawDragPoint(i, state.mapFrame.toCoordinate(MapPoint(point.x + amount.x / unitPx, point.y + amount.y / unitPx)))
                 }
             }
             .clickable(role = Role.Button, interactionSource = null, indication = null) { repo.drawTapPoint(i) },
@@ -422,10 +437,15 @@ fun ExclusionZonesScreen(state: ExclusionZonesState, repo: PingersRepository, na
                 // Placeholder geometry for the two example zones, as drawn on the canvas.
                 hatched(Path().apply { addOval(androidx.compose.ui.geometry.Rect(Offset(80f, 60f), 42f)) })
                 hatched(Path().apply { addRoundRect(RoundRect(215f, 25f, 315f, 95f, CornerRadius(8f))) })
-                drawCircle(Color.White, 8.5f, Offset(state.me.x, state.me.y))
-                drawCircle(Pc.Blue, 7f, Offset(state.me.x, state.me.y))
+                state.me?.let(state.mapFrame::toMap)?.let { me ->
+                    drawCircle(Color.White, 8.5f, Offset(me.x, me.y))
+                    drawCircle(Pc.Blue, 7f, Offset(me.x, me.y))
+                }
             }) { unit ->
-                state.zones.forEach { z -> MapLabel(z.name, Modifier.offset(unit * z.labelAt.x, unit * z.labelAt.y)) }
+                state.zones.forEach { z ->
+                    val at = state.mapFrame.toMap(z.labelAt)
+                    MapLabel(z.name, Modifier.offset(unit * at.x, unit * at.y))
+                }
             }
         }
         Spacer(Modifier.height(16.dp))

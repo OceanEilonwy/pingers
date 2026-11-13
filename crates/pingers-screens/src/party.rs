@@ -326,7 +326,7 @@ mod tests {
     use crate::fixtures::{self, FixtureError};
 
     fn operator(name: &str) -> Result<Operator, ScreenError> {
-        Operator::new(name)
+        Ok(Operator::new(name)?)
     }
 
     fn draft() -> Result<PartyDraft, ScreenError> {
