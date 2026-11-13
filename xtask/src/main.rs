@@ -136,12 +136,15 @@ fn check_layers(root: &Path) -> Result<Outcome> {
     let exceptions = read_same_layer_exceptions(&root.join("Cargo.toml"))?;
 
     let mut violations = Vec::new();
-    let mut used = Vec::new();
+    let mut ledger = ExceptionLedger {
+        exceptions: &exceptions,
+        used: Vec::new(),
+    };
     for manifest in &crates {
-        check_direct_dependencies(manifest, &by_name, &exceptions, &mut used, &mut violations);
+        check_direct_dependencies(manifest, &by_name, &mut ledger, &mut violations);
     }
     for exception in &exceptions {
-        if !used.contains(&exception) {
+        if !ledger.used.contains(&exception) {
             violations.push(format!(
                 "same-layer exception {} -> {} is no longer needed; remove it",
                 exception.dependent, exception.dependency
@@ -171,11 +174,16 @@ fn check_layers(root: &Path) -> Result<Outcome> {
     }
 }
 
-fn check_direct_dependencies<'exceptions>(
+/// The same-layer exceptions, and which of them some dependency actually used.
+struct ExceptionLedger<'exceptions> {
+    exceptions: &'exceptions [SameLayerException],
+    used: Vec<&'exceptions SameLayerException>,
+}
+
+fn check_direct_dependencies(
     manifest: &CrateManifest,
     by_name: &BTreeMap<&str, &CrateManifest>,
-    exceptions: &'exceptions [SameLayerException],
-    used: &mut Vec<&'exceptions SameLayerException>,
+    ledger: &mut ExceptionLedger<'_>,
     violations: &mut Vec<String>,
 ) {
     for dependency in &manifest.dependencies {
@@ -198,11 +206,11 @@ fn check_direct_dependencies<'exceptions>(
             (Layer::Dev, _) => true,
             (Layer::Numbered(_), Layer::Dev) => false,
             (Layer::Numbered(own), Layer::Numbered(theirs)) if theirs == own => {
-                let exception = exceptions.iter().find(|exception| {
+                let exception = ledger.exceptions.iter().find(|exception| {
                     exception.dependent == manifest.name && exception.dependency == target.name
                 });
                 if let Some(exception) = exception {
-                    used.push(exception);
+                    ledger.used.push(exception);
                 }
                 exception.is_some()
             }

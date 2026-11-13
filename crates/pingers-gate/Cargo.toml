@@ -1,0 +1,21 @@
+[package]
+name = "pingers-gate"
+description = "The single answer to \"may this device share its presence right now?\"."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 1
+
+[dependencies]
+pingers-geo = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+pingers-time = { workspace = true }
+
+[lints]
+workspace = true

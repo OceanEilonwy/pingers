@@ -1,0 +1,31 @@
+[package]
+name = "pingers-mls"
+description = "A narrow wrapper over OpenMLS: Party groups and per-meetup groups."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 1
+
+[features]
+# The X-Wing ciphersuite (0x004D) for "quantum-resistant" Parties (design B.8), via a libcrux
+# provider the implementer adds.
+x-wing = ["pingers-crypto/x-wing"]
+
+[dependencies]
+pingers-crypto = { workspace = true }
+pingers-proto = { workspace = true }
+pingers-time = { workspace = true }
+openmls = { workspace = true }
+openmls_basic_credential = { workspace = true }
+openmls_rust_crypto = { workspace = true }
+openmls_traits = { workspace = true }
+rand_core = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+
+[lints]
+workspace = true

@@ -77,6 +77,18 @@ fn push_bind(id: &[u8; 16]) -> PushBind {
     PushBind(bind)
 }
 
+/// SHA-256 of an encoded OHTTP or push relay key config: the value members pin in Party state
+/// (design B.4.9, B.12).
+#[must_use]
+pub fn key_config_hash(encoded: &[u8]) -> pingers_proto::KeyConfigHash {
+    let digest = Sha256::digest(encoded);
+    let mut hash = [0; 32];
+    for (target, source) in hash.iter_mut().zip(digest.iter()) {
+        *target = *source;
+    }
+    pingers_proto::KeyConfigHash::from_bytes(hash)
+}
+
 /// A push relay's HPKE public key (X25519, HKDF-SHA256, AES-128-GCM) from its pinned key
 /// config (design D, `RelayConfig`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,11 +135,19 @@ secret_key!(
 /// [`CryptoError::Encoding`] if the plaintext does not fit.
 pub fn seal_push_token(
     relay_key: &PushRelayPublicKey,
-    bind: &PushBind,
-    plaintext: &PushTokenPlaintext,
+    token: &PushTokenToSeal<'_>,
     rng: &mut impl CryptoRng,
 ) -> Result<SealedPushBlob, CryptoError> {
-    not_implemented((relay_key, bind, plaintext, rng))
+    not_implemented((relay_key, token, rng))
+}
+
+/// A push token and the mailbox or subscription it is bound to.
+#[derive(Clone, Copy, Debug)]
+pub struct PushTokenToSeal<'token> {
+    /// The bind of the mailbox or subscription.
+    pub bind: PushBind,
+    /// Platform, class, token and expiry.
+    pub plaintext: &'token PushTokenPlaintext,
 }
 
 /// Opens a sealed push token on the relay. Fails if `bind` is not the one it was sealed with.

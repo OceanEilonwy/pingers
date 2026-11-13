@@ -1,0 +1,58 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! Board, leases, mailboxes, knocks (sans-IO).
+//!
+//! The co-presence protocol (architecture §3, design B.4). All inputs and outputs are values;
+//! the caller does the network, storage and clock reads.
+//!
+//! Client half:
+//! - [`ActiveSpot`]: a Spot's keys, derivable only while the device is `Inside` it
+//!   (design B.4.3, "match only where you are");
+//! - [`build_lease`]: real slots plus random dummies, shuffled, always four;
+//! - [`TrialMatcher`]: trial-match board pages against active Spots;
+//! - [`build_knock`], [`open_knock`], [`verify_knock`]: the knock and its checks;
+//! - [`decide_knock`]: the liveness decision, tie-break and Meetup admission;
+//! - [`prepare_mailbox`] and [`knock_unanswered`]: the mailbox pool and unanswered knocks;
+//! - [`plan_upload`] and [`read_board`]: the cover policy.
+//!
+//! Server half (feature `server`): lease validation, segment expiry, mailbox posting rules.
+#![forbid(unsafe_code)]
+
+mod cadence;
+mod error;
+mod knock;
+mod lease;
+mod liveness;
+mod mailbox;
+mod matching;
+#[cfg(feature = "server")]
+mod server;
+mod spot;
+mod stub;
+
+pub use cadence::{
+    DataMode, EpochChange, MIN_UPLOAD_SPACING, ReadPolicy, TARGET_UPLOAD_SPACING, UploadPlan,
+    UploadTrigger, plan_upload, read_board,
+};
+pub use error::PresenceError;
+pub use knock::{
+    KnockContext, KnockInputs, OpenedKnock, OutgoingKnock, RosterLookup, VerifiedKnock,
+    build_knock, open_knock, verify_knock,
+};
+pub use lease::{
+    BuiltLease, LEASE_BUCKETS, LeaseInputs, RealSlot, SlotCandidate, SlotContent, SlotRecord,
+    build_lease, choose_slots,
+};
+pub use liveness::{
+    Admission, FreshFix, KnockDecision, KnockSituation, LivenessEvidence, Sharing, decide_knock,
+};
+pub use mailbox::{
+    LEASE_DURATION, MailboxPurpose, MailboxRegistration, MailboxRequest, PushSealing,
+    knock_unanswered, prepare_mailbox,
+};
+pub use matching::{BoardMatch, MAX_KNOCKS_PER_ARRIVAL, OwnRecords, TrialMatcher, knock_targets};
+#[cfg(feature = "server")]
+pub use server::{
+    MAX_MAILBOX_LIFETIME, check_lease, check_mailbox_post, check_mailbox_spec, live_segments,
+    segment_expired,
+};
+pub use spot::{ActiveSpot, SpotRef, SpotStatus};

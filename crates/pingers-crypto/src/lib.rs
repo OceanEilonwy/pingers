@@ -41,16 +41,18 @@ pub use invite::{InviteSecret, open_join_request, seal_join_request};
 pub use labels::ExporterLabel;
 pub use location::{
     GrantContext, GrantKeyPair, GrantPublicKey, GrantSecretKey, LocationAad, LocationAsk,
-    LocationGrant, LocationKey, OpenedGrant, SEALED_LOCATION_LENGTH, dummy_location, open_location,
-    open_location_ask, open_location_grant, seal_location, seal_location_ask, seal_location_grant,
+    LocationGrant, LocationKey, LocationToSeal, OpenedGrant, SEALED_LOCATION_LENGTH,
+    dummy_location, open_location, open_location_ask, open_location_grant, seal_location,
+    seal_location_ask, seal_location_grant,
 };
 pub use mailbox::{
-    MailboxReadKey, PushBind, PushRelayPrivateKey, PushRelayPublicKey, mailbox_id, open_push_token,
-    push_bind_for_mailbox, push_bind_for_subscription, seal_push_token,
+    MailboxReadKey, PushBind, PushRelayPrivateKey, PushRelayPublicKey, PushTokenToSeal,
+    key_config_hash, mailbox_id, open_push_token, push_bind_for_mailbox,
+    push_bind_for_subscription, seal_push_token,
 };
 pub use presence::{
-    KnockKey, KnockSignedFields, MeetupPsk, PresenceRoot, SealKey, SpotKey, TagKey,
-    derive_knock_key, derive_meetup_psk, derive_seal_key, derive_spot_key, derive_tag_key,
-    open_board_beacon, open_knock, record_tag, seal_board_beacon, seal_knock, sign_knock,
-    tag_matches, verify_knock,
+    BeaconHeader, KnockKey, KnockPlaintext, KnockSignedFields, MeetupPsk, PresenceRoot, SealKey,
+    SpotKey, TagKey, derive_knock_key, derive_meetup_psk, derive_seal_key, derive_spot_key,
+    derive_tag_key, open_board_beacon, open_knock, record_tag, seal_board_beacon, seal_knock,
+    sign_knock, tag_matches, verify_knock,
 };

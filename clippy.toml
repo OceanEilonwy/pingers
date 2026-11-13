@@ -14,3 +14,14 @@ disallowed-methods = [
   { path = "rand::random", reason = "take &mut impl CryptoRng", allow-invalid = true },
   { path = "std::env::var", reason = "read config once in the binary" },
 ]
+
+# Protocol names that doc comments use as words, not code. ".." keeps clippy's defaults.
+doc-valid-idents = [
+  "OpenMLS", "KeyPackage", "KeyPackages", "PrivateMessage", "UnifiedPush", "WorkManager",
+  "MapLibre", "UniFFI", "SQLCipher", "XChaCha20", "ChaCha20", "..",
+]
+
+# Style guide §11: more than three parameters means a struct or a builder. Clippy counts
+# `self`, so the threshold is 4: a method may take `self` and three parameters, and a free
+# function with four parameters is caught in review.
+too-many-arguments-threshold = 4

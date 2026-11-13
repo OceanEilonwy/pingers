@@ -128,12 +128,22 @@ pub fn derive_seal_key(spot_key: &SpotKey, start: Bucket) -> Result<SealKey, Cry
 /// [`CryptoError::Internal`] if the AEAD fails.
 pub fn seal_board_beacon(
     seal_key: &SealKey,
-    start: Bucket,
-    randomness: &RecordRandomness,
-    tag: &RecordTag,
+    header: &BeaconHeader<'_>,
     beacon: &BoardBeacon,
 ) -> Result<SealedBeacon, CryptoError> {
-    not_implemented((seal_key, start, randomness, tag, beacon))
+    not_implemented((seal_key, header, beacon))
+}
+
+/// The parts of a record a beacon seal binds: its start bucket, randomness `r` (which also
+/// gives the nonce) and tag.
+#[derive(Clone, Copy, Debug)]
+pub struct BeaconHeader<'record> {
+    /// The lease's start bucket.
+    pub start: Bucket,
+    /// The record's randomness.
+    pub randomness: &'record RecordRandomness,
+    /// The record's tag.
+    pub tag: &'record RecordTag,
 }
 
 /// Opens a matched record's beacon.
@@ -171,7 +181,7 @@ pub fn derive_knock_key(
     not_implemented((seal_key, randomness))
 }
 
-/// Seals an encoded knock so that the mailbox post is exactly `class` bytes:
+/// Seals an encoded knock so that the mailbox post is exactly `knock.class` bytes:
 /// `nonce (24, random) || XChaCha20-Poly1305(K_knock, be16(len) || knock || zero padding)`.
 /// The classical suite uses 1 KiB, X-Wing Parties 4 KiB (design B.4.2).
 ///
@@ -181,11 +191,19 @@ pub fn derive_knock_key(
 /// nonce and tag; [`CryptoError::Internal`] if the AEAD fails.
 pub fn seal_knock(
     knock_key: &KnockKey,
-    encoded_knock: &[u8],
-    class: SizeClass,
+    knock: &KnockPlaintext<'_>,
     rng: &mut impl CryptoRng,
 ) -> Result<Vec<u8>, CryptoError> {
-    not_implemented((knock_key, encoded_knock, class, rng))
+    not_implemented((knock_key, knock, rng))
+}
+
+/// An encoded knock and the size class its sealed form must fill.
+#[derive(Clone, Copy, Debug)]
+pub struct KnockPlaintext<'knock> {
+    /// The canonical encoding of the knock.
+    pub encoded: &'knock [u8],
+    /// The mailbox post size: 1 KiB, or 4 KiB for X-Wing Parties.
+    pub class: SizeClass,
 }
 
 /// Opens a mailbox post as a knock and returns the encoded knock without padding.

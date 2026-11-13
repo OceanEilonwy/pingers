@@ -103,11 +103,19 @@ pub const SEALED_LOCATION_LENGTH: usize = 80;
 /// [`CryptoError::Internal`] if the AEAD fails.
 pub fn seal_location(
     key: &LocationKey,
-    aad: &LocationAad<'_>,
-    location: &LocationPlaintext,
+    frame: &LocationToSeal<'_>,
     rng: &mut impl CryptoRng,
 ) -> Result<SealedLocationFrame, CryptoError> {
-    not_implemented((key, aad, location, rng))
+    not_implemented((key, frame, rng))
+}
+
+/// A position and the associated data that binds it to its frame.
+#[derive(Clone, Copy, Debug)]
+pub struct LocationToSeal<'frame> {
+    /// Group, epoch, sender and generation.
+    pub aad: LocationAad<'frame>,
+    /// The position.
+    pub location: &'frame LocationPlaintext,
 }
 
 /// A frame indistinguishable from a real sealed location: random nonce and ciphertext of
@@ -151,8 +159,11 @@ pub struct GrantContext<'group> {
     pub sender: LeafIndex,
 }
 
-/// What a grant carries: `lk_gen || LK_self || expires_at` (design B.6.1).
+/// A grant to seal: the HPKE context and what it carries, `lk_gen || LK_self || expires_at`
+/// (design B.6.1).
 pub struct LocationGrant<'key> {
+    /// The group and granting leaf, bound through the HPKE info.
+    pub context: GrantContext<'key>,
     /// The generation being granted.
     pub generation: LocationGeneration,
     /// The key for that generation.
@@ -179,11 +190,10 @@ pub struct OpenedGrant {
 /// [`CryptoError::Internal`] if HPKE fails.
 pub fn seal_location_grant(
     recipient: &GrantPublicKey,
-    context: &GrantContext<'_>,
     grant: &LocationGrant<'_>,
     rng: &mut impl CryptoRng,
 ) -> Result<SealedGrant, CryptoError> {
-    not_implemented((recipient, context, grant, rng))
+    not_implemented((recipient, grant, rng))
 }
 
 /// Trial-opens a grant with this member's grant key. Most grants are for someone else, so
@@ -201,9 +211,12 @@ pub fn open_location_grant(
     not_implemented((own_key, context, sealed))
 }
 
-/// What an ask carries: `requester_leaf || req_id || ts` (design B.6.1).
+/// An ask: the group it is bound to (through the HPKE info), and what it carries,
+/// `requester_leaf || req_id || ts` (design B.6.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LocationAsk {
+    /// The Meetup group.
+    pub group: GroupId,
     /// Who is asking.
     pub requester: LeafIndex,
     /// The request's id, for the answer and its expiry.
@@ -221,11 +234,10 @@ pub struct LocationAsk {
 /// [`CryptoError::Internal`] if HPKE fails.
 pub fn seal_location_ask(
     target: &GrantPublicKey,
-    group: &GroupId,
     ask: &LocationAsk,
     rng: &mut impl CryptoRng,
 ) -> Result<SealedAsk, CryptoError> {
-    not_implemented((target, group, ask, rng))
+    not_implemented((target, ask, rng))
 }
 
 /// Trial-opens an ask with this member's grant key.

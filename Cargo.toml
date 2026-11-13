@@ -74,8 +74,9 @@ tls_codec = "0.5.0"
 
 # Anonymous authorisation (pingers-anon only)
 rln = { version = "3.1.0", default-features = false }
-voprf = { version = "0.6.0-pre.2", default-features = false }
-privacypass = { version = "0.2.0-pre.4", default-features = false }
+# Privacy Pass type 0x0001 (VOPRF, P-384) is built on voprf directly: privacypass
+# 0.2.0-pre.4 does not compile (its blind-rsa-signatures dependency breaks against rsa).
+voprf = { version = "0.6.0-pre.2", default-features = false, features = ["alloc"] }
 
 # Oblivious HTTP (pingers-ohttp only); AES-GCM is pinned in code, not here.
 ohttp = { version = "0.8.0", default-features = false, features = ["client", "server", "rust-hpke", "stream"] }

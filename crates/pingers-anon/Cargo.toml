@@ -1,0 +1,32 @@
+[package]
+name = "pingers-anon"
+description = "Anonymous authorisation, both sides: RLN membership proofs and Privacy Pass."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 1
+
+[features]
+default = []
+# Client: membership tree copy, witness and proof generation, Privacy Pass token requests.
+prover = ["dep:rln", "dep:voprf"]
+# Server: proof verification and nullifier classification.
+verifier = ["dep:rln"]
+# Server: Privacy Pass issuance and redemption checks.
+issuer = ["dep:voprf"]
+
+[dependencies]
+pingers-proto = { workspace = true }
+pingers-time = { workspace = true }
+rand_core = { workspace = true }
+rln = { workspace = true, optional = true }
+thiserror = { workspace = true }
+voprf = { workspace = true, optional = true }
+zeroize = { workspace = true }
+
+[lints]
+workspace = true
