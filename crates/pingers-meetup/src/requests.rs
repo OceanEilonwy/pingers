@@ -174,6 +174,18 @@ mod tests {
     }
 
     #[test]
+    fn forgetting_a_member_keeps_everyone_elses_requests() -> Result<(), MeetupError> {
+        let mut requests = Requests::default();
+        let now = UnixSeconds::new(1_000);
+        let _left = requests.receive(request(1), LeafIndex::new(2), now)?;
+        let _stays = requests.receive(request(2), LeafIndex::new(3), now)?;
+        requests.forget(LeafIndex::new(2));
+        assert!(requests.take(request(1), now).is_err());
+        assert_eq!(requests.take(request(2), now)?.from, LeafIndex::new(3));
+        Ok(())
+    }
+
+    #[test]
     fn an_outgoing_request_is_pending_until_it_expires() {
         let mut requests = Requests::default();
         requests.sent(LeafIndex::new(3), UnixSeconds::new(1_600));
