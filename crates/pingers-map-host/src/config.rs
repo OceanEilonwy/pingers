@@ -20,8 +20,11 @@
 //! retry_after_seconds = 30
 //! ```
 //!
-//! `listen`, `directory`, `max_disk` and `hosted` are required. The directory and the region
-//! list are read when the host starts ([`crate::serve`]), not when the file is parsed.
+//! `listen`, `directory`, `max_disk` and `hosted` are required. `hosted` may also be one
+//! string of prefixes separated by spaces (`hosted = "oceania europe/germany"`), for template
+//! systems whose settings have no list type; an empty list or string hosts nothing. The
+//! directory and the region list are read when the host starts ([`crate::serve`]), not when
+//! the file is parsed.
 
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
@@ -111,7 +114,7 @@ struct FileConfig {
     listen: SocketAddr,
     directory: PathBuf,
     max_disk: String,
-    hosted: Vec<String>,
+    hosted: FileHosted,
     #[serde(default)]
     max_zoom: std::collections::BTreeMap<String, u8>,
     #[serde(default = "default_logging")]
@@ -119,6 +122,23 @@ struct FileConfig {
     #[serde(default = "default_counts_interval")]
     counts_interval_s: u64,
     cache: Option<FileCache>,
+}
+
+/// `hosted`: a TOML array, or one space-separated string.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum FileHosted {
+    List(Vec<String>),
+    Spaced(String),
+}
+
+impl FileHosted {
+    fn prefixes(&self) -> Vec<&str> {
+        match self {
+            Self::List(list) => list.iter().map(String::as_str).collect(),
+            Self::Spaced(text) => text.split_whitespace().collect(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -171,8 +191,9 @@ impl MapHostConfig {
         };
         let hosted = file
             .hosted
-            .iter()
-            .map(|text| region(text))
+            .prefixes()
+            .into_iter()
+            .map(region)
             .collect::<Result<Vec<_>, _>>()?;
         let max_zoom = file
             .max_zoom
@@ -348,6 +369,42 @@ mod tests {
             Err(ConfigError::Syntax { line: 5 })
         );
         assert!(parse("listen = \"127.0.0.1:8090\"\ndirectory = \"/d\"\n").is_err());
+    }
+
+    fn hosted_ids(text: &str) -> Result<Vec<String>, ConfigError> {
+        let config = parse(&MINIMAL.replace("hosted = [\"oceania\"]", text))?;
+        Ok(config
+            .allow
+            .hosted
+            .iter()
+            .map(|id| id.as_str().to_owned())
+            .collect())
+    }
+
+    #[test]
+    fn hosted_may_be_one_space_separated_string() {
+        let both = Ok(vec!["oceania".to_owned(), "europe/germany".to_owned()]);
+        assert_eq!(hosted_ids("hosted = \"oceania europe/germany\""), both);
+        assert_eq!(hosted_ids("hosted = \"  oceania\teurope/germany \""), both);
+        assert_eq!(
+            hosted_ids("hosted = [\"oceania\", \"europe/germany\"]"),
+            both
+        );
+        assert_eq!(hosted_ids("hosted = \"\""), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn a_bad_prefix_in_a_hosted_string_is_named() {
+        assert_eq!(
+            hosted_ids("hosted = \"oceania Europe\""),
+            Err(ConfigError::BadRegionId {
+                id: "Europe".to_owned()
+            })
+        );
+        assert!(matches!(
+            hosted_ids("hosted = 3"),
+            Err(ConfigError::Syntax { .. })
+        ));
     }
 
     #[test]
