@@ -3,6 +3,8 @@
 
 use core::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use minicbor::Decoder;
 use pingers_time::UnixSeconds;
 
@@ -307,6 +309,9 @@ impl PushBind {
 pub struct KeyConfigHash([u8; 32]);
 
 impl KeyConfigHash {
+    /// Length of [`KeyConfigHash::to_pin`]: 32 bytes in unpadded base64url.
+    pub const PIN_LENGTH: usize = 43;
+
     /// Wraps hash bytes.
     #[must_use]
     pub const fn from_bytes(bytes: [u8; 32]) -> Self {
@@ -317,6 +322,38 @@ impl KeyConfigHash {
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    /// The hash as a pin: unpadded base64url (RFC 4648 §5), [`KeyConfigHash::PIN_LENGTH`]
+    /// characters. This is the one text form of a pin: what the `pins` subcommands print, one
+    /// per line, and what the app's build-time pin sets (`PINGERS_GATEWAY_KEY_PINS`,
+    /// `PINGERS_PUSH_RELAY_KEY_PINS`, comma-separated) hold.
+    #[must_use]
+    pub fn to_pin(&self) -> String {
+        URL_SAFE_NO_PAD.encode(self.0)
+    }
+
+    /// Parses a pin written by [`KeyConfigHash::to_pin`]. Padding, the standard alphabet's `+`
+    /// and `/`, and non-canonical trailing bits are refused, so each hash has exactly one pin.
+    ///
+    /// # Errors
+    ///
+    /// [`ProtoError::OutOfRange`] unless `text` is 43 base64url characters encoding 32 bytes.
+    pub fn from_pin(text: &str) -> Result<Self, ProtoError> {
+        let bad = || ProtoError::OutOfRange {
+            field: "key config pin",
+        };
+        if text.len() != Self::PIN_LENGTH {
+            return Err(bad());
+        }
+        let mut hash = [0; 32];
+        let written = URL_SAFE_NO_PAD
+            .decode_slice(text, &mut hash)
+            .map_err(|_| bad())?;
+        if written != hash.len() {
+            return Err(bad());
+        }
+        Ok(Self(hash))
     }
 }
 
@@ -517,6 +554,36 @@ mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
     use super::*;
+
+    /// `[0xff; 32]` uses the URL-safe `_` and ends with two zero padding bits (`8`).
+    const ALL_ONES_PIN: &str = "__________________________________________8";
+
+    #[test]
+    fn a_pin_is_unpadded_base64url() -> Result<(), ProtoError> {
+        let hash = KeyConfigHash::from_bytes([0xff; 32]);
+        assert_eq!(hash.to_pin(), ALL_ONES_PIN);
+        assert_eq!(KeyConfigHash::from_pin(ALL_ONES_PIN)?, hash);
+        Ok(())
+    }
+
+    #[test]
+    fn a_pin_has_exactly_one_spelling() {
+        let standard_alphabet = ALL_ONES_PIN.replace('_', "/");
+        let padded = format!("{ALL_ONES_PIN}=");
+        let short = ALL_ONES_PIN.get(1..).unwrap_or_default().to_owned();
+        let trailing_bits = ALL_ONES_PIN.replace('8', "9");
+        for text in [standard_alphabet, padded, short, trailing_bits] {
+            assert!(
+                matches!(
+                    KeyConfigHash::from_pin(&text),
+                    Err(ProtoError::OutOfRange {
+                        field: "key config pin"
+                    })
+                ),
+                "{text}"
+            );
+        }
+    }
 
     #[test]
     fn zero_time_to_live_is_rejected() {
