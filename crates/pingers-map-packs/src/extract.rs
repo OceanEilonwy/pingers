@@ -255,8 +255,7 @@ pub fn publish(region: &Region, publication: &Publication<'_>) -> Result<Manifes
     let (index_sha, index_size) = sha256_file(&files.index)?;
     let name_of = |path: &Path| {
         path.file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
     };
     let manifest = Manifest {
         format: FORMAT,

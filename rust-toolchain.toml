@@ -1,0 +1,7 @@
+# One Rust version for local builds and CI, so a newer clippy on the runner cannot fail a tree
+# that passed locally. Move it forward deliberately, in its own commit, and fix new lints there.
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
+targets = ["aarch64-linux-android", "x86_64-linux-android"]
