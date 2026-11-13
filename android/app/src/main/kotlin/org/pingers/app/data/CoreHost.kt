@@ -11,6 +11,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONException
+import org.pingers.app.BuildConfig
 import org.json.JSONObject
 import org.pingers.app.platform.AndroidPlatform
 import org.pingers.app.platform.CoreNotification
@@ -28,6 +29,7 @@ import uniffi.pingers.Coordinate
 import uniffi.pingers.Core
 import uniffi.pingers.CoreException
 import uniffi.pingers.Events
+import uniffi.pingers.InstanceConfig
 import uniffi.pingers.GeofenceEvent
 import java.io.File
 import java.security.SecureRandom
@@ -100,7 +102,7 @@ object CoreHost {
         val dbPath = File(app.noBackupFilesDir, DB_NAME)
         return try {
             ensureDatabaseKey(platform, dbPath)
-            Core.open(dbPath.absolutePath, FfiPlatform(platform), Fanout).also {
+            Core.open(dbPath.absolutePath, instance(), FfiPlatform(platform), Fanout).also {
                 core = it
                 openError = null
                 failedAt = 0L
@@ -112,6 +114,13 @@ object CoreHost {
             fail("secure store unavailable: ${e.error}")
         }
     }
+
+    /** The instance from the build configuration (see app/build.gradle.kts). */
+    private fun instance() = InstanceConfig(
+        server = BuildConfig.SERVER_HOST.trimEnd('/'),
+        ohttpRelay = BuildConfig.OHTTP_RELAY.trimEnd('/'),
+        pushRelay = BuildConfig.PUSH_RELAY.trimEnd('/'),
+    )
 
     private fun fail(why: String): Core? {
         Log.w(TAG, why)

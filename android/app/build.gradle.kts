@@ -107,6 +107,20 @@ android {
             .orElse(providers.environmentVariable("PINGERS_MAP_HOST"))
             .getOrElse("https://maps.pingers.invalid")
         buildConfigField("String", "MAP_HOST", "\"$mapHost\"")
+        // The Pingers instance the core talks to (Core.open): the server and OHTTP gateway, the
+        // OHTTP relay and the push relay. Deployment configuration as above: CI sets
+        // PINGERS_SERVER_HOST, PINGERS_OHTTP_RELAY and PINGERS_PUSH_RELAY (or pass
+        // -PpingersServerHost=..., -PpingersOhttpRelay=..., -PpingersPushRelay=...). Unset, they
+        // are hosts that never resolve.
+        fun deployment(property: String, variable: String, unset: String) {
+            val value = providers.gradleProperty(property)
+                .orElse(providers.environmentVariable(variable))
+                .getOrElse(unset)
+            buildConfigField("String", variable.removePrefix("PINGERS_"), "\"$value\"")
+        }
+        deployment("pingersServerHost", "PINGERS_SERVER_HOST", "https://pingers.invalid")
+        deployment("pingersOhttpRelay", "PINGERS_OHTTP_RELAY", "https://ohttp.pingers.invalid")
+        deployment("pingersPushRelay", "PINGERS_PUSH_RELAY", "https://push.pingers.invalid")
     }
 
     testOptions {
