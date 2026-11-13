@@ -546,7 +546,7 @@ enum CommitJob {
 
 /// When the live channel is re-opened after it dropped.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Reconnect {
+pub(crate) struct Reconnect {
     /// When the next attempt is due; `None` while connected.
     at: Option<UnixSeconds>,
     /// Attempts since a frame last arrived.
@@ -556,7 +556,7 @@ struct Reconnect {
 impl Reconnect {
     /// The wait before attempt `failures`: none for the first, then 1 s doubling to
     /// [`MAX_RECONNECT_DELAY`].
-    fn delay(failures: u32) -> Duration {
+    pub(crate) fn delay(failures: u32) -> Duration {
         let Some(exponent) = failures.checked_sub(2) else {
             return Duration::ZERO;
         };
