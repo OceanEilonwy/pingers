@@ -107,6 +107,11 @@ android {
 
     // gms: Play services location and FCM alongside UnifiedPush. foss: no Google code at all,
     // UnifiedPush only. Debug builds default to gms when google-services.json is configured.
+    // Each flavour has its own application id, so both install side by side: org.pingers.app
+    // and org.pingers.app.foss, each with .debug in debug builds. Firebase knows only
+    // org.pingers.app; the gms debug build (org.pingers.app.debug) uses that client's
+    // configuration, which FCM accepts as long as the Firebase API key is not restricted to
+    // the release package (see README, "FCM").
     flavorDimensions += "services"
     productFlavors {
         create("gms") {
@@ -115,6 +120,7 @@ android {
         }
         create("foss") {
             dimension = "services"
+            applicationIdSuffix = ".foss"
             isDefault = !googleServicesJson.isPresent
         }
     }

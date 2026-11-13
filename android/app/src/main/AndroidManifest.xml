@@ -20,6 +20,7 @@
 
     <!-- Nothing is backed up: Parties, Spots, zones and keys stay on this phone. -->
     <application
+        android:name=".PingersApp"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"

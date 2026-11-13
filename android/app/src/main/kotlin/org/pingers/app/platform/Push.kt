@@ -41,6 +41,10 @@ object Push {
     /** The UnifiedPush distributors installed (ntfy, a Nextcloud app, ...), by package name. */
     fun distributors(context: Context): List<String> = UnifiedPush.getDistributors(context)
 
+    /** The distributor Pingers is registered with, if it is still installed. */
+    fun distributor(context: Context): String? =
+        UnifiedPush.getSavedDistributor(context)?.takeIf { it in distributors(context) }
+
     /**
      * Registers with a UnifiedPush distributor: [distributor] if given, else the one saved,
      * the system default, or the only one installed. Returns false when there is none to pick

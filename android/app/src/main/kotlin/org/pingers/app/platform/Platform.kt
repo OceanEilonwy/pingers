@@ -1,10 +1,10 @@
 package org.pingers.app.platform
 
 /*
- * The Kotlin side of the Rust core's `Platform` callback interface (crates/pingers-client,
- * `trait Platform`), written out by hand until pingers-ffi exports it through UniFFI. Each
- * type here mirrors one in pingers-client; when the generated bindings land, AndroidPlatform
- * implements the generated interface instead and these types become thin adapters.
+ * The platform layer's side of the Rust core's `Platform` callback interface (pingers-ffi
+ * `trait Platform`). These types mirror the generated ones in `uniffi.pingers`, so this package
+ * builds and tests without the Rust library; data/FfiPlatform.kt implements the generated
+ * interface by converting to these and calling AndroidPlatform.
  */
 
 /** Why a platform call failed (pingers-client `PlatformError`). */
