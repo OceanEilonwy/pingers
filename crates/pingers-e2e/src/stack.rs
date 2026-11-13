@@ -16,9 +16,9 @@ use pingers_crypto::{PushRelayPrivateKey, PushRelayPublicKey};
 use pingers_delivery::{Delivery, SqliteDeliveryStore};
 use pingers_mailbox::{ListedRelays, RelayCredential, RelayTarget};
 use pingers_ohttp::{GatewayKey, KeyConfig};
-use pingers_proto::{RelayId, RelayUrl};
+use pingers_proto::{RelayId, RelayUrl, ServerId};
 use pingers_server::{
-    AddressList, DeliveryLive, MailboxStore, OhttpKeys, Outside, RelayAllowList, RngSeed,
+    AddressList, Database, DeliveryLive, OhttpKeys, Outside, RelayAllowList, Required, RngSeed,
     ServerConfig,
 };
 use pingers_testkit::{random_array, seeded_rng, test_clock};
@@ -37,12 +37,12 @@ pub const DEVICE_ADDRESS: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 /// Where the relay's connections to the server come from (through the [`Tap`]): the only
 /// address the server's gateway accepts.
 pub const RELAY_EGRESS: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
-/// The push relay the server lists. Its URL does not resolve, so wakes go nowhere (the
-/// harness push relay is plain HTTP and the server calls `https://` only).
+/// The push relay the server lists. Its URL does not resolve, so wakes go nowhere.
 const PUSH_RELAY_ID: RelayId = RelayId::new(1);
 const PUSH_RELAY_URL: &str = "https://push-relay.invalid";
 
-/// The delivery service standing in for the server's unwired group routes.
+/// The delivery service the devices' group logs go to (pingers-server's group routes are
+/// wired, but the devices do not use them yet).
 pub type GroupDelivery = Delivery<SqliteDeliveryStore, ()>;
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -58,6 +58,7 @@ pub struct Stack {
     directory: PathBuf,
     tap: Arc<Tap>,
     delivery: GroupDelivery,
+    credentials: Arc<crate::TokenPool>,
     stop: watch::Sender<()>,
     tasks: Vec<JoinHandle<()>>,
 }
@@ -88,6 +89,7 @@ impl Stack {
 
         let server_listener = TcpListener::bind(SocketAddr::new(DEVICE_ADDRESS, 0)).await?;
         let server = server_listener.local_addr()?;
+        let server_id = ServerId::new(format!("https://{server}"))?;
         let tap_listener = TcpListener::bind(SocketAddr::new(DEVICE_ADDRESS, 0)).await?;
         let tap_address = tap_listener.local_addr()?;
         let relay_listener = TcpListener::bind(SocketAddr::new(DEVICE_ADDRESS, 0)).await?;
@@ -102,15 +104,16 @@ impl Stack {
         )]);
         let config = ServerConfig {
             metrics: AddressList::new(vec![DEVICE_ADDRESS]),
-            mailbox_store: MailboxStore::File(directory.join("mailboxes.sqlite")),
+            mailbox_store: Database::File(directory.join("mailboxes.sqlite")),
             push_relays,
             push_timeout: Duration::from_secs(1),
             expire_interval: Duration::from_secs(60),
-            ..ServerConfig::new(
-                server,
-                OhttpKeys::new(vec![gateway_key])?,
-                RelayAllowList::new(vec![RELAY_EGRESS])?,
-            )
+            ..ServerConfig::new(Required {
+                listen: server,
+                server_id: server_id.clone(),
+                ohttp_keys: OhttpKeys::new(vec![gateway_key])?,
+                relays: RelayAllowList::new(vec![RELAY_EGRESS])?,
+            })
         };
         let outside = Outside {
             clock: clock.clone(),
@@ -151,6 +154,7 @@ impl Stack {
                 relay_done,
             )),
         ];
+        let credentials = Arc::new(crate::TokenPool::new(server, server_id, clock.clone()));
         Ok(Self {
             clock,
             server,
@@ -161,6 +165,7 @@ impl Stack {
             directory,
             tap,
             delivery,
+            credentials,
             stop,
             tasks,
         })
@@ -227,6 +232,12 @@ impl Stack {
         &self.delivery
     }
 
+    /// The Privacy Pass tokens the devices spend on anonymous requests.
+    #[must_use]
+    pub fn credentials(&self) -> Arc<crate::TokenPool> {
+        Arc::clone(&self.credentials)
+    }
+
     /// The server's mailbox database file.
     #[must_use]
     pub fn mailbox_database(&self) -> PathBuf {
@@ -285,24 +296,17 @@ impl Stack {
         content_type: Option<&str>,
         body: Vec<u8>,
     ) -> Result<(u16, Vec<u8>), E2eError> {
-        let stream = tokio::net::TcpStream::connect(self.server).await?;
-        let (mut sender, connection) =
-            hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(stream))
-                .await?;
-        let connection = tokio::spawn(connection);
-        let mut request = hyper::Request::builder()
-            .method(method)
-            .uri(format!("http://{}{path}", self.server));
-        if let Some(content_type) = content_type {
-            request = request.header(hyper::header::CONTENT_TYPE, content_type);
-        }
-        let request = request.body(OnceBody(Some(Bytes::from(body))))?;
-        let response = sender.send_request(request).await?;
-        let status = response.status().as_u16();
-        let body = collect(response.into_body()).await?;
-        drop(sender);
-        connection.abort();
-        Ok((status, body))
+        http2(
+            self.server,
+            Http2Request {
+                method,
+                path,
+                content_type,
+                authorization: None,
+                body,
+            },
+        )
+        .await
     }
 
     /// The server's metrics text (`GET /metrics`, which the server answers for
@@ -340,6 +344,50 @@ impl Drop for Stack {
         // Best effort: a leftover temporary directory fails nothing.
         let _ = std::fs::remove_dir_all(&self.directory);
     }
+}
+
+/// A direct request to the server.
+pub(crate) struct Http2Request<'a> {
+    pub(crate) method: &'a str,
+    pub(crate) path: &'a str,
+    pub(crate) content_type: Option<&'a str>,
+    pub(crate) authorization: Option<&'a str>,
+    pub(crate) body: Vec<u8>,
+}
+
+/// Sends `request` over a fresh HTTP/2 connection to `server`; returns the status and body.
+pub(crate) async fn http2(
+    server: SocketAddr,
+    request: Http2Request<'_>,
+) -> Result<(u16, Vec<u8>), E2eError> {
+    let Http2Request {
+        method,
+        path,
+        content_type,
+        authorization,
+        body,
+    } = request;
+    let stream = tokio::net::TcpStream::connect(server).await?;
+    let (mut sender, connection) =
+        hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(stream)).await?;
+    let connection = tokio::spawn(connection);
+    let mut builder = hyper::Request::builder()
+        .method(method)
+        .uri(format!("http://{server}{path}"));
+    if let Some(content_type) = content_type {
+        builder = builder.header(hyper::header::CONTENT_TYPE, content_type);
+    }
+    if let Some(authorization) = authorization {
+        builder = builder.header(hyper::header::AUTHORIZATION, authorization);
+    }
+    let response = sender
+        .send_request(builder.body(OnceBody(Some(Bytes::from(body))))?)
+        .await?;
+    let status = response.status().as_u16();
+    let body = collect(response.into_body()).await?;
+    drop(sender);
+    connection.abort();
+    Ok((status, body))
 }
 
 /// A body sent in one frame.

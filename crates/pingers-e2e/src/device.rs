@@ -209,17 +209,28 @@ impl Device {
         recorder: Arc<Recorder>,
     ) -> Result<Self, E2eError> {
         let transport = Arc::new(stack.transport(seed.wrapping_add(0x5eed))?);
-        Ok(Self::with_transport(name, seed, transport, recorder))
+        Ok(Self::with_transport(
+            name,
+            seed,
+            transport,
+            recorder,
+            stack.credentials(),
+        ))
     }
 
     /// A device sharing `transport` (each request still has its own HPKE context): for load
     /// runs with many devices.
     #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a device's name and seed, and the three shared parts of its channel"
+    )]
     pub fn with_transport(
         name: &str,
         seed: u64,
         transport: Arc<pingers_transport::OhttpTransport>,
         recorder: Arc<Recorder>,
+        credentials: Arc<crate::TokenPool>,
     ) -> Self {
         let mut rng = seeded_rng(seed);
         let key = AccountSigningKey::generate(&mut rng);
@@ -237,6 +248,7 @@ impl Device {
                 device: name.to_owned(),
                 transport,
                 recorder,
+                credentials,
             },
             push_token,
             party: None,
@@ -910,6 +922,10 @@ impl Device {
             .await
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the two creation paths of design G.4, side by side"
+    )]
     async fn create_meetup_with(
         &mut self,
         stack: &Stack,
@@ -954,23 +970,37 @@ impl Device {
             let mut own_sequences = Vec::new();
             match log {
                 CreationLog::Nothing => {
+                    // Design G.4 as drawn: the first commit travels in the Welcome, so the log
+                    // starts at the epoch it leads to.
                     group.merge_pending_commit()?;
-                    stack.delivery().create_group(CreateGroup {
-                        group_id,
-                        auth_key: group.log_auth_key_pair()?.public_key(),
-                        subscriptions,
-                        state: None,
-                    })?;
+                    stack.delivery().create_group(
+                        CreateGroup {
+                            group_id,
+                            auth_key: group.log_auth_key_pair()?.public_key(),
+                            subscriptions,
+                            state: None,
+                        },
+                        pingers_delivery::GroupStart {
+                            lifetime: pingers_delivery::GroupLifetime::Meetup,
+                            epoch: group.epoch(),
+                        },
+                    )?;
                 }
                 CreationLog::PostCreationCommit => {
                     // The delivery log starts at epoch 0, where the group was before its first
                     // commit; posting that commit brings the log to the members' epoch.
-                    stack.delivery().create_group(CreateGroup {
-                        group_id,
-                        auth_key: group.log_auth_key_pair()?.public_key(),
-                        subscriptions,
-                        state: None,
-                    })?;
+                    stack.delivery().create_group(
+                        CreateGroup {
+                            group_id,
+                            auth_key: group.log_auth_key_pair()?.public_key(),
+                            subscriptions,
+                            state: None,
+                        },
+                        pingers_delivery::GroupStart {
+                            lifetime: pingers_delivery::GroupLifetime::Meetup,
+                            epoch: group.epoch(),
+                        },
+                    )?;
                     let request = CommitRequest {
                         epoch: group.epoch(),
                         commit: created.commit.commit.clone(),
