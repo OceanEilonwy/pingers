@@ -5,12 +5,9 @@
 //! through [`Core::snapshot`] and the screens on [`Snapshot`]. The constructor and the actions
 //! are Kotlin `suspend` functions on the tokio runtime.
 //!
-//! WAITING(L3 crates): pingers-parties, pingers-sync, pingers-wake and pingers-meetup-session
-//! reach the client through its ports, built from the opened database by [`Core::open`]'s
-//! `build` closure. Until they merge the closure has nothing to build and `open` answers
-//! [`CoreError::Unavailable`]. pingers-testkit's `FakeCrates` would fill the gap, but
-//! `cargo xtask layers` forbids a production crate depending on a dev crate, so they are used
-//! only in this module's tests (through [`Core::open_with`]).
+//! [`Core::open`] opens the client on the real L3 crates (`Client::open`); pingers-sync's
+//! parts answer [`CoreError::Unavailable`] until it merges. This module's tests use
+//! pingers-testkit's `FakeCrates` through [`Core::open_with`].
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -36,11 +33,11 @@ impl From<ClientError> for CoreError {
             ClientError::Platform(_)
             | ClientError::NoDatabaseKey
             | ClientError::MalformedDatabaseKey
-            | ClientError::Store(_) => Self::Storage { reason },
-            ClientError::Parties
-            | ClientError::Sync
-            | ClientError::Wake
-            | ClientError::MeetupSession => Self::Network { reason },
+            | ClientError::Store(_)
+            | ClientError::Records(_) => Self::Storage { reason },
+            ClientError::Parties(_) | ClientError::Wake(_) | ClientError::MeetupSession(_) => {
+                Self::Network { reason }
+            }
             _ => Self::Unavailable { reason },
         }
     }
@@ -195,14 +192,15 @@ pub struct Core {
 }
 
 impl Core {
-    /// Opens the client with the L3 crates `build` makes from the database.
+    /// Opens the client with the L3 crates `build` makes from the database (tests).
+    #[cfg(test)]
     async fn open_with(
         db_path: String,
         platform: Arc<dyn Platform>,
         events: Arc<dyn Events>,
         build: impl FnOnce(pingers_store::Database) -> Result<ports::Crates, ClientError>,
     ) -> Result<Arc<Self>, CoreError> {
-        let client = Client::open(
+        let client = Client::open_with(
             ClientConfig {
                 database: PathBuf::from(db_path),
             },
@@ -235,19 +233,15 @@ impl Core {
         platform: Arc<dyn Platform>,
         events: Arc<dyn Events>,
     ) -> Result<Arc<Self>, CoreError> {
-        let opened = Self::open_with(db_path, platform, events, |_database| {
-            Err(ClientError::Internal)
-        })
-        .await;
-        opened.map_err(|error| {
-            if let CoreError::Unavailable { .. } = error {
-                CoreError::Unavailable {
-                    reason: "the L3 crates behind pingers-client have not merged yet".to_owned(),
-                }
-            } else {
-                error
-            }
-        })
+        let client = Client::open(
+            ClientConfig {
+                database: PathBuf::from(db_path),
+            },
+            Arc::new(PlatformAdapter(platform)),
+            Arc::new(EventsAdapter(events)),
+        )
+        .await?;
+        Ok(Arc::new(Self { client }))
     }
 
     /// The latest published state, for the screens.

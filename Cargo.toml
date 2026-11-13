@@ -49,6 +49,8 @@ subtle = "2.6.1"
 # Randomness: functions take `&mut impl rand_core::CryptoRng`; tests seed ChaCha.
 rand_core = "0.10.1"
 rand_chacha = "0.10.0"
+# The OS entropy source, read only by composition roots (pingers-client) to seed what they pass down.
+getrandom = { version = "0.4.3", features = ["sys_rng"] }
 
 # Encoding
 minicbor = { version = "2.3.1", features = ["alloc", "derive"] }

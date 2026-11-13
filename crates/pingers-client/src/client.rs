@@ -19,7 +19,7 @@ use crate::ports::{
     SettingChange, SpotDraft, WakeInput, WakeOutcome,
 };
 use crate::snapshot::{ClientSnapshot, InviteLink, InviteUrl, Name, WakePushes};
-use crate::{ClientError, Events, Platform, SecureStoreKey};
+use crate::{ClientError, Events, Outside, Platform, SecureStoreKey};
 
 /// Where the client keeps its data.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,14 +38,33 @@ pub struct Client {
 
 impl Client {
     /// Opens the store with the database key from the platform's secure store, builds the
-    /// crates over it with `build`, and publishes the first snapshot.
+    /// real crates over it ([`Crates::real`] with [`Outside::system`]), and publishes the
+    /// first snapshot.
+    ///
+    /// # Errors
+    ///
+    /// As [`Client::open_with`].
+    pub async fn open(
+        config: ClientConfig,
+        platform: Arc<dyn Platform>,
+        events: Arc<dyn Events>,
+    ) -> Result<Self, ClientError> {
+        let crates_platform = Arc::clone(&platform);
+        Self::open_with(config, platform, events, move |database| {
+            Crates::real(database, crates_platform, Outside::system())
+        })
+        .await
+    }
+
+    /// Opens the store as [`Client::open`] does, but builds the crates over it with `build`
+    /// (tests pass testkit's `FakeCrates`, or [`Crates::real`] with a manual clock).
     ///
     /// # Errors
     ///
     /// [`ClientError::Platform`], [`ClientError::NoDatabaseKey`] or
     /// [`ClientError::MalformedDatabaseKey`] for the key; [`ClientError::Store`] if the
     /// database does not open; whatever `build` or a crate's snapshot section returns.
-    pub async fn open(
+    pub async fn open_with(
         config: ClientConfig,
         platform: Arc<dyn Platform>,
         events: Arc<dyn Events>,
@@ -212,7 +231,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// [`ClientError::Sync`].
+    /// [`ClientError::Unavailable`] until pingers-sync merges.
     pub async fn set_wake_pushes(&self, setting: WakePushes) -> Result<(), ClientError> {
         let tokens = self.platform.push_tokens();
         self.published(self.crates.sync.set_wake_pushes(setting, tokens).await)
@@ -223,7 +242,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// [`ClientError::Sync`].
+    /// [`ClientError::Unavailable`] until pingers-sync merges.
     pub async fn push_tokens_changed(&self) -> Result<(), ClientError> {
         let tokens = self.platform.push_tokens();
         self.published(self.crates.sync.push_tokens_changed(tokens).await)

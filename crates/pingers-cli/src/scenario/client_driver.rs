@@ -77,7 +77,7 @@ where
                 database: self.directory.join(format!("{}.db", device.name)),
             };
             let build = &mut self.build;
-            let client = Client::open(
+            let client = Client::open_with(
                 config,
                 std::sync::Arc::new(device.platform.clone()),
                 std::sync::Arc::new(device.events.clone()),

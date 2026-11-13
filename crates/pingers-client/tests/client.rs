@@ -19,7 +19,7 @@ use pingers_client::snapshot::{
 };
 use pingers_client::{
     Client, ClientConfig, ClientError, Fallback, FixQuality, LocationMode, Notice, OsRegion,
-    PlatformError, PushTokens,
+    PlatformError, PushTokens, Unavailable,
 };
 use pingers_gate::{FocusState, GateDecision, PauseState, SuppressReason};
 use pingers_geo::{Circle, Coordinate, Fence, Fix, GeoError, Meters};
@@ -110,7 +110,7 @@ async fn open(
     fakes: &FakeCrates,
 ) -> Result<Client, ClientError> {
     let crates = fakes.crates();
-    Client::open(
+    Client::open_with(
         dir.config(),
         Arc::new(platform.clone()),
         Arc::new(RecordingEvents::new()),
@@ -125,7 +125,7 @@ async fn rig() -> Result<Rig, TestError> {
     let events = RecordingEvents::new();
     let fakes = FakeCrates::new()?;
     let crates = fakes.crates();
-    let client = Client::open(
+    let client = Client::open_with(
         dir.config(),
         Arc::new(platform.clone()),
         Arc::new(events.clone()),
@@ -257,20 +257,20 @@ async fn open_uses_the_stored_key_for_the_database() -> Result<(), TestError> {
 async fn open_fails_when_building_the_crates_fails() -> Result<(), TestError> {
     let dir = TestDir::new()?;
     let platform = platform_with_key(&KEY)?;
-    let result = Client::open(
+    let result = Client::open_with(
         dir.config(),
         Arc::new(platform),
         Arc::new(RecordingEvents::new()),
-        |_database| Err(ClientError::Wake),
+        |_database| Err(ClientError::Internal),
     )
     .await;
-    assert!(matches!(result, Err(ClientError::Wake)));
+    assert!(matches!(result, Err(ClientError::Internal)));
     let fakes = FakeCrates::new()?;
     fakes.set_failing(Some(CrateName::Sync));
     let platform = platform_with_key(&KEY)?;
     assert!(matches!(
         open(&dir, &platform, &fakes).await,
-        Err(ClientError::Sync)
+        Err(ClientError::Unavailable(Unavailable::Sync))
     ));
     Ok(())
 }
@@ -576,7 +576,7 @@ async fn a_failing_crate_fails_the_call_and_keeps_the_snapshot() -> Result<(), T
     let reads = rig.fakes.section_reads();
     assert!(matches!(
         rig.client.leave_party(PARTY).await,
-        Err(ClientError::Parties)
+        Err(ClientError::Parties(_))
     ));
     assert_eq!(rig.fakes.section_reads(), reads);
     rig.fakes.set_failing(Some(CrateName::Wake));
@@ -584,12 +584,12 @@ async fn a_failing_crate_fails_the_call_and_keeps_the_snapshot() -> Result<(), T
         next_wake: Some(Duration::from_mins(1)),
         ..WakeOutcome::default()
     });
-    assert!(matches!(rig.client.on_wake().await, Err(ClientError::Wake)));
+    assert!(matches!(rig.client.on_wake().await, Err(ClientError::Wake(_))));
     assert_eq!(rig.platform.pending_wake(), None);
     rig.fakes.set_failing(Some(CrateName::Meetups));
     assert!(matches!(
         rig.client.leave_meetup(MEETUP).await,
-        Err(ClientError::MeetupSession)
+        Err(ClientError::MeetupSession(_))
     ));
     assert!(Arc::ptr_eq(&before, &rig.client.snapshot()));
     Ok(())

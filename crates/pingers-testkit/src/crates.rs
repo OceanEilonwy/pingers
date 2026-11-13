@@ -238,12 +238,18 @@ impl FakeCrates {
     }
 }
 
-const fn error(crate_name: CrateName) -> ClientError {
+/// A failure of `crate_name`, carrying an error of that crate's own type (pingers-sync has
+/// none yet, so its failure is the client's `Unavailable::Sync`).
+fn error(crate_name: CrateName) -> ClientError {
     match crate_name {
-        CrateName::Parties => ClientError::Parties,
-        CrateName::Sync => ClientError::Sync,
-        CrateName::Wake => ClientError::Wake,
-        CrateName::Meetups => ClientError::MeetupSession,
+        CrateName::Parties => ClientError::Parties(pingers_parties::PartiesError::Internal),
+        CrateName::Sync => ClientError::Unavailable(pingers_client::Unavailable::Sync),
+        CrateName::Wake => ClientError::Wake(pingers_wake::WakeError::Presence(
+            pingers_presence::PresenceError::NotInside,
+        )),
+        CrateName::Meetups => {
+            ClientError::MeetupSession(pingers_meetup_session::SessionError::Internal)
+        }
     }
 }
 
@@ -260,7 +266,7 @@ impl PartiesPort for FakeCrates {
     async fn create_invite(&self, party: PartyId) -> Result<InviteLink, ClientError> {
         let link = InviteLink {
             url: InviteUrl::new("https://pingers.test/join#secret")
-                .map_err(|_invalid| ClientError::Parties)?,
+                .map_err(|_invalid| error(CrateName::Parties))?,
             expires_at: Self::INVITE_EXPIRES,
         };
         self.answer(CrateName::Parties, CrateCall::CreateInvite(party), link)

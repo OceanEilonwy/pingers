@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! What the client needs from each L3 crate, one trait per crate.
 //!
-//! pingers-parties, pingers-sync, pingers-wake and pingers-meetup-session are being written in
-//! parallel, so their APIs are not fixed yet. These traits are the client's side of each
-//! contract: the composition root calls only these, each [`Client`](crate::Client) method
-//! calls exactly one of them, and the real crates plug in through [`Crates`]. When a crate
-//! lands its trait is implemented for it here (or replaced by its type), and nothing above
-//! changes. Every method is async so an implementation can move SQLCipher work off the
-//! runtime (style guide §10).
+//! These traits are the client's side of each L3 crate's contract: the composition root calls
+//! only these, each [`Client`](crate::Client) method calls exactly one of them, and the crates
+//! plug in through [`Crates`]: [`Crates::real`] over pingers-parties, pingers-wake and
+//! pingers-meetup-session (pingers-sync's parts answer `Unavailable` until it merges), or
+//! testkit's `FakeCrates` in tests. Every method is async so an implementation can move
+//! SQLCipher work off the runtime (style guide §10).
 
 use std::sync::Arc;
 use std::time::Duration;

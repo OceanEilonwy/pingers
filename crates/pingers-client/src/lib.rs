@@ -12,8 +12,11 @@
 //! - [`Platform`] and [`Events`]: the two traits the shell implements (design E.1, adapted to
 //!   the split crates, Android only), and the [`Notice`] vocabulary.
 //! - [`Client`]: the async API. [`Client::open`] reads the database key from the platform's
-//!   secure store, opens the store and builds the [`Crates`] over it.
-//! - [`ports`]: what the client calls on each L3 crate.
+//!   secure store, opens the store and builds the real [`Crates`] over it
+//!   ([`Crates::real`]); [`Client::open_with`] takes another builder (tests use testkit's
+//!   `FakeCrates`).
+//! - [`ports`]: what the client calls on each L3 crate; the adapters over the real crates
+//!   are in the private `real` module.
 //! - [`snapshot`]: the [`ClientSnapshot`](snapshot::ClientSnapshot) every call republishes.
 //!
 //! Commands report changes through the snapshot ([`Client::subscribe`]); [`Events`] carries
@@ -23,11 +26,13 @@
 mod client;
 mod error;
 pub mod ports;
+mod real;
 pub mod snapshot;
 
 pub use client::{Client, ClientConfig};
-pub use error::ClientError;
+pub use error::{ClientError, Unavailable};
 pub use ports::Crates;
+pub use real::Outside;
 
 use std::time::Duration;
 

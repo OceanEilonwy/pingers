@@ -12,22 +12,31 @@ layer = 3
 
 [dependencies]
 async-trait = { workspace = true }
+getrandom = { workspace = true }
+hex = { workspace = true }
+pingers-crypto = { workspace = true }
 pingers-gate = { workspace = true }
 pingers-geo = { workspace = true }
 pingers-meetup = { workspace = true }
 pingers-meetup-session = { workspace = true }
+pingers-mls = { workspace = true }
+pingers-ohttp = { workspace = true }
 pingers-parties = { workspace = true }
+pingers-presence = { workspace = true }
 pingers-proto = { workspace = true }
 pingers-store = { workspace = true }
 pingers-sync = { workspace = true }
 pingers-time = { workspace = true }
 pingers-transport = { workspace = true }
 pingers-wake = { workspace = true }
+rand_core = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+pingers-time = { workspace = true, features = ["test-util"] }
+rand_chacha = { workspace = true }
 pingers-testkit = { workspace = true, features = ["client"] }
 tokio = { workspace = true }
 

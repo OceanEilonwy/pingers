@@ -1,0 +1,408 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! The adapters against a real store: the client records round-trip, region ids round-trip,
+//! and a wake confirmed inside a Spot ends at pingers-sync's stub with `PortFailed`.
+#![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+use core::time::Duration;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use pingers_crypto::{AccountSigningKey, account_id};
+use pingers_gate::{FocusState, LocationSharing, MinuteOfDay, PauseState};
+use pingers_geo::{
+    Circle, Coordinate, Fence, Fix, GeoError, Meters, Polygon, PresenceSnapshot, PresenceState,
+};
+use pingers_meetup::LocationVisibility;
+use pingers_presence::SpotRef;
+use pingers_proto::{
+    Epoch, KeyConfigHash, Lease, MailboxId, PartyId, RecordRandomness, ServerId, SpotId,
+};
+use pingers_store::{Database, DatabaseKey, Identity, Session};
+use pingers_time::{Bucket, Clock as _, ManualClock, UnixSeconds};
+use pingers_wake::ports::RegionId;
+use pingers_wake::{
+    DecidedKnock, KnockStatus, KnownEpoch, LeaseSlot, LiveLease, PeerActivity, PortError,
+    RETRY_AFTER, RealRecord, SentKnock, SpotSnapshot, WakeEnding, WakeSnapshot, WakeStep,
+    WakeTrigger,
+};
+use rand_chacha::ChaCha20Rng;
+use rand_core::SeedableRng as _;
+use zeroize::Zeroizing;
+
+use super::meetups::Meetups;
+use super::parties::Parties;
+use super::sync::Outbox;
+use super::wake::Wake;
+use super::wake_ports::{region_id, region_text};
+use super::{Backend, Outside, wake_codec};
+use crate::ports::{PartiesPort as _, PartyDraft, SettingChange, SpotDraft, WakePort as _};
+use crate::snapshot::{
+    DailyWindow, Days, ExclusionZone, HideTrail, Name, PartyColour, PauseInFocus, PostQuantum,
+    QuietHoursPreference, Toggle, ZoneId, ZoneParties, ZoneSchedule, ZoneTimes,
+};
+use crate::{
+    ClientError, FixQuality, LocationMode, OsRegion, Platform, PlatformError, PushTokens,
+    SecureStoreKey,
+};
+
+type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+struct Store {
+    path: PathBuf,
+    backend: Arc<Backend>,
+    clock: ManualClock,
+}
+
+impl Drop for Store {
+    fn drop(&mut self) {
+        drop(std::fs::remove_dir_all(&self.path));
+    }
+}
+
+/// A store with an account, under a manual clock and seeded randomness.
+fn store() -> Result<Store, Box<dyn std::error::Error>> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "pingers-client-adapters-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    drop(std::fs::remove_dir_all(&path));
+    std::fs::create_dir_all(&path)?;
+    let database = Database::open(
+        &path.join("pingers.db"),
+        DatabaseKey::from_bytes(Zeroizing::new([5; 32])),
+    )?;
+    let signing_key = AccountSigningKey::generate(&mut ChaCha20Rng::seed_from_u64(7));
+    database.session()?.identity().save(&Identity {
+        account: account_id(&signing_key.public_key()),
+        signing_key,
+        server: ServerId::new("https://pingers.test".to_owned())?,
+        server_pin: KeyConfigHash::from_bytes([1; 32]),
+    })?;
+    let clock = ManualClock::new(UnixSeconds::new(1_800_000_000));
+    let seeds = Arc::new(AtomicU64::new(0));
+    let backend = Arc::new(Backend {
+        database: Arc::new(database),
+        outside: Outside {
+            clock: Arc::new(clock.clone()),
+            timer: Arc::new(clock.clone()),
+            rng: Arc::new(move || {
+                Box::new(ChaCha20Rng::seed_from_u64(
+                    seeds.fetch_add(1, Ordering::Relaxed),
+                ))
+            }),
+        },
+    });
+    Ok(Store {
+        path,
+        backend,
+        clock,
+    })
+}
+
+async fn session<T: Send + 'static>(
+    store: &Store,
+    job: impl FnOnce(&Session) -> Result<T, ClientError> + Send + 'static,
+) -> Result<T, ClientError> {
+    store
+        .backend
+        .store(move |session, _clock, _rng| job(session))
+        .await
+}
+
+fn wake(store: &Store) -> Wake {
+    Wake::new(
+        Arc::clone(&store.backend),
+        Arc::new(Quiet),
+        Arc::new(Meetups::new(Arc::clone(&store.backend))),
+    )
+}
+
+/// A platform with Focus on that ignores every request.
+struct Quiet;
+
+impl Platform for Quiet {
+    fn secure_store_get(
+        &self,
+        _key: &SecureStoreKey,
+    ) -> Result<Option<Zeroizing<Vec<u8>>>, PlatformError> {
+        Ok(None)
+    }
+    fn secure_store_put(&self, _key: &SecureStoreKey, _value: &[u8]) -> Result<(), PlatformError> {
+        Ok(())
+    }
+    fn set_os_geofences(&self, _regions: &[OsRegion]) {}
+    fn request_fix(&self, _quality: FixQuality, _timeout: Duration) {}
+    fn set_location_mode(&self, _mode: LocationMode) {}
+    fn focus_state(&self) -> FocusState {
+        FocusState::On
+    }
+    fn schedule_wake(&self, _after: Duration) {}
+    fn push_tokens(&self) -> Option<PushTokens> {
+        None
+    }
+}
+
+fn spot_ref(seed: u8) -> SpotRef {
+    SpotRef {
+        party: PartyId::from_bytes([seed; 16]),
+        spot: SpotId::from_bytes([seed.wrapping_add(1); 16]),
+    }
+}
+
+fn presence(spot: u8, state: PresenceState, since: u64) -> SpotSnapshot {
+    SpotSnapshot {
+        spot: spot_ref(spot),
+        presence: PresenceSnapshot {
+            state,
+            since: UnixSeconds::new(since),
+            last_fix_at: Some(UnixSeconds::new(since.saturating_add(1))).filter(|_| since == 10),
+        },
+    }
+}
+
+#[tokio::test]
+async fn a_full_wake_snapshot_round_trips_through_the_store() -> TestResult {
+    let store = store()?;
+    let mut slots = [LeaseSlot {
+        randomness: RecordRandomness::from_bytes([2; 16]),
+        real: None,
+    }; Lease::SLOTS];
+    if let Some(slot) = slots.last_mut() {
+        *slot = LeaseSlot {
+            randomness: RecordRandomness::from_bytes([3; 16]),
+            real: Some(RealRecord {
+                spot: spot_ref(1),
+                epoch: Epoch::new(4),
+                knock_mailbox: MailboxId::from_bytes([9; 16]),
+            }),
+        };
+    }
+    let knock = |seed: u8, status| SentKnock {
+        spot: spot_ref(seed),
+        epoch: Epoch::new(u64::from(seed)),
+        knock_mailbox: MailboxId::from_bytes([seed; 16]),
+        matched: RecordRandomness::from_bytes([seed.wrapping_add(1); 16]),
+        reply_mailbox: MailboxId::from_bytes([seed.wrapping_add(2); 16]),
+        sent_at: UnixSeconds::new(u64::from(seed)),
+        status,
+    };
+    let snapshot = WakeSnapshot {
+        spots: vec![
+            presence(1, PresenceState::Inside, 10),
+            presence(5, PresenceState::Suppressed, 12),
+            presence(6, PresenceState::Candidate, 13),
+            presence(7, PresenceState::Outside, 14),
+        ],
+        last_in_zone: Some(UnixSeconds::new(20)),
+        leases: vec![LiveLease {
+            start: Bucket::from_index(1_000)?,
+            slots,
+        }],
+        sent_knocks: vec![
+            knock(4, KnockStatus::Waiting),
+            knock(8, KnockStatus::Answered),
+        ],
+        decided_knocks: vec![DecidedKnock {
+            reply_mailbox: MailboxId::from_bytes([11; 16]),
+            at: UnixSeconds::new(40),
+        }],
+        last_upload: Some(UnixSeconds::new(50)),
+        epochs: vec![KnownEpoch {
+            party: PartyId::from_bytes([12; 16]),
+            epoch: Epoch::new(8),
+        }],
+        peer_activity: vec![PeerActivity {
+            spot: spot_ref(3),
+            at: UnixSeconds::new(60),
+        }],
+    };
+    let saved = snapshot.clone();
+    let loaded = session(&store, move |session| {
+        let empty = wake_codec::load(session)?;
+        wake_codec::save(session, &saved)?;
+        Ok((empty, wake_codec::load(session)?))
+    })
+    .await?;
+    assert_eq!(loaded, (WakeSnapshot::default(), snapshot));
+    Ok(())
+}
+
+#[test]
+fn region_ids_round_trip_and_junk_is_refused() -> TestResult {
+    for region in [RegionId::Horizon, RegionId::Spot(spot_ref(4))] {
+        assert_eq!(region_id(&region_text(region))?, region);
+    }
+    let short = format!("spot:{}", "00".repeat(31));
+    for junk in ["", "horizons", "spot:", "spot:zz", "place:00", short.as_str()] {
+        assert!(region_id(junk).is_err(), "{junk:?}");
+    }
+    Ok(())
+}
+
+fn zones(window: DailyWindow) -> Result<Vec<ExclusionZone>, Box<dyn std::error::Error>> {
+    let circle = |latitude, name| -> Result<ExclusionZone, Box<dyn std::error::Error>> {
+        Ok(ExclusionZone {
+            id: ZoneId::new(1),
+            name: Name::new(name)?,
+            fence: Fence::Circle(Circle::new(
+                Coordinate::new(latitude, 2.0)?,
+                Meters::new(80.0)?,
+            )?),
+            schedule: ZoneSchedule::ALWAYS,
+        })
+    };
+    let windowed = |days, latitude, name| -> Result<ExclusionZone, Box<dyn std::error::Error>> {
+        Ok(ExclusionZone {
+            schedule: ZoneSchedule {
+                times: ZoneTimes::Window { days, window },
+                parties: ZoneParties::All,
+            },
+            ..circle(latitude, name)?
+        })
+    };
+    Ok(vec![
+        circle(1.0, "Home")?,
+        ExclusionZone {
+            id: ZoneId::new(2),
+            name: Name::new("Office")?,
+            fence: Fence::Polygon(Polygon::new(vec![
+                Coordinate::new(0.0, 0.0)?,
+                Coordinate::new(0.0, 0.001)?,
+                Coordinate::new(0.001, 0.001)?,
+            ])?),
+            schedule: ZoneSchedule {
+                times: ZoneTimes::Window {
+                    days: Days::Weekdays,
+                    window,
+                },
+                parties: ZoneParties::Only(vec![PartyId::from_bytes([3; 16])]),
+            },
+        },
+        windowed(Days::Weekends, 3.0, "Gym")?,
+        windowed(Days::EveryDay, 4.0, "Club")?,
+    ])
+}
+
+#[tokio::test]
+async fn settings_and_zones_round_trip_through_the_store() -> TestResult {
+    let store = store()?;
+    let wake = wake(&store);
+    let first = wake.section().await?;
+    assert_eq!(first.settings.location_sharing, LocationSharing::On);
+    assert_eq!(first.settings.pause_in_focus, PauseInFocus::On);
+    assert_eq!(first.settings.hide_trail, HideTrail::On);
+    assert_eq!(first.settings.quiet_hours.state, Toggle::Off);
+    assert_eq!(first.settings.focus, FocusState::On);
+    assert!(first.zones.is_empty());
+    assert_eq!(
+        first.gate,
+        pingers_gate::GateDecision::Suppress(pingers_gate::SuppressReason::Focus),
+        "Focus pauses sharing by default"
+    );
+
+    let quiet = QuietHoursPreference {
+        state: Toggle::On,
+        window: DailyWindow::new(MinuteOfDay::new(60)?, MinuteOfDay::new(120)?)?,
+    };
+    let zones = zones(quiet.window)?;
+    for change in [
+        SettingChange::LocationSharing(LocationSharing::Off),
+        SettingChange::Pause(PauseState::Paused),
+        SettingChange::PauseInFocus(PauseInFocus::Off),
+        SettingChange::QuietHours(quiet),
+        SettingChange::HideTrail(HideTrail::Off),
+        SettingChange::Visibility(LocationVisibility::Nobody),
+        SettingChange::Zones(zones.clone()),
+    ] {
+        wake.change_setting(change).await?;
+    }
+    let after = wake.section().await?;
+    assert_eq!(after.settings.location_sharing, LocationSharing::Off);
+    assert_eq!(after.settings.pause_in_focus, PauseInFocus::Off);
+    assert_eq!(after.settings.quiet_hours, quiet);
+    assert_eq!(after.settings.hide_trail, HideTrail::Off);
+    assert_eq!(after.settings.visibility, LocationVisibility::Nobody);
+    assert_eq!(after.zones, zones);
+
+    wake.change_setting(SettingChange::Visibility(LocationVisibility::Everyone))
+        .await?;
+    wake.change_setting(SettingChange::LocationSharing(LocationSharing::On))
+        .await?;
+    wake.change_setting(SettingChange::Pause(PauseState::NotPaused))
+        .await?;
+    let shared = wake.section().await?;
+    assert_eq!(shared.settings.visibility, LocationVisibility::Everyone);
+    assert_eq!(
+        shared.gate,
+        pingers_gate::GateDecision::Share,
+        "Focus is ignored and 00:00 UTC is outside quiet hours"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_wake_confirmed_inside_a_spot_ends_at_the_sync_stub() -> TestResult {
+    let store = store()?;
+    let parties = Parties::new(Arc::clone(&store.backend), Arc::new(Outbox::default()));
+    let party = parties
+        .create_party(PartyDraft {
+            name: Name::new("Crew")?,
+            my_name: Name::new("Sam")?,
+            colour: PartyColour::Plum,
+            post_quantum: PostQuantum::Off,
+        })
+        .await?;
+    let centre = Coordinate::new(48.8584, 2.2945)?;
+    parties
+        .save_spot(
+            party,
+            SpotDraft {
+                id: None,
+                name: Name::new("Tower")?,
+                fence: Fence::Circle(Circle::new(centre, Meters::new(150.0)?)?),
+            },
+        )
+        .await?;
+    let wake = wake(&store);
+    wake.change_setting(SettingChange::PauseInFocus(PauseInFocus::Off))
+        .await?;
+    let fix = |at| -> Result<Fix, GeoError> {
+        Ok(Fix {
+            coordinate: centre,
+            accuracy: Meters::new(10.0)?,
+            taken_at: at,
+        })
+    };
+
+    let (first, first_outcome) = wake
+        .pipeline(WakeTrigger::Fix(fix(store.clock.now())?))
+        .await?;
+    assert!(first.transitions.len() == 1, "the Spot became a candidate");
+    assert_ne!(first_outcome.location_mode, Some(LocationMode::Dwell));
+
+    store.clock.advance(Duration::from_secs(31));
+    let (second, outcome) = wake
+        .pipeline(WakeTrigger::Fix(fix(store.clock.now())?))
+        .await?;
+    assert_eq!(second.decision, pingers_gate::GateDecision::Share);
+    assert_eq!(
+        second.ending,
+        WakeEnding::PortFailed {
+            step: WakeStep::GroupLogs,
+            error: PortError::Unavailable,
+        }
+    );
+    assert_eq!(outcome.location_mode, Some(LocationMode::Dwell));
+    assert_eq!(outcome.next_wake, Some(RETRY_AFTER));
+    assert!(outcome.events.is_empty());
+
+    let stored = session(&store, wake_codec::load).await?;
+    assert_eq!(
+        stored.spots.first().map(|spot| spot.presence.state),
+        Some(PresenceState::Inside)
+    );
+    Ok(())
+}
