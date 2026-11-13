@@ -30,9 +30,11 @@ pub struct StoredSubscription {
 pub struct NewGroup {
     /// Its id.
     pub id: GroupId,
-    /// Epoch 0's log-auth key.
+    /// The starting epoch's log-auth key.
     pub auth_key: GroupAuthKey,
-    /// The first snapshot, for epoch 0.
+    /// The epoch the log starts at (the members' epoch at upload).
+    pub epoch: Epoch,
+    /// The first snapshot, for the starting epoch.
     pub state: Option<SealedSnapshot>,
     /// The first subscriptions.
     pub subscriptions: Vec<StoredSubscription>,
@@ -102,7 +104,7 @@ pub enum CommitWrite {
 ///
 /// Sequence numbers start at 1 and increase by one per stored entry within a group.
 pub trait DeliveryStore: Send + Sync {
-    /// Creates a group at epoch 0 with an empty log.
+    /// Creates a group at `group.epoch` with an empty log.
     ///
     /// # Errors
     ///

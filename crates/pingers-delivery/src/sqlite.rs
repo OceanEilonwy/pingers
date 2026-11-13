@@ -79,10 +79,22 @@ impl SqliteDeliveryStore {
     }
 
     fn with_connection(connection: Connection) -> Result<Self, DeliveryError> {
+        // Deleted groups' pages are overwritten, not left free in the file (design G.7: a
+        // Meetup's rows are dropped when it ends).
+        connection.pragma_update(None, "secure_delete", "ON")?;
         connection.execute_batch(SCHEMA)?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
+    }
+
+    /// Copies the write-ahead log into the database and empties it, so deleted rows (already
+    /// overwritten there by `secure_delete`) do not survive in the log file either. A no-op
+    /// for an in-memory database.
+    fn truncate_wal(&self) -> Result<(), DeliveryError> {
+        let connection = self.lock()?;
+        connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        Ok(())
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, DeliveryError> {
@@ -239,10 +251,11 @@ impl DeliveryStore for SqliteDeliveryStore {
         self.transact(|transaction| {
             let inserted = transaction.execute(
                 "INSERT OR IGNORE INTO grp (group_id, auth_pk, head_epoch, lifetime, idle_expires_at)
-                 VALUES (?1, ?2, 0, ?3, ?4)",
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
                     group.id.as_bytes().as_slice(),
                     group.auth_key.as_bytes().as_slice(),
+                    group.epoch.get(),
                     group.lifetime.to_stored(),
                     group.idle_expires_at.get()
                 ],
@@ -251,7 +264,7 @@ impl DeliveryStore for SqliteDeliveryStore {
                 return Err(DeliveryError::GroupExists);
             }
             if let Some(state) = &group.state {
-                put_state(transaction, &group.id, Epoch::new(0), state)?;
+                put_state(transaction, &group.id, group.epoch, state)?;
             }
             for stored in &group.subscriptions {
                 put_subscription_row(transaction, &group.id, stored)?;
@@ -453,7 +466,8 @@ impl DeliveryStore for SqliteDeliveryStore {
                 return Err(DeliveryError::UnknownGroup);
             }
             delete_children(transaction, id)
-        })
+        })?;
+        self.truncate_wal()
     }
 
     fn expire(&self, now: UnixSeconds) -> Result<Vec<GroupId>, DeliveryError> {
@@ -470,7 +484,16 @@ impl DeliveryStore for SqliteDeliveryStore {
                 delete_children(transaction, id)?;
             }
             transaction.execute("DELETE FROM grp_sub WHERE expires_at <= ?1", [now.get()])?;
-            expired.into_iter().map(group_id_from_column).collect()
+            expired
+                .into_iter()
+                .map(group_id_from_column)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .and_then(|expired| {
+            if !expired.is_empty() {
+                self.truncate_wal()?;
+            }
+            Ok(expired)
         })
     }
 }

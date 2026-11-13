@@ -15,7 +15,7 @@ use rand_core::CryptoRng;
 
 use crate::live::{ChannelId, LiveRegistry};
 use crate::store::{CommitWrite, DeliveryStore, NewCommit, NewEntry, NewGroup, StoredSubscription};
-use crate::{DeliveryError, GroupLifetime};
+use crate::{DeliveryError, GroupLifetime, GroupStart};
 
 /// The longest a subscription may live: Party subscriptions are renewed every 30 days
 /// (design B.4.9).
@@ -150,8 +150,8 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         })
     }
 
-    /// `POST /v1/groups`: a new group at epoch 0, of lifetime class `lifetime`. Wakes nobody:
-    /// the creator delivers Welcomes through mailboxes.
+    /// `POST /v1/groups`: a new group at `start.epoch`, of lifetime class `start.lifetime`.
+    /// Wakes nobody: the creator delivers Welcomes through mailboxes.
     ///
     /// # Errors
     ///
@@ -159,8 +159,9 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
     pub fn create_group(
         &self,
         request: CreateGroup,
-        lifetime: GroupLifetime,
+        start: GroupStart,
     ) -> Result<(), DeliveryError> {
+        let GroupStart { lifetime, epoch } = start;
         let now = self.clock.now();
         let subscriptions = request
             .subscriptions
@@ -170,6 +171,7 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         self.store.create_group(NewGroup {
             id: request.group_id,
             auth_key: request.auth_key,
+            epoch,
             state: request.state,
             subscriptions,
             lifetime,

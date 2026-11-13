@@ -33,7 +33,7 @@ mod sqlite;
 mod store;
 
 pub use error::DeliveryError;
-pub use lifetime::{GroupLifetime, MEETUP_IDLE_LIFETIME, PARTY_IDLE_LIFETIME};
+pub use lifetime::{GroupLifetime, GroupStart, MEETUP_IDLE_LIFETIME, PARTY_IDLE_LIFETIME};
 pub use live::ChannelId;
 pub use memory::MemoryDeliveryStore;
 pub use service::{

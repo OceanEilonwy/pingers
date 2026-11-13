@@ -85,7 +85,7 @@ impl DeliveryStore for MemoryDeliveryStore {
         if groups.contains_key(&group.id) {
             return Err(DeliveryError::GroupExists);
         }
-        let epoch = Epoch::new(0);
+        let epoch = group.epoch;
         groups.insert(
             group.id,
             Group {

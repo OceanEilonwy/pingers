@@ -15,6 +15,20 @@ pub const MEETUP_IDLE_LIFETIME: Duration = Duration::from_hours(2);
 /// nobody has opened for half a year expires.
 pub const PARTY_IDLE_LIFETIME: Duration = Duration::from_hours(180 * 24);
 
+/// How a new group starts: its lifetime class, and the MLS epoch its members are already in.
+///
+/// A Meetup group is at epoch 1 by the time it is uploaded: its creator's first commit added
+/// the knocker and injected the PSK, and that commit travels in the Welcome, not the log
+/// (design G.4). Its log therefore starts at epoch 1, and the next commit is the epoch-1 one.
+/// A Party group created before any commit starts at epoch 0.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GroupStart {
+    /// The lifetime class.
+    pub lifetime: GroupLifetime,
+    /// The epoch the members are in, and the log's head epoch; `auth_key` is this epoch's.
+    pub epoch: pingers_proto::Epoch,
+}
+
 /// The lifetime class of a group, fixed at creation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
