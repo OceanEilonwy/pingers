@@ -84,9 +84,11 @@ async fn anonymous_routes_never_see_a_device_address() -> TestResult {
         &format!("{oblivious_ok} OHTTP requests counted, {requests} sent"),
     )?;
     // The only direct requests are the relay fetching the public key config, once per device
-    // transport (from the relay's address, through the tap).
+    // transport (from the relay's address, through the tap), and the identified token
+    // fetches (account, bearer, issuer key, batch), which name an account anyway.
+    let token_fetches = world.stack.credentials().direct_requests();
     check(
-        metric(&metrics, "direct", "ok") == Some(3),
+        metric(&metrics, "direct", "ok") == Some(token_fetches.saturating_add(3)),
         &format!("direct requests other than the key config: {metrics}"),
     )?;
     for outcome in ["client_error", "not_implemented", "server_error"] {
@@ -478,7 +480,6 @@ async fn nothing_of_the_meetup_is_left_after_g7() -> TestResult {
 /// pingers-delivery's `SqliteDeliveryStore` sets no pragmas, so a deleted group's id, log
 /// entries and sealed subscriptions stay in free pages of the file until overwritten.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "finding: SqliteDeliveryStore does not set secure_delete; deleted groups linger on disk"]
 async fn deleted_meetup_bytes_do_not_linger_on_disk() -> TestResult {
     let (world, group) = played(860).await?;
     let raw = database_bytes(&world.stack.delivery_database())?;

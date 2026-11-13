@@ -24,10 +24,17 @@ cargo install cargo-ndk
 sdkmanager "ndk;27.0.12077973"
 
 export JAVA_HOME=/opt/android-studio/jbr   # any JDK 21
-./gradlew assembleDebug assembleRelease lint
+./gradlew assembleDebug lint
 ./gradlew installDebug
-./gradlew assembleRelease -PpingersSplits   # one APK per ABI, plus a universal one
+./gradlew assembleRelease -PpingersSplits   # signed (below); one APK per ABI, plus a universal one
 ```
+
+**Release builds** are signed with the upload key from `PINGERS_KEYSTORE_PATH`,
+`PINGERS_KEYSTORE_PASSWORD` and `PINGERS_KEY_ALIAS`, and fail without them (never a debug
+signature); `cargo xtask release-android` builds both flavours and checks their signatures. The
+deployment hosts (`PINGERS_SERVER_HOST`, `PINGERS_OHTTP_RELAY`, `PINGERS_PUSH_RELAY`,
+`PINGERS_MAP_HOST`) come from the environment too. [docs/release.md](docs/release.md) lists
+every CI secret and variable and where its local value lives.
 
 Gradle drives cargo, so the Rust library and the Kotlin bindings can't drift from
 the crates:

@@ -6,8 +6,9 @@
 //!
 //! - group routes are answered by pingers-delivery in process, but only when the server
 //!   answered `501`, so the tests run against the real server once it serves them;
-//! - Privacy Pass issuance (identified, direct) is answered by pingers-anon's issuer, since
-//!   the harness server speaks plain HTTP and `DirectTransport` requires `https://`.
+//! - Privacy Pass issuance (identified, direct) goes to the real server with the harness's
+//!   `send_direct`, since the harness server speaks plain HTTP and `DirectTransport` requires
+//!   `https://`; the account behind it is registered when the world starts.
 //!
 //! Every anonymous request still crosses the real relay and gateway first.
 
@@ -17,21 +18,22 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use pingers_anon::{IssuerKey, TokenCount, issue_tokens};
+use pingers_anon::TokenCount;
+use pingers_crypto::{AccountSigningKey, sign_auth_challenge, sign_registration};
 use pingers_delivery::{Delivery, MemoryDeliveryStore};
 use pingers_ohttp::{BinaryRequest, BinaryResponse, Header, StatusCode};
 use pingers_proto::{
-    AnonymousCredential, AppMessage, CommitRequest, CreateGroup, GroupId, MembershipLeaves,
-    MessageAccepted, PrivacyPassIssueRequest, PrivacyPassIssueResponse, SecretText, SequenceNumber,
-    ServerId, Subscription, SubscriptionId, WireDecode, WireEncode,
+    AnonymousCredential, AppMessage, AuthRequest, AuthResponse, CommitRequest, CreateGroup,
+    GroupId, MessageAccepted, PrivacyPassKeys, RegisterRequest, RegisterResponse, SecretText,
+    SequenceNumber, ServerId, Subscription, SubscriptionId, WireDecode, WireEncode,
 };
 use pingers_store::{Database, DatabaseKey, Session, TokenKeyId};
 use pingers_sync::{
     CommitAttempts, CredentialPolicy, ProcessRole, ProverStatus, QueueCapacity, SyncEngine,
     SyncError, SyncParts, SyncSettings, TokenIssuer, TokenStock, WakeBudget,
 };
-use pingers_testkit::{HarnessConfig, InProcessHarness, TestRng, seeded_rng};
-use pingers_time::ManualClock;
+use pingers_testkit::{HarnessConfig, InProcessHarness, TestRng, seeded_rng, send_direct};
+use pingers_time::{Clock as _, ManualClock};
 use pingers_transport::{
     DuplexStream, KeyPin, OhttpConfig, OhttpTransport, PrivacyClass, Relay, Router, Routes,
     TlsRoots, Transport, TransportError, TransportKind,
@@ -173,7 +175,12 @@ impl GroupStandIn {
         let answer = match (request.method.as_str(), segments.as_slice()) {
             ("POST", ["groups"]) => {
                 let create = CreateGroup::decode(&request.body).ok()?;
-                match self.delivery.create_group(create) {
+                // The stand-in keeps the server's old behaviour: a Meetup at epoch 0.
+                let start = pingers_delivery::GroupStart {
+                    lifetime: pingers_delivery::GroupLifetime::Meetup,
+                    epoch: pingers_proto::Epoch::new(0),
+                };
+                match self.delivery.create_group(create, start) {
                     Ok(()) => response(201, Vec::new()),
                     Err(_) => response(409, Vec::new()),
                 }
@@ -264,7 +271,6 @@ pub(crate) struct Link {
     stalled: AtomicBool,
     refuse_commits: AtomicBool,
     rivals: Mutex<VecDeque<BinaryRequest>>,
-    leaves: Mutex<VecDeque<MembershipLeaves>>,
     seen: Mutex<Vec<Seen>>,
 }
 
@@ -290,12 +296,6 @@ impl Link {
         lock(&self.rivals).push_back(rival);
     }
 
-    /// Answers the next `GET /v1/rln/leaves` (one page per call) while the server answers
-    /// `501`.
-    pub(crate) fn script_leaves(&self, page: MembershipLeaves) {
-        lock(&self.leaves).push_back(page);
-    }
-
     pub(crate) fn seen(&self) -> Vec<Seen> {
         lock(&self.seen).clone()
     }
@@ -305,15 +305,10 @@ impl Link {
             .relay
             .request(PrivacyClass::Anonymous, request.clone())
             .await?;
-        if answer.status.get() == 501 {
-            if request.path.starts_with("/v1/rln/leaves")
-                && let Some(page) = lock(&self.leaves).pop_front()
-            {
-                return encoded(200, &page);
-            }
-            if let Some(stand_in) = self.groups.answer(&request) {
-                return stand_in;
-            }
+        if answer.status.get() == 501
+            && let Some(stand_in) = self.groups.answer(&request)
+        {
+            return stand_in;
         }
         Ok(answer)
     }
@@ -370,29 +365,102 @@ impl Transport for Link {
     }
 }
 
-/// The identified route: Privacy Pass issuance answered by pingers-anon's issuer.
+/// The account the tests' identified requests use on the harness server.
+#[derive(Clone)]
+pub(crate) struct Account {
+    server: std::net::SocketAddr,
+    server_id: ServerId,
+    key: Arc<AccountSigningKey>,
+    clock: ManualClock,
+}
+
+fn identified(method: &str, path: &str, headers: Vec<Header>, body: Vec<u8>) -> BinaryRequest {
+    BinaryRequest {
+        method: method.to_owned(),
+        path: path.to_owned(),
+        headers,
+        body,
+    }
+}
+
+impl Account {
+    /// Registers the account (idempotent) and returns a fresh `Bearer ...` value.
+    pub(crate) async fn bearer(&self) -> Result<String, TestError> {
+        let registration = RegisterRequest {
+            signature_key: *self.key.public_key().as_bytes(),
+            proof: *sign_registration(&self.key, &self.server_id)?.as_bytes(),
+            registration_code: None,
+        };
+        let registered = send_direct(
+            self.server,
+            &identified("POST", "/v1/accounts", Vec::new(), registration.encode()?),
+        )
+        .await?;
+        let auth = AuthRequest {
+            account_id: RegisterResponse::decode(&registered.body)?.account_id,
+            nonce_signature: *sign_auth_challenge(
+                &self.key,
+                &self.server_id,
+                self.clock.now().bucket(),
+            )?
+            .as_bytes(),
+        };
+        let authed = send_direct(
+            self.server,
+            &identified("POST", "/v1/auth", Vec::new(), auth.encode()?),
+        )
+        .await?;
+        Ok(format!(
+            "Bearer {}",
+            AuthResponse::decode(&authed.body)?.bearer.expose()
+        ))
+    }
+
+    /// The server's issuing Privacy Pass key.
+    async fn issuer(&self) -> Result<TokenIssuer, TestError> {
+        let keys = send_direct(
+            self.server,
+            &identified("GET", "/v1/pp/keys", Vec::new(), Vec::new()),
+        )
+        .await?;
+        let keys = PrivacyPassKeys::decode(&keys.body)?;
+        let key = keys
+            .keys
+            .last()
+            .ok_or(TestError::Unexpected("the server has no issuer key"))?;
+        Ok(TokenIssuer {
+            public_key: key.public_key.clone(),
+            key_id: TokenKeyId::from_bytes(key.key_id),
+        })
+    }
+
+    /// Sends an identified request to the server.
+    pub(crate) async fn send(&self, request: &BinaryRequest) -> Result<BinaryResponse, TestError> {
+        Ok(send_direct(self.server, request).await?)
+    }
+}
+
+/// The identified route: Privacy Pass issuance at the real server, as the world's account
+/// (whatever bearer the engine presents, the request goes out with a fresh one).
 pub(crate) struct Issuer {
-    key: IssuerKey,
-    rng: Mutex<TestRng>,
+    account: Account,
+    info: TokenIssuer,
     requests: AtomicUsize,
     unavailable: AtomicBool,
 }
 
 impl Issuer {
-    fn new() -> Result<Self, TestError> {
-        Ok(Self {
-            key: IssuerKey::generate(&mut seeded_rng(5))?,
-            rng: Mutex::new(seeded_rng(6)),
+    fn new(account: Account, info: TokenIssuer) -> Self {
+        Self {
+            account,
+            info,
             requests: AtomicUsize::new(0),
             unavailable: AtomicBool::new(false),
-        })
+        }
     }
 
     pub(crate) fn info(&self) -> TokenIssuer {
-        TokenIssuer {
-            public_key: self.key.public_key(),
-            key_id: TokenKeyId::from_bytes(self.key.key_id()),
-        }
+        self.info.clone()
     }
 
     pub(crate) fn requests(&self) -> usize {
@@ -425,13 +493,23 @@ impl Transport for Issuer {
         if self.unavailable.load(Ordering::SeqCst) {
             return response(503, Vec::new());
         }
-        let issue = PrivacyPassIssueRequest::decode(&request.body)
+        let bearer = self
+            .account
+            .bearer()
+            .await
             .map_err(|_| TransportError::InvalidRequest)?;
-        let evaluated = issue_tokens(&self.key, issue.token_request(), &mut *lock(&self.rng))
-            .map_err(|_| TransportError::InvalidRequest)?;
-        let answer =
-            PrivacyPassIssueResponse::new(evaluated).map_err(|_| TransportError::InvalidRequest)?;
-        encoded(200, &answer)
+        let mut forwarded = request.clone();
+        forwarded
+            .headers
+            .retain(|header| header.name != "authorization");
+        forwarded.headers.push(Header {
+            name: "authorization".to_owned(),
+            value: bearer.into_bytes(),
+        });
+        self.account
+            .send(&forwarded)
+            .await
+            .map_err(|_| TransportError::InvalidRequest)
     }
 
     async fn stream(
@@ -450,6 +528,11 @@ impl Transport for Issuer {
 pub(crate) struct World {
     pub(crate) harness: InProcessHarness,
     pub(crate) clock: ManualClock,
+    /// The harness server's origin, which proofs are bound to.
+    pub(crate) server_id: ServerId,
+    /// The account identified requests use.
+    pub(crate) account: Account,
+    issuer_info: TokenIssuer,
     groups: Arc<GroupStandIn>,
     dir: TestDir,
     next_device: AtomicU64,
@@ -471,10 +554,6 @@ pub(crate) fn bearer() -> SecretText {
     SecretText::new("harness-bearer".to_owned())
 }
 
-pub(crate) fn server() -> Result<ServerId, TestError> {
-    Ok(ServerId::new("https://pingers.test".to_owned())?)
-}
-
 /// Proofs and tokens accepted; the prover enabled. Devices in these tests have no RLN
 /// identity, so the main app falls back to tokens (design B.4.8 trigger 1).
 pub(crate) fn policy() -> CredentialPolicy {
@@ -493,12 +572,67 @@ pub(crate) fn stock() -> Result<TokenStock, TestError> {
 }
 
 impl World {
+    /// One Privacy Pass token from the server, as an `authorization` header: for requests the
+    /// tests build by hand (another member's racing commit).
+    pub(crate) async fn spare_token(&self) -> Result<Header, TestError> {
+        let pending = pingers_anon::begin_token_issuance(
+            &self.issuer_info.public_key,
+            TokenCount::new(1)?,
+            &mut seeded_rng(self.next_device.fetch_add(1, Ordering::SeqCst)),
+        )?;
+        let bearer = self.account.bearer().await?;
+        let issued = self
+            .account
+            .send(&identified(
+                "POST",
+                "/v1/pp/issue",
+                vec![Header {
+                    name: "authorization".to_owned(),
+                    value: bearer.into_bytes(),
+                }],
+                pingers_proto::PrivacyPassIssueRequest::new(pending.request().to_vec())?
+                    .encode()?,
+            ))
+            .await?;
+        let response = pingers_proto::PrivacyPassIssueResponse::decode(&issued.body)?;
+        let token = pending
+            .finish(response.token_response())?
+            .pop()
+            .ok_or(TestError::Unexpected("no token issued"))?;
+        Ok(Header {
+            name: "authorization".to_owned(),
+            value: token.authorization().as_bytes().to_vec(),
+        })
+    }
+
     pub(crate) fn start() -> Result<Self, TestError> {
         let config = HarnessConfig::default();
         let clock = config.clock.clone();
         let harness = InProcessHarness::start(&config)?;
+        let server_id = ServerId::new(harness.endpoints().server_id.clone())?;
+        let account = Account {
+            server: harness.endpoints().server,
+            server_id: server_id.clone(),
+            key: Arc::new(AccountSigningKey::from_bytes(Zeroizing::new([7; 32]))),
+            clock: clock.clone(),
+        };
+        // The issuer key is read once, on a runtime of its own: tests start worlds from
+        // inside their own runtime, which cannot be blocked on.
+        let reader = account.clone();
+        let issuer_info = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| TestError::Unexpected("no runtime for the setup"))?
+                .block_on(reader.issuer())
+        })
+        .join()
+        .map_err(|_| TestError::Unexpected("the setup thread panicked"))??;
         Ok(Self {
             harness,
+            server_id,
+            account,
+            issuer_info,
             groups: Arc::new(GroupStandIn::new(&clock)),
             clock,
             dir: TestDir::new()?,
@@ -542,10 +676,9 @@ impl World {
             stalled: AtomicBool::new(false),
             refuse_commits: AtomicBool::new(false),
             rivals: Mutex::new(VecDeque::new()),
-            leaves: Mutex::new(VecDeque::new()),
             seen: Mutex::new(Vec::new()),
         });
-        let issuer = Arc::new(Issuer::new()?);
+        let issuer = Arc::new(Issuer::new(self.account.clone(), self.issuer_info.clone()));
         self.open_device(Boot {
             number,
             role,
@@ -609,7 +742,7 @@ impl World {
                 rng: Box::new(seeded_rng(seed)),
             },
             SyncSettings {
-                server: server()?,
+                server: self.server_id.clone(),
                 role,
                 credentials: policy(),
                 token_stock: stock()?,

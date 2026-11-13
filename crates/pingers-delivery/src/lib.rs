@@ -13,8 +13,9 @@
 //!   (pingers-mailbox's relay client). `Quiet` wakes carry a random 0 to 30 s delay.
 //! - **Live fan-out.** Which open live channels belong to a group, with the caller's handle for
 //!   each; no IP addresses. Frames and stored messages are forwarded to the other channels.
-//! - **Expiry and deletion.** A group with no reads or writes for two hours is deleted, as is
-//!   one a member deletes; its live channels are closed with it.
+//! - **Expiry and deletion.** A group with no reads or writes for its lifetime class's idle
+//!   time ([`GroupLifetime`]: two hours for a Meetup, 180 days for a Party, stated at creation)
+//!   is deleted, as is one a member deletes; its live channels are closed with it.
 //!
 //! Welcomes are not handled here: they travel as mailbox posts (pingers-mailbox).
 //!
@@ -23,6 +24,7 @@
 #![forbid(unsafe_code)]
 
 mod error;
+mod lifetime;
 mod live;
 mod memory;
 mod service;
@@ -31,11 +33,11 @@ mod sqlite;
 mod store;
 
 pub use error::DeliveryError;
+pub use lifetime::{GroupLifetime, GroupStart, MEETUP_IDLE_LIFETIME, PARTY_IDLE_LIFETIME};
 pub use live::ChannelId;
 pub use memory::MemoryDeliveryStore;
 pub use service::{
-    CommitOutcome, Delivery, Forwarded, IDLE_LIFETIME, MAX_QUIET_DELAY, MAX_SUBSCRIPTION_LIFETIME,
-    Posted, Wake,
+    CommitOutcome, Delivery, Forwarded, MAX_QUIET_DELAY, MAX_SUBSCRIPTION_LIFETIME, Posted, Wake,
 };
 #[cfg(feature = "sqlite")]
 pub use sqlite::SqliteDeliveryStore;

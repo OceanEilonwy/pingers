@@ -8,8 +8,9 @@ use std::sync::{Arc, Barrier};
 
 use pingers_crypto::push_bind_for_subscription;
 use pingers_delivery::{
-    CommitOutcome, Delivery, DeliveryError, DeliveryStore, IDLE_LIFETIME, MAX_QUIET_DELAY,
-    MAX_SUBSCRIPTION_LIFETIME, MemoryDeliveryStore, PAGE_ENTRIES, Wake,
+    CommitOutcome, Delivery, DeliveryError, DeliveryStore, GroupLifetime, GroupStart,
+    MAX_QUIET_DELAY, MAX_SUBSCRIPTION_LIFETIME, MEETUP_IDLE_LIFETIME, MemoryDeliveryStore,
+    PAGE_ENTRIES, PARTY_IDLE_LIFETIME, Wake,
 };
 use pingers_proto::{
     AppMessage, CommitRequest, CommitResponse, ContentType, CreateGroup, Delivery as Mode, Epoch,
@@ -55,6 +56,14 @@ fn subscription(tag: u8, lifetime: Duration) -> Result<Subscription, TestError> 
     })
 }
 
+/// A group whose log starts at epoch 0.
+fn at_zero(lifetime: GroupLifetime) -> GroupStart {
+    GroupStart {
+        lifetime,
+        epoch: Epoch::new(0),
+    }
+}
+
 fn sub_id(tag: u8) -> SubscriptionId {
     SubscriptionId::from_bytes([tag; 16])
 }
@@ -73,15 +82,18 @@ impl<S: DeliveryStore> World<S> {
         let clock = test_clock();
         let delivery = Delivery::new(store, Arc::new(clock.clone()));
         let group = GroupId::from_bytes([7; 32]);
-        delivery.create_group(CreateGroup {
-            group_id: group,
-            auth_key: auth_key(0),
-            subscriptions: subscriptions
-                .iter()
-                .map(|tag| subscription(*tag, SUBSCRIPTION_LIFETIME))
-                .collect::<Result<_, _>>()?,
-            state: Some(SealedSnapshot::from_bytes(vec![0xE0])),
-        })?;
+        delivery.create_group(
+            CreateGroup {
+                group_id: group,
+                auth_key: auth_key(0),
+                subscriptions: subscriptions
+                    .iter()
+                    .map(|tag| subscription(*tag, SUBSCRIPTION_LIFETIME))
+                    .collect::<Result<_, _>>()?,
+                state: Some(SealedSnapshot::from_bytes(vec![0xE0])),
+            },
+            at_zero(GroupLifetime::Meetup),
+        )?;
         Ok(Self {
             clock,
             delivery,
@@ -584,7 +596,7 @@ fn idle_group_expires_after_two_hours(store: impl DeliveryStore) -> Result<(), T
     let _channel = world.delivery.open_live(&world.group, Some(sub_id(1)), 5)?;
     world
         .clock
-        .advance(IDLE_LIFETIME.saturating_sub(Duration::from_secs(1)));
+        .advance(MEETUP_IDLE_LIFETIME.saturating_sub(Duration::from_secs(1)));
     assert_eq!(world.delivery.expire_idle()?, vec![]);
     world.clock.advance(Duration::from_secs(1));
     assert_eq!(world.delivery.expire_idle()?, vec![world.group]);
@@ -612,7 +624,7 @@ fn writes_postpone_expiry(store: impl DeliveryStore) -> Result<(), TestError> {
     let _stored = world.post(1, Mode::Stored, None)?;
     world
         .clock
-        .advance(IDLE_LIFETIME.saturating_sub(Duration::from_secs(1)));
+        .advance(MEETUP_IDLE_LIFETIME.saturating_sub(Duration::from_secs(1)));
     assert_eq!(world.delivery.expire_idle()?, vec![]);
     world.clock.advance(Duration::from_secs(1));
     assert_eq!(world.delivery.expire_idle()?, vec![world.group]);
@@ -641,10 +653,140 @@ fn reads_and_live_channels_postpone_expiry(store: impl DeliveryStore) -> Result<
     )?;
     world
         .clock
-        .advance(IDLE_LIFETIME.saturating_sub(Duration::from_secs(1)));
+        .advance(MEETUP_IDLE_LIFETIME.saturating_sub(Duration::from_secs(1)));
     assert_eq!(world.delivery.expire_idle()?, vec![]);
     world.clock.advance(Duration::from_secs(1));
     assert_eq!(world.delivery.expire_idle()?, vec![world.group]);
+    Ok(())
+}
+
+fn party_groups_stay_idle_for_half_a_year(store: impl DeliveryStore) -> Result<(), TestError> {
+    let world = World::new(store, &[])?;
+    world.clock.advance(MEETUP_IDLE_LIFETIME);
+    assert_eq!(world.delivery.expire_idle()?, vec![world.group]);
+    let party = GroupId::from_bytes([8; 32]);
+    world.delivery.create_group(
+        CreateGroup {
+            group_id: party,
+            auth_key: auth_key(0),
+            subscriptions: Vec::new(),
+            state: None,
+        },
+        at_zero(GroupLifetime::Party),
+    )?;
+    let almost = PARTY_IDLE_LIFETIME.saturating_sub(Duration::from_secs(1));
+    // Every kind of activity renews a Party group by its own lifetime, not a Meetup's.
+    let activities: [&dyn Fn() -> Result<(), TestError>; 6] = [
+        &|| {
+            Ok(world
+                .delivery
+                .messages(&party, SequenceNumber::new(0))
+                .map(drop)?)
+        },
+        &|| Ok(world.delivery.state(&party).map(drop)?),
+        &|| {
+            Ok(world
+                .delivery
+                .put_subscription(&party, subscription(1, SUBSCRIPTION_LIFETIME)?)?)
+        },
+        &|| {
+            let outcome = world.delivery.commit(
+                &party,
+                commit_request(0, Urgency::Quiet),
+                &mut seeded_rng(3),
+            )?;
+            assert!(matches!(outcome, CommitOutcome::Accepted { .. }));
+            Ok(())
+        },
+        &|| {
+            let message = AppMessage {
+                epoch: Epoch::new(1),
+                body: body(1),
+                delivery: Mode::Stored,
+                wake: None,
+            };
+            Ok(world
+                .delivery
+                .post(&party, message, &mut seeded_rng(4))
+                .map(drop)?)
+        },
+        &|| Ok(world.delivery.open_live(&party, None, 1).map(drop)?),
+    ];
+    for activity in activities {
+        world.clock.advance(almost);
+        assert_eq!(world.delivery.expire_idle()?, vec![]);
+        activity()?;
+    }
+    world.clock.advance(almost);
+    assert_eq!(world.delivery.expire_idle()?, vec![]);
+    world.clock.advance(Duration::from_secs(1));
+    assert_eq!(world.delivery.expire_idle()?, vec![party]);
+    Ok(())
+}
+
+fn a_group_uploaded_after_its_first_commit_starts_at_that_epoch(
+    store: impl DeliveryStore,
+) -> Result<(), TestError> {
+    let world = World::new(store, &[])?;
+    let meetup = GroupId::from_bytes([8; 32]);
+    world.delivery.create_group(
+        CreateGroup {
+            group_id: meetup,
+            auth_key: auth_key(1),
+            subscriptions: Vec::new(),
+            state: Some(SealedSnapshot::from_bytes(vec![0xE1])),
+        },
+        GroupStart {
+            lifetime: GroupLifetime::Meetup,
+            epoch: Epoch::new(1),
+        },
+    )?;
+    assert_eq!(
+        world.delivery.state(&meetup)?.map(|state| state.epoch),
+        Some(Epoch::new(1))
+    );
+    let stale = world.delivery.commit(
+        &meetup,
+        commit_request(0, Urgency::Quiet),
+        &mut seeded_rng(5),
+    )?;
+    assert!(matches!(
+        stale,
+        CommitOutcome::Conflict { head_epoch } if head_epoch == Epoch::new(1)
+    ));
+    let next = world.delivery.commit(
+        &meetup,
+        commit_request(1, Urgency::Quiet),
+        &mut seeded_rng(5),
+    )?;
+    assert!(matches!(next, CommitOutcome::Accepted { .. }));
+    assert_eq!(
+        world
+            .delivery
+            .messages(&meetup, SequenceNumber::new(0))?
+            .head_epoch,
+        Epoch::new(2)
+    );
+    Ok(())
+}
+
+fn earlier_epochs_keys_are_kept_newest_first(store: impl DeliveryStore) -> Result<(), TestError> {
+    let world = World::new(store, &[])?;
+    assert_eq!(world.delivery.past_auth_keys(&world.group)?, vec![]);
+    let _first = world.commit(0, Urgency::Quiet)?;
+    let _second = world.commit(1, Urgency::Quiet)?;
+    // A losing commit changes nothing.
+    let _lost = world.commit(0, Urgency::Quiet)?;
+    assert_eq!(
+        world.delivery.past_auth_keys(&world.group)?,
+        vec![commit_request(0, Urgency::Quiet).next_auth_key, auth_key(0)]
+    );
+    assert_eq!(world.delivery.head_epoch(&world.group)?, Epoch::new(2));
+    world.delivery.delete_group(&world.group)?;
+    assert!(matches!(
+        world.delivery.past_auth_keys(&world.group),
+        Err(DeliveryError::UnknownGroup)
+    ));
     Ok(())
 }
 
@@ -664,12 +806,15 @@ fn delete_removes_the_group_and_closes_its_channels(
         Err(DeliveryError::UnknownGroup)
     ));
     // The id is free again, with nothing left over from the old group.
-    world.delivery.create_group(CreateGroup {
-        group_id: world.group,
-        auth_key: auth_key(1),
-        subscriptions: Vec::new(),
-        state: None,
-    })?;
+    world.delivery.create_group(
+        CreateGroup {
+            group_id: world.group,
+            auth_key: auth_key(1),
+            subscriptions: Vec::new(),
+            state: None,
+        },
+        at_zero(GroupLifetime::Meetup),
+    )?;
     assert_eq!(world.log()?, vec![]);
     assert_eq!(world.delivery.state(&world.group)?, None);
     let posted = world.post(0, Mode::Stored, Some(Urgency::Alert))?;
@@ -681,12 +826,15 @@ fn expiry_leaves_other_groups_alone(store: impl DeliveryStore) -> Result<(), Tes
     let world = World::new(store, &[1])?;
     world.clock.advance(Duration::from_hours(1));
     let other = GroupId::from_bytes([8; 32]);
-    world.delivery.create_group(CreateGroup {
-        group_id: other,
-        auth_key: auth_key(1),
-        subscriptions: vec![subscription(2, SUBSCRIPTION_LIFETIME)?],
-        state: None,
-    })?;
+    world.delivery.create_group(
+        CreateGroup {
+            group_id: other,
+            auth_key: auth_key(1),
+            subscriptions: vec![subscription(2, SUBSCRIPTION_LIFETIME)?],
+            state: None,
+        },
+        at_zero(GroupLifetime::Meetup),
+    )?;
     world.clock.advance(Duration::from_hours(1));
     assert_eq!(world.delivery.expire_idle()?, vec![world.group]);
     assert_eq!(world.delivery.auth_key(&other)?, auth_key(1));
@@ -706,12 +854,15 @@ fn world_now<S>(world: &World<S>) -> pingers_time::UnixSeconds {
 
 fn duplicate_group_is_refused(store: impl DeliveryStore) -> Result<(), TestError> {
     let world = World::new(store, &[])?;
-    let again = world.delivery.create_group(CreateGroup {
-        group_id: world.group,
-        auth_key: auth_key(9),
-        subscriptions: Vec::new(),
-        state: None,
-    });
+    let again = world.delivery.create_group(
+        CreateGroup {
+            group_id: world.group,
+            auth_key: auth_key(9),
+            subscriptions: Vec::new(),
+            state: None,
+        },
+        at_zero(GroupLifetime::Meetup),
+    );
     assert!(matches!(again, Err(DeliveryError::GroupExists)));
     assert_eq!(world.delivery.auth_key(&world.group)?, auth_key(0));
     Ok(())
@@ -833,6 +984,9 @@ for_each_store!(
     idle_group_expires_after_two_hours,
     writes_postpone_expiry,
     reads_and_live_channels_postpone_expiry,
+    party_groups_stay_idle_for_half_a_year,
+    earlier_epochs_keys_are_kept_newest_first,
+    a_group_uploaded_after_its_first_commit_starts_at_that_epoch,
     delete_removes_the_group_and_closes_its_channels,
     expiry_leaves_other_groups_alone,
     duplicate_group_is_refused,
@@ -842,10 +996,42 @@ for_each_store!(
 
 /// The limits are the design's absolute numbers, not just consistent with each other.
 #[test]
-fn limits_are_thirty_days_two_hours_and_thirty_seconds() {
+fn limits_are_thirty_days_two_hours_half_a_year_and_thirty_seconds() {
     assert_eq!(MAX_SUBSCRIPTION_LIFETIME, Duration::from_hours(720));
-    assert_eq!(IDLE_LIFETIME, Duration::from_hours(2));
+    assert_eq!(MEETUP_IDLE_LIFETIME, Duration::from_hours(2));
+    assert_eq!(PARTY_IDLE_LIFETIME, Duration::from_hours(180 * 24));
     assert_eq!(MAX_QUIET_DELAY, Duration::from_secs(30));
+}
+
+/// A deleted group leaves no trace of its id in the database or its write-ahead log.
+#[cfg(feature = "sqlite")]
+#[test]
+fn sqlite_store_overwrites_deleted_groups() -> Result<(), TestError> {
+    use pingers_delivery::SqliteDeliveryStore;
+
+    let path = std::env::temp_dir().join(format!(
+        "pingers-delivery-secure-delete-{}.sqlite",
+        std::process::id()
+    ));
+    let wal = path.with_extension("sqlite-wal");
+    let _stale = std::fs::remove_file(&path);
+    let world = World::new(SqliteDeliveryStore::open(&path)?, &[1])?;
+    let _posted = world.post(0, Mode::Stored, None)?;
+    world.delivery.delete_group(&world.group)?;
+    let id = [7_u8; 32];
+    for file in [&path, &wal] {
+        let bytes = std::fs::read(file).unwrap_or_default();
+        assert!(
+            !bytes.windows(id.len()).any(|window| window == id),
+            "{} still holds the group id",
+            file.display()
+        );
+    }
+    drop(world);
+    for file in [&path, &wal, &path.with_extension("sqlite-shm")] {
+        let _cleanup = std::fs::remove_file(file);
+    }
+    Ok(())
 }
 
 /// A file-backed store keeps everything across a restart.
@@ -882,6 +1068,10 @@ fn sqlite_store_survives_reopening() -> Result<(), TestError> {
     )?;
     assert_eq!(posted.sequence, Some(SequenceNumber::new(2)));
     assert_eq!(woken(&posted.wakes), BTreeSet::from([sub_id(1)]));
+    assert_eq!(
+        reopened.store().head(&group)?.lifetime,
+        GroupLifetime::Meetup
+    );
     drop(reopened);
     let _cleanup = std::fs::remove_file(&path);
     Ok(())

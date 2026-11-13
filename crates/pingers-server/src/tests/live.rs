@@ -182,17 +182,22 @@ async fn a_split_channel_has_a_lasting_downlink_and_one_shot_uplinks() -> TestRe
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn uplinks_wait_on_pingers_delivery() -> TestResult {
+async fn delivery_uplinks_need_a_group_that_exists() -> TestResult {
     let server = start(Setup::default(), DeliveryLive).await?;
     let mut relay = connect(server.address, super::LOOPBACK).await?;
-    let uplink = BinaryRequest {
-        method: "POST".to_owned(),
-        path: "/v1/groups/g1/live".to_owned(),
-        headers: Vec::new(),
-        body: b"frame".to_vec(),
-    };
-    let (_, answer) = oblivious(&mut relay, &server.config, &uplink).await?;
-    assert_eq!(answer.map(|answer| answer.status.get()), Some(501));
+    for (path, expected) in [
+        ("/v1/groups/g1/live?sub=00".to_owned(), 400),
+        (format!("/v1/groups/{}/live", hex::encode([3; 32])), 404),
+    ] {
+        let uplink = BinaryRequest {
+            method: "POST".to_owned(),
+            path,
+            headers: Vec::new(),
+            body: b"frame".to_vec(),
+        };
+        let (_, answer) = oblivious(&mut relay, &server.config, &uplink).await?;
+        assert_eq!(answer.map(|answer| answer.status.get()), Some(expected));
+    }
     server.stop().await
 }
 
