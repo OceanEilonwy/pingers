@@ -30,6 +30,10 @@ async fn subscriptions_state_and_deletion() -> TestResult {
                 subscriptions: Vec::new(),
                 state: Some(SealedSnapshot::from_bytes(vec![5; 10])),
             },
+            pingers_sync::GroupStart {
+                lifetime: pingers_sync::GroupLifetime::Party,
+                epoch: Epoch::new(0),
+            },
             budget,
         )
         .await?;

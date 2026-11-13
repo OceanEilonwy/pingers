@@ -14,7 +14,9 @@ use pingers_proto::{
 };
 
 use crate::mailbox::Delivered;
-use crate::{ApiRequest, GroupError, GroupSigner, Sending, SyncEngine, SyncError, WakeBudget};
+use crate::{
+    ApiRequest, GroupError, GroupSigner, GroupStart, Sending, SyncEngine, SyncError, WakeBudget,
+};
 
 /// How many times a commit is tried before the conflicts are reported.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -257,9 +259,10 @@ impl SyncEngine {
     pub async fn create_group(
         &self,
         request: &CreateGroup,
+        start: GroupStart,
         budget: WakeBudget,
     ) -> Result<(), SyncError> {
-        self.exchange(ApiRequest::create_group(request)?, budget)
+        self.exchange(ApiRequest::create_group(request, start)?, budget)
             .await?
             .success()
             .map(drop)

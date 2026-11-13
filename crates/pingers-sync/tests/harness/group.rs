@@ -171,6 +171,10 @@ pub(crate) async fn create(device: &Device) -> TestResult {
                 subscriptions: Vec::new(),
                 state: None,
             },
+            pingers_sync::GroupStart {
+                lifetime: pingers_sync::GroupLifetime::Party,
+                epoch: Epoch::new(0),
+            },
             WakeBudget::UNLIMITED,
         )
         .await?;

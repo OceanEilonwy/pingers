@@ -146,6 +146,31 @@ fn writes_carry_a_credential_of_their_scope_and_capability_requests_none() {
 }
 
 #[test]
+fn a_new_group_names_its_lifetime_and_epoch() -> Result<(), TestError> {
+    let create = pingers_proto::CreateGroup {
+        group_id: group(),
+        auth_key: key().public_key(),
+        subscriptions: Vec::new(),
+        state: None,
+    };
+    for (lifetime, epoch, path) in [
+        (GroupLifetime::Party, 0, "/v1/groups?lifetime=party&epoch=0"),
+        (
+            GroupLifetime::Meetup,
+            1,
+            "/v1/groups?lifetime=meetup&epoch=1",
+        ),
+    ] {
+        let start = GroupStart {
+            lifetime,
+            epoch: Epoch::new(epoch),
+        };
+        assert_eq!(ApiRequest::create_group(&create, start)?.path(), path);
+    }
+    Ok(())
+}
+
+#[test]
 fn identifiers_travel_as_hex_in_the_path() -> Result<(), TestError> {
     let mailbox = MailboxId::from_bytes([0x0f; 16]);
     let body = Padded::pad(b"knock", SizeClass::Bytes1024)?;

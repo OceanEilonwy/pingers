@@ -21,13 +21,13 @@ use pingers_ohttp::BinaryRequest;
 use pingers_parties::{LeaveRequest, Outbound, OutgoingCommit, PartiesError, PartyLifecycle};
 use pingers_presence::{MailboxPurpose, OutgoingKnock};
 use pingers_proto::{
-    AppMessage, BoardCursor, BoardPage, CommitRequest, CommitResponse, CreateGroup, GroupId,
+    AppMessage, BoardCursor, BoardPage, CommitRequest, CommitResponse, CreateGroup, Epoch, GroupId,
     GroupLogEntry, MailboxId, Padded, SequenceNumber, SubscriptionId, TimeToLive,
 };
 use pingers_store::{MailboxPurpose as StoredPurpose, WakePushes as StoredPushes};
 use pingers_sync::{
-    ApiRequest, Committed, Delivered, GroupCall, GroupError, GroupSigner, NewLease, PoolTarget,
-    Sending, SyncEngine, SyncError, WakeBudget,
+    ApiRequest, Committed, Delivered, GroupCall, GroupError, GroupLifetime, GroupSigner,
+    GroupStart, NewLease, PoolTarget, Sending, SyncEngine, SyncError, WakeBudget,
 };
 use pingers_time::{Bucket, UnixSeconds};
 use pingers_wake::PortError;
@@ -38,6 +38,12 @@ use super::party_log::{self, PartyLog};
 use crate::ports::{ServerSection, SyncPort};
 use crate::snapshot::{RelayStatus, WakePushes};
 use crate::{ClientError, Notice, PushTokens, Unavailable};
+
+/// A Party group: kept for months, uploaded at epoch 0 (pingers-parties' new group).
+const PARTY_START: GroupStart = GroupStart {
+    lifetime: GroupLifetime::Party,
+    epoch: Epoch::new(0),
+};
 
 /// How long a write that could not be sent may wait in pingers-sync's queue.
 const KEEP_FOR: Duration = Duration::from_hours(1);
@@ -159,7 +165,7 @@ impl Net {
         };
         let result = match &outbound {
             Outbound::CreateGroup(request) => engine
-                .create_group(request, WakeBudget::UNLIMITED)
+                .create_group(request, PARTY_START, WakeBudget::UNLIMITED)
                 .await
                 .map(|()| true),
             Outbound::GroupMessage { group, message } => {
@@ -509,7 +515,13 @@ fn network_error(error: &SyncError) -> NetworkError {
 impl GroupNetwork for GroupLogs {
     async fn create_group(&self, request: CreateGroup) -> Result<(), NetworkError> {
         let engine = self.0.engine().map_err(|_none| NetworkError::Unavailable)?;
-        let result = engine.create_group(&request, WakeBudget::UNLIMITED).await;
+        let start = GroupStart {
+            lifetime: GroupLifetime::Meetup,
+            epoch: Epoch::new(1),
+        };
+        let result = engine
+            .create_group(&request, start, WakeBudget::UNLIMITED)
+            .await;
         self.0.observe(&result);
         result.map_err(|error| network_error(&error))
     }

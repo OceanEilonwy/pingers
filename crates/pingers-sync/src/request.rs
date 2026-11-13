@@ -153,6 +153,26 @@ impl Route {
     }
 }
 
+/// How long the server keeps a group (design A.2): a Party for months, a Meetup until it has
+/// been idle for two hours. The server takes a group created without it for a Meetup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GroupLifetime {
+    /// A Meetup group.
+    Meetup,
+    /// A Party group.
+    Party,
+}
+
+/// What a new group is and the MLS epoch its members are in at upload (a Party at 0, a
+/// Meetup at 1, after the commit its Welcome carries).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GroupStart {
+    /// Its lifetime class.
+    pub lifetime: GroupLifetime,
+    /// Its epoch at upload.
+    pub epoch: pingers_proto::Epoch,
+}
+
 /// What a group request is signed with (auth mode Grp): the epoch's log-auth key and the
 /// signing time.
 pub struct GroupSigner<'key> {
@@ -474,13 +494,18 @@ impl ApiRequest {
         .with_read_key(read_key)
     }
 
-    /// `POST /v1/groups`.
+    /// `POST /v1/groups?lifetime=meetup|party&epoch=n`.
     ///
     /// # Errors
     ///
     /// [`SyncError::Encode`] if the body does not encode.
-    pub fn create_group(request: &CreateGroup) -> Result<Self, SyncError> {
-        Self::new(Route::CreateGroup, "POST", "/v1/groups".to_owned()).with_cbor(request)
+    pub fn create_group(request: &CreateGroup, start: GroupStart) -> Result<Self, SyncError> {
+        let lifetime = match start.lifetime {
+            GroupLifetime::Meetup => "meetup",
+            GroupLifetime::Party => "party",
+        };
+        let path = format!("/v1/groups?lifetime={lifetime}&epoch={}", start.epoch.get());
+        Self::new(Route::CreateGroup, "POST", path).with_cbor(request)
     }
 
     /// `POST /v1/groups/{id}/commit`.
