@@ -19,7 +19,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 
 /// The system allocator, zeroing each block before handing it back.
-pub struct Wiping;
+pub(crate) struct Wiping;
 
 /// Zeroes `len` bytes at `ptr` in a way the compiler must keep.
 ///

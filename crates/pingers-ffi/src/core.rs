@@ -9,6 +9,13 @@
 //! merges, `open` succeeds and holds the adapters, and every other call returns
 //! [`CoreError::Unavailable`]; each body then becomes one call into the client.
 
+// WAITING(w3-client): the stubs have nothing to await yet.
+#![expect(
+    clippy::unused_async,
+    clippy::unused_async_trait_impl,
+    reason = "each stub awaits its pingers-client call once that merges"
+)]
+
 use std::sync::Arc;
 
 use crate::CoreError;
@@ -16,7 +23,47 @@ use crate::callbacks::{Events, EventsAdapter, Platform, PlatformAdapter};
 use crate::geo::Fix;
 use crate::ids::{LocationRequestId, MeetupId, MemberId, MessageId, PartyId, SpotId};
 use crate::snapshot::Snapshot;
-use crate::views::{AnswerDraft, MeetPointDraft, PartyDraft, SpotDraft};
+use crate::views::{AnswerDraft, MeetPointDraft, PartyDraft, Reachability, SpotDraft, Visibility};
+
+/// A change to a device-wide privacy setting, as pingers-client's `SettingChange` takes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum SettingChange {
+    /// The app-wide sharing switch.
+    LocationSharing {
+        /// On or off.
+        on: bool,
+    },
+    /// The manual pause.
+    Paused {
+        /// Paused or not.
+        paused: bool,
+    },
+    /// "Pause during Focus".
+    PauseInFocus {
+        /// On or off.
+        on: bool,
+    },
+    /// Quiet hours on or off (the window is kept).
+    QuietHours {
+        /// On or off.
+        on: bool,
+    },
+    /// "Hide trail near zones".
+    HideTrail {
+        /// On or off.
+        on: bool,
+    },
+    /// Who sees the exact spot in Meetups.
+    Visibility {
+        /// The choice.
+        visibility: Visibility,
+    },
+    /// "No wake-up pushes (maximum privacy)".
+    WakePushes {
+        /// Whether wake-up pushes are registered.
+        on: bool,
+    },
+}
 
 /// The error every call returns until pingers-client's API merges.
 fn not_yet() -> CoreError {
@@ -85,6 +132,17 @@ impl Core {
         Err(not_yet())
     }
 
+    /// Asks a server or relay who runs it, for New party and Advanced (`Reachability`).
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Invalid`] for a host that is not one; [`CoreError::Network`] if it does not
+    /// answer.
+    pub async fn check_service(&self, host: String) -> Result<Reachability, CoreError> {
+        let _ = pingers_screens::common::Host::new(&host)?;
+        Err(not_yet())
+    }
+
     /// Creates a Party from New party's draft.
     ///
     /// # Errors
@@ -109,13 +167,18 @@ impl Core {
         Err(not_yet())
     }
 
-    /// Opens an invite link: the preview then shows on Accept invite.
+    /// Opens an invite link, giving the name this device's user goes by in that Party: the
+    /// preview then shows on Accept invite.
     ///
     /// # Errors
     ///
-    /// [`CoreError::Invalid`] for a link that is not an invite; [`CoreError::Network`].
-    pub async fn open_invite(&self, link: String) -> Result<(), CoreError> {
-        let _ = link;
+    /// [`CoreError::Invalid`] for a link that is not an invite or an empty name;
+    /// [`CoreError::Network`].
+    pub async fn open_invite(&self, link: String, my_name: String) -> Result<(), CoreError> {
+        let _ = (
+            pingers_screens::snapshot::InviteUrl::new(&link)?,
+            pingers_screens::common::Name::new(&my_name)?,
+        );
         Err(not_yet())
     }
 
@@ -124,8 +187,17 @@ impl Core {
     /// # Errors
     ///
     /// [`CoreError::NotFound`] if no invite is open; [`CoreError::Network`].
-    pub async fn accept_invite(&self, my_name: String) -> Result<PartyId, CoreError> {
-        let _ = my_name;
+    pub async fn accept_invite(&self) -> Result<PartyId, CoreError> {
+        Err(not_yet())
+    }
+
+    /// Changes a device-wide privacy setting (Privacy settings, Exclusion zones).
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Storage`] if it cannot be saved.
+    pub async fn change_setting(&self, change: SettingChange) -> Result<(), CoreError> {
+        let _ = change;
         Err(not_yet())
     }
 

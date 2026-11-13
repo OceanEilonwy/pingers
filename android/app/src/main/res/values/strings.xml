@@ -143,6 +143,11 @@
     <string name="spot_search">Search a place</string>
     <string name="spot_name">Spot name</string>
     <string name="spot_unnamed">New spot</string>
+
+    <!-- The Rust core -->
+    <string name="core_unavailable">Pingers couldn\'t start its core. Try again.</string>
+    <!-- The name this device gives itself in a new Party until there is a name setting. -->
+    <string name="core_my_name">Me</string>
     <string name="spot_circle">Circle</string>
     <string name="spot_draw_area">Draw area</string>
     <string name="spot_radius">Radius</string>

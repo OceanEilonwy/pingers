@@ -47,6 +47,13 @@ pub struct Snapshot(ClientSnapshot);
 
 impl Snapshot {
     /// Wraps a snapshot from pingers-client.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Core::snapshot wraps the client's once pingers-client merges"
+        )
+    )]
     pub(crate) fn new(snapshot: ClientSnapshot) -> Arc<Self> {
         Arc::new(Self(snapshot))
     }

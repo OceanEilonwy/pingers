@@ -104,6 +104,8 @@ impl From<pingers_screens::snapshot::ZoneId> for ZoneId {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
     use super::{PartyId, SpotId};
 
     #[test]

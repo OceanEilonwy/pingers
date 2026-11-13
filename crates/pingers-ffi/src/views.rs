@@ -174,10 +174,6 @@ pub enum SuppressReason {
 }
 
 impl From<pingers_gate::SuppressReason> for SuppressReason {
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "SuppressReason is non-exhaustive; a new reason shows as Other"
-    )]
     fn from(reason: pingers_gate::SuppressReason) -> Self {
         match reason {
             pingers_gate::SuppressReason::LocationSharingOff => Self::LocationSharingOff,
@@ -879,6 +875,10 @@ pub enum DrawHint {
 }
 
 /// Draw area.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per control, as pingers-screens' DrawArea has them"
+)]
 #[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct DrawAreaView {
     /// The Spot's name.
@@ -1029,6 +1029,10 @@ mirror_enum!(
 );
 
 /// Privacy settings.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per switch on the screen"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct PrivacyView {
     /// Why sharing is paused, if it is.
