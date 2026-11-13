@@ -109,6 +109,7 @@ fn params(ratio: Vec<u8>, slashing: usize) -> Vec<u8> {
         uint(0),
         tstr(b"op"),
         uint(0),
+        null(),
     ]))
 }
 
@@ -607,6 +608,7 @@ fn unknown_credential_and_custom_relay_values_are_rejected() {
         uint(0),
         tstr(b""),
         uint(0),
+        null(),
     ]));
     assert!(matches!(
         Params::decode(&unknown_credential),
@@ -624,6 +626,7 @@ fn unknown_credential_and_custom_relay_values_are_rejected() {
         uint(2),
         tstr(b""),
         uint(0),
+        null(),
     ]));
     assert!(matches!(
         Params::decode(&unknown_custom),
@@ -727,5 +730,27 @@ fn huge_declared_list_length_fails_without_allocating() {
     assert!(matches!(
         MailboxMessages::decode(&bytes),
         Err(ProtoError::Cbor(_))
+    ));
+}
+
+#[test]
+fn map_host_must_be_https() {
+    let plain_http = versioned(array(&[
+        array(&[]),
+        uint(0),
+        float(1.0),
+        uint(0),
+        array(&[]),
+        array(&[]),
+        uint(0),
+        tstr(b""),
+        uint(0),
+        tstr(b"http://maps.example"),
+    ]));
+    assert!(matches!(
+        Params::decode(&plain_http),
+        Err(ProtoError::OutOfRange {
+            field: "map host url"
+        })
     ));
 }

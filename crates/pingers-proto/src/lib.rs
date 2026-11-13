@@ -36,7 +36,7 @@ mod secret;
 pub use api::{
     AnonymousCredential, AuthRequest, AuthResponse, BoardSyncRequest, BoardSyncResponse,
     CoverReadRatio, CustomPushRelays, GroupMessages, GroupState, HourlyRoot, LeaseReplacement,
-    MailboxMessage, MailboxMessages, MembershipIndex, MembershipLeafRequest,
+    MailboxMessage, MailboxMessages, MapHostUrl, MembershipIndex, MembershipLeafRequest,
     MembershipLeafResponse, MembershipLeaves, MembershipRoot, MessageAccepted, Params,
     PushRelayInfo, ReadBoard, RegisterRequest, RegisterResponse, RootEpoch, Slashing,
 };

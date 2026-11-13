@@ -1,5 +1,10 @@
 package org.pingers.app
 
+import androidx.compose.runtime.CompositionLocalProvider
+import org.pingers.app.maps.Maps
+import org.pingers.app.ui.map.LocalMaps
+import org.pingers.app.ui.map.LocalOpenMapRegions
+import org.pingers.app.ui.screens.MapRegionsScreen
 import android.Manifest
 import android.content.Intent
 import android.graphics.Color
@@ -120,6 +125,7 @@ class MainActivity : ComponentActivity() {
 
 private const val EXTRA_SCREEN = "screen"
 private const val EXTRA_FAKE = "fake"
+private const val EXTRA_MAP_HOST = "map_host"
 
 private fun debuggable(context: android.content.Context) =
     context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
@@ -129,9 +135,19 @@ private fun App(repo: PingersRepository, nav: Navigator, pending: Intent?, consu
     val context = LocalContext.current
     val activity = context as ComponentActivity
     val route = nav.current
+    val maps = remember { Maps.get(context) }
+    // Where "Download map for this area" was pressed, for the picker's "This area". On this phone only.
+    var regionsAround by remember { mutableStateOf<org.pingers.app.data.Coordinate?>(null) }
+    val openRegions: (org.pingers.app.data.Coordinate?) -> Unit = {
+        regionsAround = it
+        nav.go(Route.MapRegions)
+    }
 
     LaunchedEffect(pending) {
         val intent = pending ?: return@LaunchedEffect
+        // Debug builds only: `--es map_host http://10.0.2.2:8090` points maps at a host on the
+        // development machine (android/docs/maps.md, "Testing").
+        if (debuggable(context) && intent.hasExtra(EXTRA_MAP_HOST)) maps.setHostOverride(intent.getStringExtra(EXTRA_MAP_HOST))
         when {
             intent.getStringExtra(CoPresenceNotifier.EXTRA_ACTION) == CoPresenceNotifier.OPEN_MEETUP -> {
                 repo.dismissAlert()
@@ -188,7 +204,9 @@ private fun App(repo: PingersRepository, nav: Navigator, pending: Intent?, consu
             transitionSpec = { fadeIn() togetherWith fadeOut() },
             label = "screen",
         ) { r ->
-            Screen(r, repo, nav, simulateAlert)
+            CompositionLocalProvider(LocalMaps provides maps, LocalOpenMapRegions provides openRegions) {
+                if (r == Route.MapRegions) MapRegionsScreen(maps, regionsAround, nav) else Screen(r, repo, nav, simulateAlert)
+            }
         }
     }
 }
@@ -215,5 +233,6 @@ private fun Screen(route: Route, repo: PingersRepository, nav: Navigator, simula
         Route.Compass -> CompassScreen(repo.compass.collectAsStateWithLifecycle().value, repo, nav)
         Route.LocationRequest -> LocationRequestScreen(repo.locationRequest.collectAsStateWithLifecycle().value, repo, nav)
         Route.MeetupEnded -> MeetupEndedScreen(repo.meetupEnded.collectAsStateWithLifecycle().value, nav)
+        Route.MapRegions -> {}
     }
 }

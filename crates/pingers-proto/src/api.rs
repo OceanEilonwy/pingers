@@ -108,6 +108,38 @@ pub struct Params {
     pub server_operator: String,
     /// The server's clock, for skew correction (design F.1).
     pub server_time: UnixSeconds,
+    /// The map host the server's operator recommends for region packs (design B.12, "Map
+    /// host"); `None` leaves the app on the publisher's default. A user override in the app
+    /// comes first.
+    pub map_host: Option<MapHostUrl>,
+}
+
+/// The `https://` base URL of a map host (pingers-map-host), under which `catalog.json` and the
+/// region files live.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MapHostUrl(String);
+
+impl MapHostUrl {
+    /// Checks the scheme; full URL parsing is the client's job.
+    ///
+    /// # Errors
+    ///
+    /// [`ProtoError::OutOfRange`] unless the URL starts with `https://`.
+    pub fn new(url: String) -> Result<Self, ProtoError> {
+        if url.starts_with("https://") {
+            Ok(Self(url))
+        } else {
+            Err(ProtoError::OutOfRange {
+                field: "map host url",
+            })
+        }
+    }
+
+    /// The URL.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// `POST /v1/accounts` (design D). `==` compares the registration code in constant time.
@@ -403,10 +435,10 @@ impl CborBody for PushRelayInfo {
 
 /// Layout: `[credentials, slashing (0 off, 1 on), cover read ratio (f32), board page records,
 /// OHTTP relays, push relays, custom push relays (0 not allowed, 1 allowed), operator,
-/// server time]`.
+/// server time, map host URL or null]`.
 impl CborBody for Params {
     fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
-        writer.array(9)?;
+        writer.array(10)?;
         writer.list(&self.anonymous_credentials)?;
         writer.unsigned(match self.rln_slashing {
             Slashing::Off => 0_u8,
@@ -423,11 +455,13 @@ impl CborBody for Params {
         });
         writer.text(&self.server_operator)?;
         writer.unsigned(self.server_time.get());
-        Ok(())
+        writer.option(self.map_host.as_ref(), |writer, url| {
+            writer.text(url.as_str())
+        })
     }
 
     fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
-        cbor::array_of(decoder, 9)?;
+        cbor::array_of(decoder, 10)?;
         Ok(Self {
             anonymous_credentials: cbor::list(decoder)?,
             rln_slashing: match decoder.u8()? {
@@ -450,6 +484,9 @@ impl CborBody for Params {
             },
             server_operator: decoder.str()?.to_owned(),
             server_time: read_time(decoder)?,
+            map_host: cbor::option(decoder, |decoder| {
+                MapHostUrl::new(decoder.str()?.to_owned())
+            })?,
         })
     }
 }

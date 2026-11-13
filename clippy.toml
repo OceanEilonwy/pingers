@@ -18,7 +18,7 @@ disallowed-methods = [
 # Protocol names that doc comments use as words, not code. ".." keeps clippy's defaults.
 doc-valid-idents = [
   "OpenMLS", "KeyPackage", "KeyPackages", "PrivateMessage", "UnifiedPush", "WorkManager",
-  "MapLibre", "UniFFI", "SQLCipher", "XChaCha20", "ChaCha20", "..",
+  "MapLibre", "UniFFI", "PMTiles", "GeoJSON", "MultiPolygon", "OpenStreetMap", "SQLCipher", "XChaCha20", "ChaCha20", "..",
 ]
 
 # Style guide §11: more than three parameters means a struct or a builder. Clippy counts

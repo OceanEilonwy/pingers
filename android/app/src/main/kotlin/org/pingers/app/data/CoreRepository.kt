@@ -233,7 +233,7 @@ class CoreRepository(
 
     private fun publishSpotEditor() {
         val party = currentParty ?: return
-        read("spot editor") { it.spotEditor(party.toFfi(), spotDraft).toUi() }?.let { _spotEditor.value = it }
+        read("spot editor") { it.spotEditor(party.toFfi(), spotDraft).toUi() }?.let { _spotEditor.value = it.copy(centre = drawFrame.origin) }
         _drawArea.value = drawState()
     }
 
@@ -410,6 +410,12 @@ class CoreRepository(
 
     override fun setSpotShape(shape: ShapeKind) {
         spotDraft = spotDraft.copy(shape = shape.toFfi())
+        publishSpotEditor()
+    }
+
+    override fun moveSpot(to: Coordinate) {
+        // A circle is saved at the frame's origin; a drawn area keeps its own coordinates.
+        drawFrame = frameAt(to, MapPoint(195f, 300f))
         publishSpotEditor()
     }
 

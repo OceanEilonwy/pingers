@@ -24,14 +24,34 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import org.pingers.app.R
+import org.pingers.app.data.MapFrame
 import org.pingers.app.data.MapPoint
+import org.pingers.app.maps.covering
 import org.pingers.app.ui.theme.Pc
+import org.pingers.app.ui.theme.body
 
 /*
- * The stylised placeholder map from the design canvas: land, water, a park and
- * white roads, drawn from the canvas's own SVG shapes. MapLibre replaces it later;
- * everything placed on a map uses the scene's units (MapPoint), so the overlay code
- * changes only in how units become screen positions.
+ * Maps. MapBox draws the real map (MapLibre over an installed region pack, PackMap.kt) when
+ * one covers the screen's MapFrame, and otherwise the stylised placeholder from the design
+ * canvas (land, water, a park and white roads, from the canvas's own SVG shapes) with a
+ * "Download map for this area" prompt. Everything placed on a map uses the scene's units
+ * (MapPoint); the frame places coordinates in those units and gives the real map its camera.
  */
 
 sealed interface MapShape {
@@ -129,20 +149,24 @@ object Scenes {
     )
 }
 
-/** Draws [scene] scaled to the canvas width, shifted by [pan] scene units, then [overlay] in scene units. */
+/**
+ * Draws [scene] scaled to the canvas width, shifted by [pan] scene units, then [overlay] in
+ * scene units. With [placeholder] false only the overlay is drawn, over a real map.
+ */
 @Composable
 fun MapCanvas(
     scene: MapScene,
     modifier: Modifier = Modifier,
     pan: MapPoint = MapPoint(0f, 0f),
+    placeholder: Boolean = true,
     overlay: DrawScope.() -> Unit = {},
 ) {
     Canvas(modifier) {
-        drawRect(Pc.MapLand)
+        if (placeholder) drawRect(Pc.MapLand)
         val s = size.width / scene.width
         scale(s, s, pivot = Offset.Zero) {
             translate(pan.x, pan.y) {
-                scene.shapes.forEach { shape ->
+                if (placeholder) scene.shapes.forEach { shape ->
                     when (shape) {
                         is MapShape.Fill -> drawPath(scene.paths.getValue(shape.d), shape.color)
                         is MapShape.Block -> drawRoundRect(
@@ -159,22 +183,62 @@ fun MapCanvas(
     }
 }
 
+/** Where a map's notices sit: the attribution and the download prompt. */
+data class MapChrome(
+    val attribution: Alignment = Alignment.BottomEnd,
+    val attributionPadding: PaddingValues = PaddingValues(6.dp),
+    /** The download prompt's place, as a fraction of the map's height from the top. */
+    val promptAt: Float = 0.42f,
+)
+
 /**
  * A map at its scene's aspect ratio with composable overlays: [content] gets the
  * size of one scene unit, so a pin at (x, y) is `Modifier.offset(unit * x, unit * y)`.
+ *
+ * With a [frame], the real map is drawn when an installed pack covers the frame's centre;
+ * otherwise the placeholder, and a "Download map for this area" prompt.
  */
 @Composable
 fun MapBox(
     scene: MapScene,
     modifier: Modifier = Modifier,
     pan: MapPoint = MapPoint(0f, 0f),
+    frame: MapFrame? = null,
+    chrome: MapChrome = MapChrome(),
     overlay: DrawScope.() -> Unit = {},
     content: @Composable BoxScope.(unit: Dp) -> Unit = {},
 ) {
+    val maps = LocalMaps.current
+    val installed = maps?.installed?.collectAsState()?.value.orEmpty()
     BoxWithConstraints(modifier.fillMaxWidth().aspectRatio(scene.width / scene.height)) {
         val unit = maxWidth / scene.width
-        MapCanvas(scene, Modifier.fillMaxSize(), pan, overlay)
+        val camera = frame?.let { cameraFor(it, scene.width, scene.height, unit.value, pan) }
+        val pack = camera?.let { covering(installed, it.target).firstOrNull() }
+        if (maps != null && pack != null && camera != null) {
+            PackMap(maps.packUrl(pack), camera, Modifier.fillMaxSize())
+            MapCanvas(scene, Modifier.fillMaxSize(), pan, placeholder = false, overlay = overlay)
+        } else {
+            MapCanvas(scene, Modifier.fillMaxSize(), pan, overlay = overlay)
+        }
         Box(Modifier.fillMaxSize().offset(unit * pan.x, unit * pan.y)) { content(unit) }
+        if (pack != null) {
+            Text(
+                stringResource(R.string.map_attribution),
+                style = body(10.sp, 500, Pc.Body),
+                modifier = Modifier.align(chrome.attribution).padding(chrome.attributionPadding)
+                    .clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.75f)).padding(horizontal = 4.dp, vertical = 1.dp),
+            )
+        } else if (frame != null && maps != null) {
+            val open = LocalOpenMapRegions.current
+            Text(
+                stringResource(R.string.map_download_prompt),
+                style = body(13.sp, 600, Pc.Blue),
+                modifier = Modifier.align(Alignment.TopCenter).offset(y = maxHeight * chrome.promptAt)
+                    .shadow(2.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(Pc.Card)
+                    .clickable(role = Role.Button) { open(camera?.target) }
+                    .heightIn(min = 36.dp).padding(horizontal = 14.dp, vertical = 9.dp),
+            )
+        }
     }
 }
 

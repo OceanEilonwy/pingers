@@ -40,6 +40,7 @@ pingers-mailbox = { path = "crates/pingers-mailbox" }
 pingers-delivery = { path = "crates/pingers-delivery" }
 pingers-quota = { path = "crates/pingers-quota" }
 pingers-testkit = { path = "crates/pingers-testkit" }
+pingers-map-packs = { path = "crates/pingers-map-packs" }
 
 # Errors and secret hygiene
 thiserror = "2.0.21"
@@ -93,6 +94,10 @@ p384 = { version = "0.14.0", default-features = false, features = ["oprf", "allo
 ohttp = { path = "vendor/ohttp" }
 bhttp = "0.8.0"
 
+# Gzip for pingers-tiles, which reads PMTiles directories and tiles (gzip by the PMTiles spec).
+# Pure Rust backend (miniz_oxide); widely used and maintained by the rust-lang org.
+flate2 = { version = "1.1.11", default-features = false, features = ["rust_backend"] }
+
 # Geometry
 libm = "0.2.16"
 
@@ -109,6 +114,8 @@ webpki-roots = "1.0.12"
 # SQLCipher needs a crypto library; the vendored OpenSSL keeps the Android build self-contained.
 rusqlite = { version = "0.42.0", features = ["bundled-sqlcipher-vendored-openssl"] }
 axum = { version = "0.8.9", features = ["http2"] }
+# ReaderStream, so pingers-map-host streams packs from disk (already in the tree via h2).
+tokio-util = { version = "0.7.20", default-features = false, features = ["io"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2", "json"] }
 url = "2.5.8"
 # RS256 for the push relay's FCM service-account JWT (RFC 7523): a Google protocol requirement,

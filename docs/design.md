@@ -23,7 +23,7 @@ One design, shipped as the initial release. There are no stages. Where a mechani
 | Post-quantum | TLS: X25519MLKEM768 via rustls/aws-lc-rs. MLS: suite 0x0003 default. | Setting: X-Wing suite per Party |
 | Storage | Server: a handful of tables of opaque bytes; board in memory only. Push relay: no database. Client: SQLCipher, key in Keychain/Keystore. | None |
 
-Three services, three operators: the **Pingers server** (self-hosted), the **OHTTP relay** (hides IP addresses from the server) and the **push relay** (hides push tokens from the server). For official app builds the push relay is run by the app publisher (B.4.9).
+Four services: the **Pingers server** (self-hosted), the **OHTTP relay** (hides IP addresses from the server), the **push relay** (hides push tokens from the server) and the **map host** (serves whole region map packs; B.12, "Map host"). For official app builds the push relay and the default map host are run by the app publisher (B.4.9).
 
 Definitions used throughout:
 
@@ -748,6 +748,14 @@ A `Router` holds one transport per class. Anonymous and stream requests are neve
 - Identified and anonymous requests never share a connection, and the core orders them with a short random gap. This blunts, but does not remove, timing correlation by the server (A.2).
 - HPKE suite: X25519 / HKDF-SHA256 / AES-128-GCM. Move to an X-Wing HPKE suite once the code points are settled (B.8).
 
+**Map host** (decided 2026-11-13). Maps come from a fourth service, separate from the server and the relays: `pingers-map-host`, a public static host of whole region packs (PMTiles extracts of the Protomaps basemap, OpenStreetMap data), each with a place-name search index and a manifest carrying sizes and SHA-256s. The app downloads a pack whole, verifies it, and renders offline with MapLibre Native; "Search a place" runs on the phone over the pack's index. No request ever names the part of the map on screen or a search term.
+
+- **Which host.** Publisher-hosted by default; highest priority first, the app uses a user override (Advanced), then the host the user's Pingers server advertises (`map_host` in `/v1/params`), then the publisher's built-in default. The chain applies per region: if the chosen host does not carry an area, that area alone comes from the next host.
+- **What the map host learns:** the device's IP address and the names of the regions it downloads, and when. If "Download maps through privacy relay" is on, not the IP: the download goes through the OHTTP relay (status: not yet implemented, see `android/docs/maps.md`; with the setting on, the app refuses to download rather than going direct). Never viewports, zoom levels, searches, Parties, Spots or locations.
+- **Fallback hosts** learn the same for the regions they serve, and every host in the chain sees the catalog request (which says only that the address uses Pingers maps). "What your server sees" says so.
+- **Region size** is the remaining signal: a pack names an area, so smaller packs (a city) say more than larger ones (a state). Operators split large countries into sub-regions to keep downloads small; the app never downloads a pack automatically.
+- **Operators** choose what to host with an allow-list of regions and a disk budget (`max_disk`), and may run a cache mode that cuts allow-listed regions from the upstream Protomaps build on first request. Cutting fetches byte ranges from the upstream build host, which then learns the map host's IP and which regions it cuts, not anything about users.
+
 **Future transports**, recorded so the interface fits them:
 
 - `Tor` (Arti, onion service on the server): removes the need for an independent relay and hides the server's IP. (The `Stream` class no longer needs it: chunked OHTTP carries it.) Blocked on testing Arti bootstrap plus an onion request inside an iOS background wake and an NSE run.
@@ -878,7 +886,8 @@ struct RlnAuth {                 // 265 B
 GET  /v1/params            -> Params { anon_auth: Vec<Rln|PP>, rln_slashing: bool, cover_read_ratio: f32, board_page_records: u32,
                                        ohttp_relays: Vec<Url>,
                                        push_relays: Vec<PushRelayInfo { relay_id, url, key_config_hash, operator: String }>,
-                                       allow_custom_push_relays: bool, server_operator: String, server_time }
+                                       allow_custom_push_relays: bool, server_operator: String, server_time,
+                                       map_host: Option<Url> }   // the map host this server recommends (B.12)
 
 // --- accounts (Acct) ---
 POST /v1/accounts          RegisterReq  { sig_pk: [u8;32], proof: Sig, reg_code: Option<String> } -> { account_id }
@@ -963,7 +972,7 @@ The relay opens `blob` with `info = "pingers/v1/push" ‖ bind`, reads `platform
 - Invite and reply mailboxes are anonymous like any other: the server sees them used and sees the group gain a subscription, without accounts.
 - A link is a bearer capability: revoke by deleting the invite mailbox.
 
-**Map tiles**: not served by this API. Tile fetches reveal the viewport to whoever serves them. Recommendation: MapLibre Native on both platforms with region packs (PMTiles extracts per metro or country) downloaded whole from a static host, so no per-view request exists. Do not range-request PMTiles for the visible area unless through the OHTTP relay. MapKit and Google Maps SDK send viewports to Apple and Google; if used, say so in the privacy text. The compass screen needs no map.
+**Map tiles**: not served by this API. Tile fetches reveal the viewport to whoever serves them. Decided (2026-11-13): MapLibre Native with region packs (PMTiles extracts of the Protomaps basemap, per city, state or country) downloaded whole from the map host (B.12, "Map host"), so no per-view request exists. Never range-request PMTiles for the visible area. No MapKit or Google Maps SDK. The compass screen needs no map.
 
 ---
 
