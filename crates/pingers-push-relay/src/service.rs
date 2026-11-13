@@ -20,13 +20,19 @@ use crate::rate::{Decision, Limiter, RateLimit};
 /// honest load.
 const MAX_TRACKED_TOKENS: usize = 1_000_000;
 
+/// How far ahead of the relay's clock a device's clock may be when it seals `not_after`. A blob
+/// whose `not_after` is further than `max_ttl` plus this from now was not sealed under the
+/// published `max_ttl` (or comes from a badly wrong clock) and is refused.
+pub const CLOCK_SKEW_ALLOWANCE: core::time::Duration = core::time::Duration::from_hours(1);
+
 /// What became of one `POST /v1/push`; the HTTP layer maps each to a status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PushOutcome {
     /// Sent to the push service. 202.
     Accepted,
-    /// The blob will never work: its key is retired or unknown, it has expired, its plaintext
-    /// is malformed, or the push service rejected the token. 410; the server deletes it.
+    /// The blob will never work: its key is retired or unknown, it has expired, it lives
+    /// longer than `max_ttl` allows, its plaintext is malformed, or the push service rejected
+    /// the token. 410; the server deletes it.
     TokenGone,
     /// The blob does not open under this bind. 422.
     DoesNotOpen,
@@ -178,6 +184,14 @@ impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
             Err(OpenError::Unavailable) => return PushOutcome::Internal,
         };
         if now > plaintext.not_after {
+            return PushOutcome::TokenGone;
+        }
+        // Design B.4.9: a blob lives at most max_ttl. Without this a far-future not_after
+        // could be replayed until the key retires.
+        let latest = now
+            .checked_add(self.max_ttl.duration())
+            .and_then(|limit| limit.checked_add(CLOCK_SKEW_ALLOWANCE));
+        if latest.is_none_or(|latest| plaintext.not_after > latest) {
             return PushOutcome::TokenGone;
         }
         if !self.sender.supports(plaintext.platform) {

@@ -288,6 +288,59 @@ async fn a_blob_presented_with_another_bind_does_not_open() -> TestResult {
 }
 
 #[tokio::test]
+async fn a_blob_living_longer_than_max_ttl_is_gone() -> TestResult {
+    // The harness publishes max_ttl = 30 days; one hour of clock skew is allowed on top.
+    let limit = NOW + 30 * DAY + 3600;
+    let mut opener = FakeOpener::default();
+    let at_limit = opener.seal(
+        1,
+        Ok(plaintext(
+            PushPlatform::UnifiedPush,
+            PushClass::Standard,
+            "https://a.example/one",
+            limit,
+        )),
+    );
+    let beyond = opener.seal(
+        2,
+        Ok(plaintext(
+            PushPlatform::UnifiedPush,
+            PushClass::Standard,
+            "https://a.example/two",
+            limit + 1,
+        )),
+    );
+    let far_future = opener.seal(
+        3,
+        Ok(plaintext(
+            PushPlatform::UnifiedPush,
+            PushClass::Standard,
+            "https://a.example/three",
+            u64::MAX,
+        )),
+    );
+    let harness = Setup::new(opener).build()?;
+    assert_eq!(
+        harness
+            .push(&body(2, &at_limit, BIND, Urgency::Alert))
+            .await,
+        PushOutcome::Accepted
+    );
+    assert_eq!(
+        harness.push(&body(2, &beyond, BIND, Urgency::Alert)).await,
+        PushOutcome::TokenGone
+    );
+    assert_eq!(
+        harness
+            .push(&body(2, &far_future, BIND, Urgency::Alert))
+            .await,
+        PushOutcome::TokenGone
+    );
+    assert_eq!(harness.sent().len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn an_expired_blob_is_gone_but_one_expiring_now_is_sent() -> TestResult {
     let mut opener = FakeOpener::default();
     let expired = opener.seal(
@@ -332,7 +385,7 @@ async fn the_old_key_opens_during_the_overlap_and_is_gone_after() -> TestResult 
             PushPlatform::UnifiedPush,
             PushClass::Standard,
             "https://a.example/",
-            NOW + 60 * DAY,
+            NOW + 30 * DAY,
         )),
     );
     let harness = Setup::new(opener).build()?;
