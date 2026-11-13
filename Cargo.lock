@@ -3413,13 +3413,23 @@ dependencies = [
 name = "pingers-push-relay"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "axum",
+ "hex",
  "pingers-crypto",
  "pingers-proto",
+ "pingers-testkit",
  "pingers-time",
+ "pingers-transport",
+ "rand_core 0.10.1",
  "reqwest",
+ "serde",
+ "serde_json",
+ "subtle",
+ "thiserror",
  "tokio",
+ "toml 1.2.1+spec-1.1.0",
+ "url",
+ "zeroize",
 ]
 
 [[package]]
