@@ -6,14 +6,17 @@
 //! over `hyper`, HTTP/2 with prior knowledge (TLS is terminated in front, as for the reference
 //! relay).
 //!
-//! - **OHTTP gateway** at `POST /ohttp`, accepted only from configured relays (design B.12,
-//!   an address allow-list): one-shot requests are decapsulated, decoded from Binary HTTP and
-//!   answered like direct ones; chunked exchanges carry the live channel
-//!   (`POST /v1/groups/{id}/live`, design B.4.9) through a [`LiveChannel`].
+//! - **OHTTP gateway** at `POST /ohttp` on its own listener (`[ohttp] listen`; the public one
+//!   answers 404), accepted only from configured relays (design B.12, an address allow-list,
+//!   with `X-Forwarded-For` read only from trusted proxies): one-shot requests are
+//!   decapsulated, decoded from Binary HTTP and answered like direct ones; chunked exchanges
+//!   carry the live channel (`POST /v1/groups/{id}/live`, design B.4.9) through a
+//!   [`LiveChannel`].
 //! - **Channels by privacy class**: identified routes are served directly, anonymous ones only
 //!   inside one-shot OHTTP, the live channel only inside chunked OHTTP; a route on the wrong
 //!   channel is `421 Misdirected Request`. Public routes (parameters, key configs) either way.
-//! - **Key config** at `GET /v1/ohttp/config` (`application/ohttp-keys`, one config).
+//! - **Key config** at `GET /v1/ohttp/config` on both listeners (`application/ohttp-keys`,
+//!   the served config: `[ohttp] served_key_id`).
 //! - **Metrics** at `GET /metrics` for configured addresses: totals per channel and outcome,
 //!   no identifiers. **Logging** is off by default; when on, it writes those totals only.
 //!
