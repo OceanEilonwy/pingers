@@ -6,10 +6,11 @@ use std::sync::{Arc, PoisonError};
 use axum::http::StatusCode;
 use pingers_board_store::{Board, BoardError};
 use pingers_ohttp::BinaryRequest;
-use pingers_proto::{BoardCursor, BoardSyncRequest, LeaseId, SecretBytes};
+use pingers_proto::{BoardCursor, BoardSyncRequest, LeaseId, RlnScope, SecretBytes};
 use pingers_time::Clock;
 
 use crate::Shared;
+use crate::credential::admit;
 use crate::dispatch::Reply;
 use crate::wire::{decode, either, encoded, hex_array, query, segment};
 
@@ -35,16 +36,17 @@ fn with_board<R>(shared: &Shared, use_board: impl FnOnce(&mut BoardService) -> R
     use_board(&mut board)
 }
 
-/// `POST /v1/board/sync`.
-pub(crate) fn sync(shared: &Shared, request: &BinaryRequest) -> Reply {
-    either(decode::<BoardSyncRequest>(&request.body).map(|sync| {
-        match with_board(shared, |board| {
+/// `POST /v1/board/sync`: Anon, scope Board. Blocking (credential check).
+pub(crate) fn sync(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
+    let _admission = admit(shared, request, RlnScope::Board)?;
+    Ok(either(decode::<BoardSyncRequest>(&request.body).map(
+        |sync| match with_board(shared, |board| {
             shared.with_rng(|rng| board.sync(&sync, rng))
         }) {
             Ok(response) => encoded(StatusCode::OK, &response),
             Err(error) => Reply::status(status_of(&error)),
-        }
-    }))
+        },
+    )))
 }
 
 /// `GET /v1/board/page?c=<cursor>`.

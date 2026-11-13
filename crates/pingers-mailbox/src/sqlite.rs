@@ -235,6 +235,7 @@ impl MailboxStorage for SqliteStorage {
         Ok(if deleted == 0 {
             Removal::Absent
         } else {
+            self.truncate_wal()?;
             Removal::Removed
         })
     }
@@ -316,6 +317,17 @@ impl MailboxStorage for SqliteStorage {
             "DELETE FROM mailbox WHERE expires_at <= ?1",
             params![to_sql_integer(now.get())?],
         )?;
+        self.truncate_wal()
+    }
+}
+
+impl SqliteStorage {
+    /// Copies the write-ahead log into the database and empties it, so deleted mailboxes
+    /// (already overwritten in the database by `secure_delete`) do not survive in the log
+    /// file. A no-op for an in-memory database.
+    fn truncate_wal(&self) -> Result<(), StorageError> {
+        self.connection
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         Ok(())
     }
 }

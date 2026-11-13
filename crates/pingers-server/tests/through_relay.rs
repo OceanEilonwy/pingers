@@ -15,9 +15,10 @@ use hyper::header::CONTENT_TYPE;
 use hyper::{Method, Request, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use pingers_ohttp::{BinaryRequest, ChunkPosition, ChunkedClient, GatewayKey, OpenedChunk};
+use pingers_proto::ServerId;
 use pingers_server::{
-    LiveChannel, LiveFrame, LiveRefused, OhttpKeys, Outside, RelayAllowList, RngSeed, ServerConfig,
-    serve_with,
+    LiveChannel, LiveFrame, LiveRefused, OhttpKeys, Outside, RelayAllowList, Required, RngSeed,
+    ServerConfig, serve_with,
 };
 use pingers_testkit::{HarnessConfig, InProcessHarness, seeded_rng, test_clock};
 use tokio::sync::{mpsc, watch};
@@ -97,11 +98,12 @@ async fn start_behind_relay() -> Result<Stack, TestError> {
     let server = server_listener.local_addr()?;
     let relay_listener = tokio::net::TcpListener::bind(SocketAddr::new(LOOPBACK, 0)).await?;
     let relay = relay_listener.local_addr()?;
-    let config = ServerConfig::new(
-        server,
-        OhttpKeys::new(vec![key])?,
-        RelayAllowList::new(vec![LOOPBACK])?,
-    );
+    let config = ServerConfig::new(Required {
+        listen: server,
+        server_id: ServerId::new("https://pingers.test".to_owned())?,
+        ohttp_keys: OhttpKeys::new(vec![key])?,
+        relays: RelayAllowList::new(vec![LOOPBACK])?,
+    });
     let clock = test_clock();
     let outside = Outside {
         clock: clock.clone(),

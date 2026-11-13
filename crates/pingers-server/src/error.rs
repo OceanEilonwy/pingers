@@ -22,6 +22,15 @@ pub enum ServerError {
     /// The mailbox database cannot be opened.
     #[error("cannot open the mailbox store")]
     MailboxStore(#[source] pingers_mailbox::StorageError),
+    /// The group database cannot be opened.
+    #[error("cannot open the group store")]
+    DeliveryStore(#[source] pingers_delivery::DeliveryError),
+    /// The quota database cannot be opened, or its membership tree does not match its root.
+    #[error("cannot open the quota store")]
+    QuotaStore(#[source] pingers_quota::QuotaError),
+    /// The push relay trust roots cannot be read.
+    #[error("cannot read the push relay certificates")]
+    ReadCertificates(#[source] std::io::Error),
     /// The push relay client cannot be built.
     #[error("cannot build the push relay client")]
     HttpClient(#[source] reqwest::Error),

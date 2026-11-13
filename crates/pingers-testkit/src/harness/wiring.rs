@@ -7,11 +7,13 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use pingers_crypto::{KeyedHashKey, KeyedHashPurpose, PushRelayPrivateKey, keyed_hash};
+use pingers_mailbox::{ListedRelays, RelayCredential, RelayTarget};
 use pingers_ohttp::GatewayKey;
 use pingers_proto::{
     PushClass, PushPlatform, PushRelayKeyId, PushToken, PushTokenPlaintext, SealedPushBlob,
     TimeToLive,
 };
+use pingers_proto::{RelayUrl, ServerId};
 use pingers_push_relay::credentials::{ServerEntry, ServerRegistry};
 use pingers_push_relay::delivery::{DeliveryOutcome, PushMessage, PushSender};
 use pingers_push_relay::keys::{KeyLifetime, KeyRing, RelayKey};
@@ -19,13 +21,14 @@ use pingers_push_relay::opener::{CryptoOpener, OpenError, TokenOpener};
 use pingers_push_relay::rate::RateLimit;
 use pingers_push_relay::service::{Relay, RelayParts};
 use pingers_server::{
-    AddressList, DeliveryLive, OhttpKeys, Outside, RelayAllowList, RngSeed, ServerConfig,
+    AddressList, CertificateSource, DeliveryLive, OhttpKeys, Outside, RelayAllowList, Required,
+    RngSeed, ServerConfig,
 };
 use pingers_time::{Clock as _, ManualClock, UnixSeconds};
 use tokio::sync::watch;
 use zeroize::Zeroizing;
 
-use super::{CapturedPush, Endpoints, HarnessConfig, HarnessError, Service};
+use super::{CapturedPush, Endpoints, HARNESS_PUSH_RELAY_ID, HarnessConfig, HarnessError, Service};
 use crate::rng::{random_array, seeded_rng};
 
 /// How long a request body may take to arrive, on the harness clock.
@@ -90,10 +93,17 @@ impl TokenOpener for NotingOpener {
     }
 }
 
+/// Where the push relay's sender records pushes, and the tokens it answers 410 for.
+pub(super) struct Capture {
+    pub(super) pushes: Arc<Mutex<Vec<CapturedPush>>>,
+    pub(super) gone: Arc<Mutex<Vec<PushToken>>>,
+    pub(super) gone_pushes: Arc<Mutex<Vec<CapturedPush>>>,
+}
+
 /// Captures every push instead of sending it.
 struct CapturingSender {
     classes: Classes,
-    pushes: Arc<Mutex<Vec<CapturedPush>>>,
+    capture: Capture,
     clock: ManualClock,
 }
 
@@ -108,6 +118,12 @@ impl PushSender for CapturingSender {
         token: &PushToken,
         _message: &PushMessage,
     ) -> impl Future<Output = DeliveryOutcome> + Send {
+        let gone = self
+            .capture
+            .gone
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(token);
         let class = self
             .classes
             .lock()
@@ -115,16 +131,21 @@ impl PushSender for CapturingSender {
             .iter()
             .find(|noted| noted.token == *token)
             .map_or(PushClass::Standard, |noted| noted.class);
-        self.pushes
-            .lock()
+        let push = CapturedPush {
+            platform,
+            class,
+            token: token.clone(),
+            sent_at: self.clock.now(),
+        };
+        let (list, outcome) = if gone {
+            (&self.capture.gone_pushes, DeliveryOutcome::TokenGone)
+        } else {
+            (&self.capture.pushes, DeliveryOutcome::Delivered)
+        };
+        list.lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(CapturedPush {
-                platform,
-                class,
-                token: token.clone(),
-                sent_at: self.clock.now(),
-            });
-        std::future::ready(DeliveryOutcome::Delivered)
+            .push(push);
+        std::future::ready(outcome)
     }
 }
 
@@ -157,7 +178,7 @@ struct PushRelayKeys {
 fn push_relay(
     keys: PushRelayKeys,
     clock: &ManualClock,
-    pushes: Arc<Mutex<Vec<CapturedPush>>>,
+    capture: Capture,
 ) -> Result<Relay<NotingOpener, CapturingSender, ManualClock>, HarnessError> {
     let failed = |_| HarnessError::Keys {
         service: Service::PushRelay,
@@ -208,7 +229,7 @@ fn push_relay(
         },
         sender: CapturingSender {
             classes,
-            pushes,
+            capture,
             clock: clock.clone(),
         },
         clock: clock.clone(),
@@ -222,10 +243,7 @@ fn push_relay(
 }
 
 /// Binds, generates keys, and starts the three services on their own runtime thread.
-pub(super) fn start(
-    config: &HarnessConfig,
-    pushes: Arc<Mutex<Vec<CapturedPush>>>,
-) -> Result<Started, HarnessError> {
+pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started, HarnessError> {
     let server_listener = bind(config, Service::Server)?;
     let relay_listener = bind(config, Service::OhttpRelay)?;
     let push_listener = bind(config, Service::PushRelay)?;
@@ -244,28 +262,53 @@ pub(super) fn start(
     let credential_hash_key = KeyedHashKey::from_bytes(Zeroizing::new(random_array(&mut rng)));
     let token_hash_key = KeyedHashKey::from_bytes(Zeroizing::new(random_array(&mut rng)));
 
+    let push_address = address(&push_listener, Service::PushRelay)?;
+    let tls = super::tls::test_tls(config.bind).map_err(|_| HarnessError::Keys {
+        service: Service::PushRelay,
+    })?;
+    let server_id = format!("https://{server}");
     let endpoints = Endpoints {
         server,
         ohttp_relay: address(&relay_listener, Service::OhttpRelay)?,
-        push_relay: address(&push_listener, Service::PushRelay)?,
+        push_relay: push_address,
+        push_relay_ca: tls.ca_pem.clone(),
+        server_id: server_id.clone(),
         ohttp_key_config,
         push_relay_key: push_public.public_key().to_vec(),
     };
     let keys_error = |_| HarnessError::Keys {
         service: Service::Server,
     };
+    let push_url =
+        RelayUrl::new(format!("https://{push_address}")).map_err(|_| HarnessError::Keys {
+            service: Service::PushRelay,
+        })?;
+    let credential =
+        String::from_utf8(PUSH_CREDENTIAL.to_vec()).map_err(|_| HarnessError::Keys {
+            service: Service::PushRelay,
+        })?;
     // On loopback the relay's connections come from the bind address, which is also where
-    // test clients come from: the relay-only rule cannot tell them apart here. No push relay
-    // is listed: pingers-proto's RelayUrl requires https://, and the harness relay is plain
-    // HTTP on loopback.
+    // test clients come from: the relay-only rule cannot tell them apart here. The push relay
+    // is HTTPS with the test CA's certificate, which the server is told to trust.
     let server_config = ServerConfig {
         request_timeout: REQUEST_TIMEOUT,
         metrics: AddressList::new(vec![config.bind]),
-        ..ServerConfig::new(
-            server,
-            OhttpKeys::new(vec![gateway_key]).map_err(keys_error)?,
-            RelayAllowList::new(vec![config.bind]).map_err(keys_error)?,
-        )
+        push_relays: ListedRelays::new([(
+            HARNESS_PUSH_RELAY_ID,
+            RelayTarget {
+                url: push_url,
+                credential: RelayCredential::new(credential),
+            },
+        )]),
+        push_relay_ca: Some(CertificateSource::Pem(tls.ca_pem.clone().into_bytes())),
+        ..ServerConfig::new(Required {
+            listen: server,
+            server_id: ServerId::new(server_id).map_err(|_| HarnessError::Keys {
+                service: Service::Server,
+            })?,
+            ohttp_keys: OhttpKeys::new(vec![gateway_key]).map_err(keys_error)?,
+            relays: RelayAllowList::new(vec![config.bind]).map_err(keys_error)?,
+        })
     };
     let push = push_relay(
         PushRelayKeys {
@@ -274,7 +317,7 @@ pub(super) fn start(
             token_hash_key,
         },
         &config.clock,
-        pushes,
+        capture,
     )?;
     let outside = Outside {
         clock: config.clock.clone(),
@@ -290,7 +333,10 @@ pub(super) fn start(
         },
         server_config,
         outside,
-        push,
+        PushService {
+            relay: push,
+            tls: tls.acceptor,
+        },
     )?;
     Ok(Started { endpoints, running })
 }
@@ -305,12 +351,18 @@ struct Listeners {
 type HarnessOutside = Outside<ManualClock, ManualClock, DeliveryLive>;
 type HarnessPushRelay = Relay<NotingOpener, CapturingSender, ManualClock>;
 
+/// The push relay and its TLS acceptor.
+struct PushService {
+    relay: HarnessPushRelay,
+    tls: tokio_rustls::TlsAcceptor,
+}
+
 /// Runs the three services on a runtime of their own thread.
 fn spawn(
     listeners: Listeners,
     server_config: ServerConfig,
     outside: HarnessOutside,
-    push: HarnessPushRelay,
+    push: PushService,
 ) -> Result<Running, HarnessError> {
     let server = address(&listeners.server, Service::Server)?;
     let Listeners {
@@ -360,11 +412,8 @@ fn spawn(
                 );
                 let relay = super::relay::serve(relay_listener, server, relay_done);
                 let push = async move {
-                    let router = pingers_push_relay::http::router(Arc::new(push));
-                    // A push relay that fails has already failed the test that used it.
-                    let _ = axum::serve(push_listener, router)
-                        .with_graceful_shutdown(push_done)
-                        .await;
+                    let router = pingers_push_relay::http::router(Arc::new(push.relay));
+                    super::tls::serve(push_listener, push.tls, router, push_done).await;
                 };
                 // A server that fails to start has already failed the test that used it.
                 let (_served, (), ()) = tokio::join!(server_task, relay, push);

@@ -34,6 +34,9 @@ pub enum E2eError {
     /// MLS refused something.
     #[error(transparent)]
     Mls(#[from] pingers_mls::MlsError),
+    /// Fetching or finishing Privacy Pass tokens failed.
+    #[error(transparent)]
+    Anon(#[from] pingers_anon::AnonError),
     /// A crypto helper failed.
     #[error(transparent)]
     Crypto(#[from] pingers_crypto::CryptoError),
