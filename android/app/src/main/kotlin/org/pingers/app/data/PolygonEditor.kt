@@ -5,10 +5,10 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * The point-by-point polygon editing model behind Draw area, as in the canvas
+ * The point-by-point polygon editing model behind Draw area, for FakeRepository, as in the canvas
  * prototype (SpotDrawArea.dc.html). Immutable: each action returns the next
- * editor. pingers-screens will own this model; until then it lives here, out of
- * the composables.
+ * editor. CoreRepository uses pingers-screens' model (AreaEditor) instead; this one stays for
+ * previews and screenshots.
  */
 data class PolygonEditor(
     val points: List<MapPoint> = emptyList(),
@@ -90,16 +90,20 @@ data class PolygonEditor(
         return abs(a / 2f) * M2_PER_UNIT2
     }
 
-    fun state(spotName: String) = DrawAreaState(
+    /** The screen, with the map units placed by [frame] (FakeRepository's map). */
+    fun state(spotName: String, frame: MapFrame) = DrawAreaState(
         spotName = spotName,
-        points = points,
-        midpoints = midpoints(),
+        points = points.map(frame::toCoordinate),
+        midpoints = midpoints().map(frame::toCoordinate),
         closed = closed,
         selected = selected,
         closable = closable,
         canUndo = history.isNotEmpty(),
         canDelete = closed && selected != null && points.size > 3,
         areaM2 = areaM2(),
+        problem = null,
+        canUse = closed,
+        mapFrame = frame,
         hint = when {
             points.isEmpty() -> DrawHint.FirstPoint
             !closed && points.size < 3 -> DrawHint.KeepTapping

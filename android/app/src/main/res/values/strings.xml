@@ -10,6 +10,7 @@
     <string name="list_and">%1$s and %2$s</string>
     <string name="you_lower">you</string>
     <string name="privacy_full">Full privacy</string>
+    <string name="privacy_checking">Checking…</string>
     <string name="privacy_reduced">Reduced privacy</string>
     <string name="server_and_privacy">%1$s · %2$s</string>
     <plurals name="members">
@@ -111,6 +112,7 @@
     <!-- Invite people, Accept invite -->
     <string name="invite_title">Invite people</string>
     <string name="invite_scan">Scan in person, or share the link.\nEach invite works once · expires in %1$d h</string>
+    <string name="invite_making">Making an invite link…</string>
     <string name="invite_share">Share invite link</string>
     <string name="invite_share_title">Invite to %1$s</string>
     <string name="invite_invitations">Invitations</string>
@@ -161,6 +163,9 @@
     <string name="draw_hint_close">Tap the orange first point to close the shape.</string>
     <string name="draw_hint_selected">Point %1$d selected. Drag to move it, or delete it.</string>
     <string name="draw_hint_adjust">Drag a point to adjust it. Tap + on an edge to add a point. Tap a point to select it.</string>
+    <string name="draw_problem_crossing">Two edges cross. Drag a point to fix it.</string>
+    <string name="draw_problem_no_area">This shape has no area. Move a point apart.</string>
+    <string name="draw_problem_too_large">This area is too large for a Spot.</string>
     <string name="draw_undo">Undo</string>
     <string name="draw_delete">Delete point</string>
     <string name="draw_clear">Clear</string>
@@ -271,8 +276,10 @@
     <!-- Meetup -->
     <string name="meetup_here">%1$s · %2$d here</string>
     <string name="meetup_set_by">Set by %1$s · %2$d m away</string>
+    <string name="meetup_set_by_no_distance">Set by %1$s</string>
     <string name="meetup_go">Go</string>
     <string name="meetup_sharing_with_you">%1$d m %2$s · sharing with you</string>
+    <string name="meetup_sharing_no_distance">Sharing with you</string>
     <string name="meetup_private">Here · exact spot private</string>
     <string name="meetup_asked">Here · asked to see exact spot</string>
     <string name="meetup_chat">Chat · %1$d</string>
@@ -303,7 +310,7 @@
     <string name="mp_title">Meet point</string>
     <string name="mp_drag">Drag map to move pin</string>
     <string name="mp_pin">Pin on map</string>
-    <string name="mp_person">At a person</string>
+    <string name="mp_at_me">At me</string>
     <string name="mp_midpoint">Midpoint</string>
     <string name="mp_label">Label (optional)</string>
     <string name="mp_distance">%1$s %2$d m</string>
@@ -312,6 +319,8 @@
 
     <!-- Compass -->
     <string name="compass_gps">GPS ±%1$d m</string>
+    <string name="compass_no_gps">Waiting for GPS</string>
+    <string name="compass_waiting">Finding %1$s…</string>
     <string name="compass_n">N</string>
     <string name="compass_walk">About %1$d min walk · %2$s</string>
     <string name="compass_taps">Phone taps when you face the right way.</string>
