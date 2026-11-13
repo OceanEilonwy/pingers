@@ -362,6 +362,7 @@ fn sealed_push(vector: &Vector) -> Result<SealedPush, TestError> {
     };
     Ok(SealedPush {
         relay,
+        key_id: PushRelayKeyId::new(small(vector, "key_id")?),
         blob: SealedPushBlob::from_bytes(bytes(vector, "blob")?),
         urgency: urgency(vector, "urgency")?,
         handle: PushHandle::from_bytes(bytes(vector, "handle")?),
@@ -523,6 +524,7 @@ fn join_request_vectors() -> Result<(), TestError> {
                     id: SubscriptionId::from_bytes(bytes(vector, "subscription_id")?),
                     push: SealedPush {
                         relay: RelayRef::Listed(RelayId::new(2)),
+                        key_id: PushRelayKeyId::new(1),
                         blob: SealedPushBlob::from_bytes(blob()),
                         urgency: Urgency::Quiet,
                         handle: PushHandle::from_bytes(ramp::<8>(0xf0)),
@@ -547,6 +549,7 @@ fn knock_vectors() -> Result<(), TestError> {
                     id: SubscriptionId::from_bytes(id),
                     push: SealedPush {
                         relay: RelayRef::Listed(RelayId::new(2)),
+                        key_id: PushRelayKeyId::new(1),
                         blob: SealedPushBlob::from_bytes(blob()),
                         urgency: Urgency::Quiet,
                         handle: PushHandle::from_bytes(ramp::<8>(0xf0)),

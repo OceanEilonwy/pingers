@@ -384,9 +384,10 @@ write(
 mbox = ramp(0x11, 16)
 blob = ramp(0, 256) + ramp(0, 64)
 handle = ramp(0xf0, 8)
-listed = a(a(u(0), u(2)), b(blob), u(1), b(handle))
+# SealedPush: [relay, relay key id, blob, urgency, handle].
+listed = a(a(u(0), u(2)), u(1), b(blob), u(1), b(handle))
 custom_hash = fill(0x77, 32)
-custom = a(a(u(1), t("https://push.example"), b(custom_hash)), b(blob), u(0), b(handle))
+custom = a(a(u(1), t("https://push.example"), b(custom_hash)), u(7), b(blob), u(0), b(handle))
 write(
     "mailbox-spec-encoding",
     "POST /v1/mailboxes body as canonical CBOR (design B.4.9, D)",
@@ -399,6 +400,7 @@ write(
                 "relay_id": 2,
                 "relay_url": "",
                 "key_config_hash": "",
+                "key_id": 1,
                 "blob": h(blob),
                 "urgency": "quiet",
                 "handle": h(handle),
@@ -413,6 +415,7 @@ write(
                 "relay_id": "",
                 "relay_url": "https://push.example",
                 "key_config_hash": h(custom_hash),
+                "key_id": 7,
                 "blob": h(blob),
                 "urgency": "alert",
                 "handle": h(handle),
@@ -427,6 +430,7 @@ write(
                 "relay_id": "",
                 "relay_url": "",
                 "key_config_hash": "",
+                "key_id": "",
                 "blob": "",
                 "urgency": "",
                 "handle": "",
@@ -437,6 +441,24 @@ write(
             "name": "zero-ttl",
             "inputs": {"encoding": h(versioned(a(b(mbox), u(0), NULL)))},
             "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "relay-key-id-over-255",
+            "inputs": {
+                "encoding": h(
+                    versioned(
+                        a(b(mbox), u(60), a(a(u(0), u(2)), u(256), b(blob), u(1), b(handle)))
+                    )
+                )
+            },
+            "expected": {"error": "Cbor"},
+        },
+        {
+            "name": "sealed-push-without-key-id",
+            "inputs": {
+                "encoding": h(versioned(a(b(mbox), u(60), a(a(u(0), u(2)), b(blob), u(1), b(handle)))))
+            },
+            "expected": {"error": "Cbor"},
         },
     ],
 )

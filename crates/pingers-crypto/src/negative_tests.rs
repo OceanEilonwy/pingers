@@ -288,6 +288,7 @@ fn knock_signature_without_subscription_does_not_cover_one_with() -> Result<(), 
         id: pingers_proto::SubscriptionId::from_bytes([6; 16]),
         push: pingers_proto::SealedPush {
             relay: pingers_proto::RelayRef::Listed(pingers_proto::RelayId::new(1)),
+            key_id: pingers_proto::PushRelayKeyId::new(1),
             blob: pingers_proto::SealedPushBlob::from_bytes([7; 320]),
             urgency: pingers_proto::Urgency::Alert,
             handle: pingers_proto::PushHandle::from_bytes([8; 8]),

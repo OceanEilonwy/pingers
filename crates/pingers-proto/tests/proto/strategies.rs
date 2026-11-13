@@ -126,13 +126,14 @@ pub(crate) fn relay_ref() -> impl Strategy<Value = RelayRef> {
 
 pub(crate) fn sealed_push() -> impl Strategy<Value = SealedPush> {
     (
-        relay_ref(),
+        (relay_ref(), any::<u8>()),
         uniform::<_, 320>(any::<u8>()),
         urgency(),
         uniform::<_, 8>(any::<u8>()),
     )
-        .prop_map(|(relay, blob, urgency, handle)| SealedPush {
+        .prop_map(|((relay, key_id), blob, urgency, handle)| SealedPush {
             relay,
+            key_id: PushRelayKeyId::new(key_id),
             blob: SealedPushBlob::from_bytes(blob),
             urgency,
             handle: PushHandle::from_bytes(handle),

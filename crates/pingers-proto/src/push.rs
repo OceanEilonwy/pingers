@@ -7,7 +7,7 @@ use minicbor::Decoder;
 use pingers_time::UnixSeconds;
 
 use crate::cbor::{self, CborBody, Writer, versioned_cbor};
-use crate::{MailboxId, ProtoError, PushHandle, RelayId, SubscriptionId};
+use crate::{MailboxId, ProtoError, PushHandle, PushRelayKeyId, RelayId, SubscriptionId};
 
 /// How long a mailbox or subscription lives on the server: at least one second and at most
 /// `u32::MAX` seconds, as the wire's `ttl_s: u32` allows.
@@ -415,6 +415,9 @@ impl CborBody for RelayRef {
 pub struct SealedPush {
     /// The relay that can open it.
     pub relay: RelayRef,
+    /// Which of that relay's keys the blob is sealed to. The key id is bound into the seal, so
+    /// the server forwards it as given instead of substituting its own idea of the current key.
+    pub key_id: PushRelayKeyId,
     /// The sealed token, fresh for every mailbox and subscription.
     pub blob: SealedPushBlob,
     /// Priority for class Standard; ignored for class Location.
@@ -423,20 +426,22 @@ pub struct SealedPush {
     pub handle: PushHandle,
 }
 
-/// Layout: `[relay, blob (320 bytes), urgency, handle (8 bytes)]`.
+/// Layout: `[relay, relay key id, blob (320 bytes), urgency, handle (8 bytes)]`.
 impl CborBody for SealedPush {
     fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
-        writer.array(4)?;
+        writer.array(5)?;
         self.relay.encode_body(writer)?;
+        writer.unsigned(self.key_id.get());
         writer.bytes(self.blob.as_bytes())?;
         self.urgency.encode_cbor(writer);
         writer.bytes(self.handle.as_bytes())
     }
 
     fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
-        cbor::array_of(decoder, 4)?;
+        cbor::array_of(decoder, 5)?;
         Ok(Self {
             relay: RelayRef::decode_body(decoder)?,
+            key_id: PushRelayKeyId::new(decoder.u8()?),
             blob: SealedPushBlob::from_bytes(cbor::fixed_bytes(decoder)?),
             urgency: Urgency::decode_cbor(decoder)?,
             handle: PushHandle::from_bytes(cbor::fixed_bytes(decoder)?),

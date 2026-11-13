@@ -118,6 +118,10 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
   AES-128-GCM, other suites `OutOfRange`), because SHA-256 of exactly those bytes is what
   members pin. `max_ttl_s` is a `TimeToLive`.
 - **`PushRelayKeyId`** (`u8`, `new`/`get`) replaces the relay's own `KeyId`.
+- **`SealedPush` carries `key_id: PushRelayKeyId`** (a new public field, so struct literals
+  must add it): layout `[relay, relay key id, blob, urgency, handle]`. pingers-crypto binds the
+  key id into the seal, so the device states which relay key it sealed to and the server
+  forwards that id instead of substituting its configured current key.
 - **`PushBind`** moved here from pingers-crypto so `PushRequest` can carry it; pingers-crypto
   re-exports it, so `pingers_crypto::PushBind` still works and the derivations stay there.
 - `PushPlatform`'s wire values and `TimeToLive`'s CBOR helpers became `pub(crate)` for reuse.
