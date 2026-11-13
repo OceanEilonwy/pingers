@@ -497,3 +497,33 @@ async fn deleted_meetup_bytes_do_not_linger_on_disk() -> TestResult {
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mailbox_posts_come_in_fixed_size_classes() -> TestResult {
+    let (world, _group) = played(870).await?;
+    let mut sizes = HashSet::new();
+    let mut registrations = HashSet::new();
+    for exchange in world.recorder.exchanges() {
+        if exchange.method == "POST" && exchange.path.ends_with("/msgs") {
+            sizes.insert(exchange.request_len);
+        } else if exchange.method == "POST" && exchange.path == "/v1/mailboxes" {
+            registrations.insert(exchange.request_len);
+        }
+    }
+    // Knocks are padded to 1 KiB and Welcomes to a mailbox class: the server sees only sizes
+    // from the fixed list (design D), never the content's length.
+    check(!sizes.is_empty(), "mailbox posts were sent")?;
+    check(
+        sizes.iter().all(|size| {
+            pingers_proto::SizeClass::MAILBOX_POST
+                .iter()
+                .any(|class| class.size() == *size)
+        }),
+        &format!("a mailbox post outside the size classes: {sizes:?}"),
+    )?;
+    // Knock and reply mailboxes look alike when registered.
+    check(
+        registrations.len() == 1,
+        &format!("mailbox registrations differ in size: {registrations:?}"),
+    )
+}
