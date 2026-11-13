@@ -584,7 +584,10 @@ async fn a_failing_crate_fails_the_call_and_keeps_the_snapshot() -> Result<(), T
         next_wake: Some(Duration::from_mins(1)),
         ..WakeOutcome::default()
     });
-    assert!(matches!(rig.client.on_wake().await, Err(ClientError::Wake(_))));
+    assert!(matches!(
+        rig.client.on_wake().await,
+        Err(ClientError::Wake(_))
+    ));
     assert_eq!(rig.platform.pending_wake(), None);
     rig.fakes.set_failing(Some(CrateName::Meetups));
     assert!(matches!(

@@ -9,6 +9,7 @@
 //! and a `Runtime` whose transport and [`GroupLogs`](super::sync::GroupLogs) come from
 //! pingers-sync. Everything that acts on a live Meetup is wired and finds none until then.
 
+use core::future::{Future, ready};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
@@ -251,10 +252,12 @@ fn meetup(session: &Session, clock: &dyn Clock, view: &MeetupView) -> Result<Mee
         .iter()
         .map(|peer| {
             let access = match (peer.position, peer.access, peer.request_pending_until) {
-                (Some(position), ExactLocation::Shared { .. }, _) => PeerAccess::Shared(TargetPosition {
-                    position: position.position,
-                    taken_at: position.taken_at,
-                }),
+                (Some(position), ExactLocation::Shared { .. }, _) => {
+                    PeerAccess::Shared(TargetPosition {
+                        position: position.position,
+                        taken_at: position.taken_at,
+                    })
+                }
                 (_, _, Some(_)) => PeerAccess::Asked,
                 _ => PeerAccess::Private,
             };
@@ -344,12 +347,15 @@ impl MeetupPort for Meetups {
             .map(|live| live.handle.group())
     }
 
-    async fn admit(&self, _admission: MeetupAdmission) -> Result<(), PortError> {
-        Err(PortError::Unavailable)
+    fn admit(
+        &self,
+        _admission: MeetupAdmission,
+    ) -> impl Future<Output = Result<(), PortError>> + Send {
+        ready(Err(PortError::Unavailable))
     }
 
-    async fn welcome(&self, _reply: ReplyPost) -> Result<(), PortError> {
-        Err(PortError::Unavailable)
+    fn welcome(&self, _reply: ReplyPost) -> impl Future<Output = Result<(), PortError>> + Send {
+        ready(Err(PortError::Unavailable))
     }
 
     async fn leave_all(&self) -> Result<(), PortError> {

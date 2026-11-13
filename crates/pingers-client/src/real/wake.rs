@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
 use pingers_gate::{
-    FocusState, GateDecision, GateInputs, LocationSharing, MinuteOfDay, PauseState, QuietHours,
+    FocusState, GateDecision, GateInputs, LocationSharing, MinuteOfDay, PauseState,
     QuietHoursSetting, decide,
 };
 use pingers_geo::{Fix, GeofenceCapacity, ZoneStatus};
@@ -26,12 +26,12 @@ use pingers_wake::{
 };
 use tokio::sync::Mutex as AsyncMutex;
 
+use super::Backend;
 use super::meetups::Meetups;
 use super::records::{self, Key, Reader, Writer, corrupt};
 use super::sync::Server;
 use super::wake_codec;
 use super::wake_ports::{Device, Lens, Time, region_id};
-use super::Backend;
 use crate::ports::{
     ClientEvent, Foreground, GeofenceTransition, PipelineSection, SettingChange, WakeInput,
     WakeOutcome, WakePort,
@@ -231,7 +231,7 @@ impl WakePort for Wake {
                     PauseInFocus::On => focus,
                     PauseInFocus::Off => FocusState::Off,
                 },
-                quiet_hours: stored.device.quiet_setting()?,
+                quiet_hours: stored.device.quiet_setting(),
                 local_time: local_time(now)?,
                 zones: ZoneStatus::Clear,
             }),
@@ -258,7 +258,12 @@ impl WakePort for Wake {
 /// WAITING(platform): `Platform` does not report the local time zone yet, so this is UTC and
 /// quiet hours are read in UTC until the shell passes its offset.
 fn local_time(now: UnixSeconds) -> Result<MinuteOfDay, ClientError> {
-    let minute = now.get().checked_rem(86_400).unwrap_or(0).checked_div(60).unwrap_or(0);
+    let minute = now
+        .get()
+        .checked_rem(86_400)
+        .unwrap_or(0)
+        .checked_div(60)
+        .unwrap_or(0);
     MinuteOfDay::new(u16::try_from(minute).map_err(|_never| corrupt())?).map_err(|_never| corrupt())
 }
 
@@ -296,7 +301,7 @@ impl Stored {
         Ok(WakeSettings {
             location_sharing: self.device.location_sharing,
             pause: self.device.pause,
-            quiet_hours: self.device.quiet_setting()?,
+            quiet_hours: self.device.quiet_setting(),
             local_time: local_time(now)?,
             zones: self.zones.iter().map(|zone| zone.fence.clone()).collect(),
             data_mode: DataMode::Normal,
@@ -363,16 +368,11 @@ impl DeviceSettings {
         })
     }
 
-    fn quiet_setting(&self) -> Result<QuietHoursSetting, ClientError> {
-        Ok(match self.quiet_hours.state {
+    fn quiet_setting(&self) -> QuietHoursSetting {
+        match self.quiet_hours.state {
             Toggle::Off => QuietHoursSetting::Off,
-            Toggle::On => {
-                let window = self.quiet_hours.window;
-                QuietHoursSetting::Scheduled(
-                    QuietHours::new(window.start(), window.end()).map_err(|_never| corrupt())?,
-                )
-            }
-        })
+            Toggle::On => QuietHoursSetting::Scheduled(self.quiet_hours.window),
+        }
     }
 }
 
@@ -445,9 +445,9 @@ fn read_zones(reader: &mut Reader<'_>) -> Result<Vec<ExclusionZone>, ClientError
                 window: read_window(reader)?,
             },
         };
-        let parties = match reader.option(|reader| {
-            reader.list(|reader| Ok(PartyId::from_bytes(reader.fixed()?)))
-        })? {
+        let parties = match reader
+            .option(|reader| reader.list(|reader| Ok(PartyId::from_bytes(reader.fixed()?))))?
+        {
             None => ZoneParties::All,
             Some(parties) => ZoneParties::Only(parties),
         };

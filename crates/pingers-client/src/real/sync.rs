@@ -9,6 +9,7 @@
 //! [`Outbox`] keeps the `Outbound` values pingers-parties returns, in memory only, so they can
 //! be handed over when pingers-sync lands; today they are dropped at exit.
 
+use core::future::{Future, ready};
 use std::sync::{Mutex, PoisonError};
 
 use async_trait::async_trait;
@@ -73,32 +74,44 @@ impl SyncPort for Sync {
 pub(crate) struct Server;
 
 impl ServerPort for Server {
-    async fn pull_group_logs(&self) -> Result<(), PortError> {
-        Err(PortError::Unavailable)
+    fn pull_group_logs(&self) -> impl Future<Output = Result<(), PortError>> + Send {
+        ready(Err(PortError::Unavailable))
     }
 
-    async fn upload_lease(&self, _upload: LeaseUpload) -> Result<Option<BoardPage>, PortError> {
-        Err(PortError::Unavailable)
+    fn upload_lease(
+        &self,
+        _upload: LeaseUpload,
+    ) -> impl Future<Output = Result<Option<BoardPage>, PortError>> + Send {
+        ready(Err(PortError::Unavailable))
     }
 
-    async fn board_page(&self, _cursor: BoardCursor) -> Result<BoardPage, PortError> {
-        Err(PortError::Unavailable)
+    fn board_page(
+        &self,
+        _cursor: BoardCursor,
+    ) -> impl Future<Output = Result<BoardPage, PortError>> + Send {
+        ready(Err(PortError::Unavailable))
     }
 
-    async fn post_knock(&self, _knock: OutgoingKnock) -> Result<(), PortError> {
-        Err(PortError::Unavailable)
+    fn post_knock(
+        &self,
+        _knock: OutgoingKnock,
+    ) -> impl Future<Output = Result<(), PortError>> + Send {
+        ready(Err(PortError::Unavailable))
     }
 
-    async fn read_mailbox(&self, _mailbox: MailboxId) -> Result<Vec<Vec<u8>>, PortError> {
-        Err(PortError::Unavailable)
+    fn read_mailbox(
+        &self,
+        _mailbox: MailboxId,
+    ) -> impl Future<Output = Result<Vec<Vec<u8>>, PortError>> + Send {
+        ready(Err(PortError::Unavailable))
     }
 
     fn take_mailbox(&self, _purpose: MailboxPurpose, _lease_start: Bucket) -> Option<MailboxId> {
         None
     }
 
-    async fn refill_mailbox_pool(&self) -> Result<(), PortError> {
-        Err(PortError::Unavailable)
+    fn refill_mailbox_pool(&self) -> impl Future<Output = Result<(), PortError>> + Send {
+        ready(Err(PortError::Unavailable))
     }
 }
 

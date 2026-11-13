@@ -87,7 +87,10 @@ async fn rig() -> Result<Rig, TestError> {
     let clock = test_clock();
     let mut rng = ChaCha20Rng::seed_from_u64(1);
     {
-        let database = Database::open(&dir.database(), DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+        let database = Database::open(
+            &dir.database(),
+            DatabaseKey::from_bytes(Zeroizing::new(KEY)),
+        )?;
         let session = database.session()?;
         let signing_key = AccountSigningKey::generate(&mut rng);
         session.identity().save(&Identity {
@@ -169,7 +172,10 @@ async fn party_with_spot(client: &Client) -> Result<(), TestError> {
 #[tokio::test]
 async fn a_party_its_spot_and_an_invite_show_in_the_snapshot() -> Result<(), TestError> {
     let rig = rig().await?;
-    assert!(rig.client.snapshot().parties.is_empty(), "a fresh store has no Parties");
+    assert!(
+        rig.client.snapshot().parties.is_empty(),
+        "a fresh store has no Parties"
+    );
 
     let party = rig
         .client
@@ -199,15 +205,27 @@ async fn a_party_its_spot_and_an_invite_show_in_the_snapshot() -> Result<(), Tes
     assert_eq!(shown.colour, PartyColour::Teal);
     assert_eq!(shown.members.len(), 1, "only this device");
     assert!(shown.members.iter().all(|member| member.me == Me::Me));
-    assert_eq!(shown.members.first().map(|member| member.name.as_str()), Some("Sam"));
+    assert_eq!(
+        shown.members.first().map(|member| member.name.as_str()),
+        Some("Sam")
+    );
     assert_eq!(shown.spots.len(), 1);
     assert_eq!(shown.spots.first().map(|shown| shown.id), Some(spot));
-    assert_eq!(shown.spots.first().map(|shown| shown.name.as_str()), Some("The wall"));
-    assert_eq!(shown.spots.first().map(|shown| &shown.fence), Some(&spot_fence()?));
+    assert_eq!(
+        shown.spots.first().map(|shown| shown.name.as_str()),
+        Some("The wall")
+    );
+    assert_eq!(
+        shown.spots.first().map(|shown| &shown.fence),
+        Some(&spot_fence()?)
+    );
     assert_eq!(shown.config.post_quantum, PostQuantum::Off);
     assert_eq!(shown.config.server.host.as_str(), "pingers.test");
     assert_eq!(shown.invite_link.as_ref(), Some(&link));
-    assert!(link.url.as_str().starts_with("https://"), "a shareable link");
+    assert!(
+        link.url.as_str().starts_with("https://"),
+        "a shareable link"
+    );
     assert_eq!(shown.invites.len(), 1);
     assert_eq!(
         shown.invites.first().map(|invite| &invite.status),
@@ -292,7 +310,10 @@ async fn a_wake_inside_a_spot_runs_to_the_server_stub_and_stops_cleanly() -> Res
     // still sets the mode and schedules the retry, and the call succeeds.
     rig.clock.advance(Duration::from_secs(31));
     rig.client.on_location(fix(rig.clock.now())?).await?;
-    assert_eq!(rig.platform.location_mode(), pingers_testkit::LocationMode::Dwell);
+    assert_eq!(
+        rig.platform.location_mode(),
+        pingers_testkit::LocationMode::Dwell
+    );
     assert_eq!(
         rig.platform.pending_wake().map(|wake| wake.after),
         Some(pingers_wake::RETRY_AFTER),

@@ -25,7 +25,6 @@ pingers-parties = { workspace = true }
 pingers-presence = { workspace = true }
 pingers-proto = { workspace = true }
 pingers-store = { workspace = true }
-pingers-sync = { workspace = true }
 pingers-time = { workspace = true }
 pingers-transport = { workspace = true }
 pingers-wake = { workspace = true }

@@ -2,6 +2,7 @@
 //! pingers-wake's own ports: [`Device`] over the shell's [`Platform`], [`Lens`] over
 //! pingers-parties, and [`Time`] over the injected clock and timer.
 
+use core::future::{Future, ready};
 use core::time::Duration;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -67,14 +68,18 @@ impl DevicePort for Device {
 
     /// The platform delivers fixes through `Client::on_location`, which runs the next wake, so
     /// this wake asks for one and goes on without it.
-    async fn request_fix(&self, quality: WakeFixQuality, timeout: Duration) -> Option<Fix> {
+    fn request_fix(
+        &self,
+        quality: WakeFixQuality,
+        timeout: Duration,
+    ) -> impl Future<Output = Option<Fix>> + Send {
         self.record(|outcome| {
             outcome.fix = Some(FixRequest {
                 quality: fix_quality(quality),
                 timeout,
             });
         });
-        None
+        ready(None)
     }
 
     fn set_os_geofences(&self, regions: &[OsRegion]) {
@@ -134,7 +139,9 @@ pub(crate) fn region_id(text: &str) -> Result<RegionId, ClientError> {
     let ids = text.strip_prefix(SPOT).ok_or_else(corrupt)?;
     let mut bytes = [0_u8; PartyId::LENGTH + SpotId::LENGTH];
     hex::decode_to_slice(ids, &mut bytes).map_err(|_bad| corrupt())?;
-    let (party, spot) = bytes.split_first_chunk::<{ PartyId::LENGTH }>().ok_or_else(corrupt)?;
+    let (party, spot) = bytes
+        .split_first_chunk::<{ PartyId::LENGTH }>()
+        .ok_or_else(corrupt)?;
     Ok(RegionId::Spot(SpotRef {
         party: PartyId::from_bytes(*party),
         spot: SpotId::from_bytes(spot.try_into().map_err(|_bad| corrupt())?),

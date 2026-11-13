@@ -21,7 +21,9 @@ pub(crate) fn load(session: &Session) -> Result<WakeSnapshot, ClientError> {
 
 /// Stores `snapshot`, replacing the previous one.
 pub(crate) fn save(session: &Session, snapshot: &WakeSnapshot) -> Result<(), ClientError> {
-    records::write(session, &Key::WakeSnapshot, |writer| encode(writer, snapshot))
+    records::write(session, &Key::WakeSnapshot, |writer| {
+        encode(writer, snapshot);
+    })
 }
 
 fn encode(writer: &mut Writer, snapshot: &WakeSnapshot) {
@@ -35,9 +37,16 @@ fn encode(writer: &mut Writer, snapshot: &WakeSnapshot) {
             PresenceState::Suppressed => 3,
         });
         writer.u64(spot.presence.since.get());
-        writer.option(spot.presence.last_fix_at, |writer, at| writer.u64(at.get()));
+        writer.option(spot.presence.last_fix_at, |writer, at| {
+            writer.u64(at.get());
+        });
+        writer.option(spot.presence.confirmed_at, |writer, at| {
+            writer.u64(at.get());
+        });
     }
-    writer.option(snapshot.last_in_zone, |writer, at| writer.u64(at.get()));
+    writer.option(snapshot.last_in_zone, |writer, at| {
+        writer.u64(at.get());
+    });
     writer.len(snapshot.leases.len());
     for lease in &snapshot.leases {
         writer.u64(lease.start.index());
@@ -68,7 +77,9 @@ fn encode(writer: &mut Writer, snapshot: &WakeSnapshot) {
         writer.fixed(decided.reply_mailbox.as_bytes());
         writer.u64(decided.at.get());
     }
-    writer.option(snapshot.last_upload, |writer, at| writer.u64(at.get()));
+    writer.option(snapshot.last_upload, |writer, at| {
+        writer.u64(at.get());
+    });
     writer.len(snapshot.epochs.len());
     for known in &snapshot.epochs {
         writer.fixed(known.party.as_bytes());
@@ -97,17 +108,18 @@ fn decode(reader: &mut Reader<'_>) -> Result<WakeSnapshot, ClientError> {
                 state,
                 since: time(reader)?,
                 last_fix_at: reader.option(time)?,
+                confirmed_at: reader.option(time)?,
             },
         })
     })?;
     let last_in_zone = reader.option(time)?;
     let leases = reader.list(|reader| {
         let start = Bucket::from_index(reader.u64()?).map_err(|_bad| corrupt())?;
-        let mut slots = [LeaseSlot {
+        let mut lease_slots = [LeaseSlot {
             randomness: RecordRandomness::from_bytes([0; RecordRandomness::LENGTH]),
             real: None,
         }; Lease::SLOTS];
-        for slot in &mut slots {
+        for slot in &mut lease_slots {
             *slot = LeaseSlot {
                 randomness: RecordRandomness::from_bytes(reader.fixed()?),
                 real: reader.option(|reader| {
@@ -119,7 +131,10 @@ fn decode(reader: &mut Reader<'_>) -> Result<WakeSnapshot, ClientError> {
                 })?,
             };
         }
-        Ok(LiveLease { start, slots })
+        Ok(LiveLease {
+            start,
+            slots: lease_slots,
+        })
     })?;
     let sent_knocks = reader.list(|reader| {
         Ok(SentKnock {

@@ -676,6 +676,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn with_a_database_key_the_core_opens_on_the_real_crates() -> Result<(), CoreError> {
+        let app = Arc::new(App::default());
+        app.secure_store_put("pingers.database-key".into(), vec![7; 32])
+            .map_err(|_| CoreError::invalid("store"))?;
+        let core = Core::open(db_path("real"), app.clone(), app).await?;
+        assert!(core.snapshot().home().parties.is_empty(), "a fresh store");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn without_a_database_key_the_core_does_not_open() {
         let app = Arc::new(App::default());
         let opened = Core::open(db_path("nokey"), app.clone(), app).await;

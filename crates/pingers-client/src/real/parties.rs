@@ -16,7 +16,7 @@ use pingers_parties::{
     SpotEdit, SpotShape,
 };
 use pingers_proto::{InviteUses, LeafIndex, MailboxId, PartyId, ServerId, SpotId};
-use pingers_store::{MemberName, PartyName, Session, SpotName};
+use pingers_store::{MemberName, Party as StoredParty, PartyName, Session, SpotName};
 use pingers_time::{Clock, UnixSeconds};
 
 use super::Backend;
@@ -215,7 +215,7 @@ impl PartiesPort for Parties {
                     .parties()
                     .list()?
                     .into_iter()
-                    .map(|row| party(session, clock, row.id, &row.name, &links))
+                    .map(|row| party(session, clock, &row, &links))
                     .collect::<Result<Vec<_>, _>>()
             })
             .await?;
@@ -239,10 +239,10 @@ fn account_server(session: &Session) -> Result<ServerId, ClientError> {
 fn party(
     session: &Session,
     clock: &dyn Clock,
-    id: PartyId,
-    name: &PartyName,
+    row: &StoredParty,
     links: &HashMap<PartyId, InviteLink>,
 ) -> Result<Party, ClientError> {
+    let id = row.id;
     let lifecycle = PartyLifecycle::new(session, clock);
     let settings = lifecycle.settings(&id)?;
     let members = lifecycle
@@ -297,7 +297,7 @@ fn party(
     .unwrap_or(PartyColour::Blue);
     Ok(Party {
         id,
-        name: name_of(name.as_str())?,
+        name: name_of(row.name.as_str())?,
         colour,
         members,
         spots,

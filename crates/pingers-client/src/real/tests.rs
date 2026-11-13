@@ -158,7 +158,8 @@ fn presence(spot: u8, state: PresenceState, since: u64) -> SpotSnapshot {
         presence: PresenceSnapshot {
             state,
             since: UnixSeconds::new(since),
-            last_fix_at: Some(UnixSeconds::new(since.saturating_add(1))).filter(|_| since == 10),
+            last_fix_at: (since == 10).then_some(UnixSeconds::new(since.saturating_add(1))),
+            confirmed_at: (state == PresenceState::Inside).then_some(UnixSeconds::new(since)),
         },
     }
 }
@@ -236,7 +237,14 @@ fn region_ids_round_trip_and_junk_is_refused() -> TestResult {
         assert_eq!(region_id(&region_text(region))?, region);
     }
     let short = format!("spot:{}", "00".repeat(31));
-    for junk in ["", "horizons", "spot:", "spot:zz", "place:00", short.as_str()] {
+    for junk in [
+        "",
+        "horizons",
+        "spot:",
+        "spot:zz",
+        "place:00",
+        short.as_str(),
+    ] {
         assert!(region_id(junk).is_err(), "{junk:?}");
     }
     Ok(())
