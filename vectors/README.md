@@ -38,7 +38,7 @@ loaded as `load_vectors("geo/polygon")`, and its `name` is `geo/polygon`.
 }
 ```
 
-- **`name`**: the topic; must match the file name without `.json`.
+- **`name`**: the topic; must match the file name without `.json`, or for a file in a subdirectory its path under `vectors/` (`geo/polygon`).
 - **`description`**: what is covered, with the design section that defines it.
 - **`vectors`**: the cases. Each has:
   - **`name`**: unique within the file, descriptive (`empty-segment`, `max-length-payload`).

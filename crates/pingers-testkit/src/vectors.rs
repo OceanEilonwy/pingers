@@ -280,7 +280,10 @@ fn parse_vector_file(path: &Path, text: &str) -> Result<VectorFile, VectorError>
         path: path.to_owned(),
         source,
     })?;
-    if path.file_stem().and_then(|stem| stem.to_str()) != Some(file.name.as_str()) {
+    // The name is the file name, or the file's path under `vectors/` for files grouped in a
+    // subdirectory (`geo/polygon` for `vectors/geo/polygon.json`): either way it must be a
+    // suffix of the path, so a file can't claim another topic's name.
+    if !path.with_extension("").ends_with(Path::new(&file.name)) {
         return Err(VectorError::NameMismatch {
             path: path.to_owned(),
             name: file.name,
@@ -356,6 +359,16 @@ mod tests {
             Err(VectorError::NameMismatch { name, .. }) if name == "other"
         ));
         assert!(parse_vector_file(Path::new("vectors/other.json"), text).is_ok());
+    }
+
+    #[test]
+    fn grouped_file_may_name_its_subdirectory_path() {
+        let text = r#"{"name": "geo/polygon", "description": "d", "vectors": []}"#;
+        assert!(parse_vector_file(Path::new("vectors/geo/polygon.json"), text).is_ok());
+        assert!(matches!(
+            parse_vector_file(Path::new("vectors/crypto/polygon.json"), text),
+            Err(VectorError::NameMismatch { name, .. }) if name == "geo/polygon"
+        ));
     }
 
     #[test]
