@@ -12,9 +12,17 @@ layer = "dev"
 
 [dependencies]
 pingers-client = { workspace = true }
-pingers-testkit = { workspace = true }
+pingers-gate = { workspace = true }
+pingers-geo = { workspace = true }
+pingers-proto = { workspace = true }
+pingers-testkit = { workspace = true, features = ["client"] }
+pingers-time = { workspace = true, features = ["test-util"] }
 anyhow = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
+toml = { workspace = true }
+url = { workspace = true }
 
 [lints]
 workspace = true

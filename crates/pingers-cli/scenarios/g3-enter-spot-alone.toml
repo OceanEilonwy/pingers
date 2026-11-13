@@ -1,0 +1,62 @@
+# Design G.3: Alice enters a Spot alone.
+#
+# Her core sees the geofence entry, asks for a fix, confirms Inside with a second fix 30 s
+# later (design F.2), uploads a lease and reads the board. Nothing matches: no Meetup, no
+# notification, and the server cannot tell this from an all-dummy lease.
+name = "g3-enter-spot-alone"
+description = "Alice enters a Spot alone: one upload, one read, no match"
+seed = 3
+
+[party]
+members = ["alice", "bob"]
+
+[[party.spots]]
+name = "anchor"
+latitude = 51.5007
+longitude = -0.1246
+radius_m = 150
+
+# Bob is far away all along; his device only takes part as a Party member.
+
+# The answer to the fix Alice's core requests when the geofence fires.
+[[steps]]
+at = 0
+device = "alice"
+fix = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 0
+device = "alice"
+geofence = { region = "anchor", transition = "enter" }
+
+[[steps]]
+at = 1
+device = "alice"
+expect = { fix_requests = 1 }
+
+# Second fix 30 s later confirms Inside.
+[[steps]]
+at = 30
+device = "alice"
+location = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 31
+device = "alice"
+expect = { location_mode = "dwell" }
+
+[[steps]]
+at = 31
+device = "alice"
+expect = { no_event = "meetup_started" }
+
+# The lease lives four buckets; the core wakes to refresh it within one.
+[[steps]]
+at = 31
+device = "alice"
+expect = { wake_within_s = 900 }
+
+[[steps]]
+at = 31
+device = "bob"
+expect = { no_event = "meetup_started" }

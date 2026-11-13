@@ -3277,8 +3277,16 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "pingers-client",
+ "pingers-gate",
+ "pingers-geo",
+ "pingers-proto",
  "pingers-testkit",
+ "pingers-time",
+ "serde",
+ "thiserror",
  "tokio",
+ "toml 1.2.1+spec-1.1.0",
+ "url",
 ]
 
 [[package]]

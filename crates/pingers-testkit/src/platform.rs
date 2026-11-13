@@ -415,9 +415,11 @@ mod tests {
     fn requests_are_answered_from_the_script_in_order() -> Result<(), GeoError> {
         let platform = FakePlatform::new(test_clock());
         platform.script_fixes([fix(1.0)?, fix(2.0)?]);
+        assert_eq!(platform.scripted_fixes_remaining(), 2);
         platform.request_fix(FixQuality::Balanced, Duration::from_secs(30));
         assert_eq!(platform.scripted_fixes_remaining(), 1);
         platform.request_fix(FixQuality::High, Duration::from_secs(5));
+        assert_eq!(platform.scripted_fixes_remaining(), 0);
         assert_eq!(platform.take_answered_fixes(), [fix(1.0)?, fix(2.0)?]);
         assert!(platform.take_answered_fixes().is_empty());
         Ok(())

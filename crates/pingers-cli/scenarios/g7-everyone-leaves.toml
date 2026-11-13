@@ -1,0 +1,112 @@
+# Design G.7: everyone leaves and the Meetup ends.
+#
+# Alice and Carol are in a Meetup. Carol leaves (Remove(self), lease revoked, state deleted)
+# and Alice commits the removal. Alone, Alice keeps the Meetup open for a returner (design
+# H.3 #17). When her own exit is confirmed she deletes the group on the server and every key,
+# transcript and peer location for it.
+name = "g7-everyone-leaves"
+description = "Carol then Alice leave; the Meetup ends and no key for it remains"
+seed = 7
+
+[party]
+members = ["alice", "carol"]
+
+[[party.spots]]
+name = "anchor"
+latitude = 51.5007
+longitude = -0.1246
+radius_m = 150
+
+# Alice and Carol meet (the G.4 sequence with Carol as the second person).
+[[steps]]
+at = 0
+device = "alice"
+fix = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 0
+device = "alice"
+geofence = { region = "anchor", transition = "enter" }
+
+[[steps]]
+at = 30
+device = "alice"
+location = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 120
+device = "carol"
+fix = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 120
+device = "carol"
+geofence = { region = "anchor", transition = "enter" }
+
+[[steps]]
+at = 150
+device = "carol"
+location = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 152
+device = "alice"
+fix = { spot = "anchor", position = "inside" }
+
+[[steps]]
+at = 152
+device = "alice"
+wake = "push"
+
+[[steps]]
+at = 155
+device = "carol"
+wake = "push"
+
+# Carol leaves.
+[[steps]]
+at = 600
+device = "carol"
+fix = { spot = "anchor", position = "outside" }
+
+[[steps]]
+at = 600
+device = "carol"
+geofence = { region = "anchor", transition = "exit" }
+
+[[steps]]
+at = 601
+device = "carol"
+expect = { event = "meetup_ended" }
+
+# Alice is alone; the Meetup stays open for a returner.
+[[steps]]
+at = 605
+device = "alice"
+expect = { event = "meetup_updated" }
+
+[[steps]]
+at = 605
+device = "alice"
+expect = { no_event = "meetup_ended" }
+
+# Alice leaves: the Meetup ends.
+[[steps]]
+at = 900
+device = "alice"
+fix = { spot = "anchor", position = "outside" }
+
+[[steps]]
+at = 900
+device = "alice"
+geofence = { region = "anchor", transition = "exit" }
+
+[[steps]]
+at = 901
+device = "alice"
+expect = { event = "meetup_ended" }
+
+[[steps]]
+at = 901
+device = "alice"
+expect = { location_mode = "idle" }
