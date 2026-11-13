@@ -93,25 +93,31 @@ pub(crate) fn project(origin: Coordinate, point: Coordinate) -> Planar {
 ///
 /// Only if the trigonometry produces a non-finite value, which valid inputs do not.
 pub(crate) fn unproject(origin: Coordinate, point: Planar) -> Result<Coordinate, GeoError> {
+    // Worked in Earth-centred unit vectors rather than with the textbook `asin` formula:
+    // `asin` loses precision as its argument nears ±1, which put points near a pole
+    // micrometres from where they belong. `atan2` of vector components is well conditioned
+    // everywhere, including across and at the poles.
     let central_angle = point.length() / EARTH_RADIUS_METERS;
     let direction = point.east.atan2(point.north);
-    let from_latitude = origin.latitude().to_radians();
-    let sin_latitude = from_latitude
-        .sin()
-        .mul_add(
-            central_angle.cos(),
-            from_latitude.cos() * central_angle.sin() * direction.cos(),
-        )
-        .clamp(-1.0, 1.0);
-    let to_latitude = sin_latitude.asin();
-    let longitude_change = (direction.sin() * central_angle.sin() * from_latitude.cos()).atan2(
-        from_latitude
-            .sin()
-            .mul_add(-sin_latitude, central_angle.cos()),
-    );
-    let longitude =
-        (origin.longitude() + longitude_change.to_degrees() + 180.0).rem_euclid(360.0) - 180.0;
-    Coordinate::new(to_latitude.to_degrees().clamp(-90.0, 90.0), longitude)
+    let (sin_latitude, cos_latitude) = origin.latitude().to_radians().sin_cos();
+    let (sin_longitude, cos_longitude) = origin.longitude().to_radians().sin_cos();
+    // The target is `cos δ · up + sin δ · (cos θ · north + sin θ · east)`, where up, north
+    // and east are the origin's local unit vectors.
+    let along_up = central_angle.cos();
+    let along_north = central_angle.sin() * direction.cos();
+    let along_east = central_angle.sin() * direction.sin();
+    // Up and north share the meridian plane: their combination's distance from the axis
+    // and its height.
+    let from_axis = cos_latitude.mul_add(along_up, -(sin_latitude * along_north));
+    let height = sin_latitude.mul_add(along_up, cos_latitude * along_north);
+    let x = from_axis.mul_add(cos_longitude, -(along_east * sin_longitude));
+    let y = from_axis.mul_add(sin_longitude, along_east * cos_longitude);
+    let to_latitude = height.atan2(x.hypot(y)).to_degrees();
+    let to_longitude = y.atan2(x).to_degrees();
+    Coordinate::new(
+        to_latitude.clamp(-90.0, 90.0),
+        to_longitude.clamp(-180.0, 180.0),
+    )
 }
 
 /// A straight segment in the plane.
@@ -405,11 +411,34 @@ mod tests {
         Ok(())
     }
 
+    /// Regression: the proptest below once found this case. 79 km due south from 77 km off
+    /// the South Pole crosses the pole; the old `asin` formula landed 1.6 µm off.
+    #[test]
+    fn unprojecting_across_a_pole_keeps_full_precision() -> Result<(), GeoError> {
+        let origin = Coordinate::new(-89.307_218_338_412_95, 0.0)?;
+        let offset = point(0.0, -78_868.246_145_520_97);
+        let target = unproject(origin, offset)?;
+        assert!(close(distance(origin, target).get(), offset.length(), 1e-6));
+        assert!(close(target.longitude().abs(), 180.0, 1e-9));
+        assert!(close(target.latitude(), -89.983_503_463_488, 1e-9));
+        Ok(())
+    }
+
+    #[test]
+    fn unprojecting_onto_a_pole_lands_on_it() -> Result<(), GeoError> {
+        let origin = Coordinate::new(89.0, 30.0)?;
+        let one_degree = EARTH_RADIUS_METERS * 1.0_f64.to_radians();
+        let target = unproject(origin, point(0.0, one_degree))?;
+        assert!(close(target.latitude(), 90.0, 1e-9));
+        Ok(())
+    }
+
     #[test]
     fn the_origin_projects_to_zero_and_back() -> Result<(), GeoError> {
         let origin = Coordinate::new(-33.9, 151.2)?;
         assert_eq!(project(origin, origin), point(0.0, 0.0));
-        assert_eq!(unproject(origin, point(0.0, 0.0))?, origin);
+        // Back through unit vectors, so equal to rounding rather than bit for bit.
+        assert!(distance(unproject(origin, point(0.0, 0.0))?, origin).get() < 1e-9);
         Ok(())
     }
 
