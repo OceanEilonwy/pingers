@@ -39,10 +39,13 @@ android {
     }
 
     // Only the ABIs pingers-ffi is built for: JNA's AAR also carries 32-bit libraries, and a
-    // 32-bit phone that installed them would crash at the first call into Rust.
+    // 32-bit phone that installed them would crash at the first call into Rust. rln also
+    // declares itself a cdylib, so cargo-ndk copies a librln-*.so beside ours; pingers-ffi links
+    // rln statically and never loads it.
     packaging {
         jniLibs {
             excludes += listOf("lib/armeabi/**", "lib/armeabi-v7a/**", "lib/x86/**", "lib/mips/**", "lib/mips64/**")
+            excludes += "lib/*/librln-*.so"
         }
     }
 
