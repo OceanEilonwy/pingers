@@ -76,10 +76,7 @@ mod tests {
             }),
             OpenError::Malformed
         );
-        assert_eq!(
-            classify(&CryptoError::NotImplemented),
-            OpenError::Unavailable
-        );
+        assert_eq!(classify(&CryptoError::Internal), OpenError::Unavailable);
         assert_eq!(classify(&CryptoError::InvalidKey), OpenError::Unavailable);
     }
 }
