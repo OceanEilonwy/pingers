@@ -1,0 +1,23 @@
+[package]
+name = "pingers-testkit"
+description = "Fake platform, in-process harness, deterministic clock and RNG, and the vector loader."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = "dev"
+
+[dependencies]
+pingers-time = { workspace = true, features = ["test-util"] }
+hex = { workspace = true }
+rand_chacha = { workspace = true }
+rand_core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

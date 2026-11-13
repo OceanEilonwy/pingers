@@ -1,0 +1,15 @@
+{
+  "name": "example",
+  "description": "Format example used by pingers-testkit's tests: SHA-256 of \"abc\" (FIPS 180-4 test vector)",
+  "vectors": [
+    {
+      "name": "sha256-abc",
+      "inputs": {
+        "message": "616263"
+      },
+      "expected": {
+        "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+      }
+    }
+  ]
+}
