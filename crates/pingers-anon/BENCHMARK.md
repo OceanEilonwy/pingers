@@ -51,6 +51,11 @@ adb shell chmod 755 /data/local/tmp/prove_bench
 adb shell /data/local/tmp/prove_bench 30
 ```
 
+Checked 2026-11-13: `cargo ndk -t arm64-v8a build --release ...` produces an aarch64 PIE for
+Android 21 (5.3 MB, unstripped); `--release` is a quicker stand-in for `--profile android`
+(then the binary is under `target/aarch64-linux-android/release/examples/`). Not yet run on a
+phone.
+
 For a 32-bit-only phone use `-t armeabi-v7a` and the `armv7-linux-androideabi` directory.
 
 Record for each phone: model, SoC, Android version, the median and p95 proof time, the first
