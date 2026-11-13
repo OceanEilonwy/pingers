@@ -750,3 +750,83 @@ fn deleting_a_group_leaves_no_state_behind() -> TestResult {
     assert_eq!(c.storage.key_names(), Vec::<String>::new());
     Ok(())
 }
+
+/// Forward secrecy for a stolen device (design A.4): once a commit is merged, nothing that
+/// decrypts the previous epoch is left in storage. OpenMLS deletes the old epoch's key pairs
+/// on every merge; this pins that our adapter really removes them.
+#[test]
+fn each_commit_deletes_the_previous_epochs_private_keys() -> TestResult {
+    // Epoch secrets, message secrets and the path keys held for one epoch.
+    const EPOCH_SCOPED: [&[u8]; 3] = [b"EpochKeyPairs", b"EpochSecrets", b"MessageSecrets"];
+    // The committer also replaces its own leaf key.
+    const COMMITTER: [&[u8]; 4] = [
+        b"EpochKeyPairs",
+        b"EpochSecrets",
+        b"MessageSecrets",
+        b"EncryptionKeyPair",
+    ];
+    let mut rng = rng(20);
+    let (a, b, c) = (
+        Device::new(&mut rng),
+        Device::new(&mut rng),
+        Device::new(&mut rng),
+    );
+    let Trio {
+        a: mut group_a,
+        b: mut group_b,
+        c: mut group_c,
+    } = party_of_three(&a, &b, &c, &mut rng)?;
+    for round in 0..3 {
+        let committer_before = a.storage.rows_labelled(&COMMITTER);
+        let receiver_before = b.storage.rows_labelled(&EPOCH_SCOPED);
+        assert!(
+            committer_before
+                .iter()
+                .any(|(key, _)| key.windows(13).any(|part| part == b"EpochKeyPairs")),
+            "round {round}: the committer holds path keys to lose"
+        );
+        let update = group_a.self_update(&mut rng)?;
+        group_a.merge_pending_commit()?;
+        group_b.process(&update.commit)?;
+        group_c.process(&update.commit)?;
+        let committer_after = a.storage.rows_labelled(&COMMITTER);
+        let receiver_after = b.storage.rows_labelled(&EPOCH_SCOPED);
+        assert!(!committer_after.is_empty() && !receiver_after.is_empty());
+        let kept: Vec<String> = committer_before
+            .intersection(&committer_after)
+            .chain(receiver_before.intersection(&receiver_after))
+            .map(|(key, _)| String::from_utf8_lossy(key).into_owned())
+            .collect();
+        assert_eq!(kept, Vec::<String>::new(), "round {round}");
+    }
+    Ok(())
+}
+
+#[test]
+fn an_unused_key_package_leaves_no_private_keys_behind() -> TestResult {
+    let mut rng = rng(21);
+    let (a, b) = (Device::new(&mut rng), Device::new(&mut rng));
+    let unanswered = b.party_key_package(&mut rng)?;
+    let kept = b.party_key_package(&mut rng)?;
+    assert_eq!(b.storage.rows_labelled(&[b"KeyPackage"]).len(), 2);
+    b.context().delete_key_package(&unanswered)?;
+    assert_eq!(b.storage.rows_labelled(&[b"KeyPackage"]).len(), 1);
+    // Deleting again is harmless, and garbage is refused.
+    b.context().delete_key_package(&unanswered)?;
+    assert!(matches!(
+        b.context()
+            .delete_key_package(&pingers_proto::KeyPackageBytes::from_bytes(vec![0; 8])),
+        Err(MlsError::InvalidMessage)
+    ));
+    // A Welcome built from the deleted KeyPackage cannot be opened; the kept one still works.
+    let mut group_a =
+        a.context()
+            .create_party_group(group_id(1), CipherSuitePolicy::Classical, &mut rng)?;
+    let lost = group_a.add_members(&[unanswered], &mut rng)?;
+    assert!(b.context().join_party_group(welcome(&lost)?).is_err());
+    group_a.discard_pending_commit()?;
+    let added = group_a.add_members(&[kept], &mut rng)?;
+    b.context().join_party_group(welcome(&added)?)?;
+    assert!(b.storage.rows_labelled(&[b"KeyPackage"]).is_empty());
+    Ok(())
+}

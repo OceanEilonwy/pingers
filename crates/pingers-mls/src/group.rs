@@ -262,6 +262,25 @@ impl<'context, S: MlsStorage> MlsContext<'context, S> {
         serialize(bundle.key_package()).map(KeyPackageBytes::from_bytes)
     }
 
+    /// Deletes the private part (init and leaf encryption keys) of a KeyPackage made by
+    /// [`Self::create_key_package`] that will not be used, such as one sent with a knock that
+    /// was never answered or one replaced by a fresh KeyPackage. A Welcome deletes it on its
+    /// own; nothing else does, so without this the keys stay on the device for good. Deleting
+    /// a KeyPackage that has no stored keys succeeds.
+    ///
+    /// # Errors
+    ///
+    /// [`MlsError::InvalidMessage`] if the bytes are not a valid KeyPackage of a supported
+    /// suite; [`MlsError::Storage`]; [`MlsError::Internal`].
+    pub fn delete_key_package(&self, key_package: &KeyPackageBytes) -> Result<(), MlsError> {
+        let provider = Provider::new(self.storage, NoRand);
+        let hash_ref = parse_key_package(key_package, &provider)?
+            .hash_ref(provider.crypto())
+            .map_err(|_| MlsError::Internal)?;
+        provider.storage().delete_key_package(&hash_ref)?;
+        Ok(())
+    }
+
     /// Creates a Party group with this device as its only member.
     ///
     /// # Errors
