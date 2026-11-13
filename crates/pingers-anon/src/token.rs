@@ -3,6 +3,7 @@
 
 use rand_core::CryptoRng;
 use voprf::{EvaluationElement, Group as _, Proof, VoprfClient};
+use zeroize::Zeroizing;
 
 use crate::AnonError;
 use crate::pp::{self, NONCE_LEN, Suite};
@@ -90,7 +91,7 @@ impl PendingIssuance {
                 let mut token = Vec::with_capacity(pp::TOKEN_LEN);
                 token.extend_from_slice(input);
                 token.extend_from_slice(&output);
-                Ok(PrivacyPassToken(token))
+                Ok(PrivacyPassToken(Zeroizing::new(token)))
             })
             .collect()
     }
@@ -133,15 +134,15 @@ pub fn begin_token_issuance(
 }
 
 /// One unspent token, shared with the app's background handlers through the `pp_token` table.
-/// `Debug` does not print it.
-#[derive(Clone, PartialEq, Eq)]
-pub struct PrivacyPassToken(Vec<u8>);
+/// `Debug` does not print it, it is zeroized on drop, and it is neither `Clone` nor comparable:
+/// a token is a bearer credential spent once (style guide §8).
+pub struct PrivacyPassToken(Zeroizing<Vec<u8>>);
 
 impl PrivacyPassToken {
     /// Loads a stored token.
     #[must_use]
-    pub const fn from_bytes(bytes: Vec<u8>) -> Self {
-        Self(bytes)
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self(Zeroizing::new(bytes))
     }
 
     /// The token encoding, for storage.
@@ -150,13 +151,11 @@ impl PrivacyPassToken {
         &self.0
     }
 
-    /// The `Authorization: PrivateToken token=...` header value that spends it (RFC 9577).
-    ///
-    /// # Errors
-    ///
-    /// [`AnonError::Internal`] if the encoding fails.
-    pub fn authorization(&self) -> Result<String, AnonError> {
-        Ok(format!("PrivateToken token=\"{}\"", pp::base64url(&self.0)))
+    /// The `Authorization: PrivateToken token=...` header value that spends it (RFC 9577),
+    /// zeroized on drop like the token.
+    #[must_use]
+    pub fn authorization(&self) -> Zeroizing<String> {
+        Zeroizing::new(format!("PrivateToken token=\"{}\"", pp::base64url(&self.0)))
     }
 }
 

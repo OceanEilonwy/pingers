@@ -173,9 +173,8 @@ fn a_full_batch_is_issued() -> Result<(), AnonError> {
 }
 
 #[test]
-fn the_authorization_header_carries_the_token() -> Result<(), AnonError> {
+fn the_authorization_header_carries_the_token() {
     let token = PrivacyPassToken::from_bytes(vec![0xfb, 0xff, 0x00]);
-    assert_eq!(token.authorization()?, "PrivateToken token=\"-_8A\"");
+    assert_eq!(token.authorization().as_str(), "PrivateToken token=\"-_8A\"");
     assert_eq!(format!("{token:?}"), "PrivacyPassToken(redacted)");
-    Ok(())
 }
