@@ -18,5 +18,10 @@ pingers-time = { workspace = true }
 rand_core = { workspace = true }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+pingers-testkit = { workspace = true }
+proptest = { workspace = true }
+serde_json = { workspace = true }
+
 [lints]
 workspace = true
