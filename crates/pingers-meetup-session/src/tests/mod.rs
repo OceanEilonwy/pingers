@@ -41,6 +41,8 @@ pub(crate) enum TestError {
     #[error(transparent)]
     Geo(#[from] pingers_geo::GeoError),
     #[error(transparent)]
+    Meetup(#[from] pingers_meetup::MeetupError),
+    #[error(transparent)]
     Time(#[from] pingers_time::TimeError),
     #[error(transparent)]
     Proto(#[from] pingers_proto::ProtoError),
