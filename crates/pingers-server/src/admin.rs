@@ -138,9 +138,6 @@ pub fn pins(keys: &OhttpKeys) -> String {
 mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
-    use rand_chacha::ChaCha20Rng;
-    use rand_core::SeedableRng as _;
-
     use super::*;
     use crate::{ServedKey, ServerConfig};
 

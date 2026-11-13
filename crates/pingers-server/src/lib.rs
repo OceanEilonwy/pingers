@@ -81,12 +81,12 @@ pub use crate::config::{
 };
 pub use crate::error::ServerError;
 pub use crate::forwarded::TrustedProxies;
-#[cfg(unix)]
-pub use crate::signal::StopSignals;
 pub use crate::live::{
     DeliveryLive, KEEP_ALIVE_CHUNK, KEEP_ALIVE_INTERVAL, LIVE_BUFFER, LiveBackend, LiveChannel,
     LiveFrame, LiveRefused,
 };
+#[cfg(unix)]
+pub use crate::signal::StopSignals;
 
 use crate::accounts::Accounts;
 use crate::board_routes::BoardService;

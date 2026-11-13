@@ -40,7 +40,7 @@ fn inner(method: &str, path: String, headers: Vec<Header>, body: Vec<u8>) -> Bin
 
 /// Sends `request` through OHTTP and returns the inner response.
 async fn call(server: &Running, request: &BinaryRequest) -> Result<BinaryResponse, TestError> {
-    let mut client = connect(server.address, super::LOOPBACK).await?;
+    let mut client = connect(server.gateway, super::LOOPBACK).await?;
     let (status, opened) = oblivious(&mut client, &server.config, request).await?;
     assert_eq!(status, StatusCode::OK);
     opened.ok_or_else(|| "no inner response".into())
@@ -435,6 +435,29 @@ async fn the_push_client_sends_the_credential_and_body_and_maps_the_status() -> 
         assert_eq!(only.content_type.as_deref(), Some("application/cbor"));
         assert_eq!(only.body, push_request().encode()?);
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_relay_on_this_machine_is_reached_over_plain_http_on_loopback() -> TestResult {
+    let (address, received) = fake_relay(StatusCode::ACCEPTED).await?;
+    let target = RelayTarget {
+        url: pingers_mailbox::PushRelayUrl::new(format!("http://{address}"))?,
+        credential: RelayCredential::new("credential".to_owned()),
+    };
+    let clock = ManualClock::new(UnixSeconds::new(1));
+    let relay = HttpPushRelay::new(Arc::new(clock), Duration::from_secs(10), Vec::new())?;
+    assert_eq!(
+        relay.push(&target, &push_request()).await,
+        Ok(RelayAnswer::Accepted)
+    );
+    let received = received.lock().map_err(|_| "lock")?.clone();
+    assert_eq!(
+        received
+            .first()
+            .and_then(|only| only.authorization.as_deref()),
+        Some("Bearer credential")
+    );
     Ok(())
 }
 

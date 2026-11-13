@@ -89,6 +89,8 @@ impl Stack {
 
         let server_listener = TcpListener::bind(SocketAddr::new(DEVICE_ADDRESS, 0)).await?;
         let server = server_listener.local_addr()?;
+        let gateway_listener = TcpListener::bind(SocketAddr::new(DEVICE_ADDRESS, 0)).await?;
+        let gateway = gateway_listener.local_addr()?;
         let server_id = ServerId::new(format!("https://{server}"))?;
         let tap_listener = TcpListener::bind(SocketAddr::new(DEVICE_ADDRESS, 0)).await?;
         let tap_address = tap_listener.local_addr()?;
@@ -112,6 +114,7 @@ impl Stack {
                 listen: server,
                 server_id: server_id.clone(),
                 ohttp_keys: OhttpKeys::new(vec![gateway_key])?,
+                gateway_listen: gateway,
                 relays: RelayAllowList::new(vec![RELAY_EGRESS])?,
             })
         };
@@ -135,15 +138,18 @@ impl Stack {
         let server_done = until_stopped(stopped.clone());
         let tap_done = until_stopped(stopped.clone());
         let relay_done = until_stopped(stopped);
+        let listeners = pingers_server::Listeners {
+            public: server_listener,
+            gateway: gateway_listener,
+        };
         let tasks = vec![
             tokio::spawn(async move {
                 // A server that fails to start fails the scenario's first request.
-                let _ =
-                    pingers_server::serve_with(config, outside, server_listener, server_done).await;
+                let _ = pingers_server::serve_with(config, outside, listeners, server_done).await;
             }),
             tokio::spawn(tap::serve(
                 tap_listener,
-                server,
+                gateway,
                 RELAY_EGRESS,
                 Arc::clone(&tap),
                 tap_done,

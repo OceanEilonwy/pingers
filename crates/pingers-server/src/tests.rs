@@ -293,7 +293,7 @@ async fn direct_post_to_the_gateway_from_a_non_relay_is_refused() -> TestResult 
     .await?;
     let config_request = inner("GET", "/v1/ohttp/config");
 
-    let mut stranger = connect(server.address, LOOPBACK).await?;
+    let mut stranger = connect(server.gateway, LOOPBACK).await?;
     let (status, opened) = oblivious(&mut stranger, &server.config, &config_request).await?;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert!(opened.is_none());
@@ -309,16 +309,22 @@ async fn direct_post_to_the_gateway_from_a_non_relay_is_refused() -> TestResult 
     .await?;
     assert_eq!(chunked.status(), StatusCode::FORBIDDEN);
 
-    let mut relay = connect(server.address, OTHER_LOOPBACK).await?;
+    let mut relay = connect(server.gateway, OTHER_LOOPBACK).await?;
     let (status, opened) = oblivious(&mut relay, &server.config, &config_request).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         opened.map(|response| response.body),
         Some(server.config.encoded().to_vec())
     );
-    // Each refusal is counted on the channel it was meant for.
+    // Each refusal is counted on the channel it was meant for. The gateway listener serves
+    // nothing but the gateway and its key config; metrics are on the public one.
+    for path in ["/metrics", "/v1/params"] {
+        let elsewhere = send(&mut relay, request(Method::GET, path, None, Body::empty())?).await?;
+        assert_eq!(elsewhere.status(), StatusCode::NOT_FOUND, "{path}");
+    }
+    let mut operator = connect(server.address, OTHER_LOOPBACK).await?;
     let metrics = send(
-        &mut relay,
+        &mut operator,
         request(Method::GET, "/metrics", None, Body::empty())?,
     )
     .await?;
@@ -431,28 +437,41 @@ async fn serve_runs_with_the_production_parts_until_shutdown() -> TestResult {
         listen: SocketAddr::new(LOOPBACK, 0),
         server_id: server_id()?,
         ohttp_keys: OhttpKeys::new(vec![key])?,
+        gateway_listen: SocketAddr::new(LOOPBACK, 0),
         relays: RelayAllowList::new(vec![LOOPBACK])?,
     });
-    let listener = tokio::net::TcpListener::bind(server_config.listen).await?;
-    let address = listener.local_addr()?;
+    let listeners = Listeners::bind(&server_config).await?;
+    let address = listeners.public.local_addr()?;
+    let gateway = listeners.gateway.local_addr()?;
     let (stop, stopped) = oneshot::channel::<()>();
     let task = tokio::spawn(crate::serve(
         server_config,
-        listener,
+        listeners,
         ManualClock::new(UnixSeconds::new(1)),
         async move {
             let _ = stopped.await;
         },
     ));
-    let mut client = connect(address, LOOPBACK).await?;
-    let response = send(
-        &mut client,
-        request(Method::GET, "/v1/ohttp/config", None, Body::empty())?,
-    )
-    .await?;
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(read_all(response).await?, config.encoded());
+    // The key config is on both listeners: clients fetch it directly, the relay at the gateway.
+    for listener in [address, gateway] {
+        let mut client = connect(listener, LOOPBACK).await?;
+        let response = send(
+            &mut client,
+            request(Method::GET, "/v1/ohttp/config", None, Body::empty())?,
+        )
+        .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/ohttp-keys".as_slice())
+        );
+        assert_eq!(read_all(response).await?, config.encoded());
+    }
     // Response sealing draws on the generator seeded by the operating system.
+    let mut client = connect(gateway, LOOPBACK).await?;
     let (_, opened) = oblivious(&mut client, &config, &inner("GET", "/v1/ohttp/config")).await?;
     assert_eq!(inner_status(opened.as_ref()), Some(200));
     let _ = stop.send(());
@@ -469,7 +488,7 @@ fn load_config_reads_the_file_or_says_why_not() -> TestResult {
     std::fs::write(
         &path,
         "listen = \"127.0.0.1:8080\"\nserver_id = \"https://pingers.test\"\n\
-         [ohttp]\nrelays = [\"10.0.0.5\"]\n\
+         [ohttp]\nlisten = \"127.0.0.1:8081\"\nrelays = [\"10.0.0.5\"]\n\
          [[ohttp.keys]]\nkey_id = 2\n\
          secret = \"0303030303030303030303030303030303030303030303030303030303030303\"\n",
     )?;
@@ -493,7 +512,7 @@ fn load_config_reads_the_file_or_says_why_not() -> TestResult {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn inner_requests_are_routed_by_their_privacy_class() -> TestResult {
     let server = start(Setup::default(), Echo).await?;
-    let mut relay = connect(server.address, LOOPBACK).await?;
+    let mut relay = connect(server.gateway, LOOPBACK).await?;
     let cases = [
         // Anonymous: belongs here, and asks for its credential.
         (inner("POST", "/v1/board/sync"), 401),
@@ -575,7 +594,9 @@ async fn direct_requests_are_routed_by_their_privacy_class() -> TestResult {
         (Method::POST, "/v1/accounts", StatusCode::BAD_REQUEST),
         (Method::GET, "/v1/params", StatusCode::OK),
         (Method::GET, "/v1/nothing", StatusCode::NOT_FOUND),
-        (Method::GET, "/ohttp", StatusCode::METHOD_NOT_ALLOWED),
+        // The gateway is not on the public listener at all.
+        (Method::GET, "/ohttp", StatusCode::NOT_FOUND),
+        (Method::POST, "/ohttp", StatusCode::NOT_FOUND),
         (
             Method::DELETE,
             "/v1/accounts",
@@ -605,9 +626,122 @@ async fn direct_requests_are_routed_by_their_privacy_class() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn served_key_id_picks_the_served_key_and_both_keys_open() -> TestResult {
+    let mut keys = rng(11);
+    let first = GatewayKey::generate(1, &mut keys)?;
+    let second = GatewayKey::generate(2, &mut keys)?;
+    let first_config = first.config();
+    let server = run(
+        ServerConfig {
+            ohttp_keys: OhttpKeys::serving(vec![first, second], ServedKey::Id(2))?,
+            ..configured(Setup::default())?
+        },
+        Echo,
+    )
+    .await?;
+    assert_eq!(server.config.key_id(), 2);
+    for listener in [server.address, server.gateway] {
+        let mut client = connect(listener, LOOPBACK).await?;
+        let fetched = send(
+            &mut client,
+            request(Method::GET, "/v1/ohttp/config", None, Body::empty())?,
+        )
+        .await?;
+        assert_eq!(read_all(fetched).await?, server.config.encoded());
+    }
+    // A client still on the slot no longer served is answered (rotation), sealed to it.
+    let mut relay = connect(server.gateway, LOOPBACK).await?;
+    for config in [&server.config, &first_config] {
+        let (status, opened) = oblivious(&mut relay, config, &inner("GET", "/v1/params")).await?;
+        assert_eq!(status, StatusCode::OK, "key {}", config.key_id());
+        assert_eq!(inner_status(opened.as_ref()), Some(200));
+    }
+    server.stop().await
+}
+
+/// The outer status of a one-shot request at the gateway from `from`, with these
+/// `X-Forwarded-For` lines.
+async fn gateway_status(
+    server: &Running,
+    from: IpAddr,
+    forwarded_for: &[&str],
+) -> Result<StatusCode, TestError> {
+    let mut client = connect(server.gateway, from).await?;
+    let sealed = encapsulate_request(&server.config, &inner("GET", "/v1/params"), &mut rng(12))?;
+    let mut builder = Request::builder()
+        .method(Method::POST)
+        .uri("http://server/ohttp")
+        .header(CONTENT_TYPE, "message/ohttp-req");
+    for line in forwarded_for {
+        builder = builder.header("x-forwarded-for", *line);
+    }
+    let response = send(&mut client, builder.body(Body::from(sealed.message))?).await?;
+    Ok(response.status())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn behind_a_trusted_proxy_the_relay_is_named_by_x_forwarded_for() -> TestResult {
+    const REMOTE_RELAY: &str = "203.0.113.5";
+    let server = start(
+        Setup {
+            relay: REMOTE_RELAY.parse()?,
+            trusted_proxies: vec![LOOPBACK],
+            ..Setup::default()
+        },
+        Echo,
+    )
+    .await?;
+    // Through the proxy: the relay's address is believed, a client's own claim to its left
+    // is not, and anyone else is refused.
+    assert_eq!(
+        gateway_status(&server, LOOPBACK, &[REMOTE_RELAY]).await?,
+        StatusCode::OK
+    );
+    assert_eq!(
+        gateway_status(&server, LOOPBACK, &[REMOTE_RELAY, "198.51.100.7"]).await?,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        gateway_status(&server, LOOPBACK, &["198.51.100.7"]).await?,
+        StatusCode::FORBIDDEN
+    );
+    // The proxy itself is not the relay, and an unreadable entry matches nothing.
+    assert_eq!(
+        gateway_status(&server, LOOPBACK, &[]).await?,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        gateway_status(&server, LOOPBACK, &["unknown"]).await?,
+        StatusCode::FORBIDDEN
+    );
+    // A peer that is not a trusted proxy cannot claim to be the relay.
+    assert_eq!(
+        gateway_status(&server, OTHER_LOOPBACK, &[REMOTE_RELAY]).await?,
+        StatusCode::FORBIDDEN
+    );
+    server.stop().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn without_trusted_proxies_x_forwarded_for_is_ignored() -> TestResult {
+    let server = start(Setup::default(), Echo).await?;
+    // The relay connects directly; a header naming someone else changes nothing.
+    assert_eq!(
+        gateway_status(&server, LOOPBACK, &["198.51.100.7"]).await?,
+        StatusCode::OK
+    );
+    // And a stranger cannot borrow the relay's address with it.
+    assert_eq!(
+        gateway_status(&server, OTHER_LOOPBACK, &["127.0.0.1"]).await?,
+        StatusCode::FORBIDDEN
+    );
+    server.stop().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_gateway_refuses_what_it_cannot_open() -> TestResult {
     let server = start(Setup::default(), Echo).await?;
-    let mut relay = connect(server.address, LOOPBACK).await?;
+    let mut relay = connect(server.gateway, LOOPBACK).await?;
     let one_shot = encapsulate_request(&server.config, &inner("GET", "/v1/params"), &mut rng(3))?;
     let mut largest = one_shot.message.clone();
     largest.resize(64 * 1024, 0);
@@ -696,7 +830,15 @@ async fn stalls_until_the_request_timeout(
     content_type: Option<&'static str>,
     path: &'static str,
 ) -> Result<StatusCode, TestError> {
-    let mut client = connect(server.address, LOOPBACK).await?;
+    let mut client = connect(
+        if path == "/ohttp" {
+            server.gateway
+        } else {
+            server.address
+        },
+        LOOPBACK,
+    )
+    .await?;
     let (sender, body) = channel();
     sender.send(Bytes::from_static(&[1, 2, 3]))?;
     let mut request = Request::builder()
@@ -757,7 +899,7 @@ async fn open_live_with(
     server: &Running,
     head: &BinaryRequest,
 ) -> Result<(mpsc::UnboundedSender<Bytes>, ChunkedClient, Body), TestError> {
-    let mut relay = connect(server.address, LOOPBACK).await?;
+    let mut relay = connect(server.gateway, LOOPBACK).await?;
     let start = ChunkedClient::start(&server.config, head, &mut rng(5))?;
     let (sender, body) = channel();
     sender.send(Bytes::from(start.preamble))?;
@@ -887,7 +1029,7 @@ async fn metrics_count_outcomes_for_allowed_addresses_only() -> TestResult {
     )
     .await?;
     oblivious(
-        &mut client,
+        &mut connect(server.gateway, LOOPBACK).await?,
         &server.config,
         &inner("POST", "/v1/board/sync"),
     )

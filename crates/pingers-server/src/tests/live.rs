@@ -157,7 +157,7 @@ async fn a_split_channel_has_a_lasting_downlink_and_one_shot_uplinks() -> TestRe
     );
 
     // An uplink frame as a one-shot request reaches the downlink.
-    let mut relay = connect(server.address, super::LOOPBACK).await?;
+    let mut relay = connect(server.gateway, super::LOOPBACK).await?;
     let uplink = |body: &[u8]| BinaryRequest {
         method: "POST".to_owned(),
         path: path.to_owned(),
@@ -184,7 +184,7 @@ async fn a_split_channel_has_a_lasting_downlink_and_one_shot_uplinks() -> TestRe
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delivery_uplinks_need_a_group_that_exists() -> TestResult {
     let server = start(Setup::default(), DeliveryLive).await?;
-    let mut relay = connect(server.address, super::LOOPBACK).await?;
+    let mut relay = connect(server.gateway, super::LOOPBACK).await?;
     for (path, expected) in [
         ("/v1/groups/g1/live?sub=00".to_owned(), 400),
         (format!("/v1/groups/{}/live", hex::encode([3; 32])), 404),

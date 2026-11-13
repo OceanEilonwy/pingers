@@ -128,9 +128,7 @@ pub enum ConfigError {
         relay_id: u16,
     },
     /// A push relay URL is neither `https://` nor `http://` to a loopback address literal.
-    #[error(
-        "configuration: push_relays.url must be https://, or http:// to a loopback address"
-    )]
+    #[error("configuration: push_relays.url must be https://, or http:// to a loopback address")]
     RelayUrl,
     /// A push relay to advertise has no `https://` URL for devices: its `url` is plain
     /// `http://` and no `public_url` is given, or `public_url` is not `https://`.
@@ -638,7 +636,9 @@ impl ServerConfig {
             request_timeout: positive_seconds("request_timeout_s", file.request_timeout_s)?,
             ohttp_keys: OhttpKeys::serving(
                 keys,
-                file.ohttp.served_key_id.map_or(ServedKey::First, ServedKey::Id),
+                file.ohttp
+                    .served_key_id
+                    .map_or(ServedKey::First, ServedKey::Id),
             )?,
             gateway_listen: file.ohttp.listen,
             relays: RelayAllowList::new(file.ohttp.relays)?,
