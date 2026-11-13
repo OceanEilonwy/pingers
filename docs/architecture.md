@@ -43,6 +43,7 @@ pingers/
     pingers-gate/            L1  "may this device share right now?" (Focus, pause, zones)
     pingers-store/           L2  SQLCipher storage
     pingers-transport/       L2  router and OHTTP client
+    pingers-map-packs/       L2  region map packs: PMTiles reading, place index, manifests, budgets
     pingers-parties/         L3  Party lifecycle: create, invite, join, roster, Spots
     pingers-sync/            L3  server sync: group logs, mailboxes, request queue
     pingers-wake/            L3  the background pipeline: one wake, start to finish
@@ -58,8 +59,10 @@ pingers/
     pingers-server/          L5  server binary: routes to the crates above, nothing else
     pingers-push-relay/      L5  push relay binary
     pingers-ohttp-relay/     L5  reference relay binary
+    pingers-map-host/        L5  map host binary: serves whole region packs
     pingers-testkit/         dev fake platform, harness, vectors
     pingers-cli/             dev headless client and load generator
+    pingers-tiles/           dev operator tool: cuts region packs from the Protomaps build
   android/                   Kotlin + Compose app
   vectors/                   JSON test vectors shared with other implementations
 ```
@@ -143,6 +146,12 @@ Licence (decided 2026-11-13): every crate, binary and the Android app is `AGPL-3
 - Tor and mixnets would be new `Transport` implementations here, nowhere else.
 - Deps: pingers-ohttp, `hyper`, `hyper-util`, `rustls`, `tokio`.
 
+**pingers-map-packs**: region map packs (design B.12, "Map host"), shared by the map host and the operator tool.
+- Region lists with hierarchical ids (`continent/country/state`), so large countries split into sub-regions; a host's allow-list and per-region zoom caps.
+- A PMTiles v3 and vector-tile reader, enough to build the place-name search index from the pack's own labels; the manifest and catalog formats the app reads.
+- `pmtiles extract` (and `--dry-run` size estimates) as a child process; the disk budget check.
+- Sync file I/O only; no network of its own (the `pmtiles` tool fetches from the build). Deps: `flate2`, `sha2`, `serde_json`, `toml`.
+
 ### L3: stateful logic
 
 There is no "core" crate on either side. Each stateful job has its own crate with a name that says what belongs in it. A crate whose name stops describing its contents gets split.
@@ -201,11 +210,15 @@ Server side (each crate owns its storage trait, with a SQLite implementation beh
 
 **pingers-ohttp-relay**: a small reference relay (forward only, full-duplex streaming, no logs) so relay operators have something to run. Optional if an existing relay is used.
 
+**pingers-map-host**: the map host, a separate public static service like the push relay (design B.12, "Map host"). Publisher-hosted by default; operators can run their own and Pingers servers can advertise one (`map_host` in `/v1/params`). Serves region manifests, PMTiles packs and search indexes from a directory: HTTP/2, `Range`, strong ETags from the SHA-256, immutable caching, no cookies, no client addresses, logging off by default (counts and disk use when on). Operators choose what they host with an allow-list of regions and a `max_disk` budget; an optional cache mode cuts allow-listed regions from the upstream Protomaps build on first request and evicts least-recently-served packs. Deps: pingers-map-packs, `axum`, `tokio`, `tokio-util`.
+
 ### Dev
 
 **pingers-testkit**: a fake `Platform` (scripted fixes, DND, wakes), an in-process server with relays, deterministic clock and RNG, and the vector loader. Used by every crate's integration tests.
 
 **pingers-cli**: a headless client over pingers-client for manual testing, end-to-end scenarios (G.3 to G.7 in the design), and load generation for the board-size and server-cost experiments.
+
+**pingers-tiles**: the operator tool for map packs: plans `pmtiles extract` commands with per-region size estimates against a host's budget, cuts packs, and writes each region's search index and manifest (`crates/pingers-tiles/README.md`).
 
 ## 4. Native apps
 
@@ -218,7 +231,7 @@ The shell implements `Platform` and draws what pingers-screens publishes. It own
 - a foreground service of type `location` for meetups and the optional "Keep Pingers running"
 - Keystore wrapping of the SQLCipher key
 - the `NotificationManager` interruption filter
-- MapLibre Native with whole-region offline packs
+- MapLibre Native with whole-region offline packs: the region picker, downloads with SHA-256 checks, the map host chain (user override, server's host, publisher's default, per region), on-device place search over each pack's index (`android/docs/maps.md`)
 - the rotation-vector sensor for the compass, and the downgraded-priority counter for FCM
 
 ## 5. Rules that keep the core clean

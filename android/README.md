@@ -66,7 +66,10 @@ one Kotlin caller today.
 | `Heading.kt` | Compass heading from the rotation-vector sensor. |
 | `Words.kt` | Joins strings from `strings.xml` (name lists, directions, areas). |
 | `ui/theme`, `ui/components` | Canvas colours, Space Grotesk and Inter type, the canvas's SVG icons, shared rows, cards and buttons. |
-| `ui/map/StylisedMap.kt` | The canvas's placeholder map (land, water, park, roads) drawn with Canvas. Overlays use map units. |
+| `ui/map/StylisedMap.kt` | `MapBox`: the real map when a pack covers the frame, else the canvas's placeholder (land, water, park, roads). Overlays use map units. |
+| `ui/map/PackMap.kt` | MapLibre Native over an installed PMTiles pack; the camera worked out from the screen's `MapFrame`. |
+| `maps/` | Region packs: the map host chain, catalogs, resumable verified downloads, installed packs, place search. |
+| `ui/screens/MapRegions.kt` | The region picker and the Maps rows for Advanced and What your server sees. |
 | `ui/screens/` | One composable per screen. Each gets its state, the repository and the navigator, and holds no logic. |
 
 All copy is in `res/values/strings.xml`. Fonts are in `res/font` (both SIL OFL).
@@ -102,5 +105,7 @@ Screenshots of every screen from a Pixel 9 Pro emulator are in `docs/screenshots
 6. **Words.** Text that pingers-words generates (the "What your server sees" lists, the
    pause reason, zone schedules) is already plain strings in the state. `Words.kt` and the
    format strings can move to pingers-words once it covers them.
-7. **Maps.** Swap `StylisedMap` for MapLibre. State carries coordinates and a `MapFrame`, so only
-   the frame-to-screen mapping changes.
+7. **Maps.** Done: MapLibre Native draws installed region packs (`ui/map/PackMap.kt`), the
+   placeholder stays as the fallback with a "Download map for this area" prompt, and `maps/`
+   holds the region picker's data, downloads and on-device place search. See
+   [docs/maps.md](docs/maps.md).
