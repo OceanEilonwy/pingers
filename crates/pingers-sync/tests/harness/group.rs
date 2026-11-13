@@ -16,7 +16,7 @@ use zeroize::Zeroizing;
 use crate::support::{Device, TestError, TestResult, World};
 
 /// The log-auth key of `epoch` (all members derive the same one from the MLS exporter).
-fn key_for(epoch: Epoch) -> LogAuthKeyPair {
+pub(crate) fn key_for(epoch: Epoch) -> LogAuthKeyPair {
     let seed = u8::try_from(epoch.get() % 250)
         .unwrap_or(0)
         .saturating_add(1);
@@ -29,12 +29,12 @@ fn next(epoch: Epoch) -> Epoch {
 
 #[derive(Debug, thiserror::Error)]
 #[error("member refused an entry")]
-struct Refused;
+pub(crate) struct Refused;
 
 /// A stand-in for the MLS owner: tracks the epoch and what it was handed.
-struct Member {
+pub(crate) struct Member {
     name: u8,
-    epoch: Epoch,
+    pub(crate) epoch: Epoch,
     key: LogAuthKeyPair,
     applied: Option<SequenceNumber>,
     entries: Vec<GroupLogEntry>,
@@ -43,7 +43,7 @@ struct Member {
 }
 
 impl Member {
-    fn new(name: u8) -> Self {
+    pub(crate) fn new(name: u8) -> Self {
         Self {
             name,
             epoch: Epoch::new(0),
@@ -147,9 +147,9 @@ impl CommitOwner for Idle {
     }
 }
 
-const GROUP: GroupId = GroupId::from_bytes([0x42; 32]);
+pub(crate) const GROUP: GroupId = GroupId::from_bytes([0x42; 32]);
 
-async fn create(device: &Device) -> TestResult {
+pub(crate) async fn create(device: &Device) -> TestResult {
     device
         .engine
         .create_group(

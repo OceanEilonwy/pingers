@@ -23,7 +23,7 @@ use pingers_ohttp::{BinaryRequest, BinaryResponse, Header, StatusCode};
 use pingers_proto::{
     AnonymousCredential, AppMessage, CommitRequest, CreateGroup, GroupId, MembershipLeaves,
     MessageAccepted, PrivacyPassIssueRequest, PrivacyPassIssueResponse, SecretText, SequenceNumber,
-    ServerId, WireDecode, WireEncode,
+    ServerId, Subscription, SubscriptionId, WireDecode, WireEncode,
 };
 use pingers_store::{Database, DatabaseKey, Session, TokenKeyId};
 use pingers_sync::{
@@ -213,6 +213,32 @@ impl GroupStandIn {
                     None => response(202, Vec::new()),
                 }
             }
+            ("PUT", ["groups", id, "subs", _]) => {
+                let subscription = Subscription::decode(&request.body).ok()?;
+                match self.delivery.put_subscription(&group(id)?, subscription) {
+                    Ok(()) => response(204, Vec::new()),
+                    Err(_) => response(404, Vec::new()),
+                }
+            }
+            ("DELETE", ["groups", id, "subs", sub]) => {
+                let mut bytes = [0_u8; 16];
+                hex::decode_to_slice(sub, &mut bytes).ok()?;
+                match self
+                    .delivery
+                    .remove_subscription(&group(id)?, &SubscriptionId::from_bytes(bytes))
+                {
+                    Ok(()) => response(204, Vec::new()),
+                    Err(_) => response(404, Vec::new()),
+                }
+            }
+            ("GET", ["groups", id, "state"]) => match self.delivery.state(&group(id)?) {
+                Ok(Some(state)) => encoded(200, &state),
+                Ok(None) | Err(_) => response(404, Vec::new()),
+            },
+            ("DELETE", ["groups", id]) => match self.delivery.delete_group(&group(id)?) {
+                Ok(()) => response(204, Vec::new()),
+                Err(_) => response(404, Vec::new()),
+            },
             _ => return None,
         };
         Some(answer)
@@ -236,6 +262,7 @@ pub(crate) struct Link {
     groups: Arc<GroupStandIn>,
     offline: AtomicBool,
     stalled: AtomicBool,
+    refuse_commits: AtomicBool,
     rivals: Mutex<VecDeque<BinaryRequest>>,
     leaves: Mutex<VecDeque<MembershipLeaves>>,
     seen: Mutex<Vec<Seen>>,
@@ -250,6 +277,11 @@ impl Link {
     /// Requests are sent but never answered.
     pub(crate) fn set_stalled(&self, stalled: bool) {
         self.stalled.store(stalled, Ordering::SeqCst);
+    }
+
+    /// Commits are answered `503`, as by an overloaded server.
+    pub(crate) fn set_refusing_commits(&self, refusing: bool) {
+        self.refuse_commits.store(refusing, Ordering::SeqCst);
     }
 
     /// Sends `rival` just before a later commit this link carries (one rival per commit, in
@@ -312,6 +344,9 @@ impl Transport for Link {
             return std::future::pending().await;
         }
         if request.path.ends_with("/commit") {
+            if self.refuse_commits.load(Ordering::SeqCst) {
+                return response(503, Vec::new());
+            }
             let rival = lock(&self.rivals).pop_front();
             if let Some(rival) = rival {
                 self.forward(rival).await?;
@@ -509,6 +544,7 @@ impl World {
             groups: Arc::clone(&self.groups),
             offline: AtomicBool::new(false),
             stalled: AtomicBool::new(false),
+            refuse_commits: AtomicBool::new(false),
             rivals: Mutex::new(VecDeque::new()),
             leaves: Mutex::new(VecDeque::new()),
             seen: Mutex::new(Vec::new()),

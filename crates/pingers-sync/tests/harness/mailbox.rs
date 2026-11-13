@@ -163,7 +163,7 @@ async fn a_mailbox_the_server_refuses_is_not_kept() -> TestResult {
     Ok(())
 }
 
-fn seal(relay_key: pingers_crypto::PushRelayPublicKey) -> PushSeal {
+pub(crate) fn seal(relay_key: pingers_crypto::PushRelayPublicKey) -> PushSeal {
     PushSeal {
         relay: RelayRef::Listed(RelayId::new(1)),
         relay_key,
