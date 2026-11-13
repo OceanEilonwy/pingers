@@ -230,7 +230,7 @@ pub(crate) fn base64url(bytes: &[u8]) -> String {
             *slot = *byte;
         }
         let [first, second, third] = group;
-        let bits = u32::from(first) << 16 | u32::from(second) << 8 | u32::from(third);
+        let bits = u32::from_be_bytes([0, first, second, third]);
         out.push(symbol(bits >> 18));
         out.push(symbol(bits >> 12));
         out.push(if chunk.len() > 1 {
@@ -285,6 +285,7 @@ mod tests {
     fn malformed_requests_are_rejected() -> Result<(), AnonError> {
         let encoded = encode_request(0, &[[1_u8; ELEMENT_LEN]])?;
         let wrong_type = with_byte(&encoded, 1, 2);
+        assert_eq!(wrong_type.len(), encoded.len());
         let mut trailing = encoded.clone();
         trailing.push(0);
         let short = encoded
@@ -331,6 +332,8 @@ mod tests {
         assert_eq!(parsed.authenticator, &[7; AUTHENTICATOR_LEN][..]);
         let other_type = with_byte(&token, 1, 2);
         let other_challenge = with_byte(&token, 2 + NONCE_LEN, 0);
+        assert_eq!(other_type.len(), TOKEN_LEN);
+        assert_ne!(other_challenge, token, "the flipped byte was already zero");
         let short = token.get(..TOKEN_LEN - 1).unwrap_or(&[]);
         for bad in [&other_type[..], &other_challenge, short] {
             assert!(matches!(parse_token(bad), Err(AnonError::BadToken)));
