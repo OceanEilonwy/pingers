@@ -1,0 +1,230 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! The relay's logic, without HTTP: authenticate the server, rate-limit, open the blob under
+//! its bind, check expiry, rate-limit the token, send one content-free push (design B.4.9, D).
+
+use std::hash::{BuildHasher as _, RandomState};
+use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
+
+use pingers_proto::PushPlatform;
+use pingers_time::Clock;
+
+use crate::counts::Counts;
+use crate::credentials::{ServerIndex, ServerRegistry};
+use crate::delivery::{DeliveryOutcome, MAX_PUSH_TTL, PushMessage, PushSender, WakeClass};
+use crate::keys::{KeyConfig, KeyRing};
+use crate::opener::{OpenError, TokenOpener};
+use crate::rate::{Decision, Limiter, RateLimit};
+use crate::request::PushRequest;
+
+/// How many partly drained per-token buckets are kept before new tokens are refused. At the
+/// default 30 pushes per minute a bucket refills within two minutes, so this is far above any
+/// honest load.
+const MAX_TRACKED_TOKENS: usize = 1_000_000;
+
+/// What became of one `POST /v1/push`; the HTTP layer maps each to a status.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PushOutcome {
+    /// Sent to the push service. 202.
+    Accepted,
+    /// The blob will never work: its key is retired or unknown, it has expired, its plaintext
+    /// is malformed, or the push service rejected the token. 410; the server deletes it.
+    TokenGone,
+    /// The blob does not open under this bind. 422.
+    DoesNotOpen,
+    /// The server or the token is over its rate limit. 429.
+    RateLimited,
+    /// Missing or unknown server credential. 401.
+    Unauthorized,
+    /// The body is not a push request. 400.
+    BadRequest,
+    /// The token is for a platform this relay does not serve. 501; the blob is kept.
+    PlatformUnsupported,
+    /// The push service failed. 502.
+    UpstreamFailed,
+    /// The push service did not answer in time. 504.
+    UpstreamTimedOut,
+    /// The relay itself failed. 500.
+    Internal,
+}
+
+/// A stand-in for `SHA-256(push_token)` (design C.1a) as the per-token rate-limit key: a
+/// keyed `SipHash` with a per-process random key, because only pingers-crypto may call
+/// cryptographic hashes. It never leaves memory; a collision only merges two tokens' budgets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct TokenFingerprint(u64);
+
+/// Everything [`Relay::new`] needs.
+pub struct RelayParts<O, S, C> {
+    /// Opens sealed tokens.
+    pub opener: O,
+    /// Sends pushes.
+    pub sender: S,
+    /// Wall clock, for expiry, key rotation and rate limits.
+    pub clock: C,
+    /// The relay's keys.
+    pub keys: KeyRing,
+    /// Servers allowed to use the relay.
+    pub servers: ServerRegistry,
+    /// Per-token limit.
+    pub token_limit: RateLimit,
+    /// Published in the key config: the longest lifetime a device should seal.
+    pub max_ttl: Duration,
+    /// Published in the key config: who runs this relay.
+    pub operator: String,
+}
+
+/// The push relay.
+pub struct Relay<O, S, C> {
+    opener: O,
+    sender: S,
+    clock: C,
+    keys: KeyRing,
+    servers: ServerRegistry,
+    token_limit: RateLimit,
+    max_ttl: Duration,
+    operator: String,
+    server_limiter: Mutex<Limiter<ServerIndex>>,
+    token_limiter: Mutex<Limiter<TokenFingerprint>>,
+    fingerprint_key: RandomState,
+    counts: Counts,
+}
+
+/// What `GET /v1/config` publishes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublishedConfig {
+    /// The current key, encoded as an OHTTP key config.
+    pub key_config: KeyConfig,
+    /// The platforms this relay delivers on.
+    pub platforms: Vec<PushPlatform>,
+    /// The longest lifetime a device should seal into a token.
+    pub max_ttl: Duration,
+    /// Who runs the relay.
+    pub operator: String,
+}
+
+impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
+    /// A relay from its parts.
+    #[must_use]
+    pub fn new(parts: RelayParts<O, S, C>) -> Self {
+        Self {
+            opener: parts.opener,
+            sender: parts.sender,
+            clock: parts.clock,
+            keys: parts.keys,
+            servers: parts.servers,
+            token_limit: parts.token_limit,
+            max_ttl: parts.max_ttl,
+            operator: parts.operator,
+            // One bucket per configured server is all this map ever holds.
+            server_limiter: Mutex::new(Limiter::new(usize::MAX)),
+            token_limiter: Mutex::new(Limiter::new(MAX_TRACKED_TOKENS)),
+            fingerprint_key: RandomState::new(),
+            counts: Counts::default(),
+        }
+    }
+
+    /// The outcome counters.
+    pub const fn counts(&self) -> &Counts {
+        &self.counts
+    }
+
+    /// The key config to publish now, or `None` if no key is active.
+    pub fn published_config(&self) -> Option<PublishedConfig> {
+        let key = self.keys.published(self.clock.now())?;
+        let platforms = [PushPlatform::UnifiedPush, PushPlatform::Fcm]
+            .into_iter()
+            .filter(|platform| self.sender.supports(*platform))
+            .collect();
+        Some(PublishedConfig {
+            key_config: KeyConfig::new(key.public_key()),
+            platforms,
+            max_ttl: self.max_ttl,
+            operator: self.operator.clone(),
+        })
+    }
+
+    /// Handles one push request from a server presenting `bearer`, and counts the outcome.
+    pub async fn push(&self, bearer: Option<&[u8]>, body: &[u8]) -> PushOutcome {
+        let outcome = self.push_uncounted(bearer, body).await;
+        self.counts.record(outcome);
+        outcome
+    }
+
+    async fn push_uncounted(&self, bearer: Option<&[u8]>, body: &[u8]) -> PushOutcome {
+        let Some(server) = bearer.and_then(|bearer| self.servers.authenticate(bearer)) else {
+            return PushOutcome::Unauthorized;
+        };
+        let Some(server_limit) = self.servers.limit(server) else {
+            return PushOutcome::Internal;
+        };
+        let now = self.clock.now();
+        let server_decision = self
+            .server_limiter
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .try_acquire(server, server_limit, now);
+        if server_decision == Decision::Limited {
+            return PushOutcome::RateLimited;
+        }
+        let Ok(request) = PushRequest::decode_json(body) else {
+            return PushOutcome::BadRequest;
+        };
+        self.open_and_send(&request).await
+    }
+
+    async fn open_and_send(&self, request: &PushRequest) -> PushOutcome {
+        let now = self.clock.now();
+        let Some(key) = self.keys.for_opening(request.key_id, now) else {
+            // Retired (or never ours): the blob can never open here again.
+            return PushOutcome::TokenGone;
+        };
+        let plaintext = match self
+            .opener
+            .open(key.private_key(), &request.bind, &request.blob)
+        {
+            Ok(plaintext) => plaintext,
+            Err(OpenError::DoesNotOpen) => return PushOutcome::DoesNotOpen,
+            Err(OpenError::Malformed) => return PushOutcome::TokenGone,
+            Err(OpenError::Unavailable) => return PushOutcome::Internal,
+        };
+        if now > plaintext.not_after {
+            return PushOutcome::TokenGone;
+        }
+        if !self.sender.supports(plaintext.platform) {
+            return PushOutcome::PlatformUnsupported;
+        }
+        let fingerprint =
+            TokenFingerprint(self.fingerprint_key.hash_one(plaintext.token.as_bytes()));
+        let token_decision = self
+            .token_limiter
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .try_acquire(fingerprint, self.token_limit, now);
+        if token_decision == Decision::Limited {
+            return PushOutcome::RateLimited;
+        }
+        let class = WakeClass::of(plaintext.class, request.urgency);
+        let message = PushMessage {
+            handle: request.handle,
+            priority: class.priority(),
+            time_to_live: plaintext
+                .not_after
+                .saturating_duration_since(now)
+                .min(MAX_PUSH_TTL),
+        };
+        match self
+            .sender
+            .send(plaintext.platform, &plaintext.token, &message)
+            .await
+        {
+            DeliveryOutcome::Delivered => PushOutcome::Accepted,
+            DeliveryOutcome::TokenGone => PushOutcome::TokenGone,
+            DeliveryOutcome::Failed => PushOutcome::UpstreamFailed,
+            DeliveryOutcome::TimedOut => PushOutcome::UpstreamTimedOut,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

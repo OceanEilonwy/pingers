@@ -14,10 +14,23 @@ layer = 5
 pingers-crypto = { workspace = true }
 pingers-proto = { workspace = true }
 pingers-time = { workspace = true }
-anyhow = { workspace = true }
+# The production Timer (TokioTimer) for upstream timeouts and the counts report.
+pingers-transport = { workspace = true }
 axum = { workspace = true }
+hex = { workspace = true }
 reqwest = { workspace = true }
-tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+subtle = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["net", "signal"] }
+toml = { workspace = true }
+url = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+pingers-testkit = { workspace = true }
+rand_core = { workspace = true }
 
 [lints]
 workspace = true
