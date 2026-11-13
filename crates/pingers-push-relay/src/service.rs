@@ -2,10 +2,10 @@
 //! The relay's logic, without HTTP: authenticate the server, rate-limit, open the blob under
 //! its bind, check expiry, rate-limit the token, send one content-free push (design B.4.9, D).
 
-use std::hash::{BuildHasher as _, RandomState};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
+use pingers_crypto::{KeyedHash, KeyedHashKey, KeyedHashPurpose, keyed_hash};
 use pingers_proto::PushPlatform;
 use pingers_time::Clock;
 
@@ -48,11 +48,11 @@ pub enum PushOutcome {
     Internal,
 }
 
-/// A stand-in for `SHA-256(push_token)` (design C.1a) as the per-token rate-limit key: a
-/// keyed `SipHash` with a per-process random key, because only pingers-crypto may call
-/// cryptographic hashes. It never leaves memory; a collision only merges two tokens' budgets.
+/// The per-token rate-limit key: in place of the design's `SHA-256(push_token)` (C.1a), a keyed
+/// hash, so a memory dump does not confirm a guessed token without the key. It never leaves
+/// memory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct TokenFingerprint(u64);
+struct TokenFingerprint(KeyedHash);
 
 /// Everything [`Relay::new`] needs.
 pub struct RelayParts<O, S, C> {
@@ -66,6 +66,8 @@ pub struct RelayParts<O, S, C> {
     pub keys: KeyRing,
     /// Servers allowed to use the relay.
     pub servers: ServerRegistry,
+    /// Keys the per-token rate-limit fingerprints.
+    pub token_hash_key: KeyedHashKey,
     /// Per-token limit.
     pub token_limit: RateLimit,
     /// Published in the key config: the longest lifetime a device should seal.
@@ -86,7 +88,7 @@ pub struct Relay<O, S, C> {
     operator: String,
     server_limiter: Mutex<Limiter<ServerIndex>>,
     token_limiter: Mutex<Limiter<TokenFingerprint>>,
-    fingerprint_key: RandomState,
+    token_hash_key: KeyedHashKey,
     counts: Counts,
 }
 
@@ -119,7 +121,7 @@ impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
             // One bucket per configured server is all this map ever holds.
             server_limiter: Mutex::new(Limiter::new(usize::MAX)),
             token_limiter: Mutex::new(Limiter::new(MAX_TRACKED_TOKENS)),
-            fingerprint_key: RandomState::new(),
+            token_hash_key: parts.token_hash_key,
             counts: Counts::default(),
         }
     }
@@ -152,8 +154,13 @@ impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
     }
 
     async fn push_uncounted(&self, bearer: Option<&[u8]>, body: &[u8]) -> PushOutcome {
-        let Some(server) = bearer.and_then(|bearer| self.servers.authenticate(bearer)) else {
+        let Some(bearer) = bearer else {
             return PushOutcome::Unauthorized;
+        };
+        let server = match self.servers.authenticate(bearer) {
+            Ok(Some(server)) => server,
+            Ok(None) => return PushOutcome::Unauthorized,
+            Err(_) => return PushOutcome::Internal,
         };
         let Some(server_limit) = self.servers.limit(server) else {
             return PushOutcome::Internal;
@@ -191,8 +198,14 @@ impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
         if !self.sender.supports(plaintext.platform) {
             return PushOutcome::PlatformUnsupported;
         }
-        let fingerprint =
-            TokenFingerprint(self.fingerprint_key.hash_one(plaintext.token.as_bytes()));
+        let Ok(fingerprint) = keyed_hash(
+            &self.token_hash_key,
+            KeyedHashPurpose::PushTokenRateLimit,
+            plaintext.token.as_bytes(),
+        ) else {
+            return PushOutcome::Internal;
+        };
+        let fingerprint = TokenFingerprint(fingerprint);
         let token_decision = self
             .token_limiter
             .lock()

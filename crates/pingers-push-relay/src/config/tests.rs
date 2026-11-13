@@ -6,12 +6,16 @@ use crate::keys::KeyId;
 
 const PRIVATE: &str = "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";
 const PUBLIC: &str = "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a";
+const HASH_KEY: &str = "4242424242424242424242424242424242424242424242424242424242424242";
+/// `credential_hash` of `0123456789abcdef0123456789abcdef` under [`HASH_KEY`].
+const H0: &str = "11e91a598f0cdd95086a51f58961207c05755742f65f5e2a4885bbe8721c3985";
 
 fn minimal() -> String {
     format!(
         r#"
 listen = "127.0.0.1:8080"
 operator = "Test Relay Ltd"
+hash_key = "4242424242424242424242424242424242424242424242424242424242424242"
 
 [[keys]]
 key_id = 1
@@ -21,7 +25,7 @@ activated_at = 1000
 
 [[servers]]
 server_id = "pingers.example"
-credential = "0123456789abcdef0123456789abcdef"
+credential_hash = "11e91a598f0cdd95086a51f58961207c05755742f65f5e2a4885bbe8721c3985"
 pushes_per_minute = 600
 
 [unifiedpush]
@@ -59,7 +63,7 @@ fn a_minimal_file_gets_private_defaults() -> Result<(), ConfigError> {
         config
             .servers
             .authenticate(b"0123456789abcdef0123456789abcdef")
-            .is_some()
+            .is_ok_and(|server| server.is_some())
     );
     Ok(())
 }
@@ -133,13 +137,13 @@ fn no_platform_is_refused() {
 #[test]
 fn syntax_errors_give_the_line_but_not_the_text() {
     let text = minimal().replace(
-        "credential = \"0123456789abcdef0123456789abcdef\"",
-        "credential = \"0123456789abcdef0123456789abcdef",
+        "credential_hash = \"11e91a598f0cdd95086a51f58961207c05755742f65f5e2a4885bbe8721c3985\"",
+        "credential_hash = \"11e91a598f0cdd95086a51f58961207c05755742f65f5e2a4885bbe8721c3985",
     );
     let error = error_of(&text);
-    assert_eq!(error, Some(ConfigError::Syntax { line: 13 }));
+    assert_eq!(error, Some(ConfigError::Syntax { line: 14 }));
     let message = error.map(|error| error.to_string()).unwrap_or_default();
-    assert!(!message.contains("0123456789abcdef"));
+    assert!(!message.contains("11e91a598f0cdd95"));
 }
 
 #[test]
@@ -210,23 +214,30 @@ fn key_and_server_rules_apply() {
         Some(ConfigError::RetiredBeforeActivated { key_id: 1 })
     );
     assert_eq!(
-        error_of(&minimal().replace(
-            "credential = \"0123456789abcdef0123456789abcdef\"",
-            "credential = \"short\""
-        )),
-        Some(ConfigError::WeakCredential {
-            server_id: "pingers.example".to_owned()
+        error_of(&minimal().replace(H0, "short")),
+        Some(ConfigError::BadHex {
+            field: "servers.credential_hash",
+            bytes: 32
+        })
+    );
+    assert_eq!(
+        error_of(&minimal().replace(HASH_KEY, "42")),
+        Some(ConfigError::BadHex {
+            field: "hash_key",
+            bytes: 32
         })
     );
 }
 
 #[test]
 fn a_file_without_keys_or_servers_is_refused() {
-    let no_keys = "listen = \"127.0.0.1:1\"\noperator = \"x\"\n[[servers]]\nserver_id = \"a\"\n\
-         credential = \"0123456789abcdef0123456789abcdef\"\npushes_per_minute = 1\n[unifiedpush]\n";
-    assert_eq!(error_of(no_keys), Some(ConfigError::NoKeys));
+    let no_keys = format!(
+        "listen = \"127.0.0.1:1\"\noperator = \"x\"\nhash_key = \"{HASH_KEY}\"\n[[servers]]\n\
+         server_id = \"a\"\ncredential_hash = \"{H0}\"\npushes_per_minute = 1\n[unifiedpush]\n"
+    );
+    assert_eq!(error_of(&no_keys), Some(ConfigError::NoKeys));
     let no_servers = format!(
-        "listen = \"127.0.0.1:1\"\noperator = \"x\"\n[[keys]]\nkey_id = 1\n\
+        "listen = \"127.0.0.1:1\"\noperator = \"x\"\nhash_key = \"{HASH_KEY}\"\n[[keys]]\nkey_id = 1\n\
          private_key = \"{PRIVATE}\"\npublic_key = \"{PUBLIC}\"\nactivated_at = 0\n[unifiedpush]\n"
     );
     assert_eq!(error_of(&no_servers), Some(ConfigError::NoServers));

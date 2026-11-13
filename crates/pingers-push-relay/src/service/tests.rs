@@ -14,7 +14,7 @@ use pingers_testkit::ManualClock;
 use pingers_time::UnixSeconds;
 
 use super::*;
-use crate::credentials::tests::{CREDENTIAL_A, CREDENTIAL_B, entry};
+use crate::credentials::tests::{CREDENTIAL_A, CREDENTIAL_B, entry, hash_key};
 use crate::delivery::Priority;
 use crate::keys::KeyId;
 use crate::keys::tests::key;
@@ -151,10 +151,14 @@ impl Setup {
                 key(1, 0, Some(NOW + 29 * DAY)),
                 key(2, NOW - DAY, None),
             ])?,
-            servers: ServerRegistry::new(vec![
-                entry("a", CREDENTIAL_A, self.server_a_per_minute),
-                entry("b", CREDENTIAL_B, 1000),
-            ])?,
+            servers: ServerRegistry::new(
+                hash_key(),
+                vec![
+                    entry("a", CREDENTIAL_A, self.server_a_per_minute),
+                    entry("b", CREDENTIAL_B, 1000),
+                ],
+            )?,
+            token_hash_key: hash_key(),
             token_limit: per_minute(self.token_per_minute),
             max_ttl: Duration::from_secs(30 * DAY),
             operator: "Test Relay Ltd".to_owned(),

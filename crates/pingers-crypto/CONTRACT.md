@@ -59,7 +59,8 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
 - **AAD and info encodings** use big-endian integers: `be32` for leaf indexes and generations.
 - **Labels not in the design**: `pingers/v1/lk-ask` (HPKE info for asks, with the group id),
   `pingers/v1/grp-request` (group request signatures), `pingers/v1/register` (registration
-  proof), `pingers/v1/sub-bind` (subscription binds). The design gives no label for these;
+  proof), `pingers/v1/sub-bind` (subscription binds), `pingers/v1/relay-token` and
+  `pingers/v1/relay-credential` (keyed hashes). The design gives no label for these;
   domain separation needs one.
 - **Grant public keys are variable-length bytes** so the X-Wing variant (feature `x-wing`)
   fits the same type.
@@ -99,6 +100,14 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
 - **Grants and asks are not padded here.** The 256-byte frame class is applied when the
   `MeetupMessage` is padded; an X-Wing grant (1,180 bytes) cannot fit 256 bytes and takes the
   4 KiB class.
+- **Keyed hash for the push relay** (added): `KeyedHashKey` (secret, public `from_bytes` and
+  `expose_bytes` because the relay reads it from its configuration), `KeyedHashPurpose`
+  (`PushTokenRateLimit`, `ServerCredential`), `KeyedHash` (32 bytes, `ConstantTimeEq`, `Debug`
+  redacted; `==`/`Hash` only for map keys) and `keyed_hash(key, purpose, input) =
+  HMAC-SHA-256(key, label || input)`, labels `pingers/v1/relay-token` and
+  `pingers/v1/relay-credential`. The relay keys its per-token rate limits with it in place of
+  the design's `SHA-256(push_token)`, and stores server credentials as keyed hashes. Vectors in
+  `vectors/crypto/keyed-hash.json`.
 - **Additions** (no fixed signature changed): `verify_group_request` and
   `verify_registration` (server side), `PushRelayPrivateKey::generate` and
   `PushRelayPrivateKey::public_key(key_id)` (relay key config). `CryptoError::NotImplemented`

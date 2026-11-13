@@ -12,6 +12,7 @@
 //! - Group state snapshots and log-auth keys from the MLS exporter (B.2).
 //! - Location keys, grants and asks inside a Meetup (B.6.1).
 //! - Invite join requests (D).
+//! - Keyed hashes for the push relay's rate limits and stored credentials (C.1a).
 //!
 //! Secret types wrap `zeroize::Zeroizing` and implement neither `Debug`, `Display`, `Clone`
 //! nor `Serialize`. MACs and tags are compared with `subtle`, never `==`.
@@ -24,6 +25,7 @@ mod group;
 mod hpke;
 mod identity;
 mod invite;
+mod keyed_hash;
 mod labels;
 mod location;
 mod mailbox;
@@ -48,6 +50,7 @@ pub use identity::{
     verify_registration,
 };
 pub use invite::{InviteSecret, open_join_request, seal_join_request};
+pub use keyed_hash::{KeyedHash, KeyedHashKey, KeyedHashPurpose, keyed_hash};
 pub use labels::ExporterLabel;
 pub use location::{
     GrantContext, GrantKeyPair, GrantPublicKey, GrantSecretKey, LocationAad, LocationAsk,

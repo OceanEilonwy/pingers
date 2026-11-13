@@ -21,12 +21,12 @@ use crate::test_support::{
 };
 use crate::{
     AccountSigningKey, BeaconHeader, GrantContext, GrantKeyPair, GrantSecretKey, GroupRequest,
-    InviteSecret, KnockKey, KnockPlaintext, KnockSignedFields, LocationAad, LocationAsk,
-    LocationGrant, LocationKey, LogAuthKeyPair, MailboxReadKey, PresenceRoot, PushBind,
-    PushRelayPrivateKey, PushTokenToOpen, RevokeKey, SealKey, StateKey, account_id,
-    derive_knock_key, derive_meetup_psk, derive_seal_key, derive_spot_key, derive_tag_key,
-    key_config_hash, mailbox_id, open_board_beacon, open_join_request, open_knock,
-    open_location_ask, open_location_grant, open_state_snapshot, push_bind_for_mailbox,
+    InviteSecret, KeyedHashKey, KeyedHashPurpose, KnockKey, KnockPlaintext, KnockSignedFields,
+    LocationAad, LocationAsk, LocationGrant, LocationKey, LogAuthKeyPair, MailboxReadKey,
+    PresenceRoot, PushBind, PushRelayPrivateKey, PushTokenToOpen, RevokeKey, SealKey, StateKey,
+    account_id, derive_knock_key, derive_meetup_psk, derive_seal_key, derive_spot_key,
+    derive_tag_key, key_config_hash, keyed_hash, mailbox_id, open_board_beacon, open_join_request,
+    open_knock, open_location_ask, open_location_grant, open_state_snapshot, push_bind_for_mailbox,
     push_bind_for_subscription, record_tag, revoke_commitment, seal_board_beacon,
     seal_join_request, seal_knock, seal_location_ask, seal_location_grant, seal_state_snapshot,
     segment_hash, sign_group_request, sign_knock, sign_registration, tag_matches,
@@ -298,6 +298,24 @@ fn mailbox_and_push_bind() -> Result<(), TestError> {
         assert_eq!(
             bind.as_bytes().as_slice(),
             vector.expected_bytes("push_bind")?
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn keyed_hashes() -> Result<(), TestError> {
+    for vector in load("keyed-hash")?.vectors {
+        let key = KeyedHashKey::from_bytes(Zeroizing::new(input_array(&vector, "key")?));
+        let purpose = match input_text(&vector, "purpose")? {
+            "ServerCredential" => KeyedHashPurpose::ServerCredential,
+            "PushTokenRateLimit" => KeyedHashPurpose::PushTokenRateLimit,
+            _ => return Err(TestError::Field("purpose")),
+        };
+        let hash = keyed_hash(&key, purpose, &vector.input_bytes("input")?)?;
+        assert_eq!(
+            hash.as_bytes().as_slice(),
+            vector.expected_bytes("keyed_hash")?
         );
     }
     Ok(())

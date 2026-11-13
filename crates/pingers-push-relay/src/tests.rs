@@ -17,6 +17,7 @@ fn config_text(listen: &str, activated_at: u64) -> String {
         r#"
 listen = "{listen}"
 operator = "Start-up Test"
+hash_key = "4242424242424242424242424242424242424242424242424242424242424242"
 
 [[keys]]
 key_id = 1
@@ -26,7 +27,7 @@ activated_at = {activated_at}
 
 [[servers]]
 server_id = "s"
-credential = "0123456789abcdef0123456789abcdef"
+credential_hash = "11e91a598f0cdd95086a51f58961207c05755742f65f5e2a4885bbe8721c3985"
 pushes_per_minute = 1
 
 [unifiedpush]

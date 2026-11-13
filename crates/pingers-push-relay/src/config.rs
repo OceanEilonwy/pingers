@@ -9,6 +9,7 @@
 //! upstream_timeout_ms = 10000
 //! token_pushes_per_minute = 30
 //! max_ttl_s = 2592000
+//! hash_key = "<64 hex>"            # keys the credential hashes and the token rate limits
 //!
 //! [[keys]]
 //! key_id = 1
@@ -19,7 +20,7 @@
 //!
 //! [[servers]]
 //! server_id = "pingers.example"
-//! credential = "<random, at least 32 characters>"
+//! credential_hash = "<64 hex>"     # HMAC of the server's credential; see below
 //! pushes_per_minute = 600
 //!
 //! [unifiedpush]
@@ -31,20 +32,35 @@
 //! endpoint = "https://fcm.googleapis.com/"
 //! ```
 //!
-//! The file holds private keys and credentials: keep it readable by the relay only.
+//! The file holds private keys and the hash key: keep it readable by the relay only. It holds
+//! no server credential, only its keyed hash, so a copy of the file does not let anyone push.
+//!
+//! Issuing a server credential (pingers-crypto's `keyed_hash` with purpose
+//! `ServerCredential`: `HMAC-SHA-256(hash_key, "pingers/v1/relay-credential" || credential)`):
+//!
+//! ```sh
+//! openssl rand -hex 32 > hash_key           # once per relay; paste into hash_key
+//! credential=$(openssl rand -hex 32)        # give this to the server operator only
+//! printf '%s%s' 'pingers/v1/relay-credential' "$credential" \
+//!   | openssl dgst -sha256 -mac HMAC -macopt hexkey:"$(cat hash_key)" -r | cut -d' ' -f1
+//! ```
+//!
+//! The last line prints the `credential_hash` for the server's entry. The server presents the
+//! credential as `Authorization: Bearer <credential>`; credentials shorter than 32 characters
+//! are refused. Changing `hash_key` invalidates every credential hash.
 
 use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use pingers_crypto::{PushRelayPrivateKey, PushRelayPublicKey};
+use pingers_crypto::{KeyedHash, KeyedHashKey, PushRelayPrivateKey, PushRelayPublicKey};
 use pingers_time::UnixSeconds;
 use reqwest::Url;
 use serde::Deserialize;
 use zeroize::{Zeroize as _, Zeroizing};
 
-use crate::credentials::{ServerCredential, ServerEntry, ServerRegistry};
+use crate::credentials::{ServerEntry, ServerRegistry};
 use crate::delivery::EndpointPolicy;
 use crate::error::ConfigError;
 use crate::keys::{KeyLifetime, KeyRing, RelayKey};
@@ -91,6 +107,9 @@ pub struct RelayConfig {
     pub keys: KeyRing,
     /// Servers allowed to use the relay.
     pub servers: ServerRegistry,
+    /// Keys the per-token rate-limit fingerprints: the configured `hash_key`, used with its
+    /// own purpose label.
+    pub token_hash_key: KeyedHashKey,
     /// UnifiedPush, if enabled.
     pub unifiedpush: Option<EndpointPolicy>,
     /// FCM, if enabled.
@@ -138,6 +157,7 @@ struct FileConfig {
     token_pushes_per_minute: u32,
     #[serde(default = "default_max_ttl")]
     max_ttl_s: u64,
+    hash_key: String,
     #[serde(default)]
     keys: Vec<FileKey>,
     #[serde(default)]
@@ -160,7 +180,7 @@ struct FileKey {
 #[serde(deny_unknown_fields)]
 struct FileServer {
     server_id: String,
-    credential: String,
+    credential_hash: String,
     pushes_per_minute: u32,
 }
 
@@ -188,7 +208,7 @@ impl RelayConfig {
     /// [`ConfigError::Syntax`] for TOML or schema errors, or the variant naming the field or
     /// rule that failed.
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
-        let file: FileConfig = toml::from_str(text).map_err(|error| ConfigError::Syntax {
+        let mut file: FileConfig = toml::from_str(text).map_err(|error| ConfigError::Syntax {
             line: error.span().map_or(0, |span| line_of(text, span.start)),
         })?;
         if file.unifiedpush.is_none() && file.fcm.is_none() {
@@ -209,6 +229,10 @@ impl RelayConfig {
             millis => Duration::from_millis(millis),
         };
         let fcm = file.fcm.map(fcm_config).transpose()?;
+        let hash_key = hex_32("hash_key", &file.hash_key);
+        file.hash_key.zeroize();
+        let hash_key = hash_key?;
+        let token_hash_key = KeyedHashKey::from_bytes(Zeroizing::new(*hash_key));
         Ok(Self {
             listen: file.listen,
             operator: file.operator,
@@ -223,11 +247,13 @@ impl RelayConfig {
                     .collect::<Result<_, _>>()?,
             )?,
             servers: ServerRegistry::new(
+                KeyedHashKey::from_bytes(hash_key),
                 file.servers
                     .into_iter()
                     .map(server_entry)
                     .collect::<Result<_, _>>()?,
             )?,
+            token_hash_key,
             unifiedpush: file.unifiedpush.map(|unifiedpush| {
                 if unifiedpush.allow_insecure_local_endpoints {
                     EndpointPolicy::AllowInsecureLocal
@@ -284,7 +310,10 @@ fn relay_key(mut key: FileKey) -> Result<RelayKey, ConfigError> {
 
 fn server_entry(server: FileServer) -> Result<ServerEntry, ConfigError> {
     Ok(ServerEntry {
-        credential: ServerCredential::new(Zeroizing::new(server.credential.into_bytes())),
+        credential_hash: KeyedHash::from_bytes(*hex_32(
+            "servers.credential_hash",
+            &server.credential_hash,
+        )?),
         limit: rate("servers.pushes_per_minute", server.pushes_per_minute)?,
         server_id: server.server_id,
     })

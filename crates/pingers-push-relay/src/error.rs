@@ -104,15 +104,9 @@ pub enum ConfigError {
         /// The repeated id (an operator-chosen label, not a secret).
         server_id: String,
     },
-    /// Two servers share a credential.
+    /// Two servers share a credential hash.
     #[error("two servers share a credential")]
     DuplicateCredential,
-    /// A credential is too short to be a random bearer secret.
-    #[error("the credential of server {server_id} is shorter than 32 characters")]
-    WeakCredential {
-        /// The server.
-        server_id: String,
-    },
     /// The FCM endpoint is not a valid URL.
     #[error("fcm.endpoint is not a valid http(s) URL")]
     BadFcmEndpoint,

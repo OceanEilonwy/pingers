@@ -165,6 +165,7 @@ pub async fn serve_with<S: PushSender, C: Clock + 'static>(
         clock,
         keys: config.keys,
         servers: config.servers,
+        token_hash_key: config.token_hash_key,
         token_limit: config.token_limit,
         max_ttl: config.max_ttl,
         operator: config.operator,

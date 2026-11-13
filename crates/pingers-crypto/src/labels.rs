@@ -55,6 +55,11 @@ pub(crate) const PUSH_BIND: &[u8] = b"pingers/v1/push-bind";
 /// label ("as for a mailbox"); a separate label keeps a subscription bind from ever equalling
 /// a mailbox bind.
 pub(crate) const SUBSCRIPTION_BIND: &[u8] = b"pingers/v1/sub-bind";
+/// Keyed hash of a push token for the relay's rate limits. Decision: the design hashes the
+/// token with plain SHA-256 and gives no label.
+pub(crate) const RELAY_TOKEN: &[u8] = b"pingers/v1/relay-token";
+/// Keyed hash of a server credential as the relay stores it. Decision: the design gives none.
+pub(crate) const RELAY_CREDENTIAL: &[u8] = b"pingers/v1/relay-credential";
 /// HPKE info prefix of location grants (design B.6.1).
 pub(crate) const LOCATION_GRANT: &[u8] = b"pingers/v1/lk-grant";
 /// HPKE info prefix of location asks. Decision: the design gives none.
@@ -68,7 +73,7 @@ pub(crate) const REGISTRATION: &[u8] = b"pingers/v1/register";
 
 /// Every private label, so tests can check they are distinct and vectors can name them.
 #[cfg(test)]
-pub(crate) const ALL: [&[u8]; 16] = [
+pub(crate) const ALL: [&[u8]; 18] = [
     SPOT,
     TAG,
     SEAL,
@@ -80,6 +85,8 @@ pub(crate) const ALL: [&[u8]; 16] = [
     PUSH,
     PUSH_BIND,
     SUBSCRIPTION_BIND,
+    RELAY_TOKEN,
+    RELAY_CREDENTIAL,
     LOCATION_GRANT,
     LOCATION_ASK,
     INVITE_JOIN,
