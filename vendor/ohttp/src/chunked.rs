@@ -91,6 +91,13 @@ impl ChunkedClientRequest {
         seal_chunk(&mut self.hpke, chunk, last)
     }
 
+    /// Test support: seals an empty non-final chunk, which `seal` refuses, so tests can check
+    /// that receivers reject it.
+    #[cfg(feature = "test-util")]
+    pub fn seal_empty_non_final(&mut self) -> Res<Vec<u8>> {
+        self.hpke.seal(CHUNK_AAD, &[])
+    }
+
     /// The keys needed to open the response, available before any of it arrives.
     pub fn response(&self) -> Res<ChunkedResponseKeys> {
         let config = self.hpke.config();
@@ -188,5 +195,12 @@ impl ChunkedServerResponse {
     /// Seals one response chunk (without its length prefix).
     pub fn seal(&mut self, chunk: &[u8], last: bool) -> Res<Vec<u8>> {
         seal_chunk(&mut self.aead, chunk, last)
+    }
+
+    /// Test support: seals an empty non-final chunk, which `seal` refuses, so tests can check
+    /// that receivers reject it.
+    #[cfg(feature = "test-util")]
+    pub fn seal_empty_non_final(&mut self) -> Res<Vec<u8>> {
+        self.aead.seal(CHUNK_AAD, &[])
     }
 }

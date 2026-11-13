@@ -1,6 +1,7 @@
 // Vendored from ohttp 0.8.0 and patched for Pingers; see ../README.md for every change.
-#![deny(warnings, clippy::pedantic)]
-#![allow(clippy::missing_errors_doc)] // I'm too lazy
+// Pingers patch: upstream's `deny(warnings, clippy::pedantic)` is dropped. Clippy picks up the
+// Pingers workspace's clippy.toml here, and vendored code keeps upstream's style.
+#![allow(clippy::all, clippy::pedantic)]
 #![forbid(unsafe_code)]
 
 pub mod chunked;

@@ -10,14 +10,17 @@
 //!
 //! Sans-IO: functions take and return bytes. pingers-transport moves them over HTTP/2.
 //! The HPKE suite is fixed: X25519, HKDF-SHA256, AES-128-GCM.
+//!
+//! The HPKE layer is a patched copy of the `ohttp` crate in `vendor/ohttp` (see its README):
+//! it takes randomness from the caller and replaces upstream's chunked `stream` module.
 #![forbid(unsafe_code)]
 
 mod chunked;
 mod config;
 mod error;
+mod framing;
 mod message;
 mod request;
-mod stub;
 
 pub use chunked::{
     ChunkPosition, ChunkedClient, ChunkedClientStart, ChunkedGateway, OpenedChunk,

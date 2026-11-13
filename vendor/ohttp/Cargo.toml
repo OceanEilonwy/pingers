@@ -11,6 +11,10 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/martinthomson/ohttp"
 publish = false
 
+[features]
+# Test support only: lets tests build the invalid inputs receivers must reject.
+test-util = []
+
 [dependencies]
 aead = { version = "0.6", default-features = false, features = ["alloc"] }
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }

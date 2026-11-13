@@ -27,7 +27,8 @@ pub enum OhttpError {
     /// A non-final chunk had length zero, which draft-08 §6 requires receivers to reject.
     #[error("zero-length non-final chunk")]
     EmptyNonFinalChunk,
-    /// The stream ended without a final chunk (possible truncation).
+    /// The stream ended without a final chunk (possible truncation), or a chunked preamble
+    /// ended before its first chunk did.
     #[error("stream ended without a final chunk")]
     Truncated,
     /// Bytes arrived after the final chunk.
@@ -36,13 +37,14 @@ pub enum OhttpError {
     /// A chunk counter would overflow.
     #[error("too many chunks")]
     TooManyChunks,
+    /// A chunk is larger than 16 KiB of plaintext (upstream `ohttp`'s limit), so a peer cannot
+    /// make a decoder buffer without bound.
+    #[error("chunk too large")]
+    ChunkTooLarge,
     /// A Binary HTTP message is malformed.
     #[error("malformed binary HTTP message")]
     BadMessage,
     /// The HPKE layer reported an error the types should have ruled out.
     #[error("internal OHTTP error")]
     Internal,
-    /// This part of the contract has no implementation yet.
-    #[error("not implemented")]
-    NotImplemented,
 }

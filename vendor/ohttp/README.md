@@ -41,6 +41,9 @@ Pingers needs three things the published crate cannot give (design B.4.9, H.1 #1
   refuses to seal an empty non-final chunk, and returns `Error::EmptyChunk` when an opened
   non-final chunk is empty. Entry points: `ClientRequest::encapsulate_chunked`,
   `Server::decapsulate_chunked`.
+- **Added the `test-util` feature:** `seal_empty_non_final` on both chunk sealers, so tests
+  can build the empty non-final chunk that receivers must reject. Only dev-dependencies
+  enable it.
 - **Added `KeyConfig::import` and `rh::hpke::import_private_key`:** load a stored private key.
 - **Panics turned into errors:** `KeyConfig::new` and `KeyConfig::derive` with no supported
   suite, `Server::new` without a private key, a missing private key in

@@ -1,8 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Binary HTTP messages (RFC 9292), the inner requests and responses of OHTTP.
+//!
+//! Encoding uses the known-length form and omits trailing empty sections (RFC 9292 §3.8), so a
+//! bare `200` response is the three bytes `01 40 c8`, as in RFC 9458 Appendix A. Decoding
+//! accepts either form and trailing zero padding (RFC 9292 §3.8), and rejects what Pingers
+//! never sends: informational responses, trailers, and response messages where a request is
+//! expected (or the reverse).
+
+use std::io::Cursor;
 
 use crate::OhttpError;
-use crate::stub::not_implemented;
+
+/// The scheme written into every request's control data. Gateways route on the path only.
+const SCHEME: &[u8] = b"https";
 
 /// One header field.
 #[derive(Clone, PartialEq, Eq)]
@@ -66,18 +76,38 @@ impl BinaryRequest {
     ///
     /// # Errors
     ///
-    /// [`OhttpError::BadMessage`] if a field cannot be encoded.
+    /// [`OhttpError::BadMessage`] if the method is empty, the path does not start with `/`, or
+    /// a header name is empty or not lower-case.
     pub fn encode(&self) -> Result<Vec<u8>, OhttpError> {
-        not_implemented(self)
+        check_request_line(&self.method, &self.path)?;
+        let mut message = bhttp::Message::request(
+            self.method.as_bytes().to_vec(),
+            SCHEME.to_vec(),
+            Vec::new(),
+            self.path.as_bytes().to_vec(),
+        );
+        write_message(&mut message, &self.headers, &self.body)
     }
 
     /// Parses a Binary HTTP request.
     ///
     /// # Errors
     ///
-    /// [`OhttpError::BadMessage`] if it is malformed.
+    /// [`OhttpError::BadMessage`] if it is malformed, is a response, carries trailers, has
+    /// non-zero bytes after the message, or breaks a rule [`BinaryRequest::encode`] enforces.
     pub fn decode(bytes: &[u8]) -> Result<Self, OhttpError> {
-        not_implemented(bytes)
+        let message = read_message(bytes)?;
+        let bhttp::ControlData::Request { method, path, .. } = message.control() else {
+            return Err(OhttpError::BadMessage);
+        };
+        let request = Self {
+            method: text(method)?,
+            path: text(path)?,
+            headers: headers(message.header())?,
+            body: message.content().to_vec(),
+        };
+        check_request_line(&request.method, &request.path)?;
+        Ok(request)
     }
 }
 
@@ -97,17 +127,110 @@ impl BinaryResponse {
     ///
     /// # Errors
     ///
-    /// [`OhttpError::BadMessage`] if a field cannot be encoded.
+    /// [`OhttpError::BadMessage`] if the status is informational (1xx), which a final response
+    /// cannot carry, or a header name is empty or not lower-case.
     pub fn encode(&self) -> Result<Vec<u8>, OhttpError> {
-        not_implemented(self)
+        let status =
+            bhttp::StatusCode::try_from(self.status.get()).map_err(|_| OhttpError::BadMessage)?;
+        if status.informational() {
+            return Err(OhttpError::BadMessage);
+        }
+        let mut message = bhttp::Message::response(status);
+        write_message(&mut message, &self.headers, &self.body)
     }
 
     /// Parses a Binary HTTP response.
     ///
     /// # Errors
     ///
-    /// [`OhttpError::BadMessage`] if it is malformed.
+    /// [`OhttpError::BadMessage`] if it is malformed, is a request, includes informational
+    /// responses or trailers, or has non-zero bytes after the message.
     pub fn decode(bytes: &[u8]) -> Result<Self, OhttpError> {
-        not_implemented(bytes)
+        let message = read_message(bytes)?;
+        let bhttp::ControlData::Response(status) = message.control() else {
+            return Err(OhttpError::BadMessage);
+        };
+        if !message.informational().is_empty() {
+            return Err(OhttpError::BadMessage);
+        }
+        Ok(Self {
+            status: StatusCode::new(status.code())?,
+            headers: headers(message.header())?,
+            body: message.content().to_vec(),
+        })
     }
+}
+
+fn check_request_line(method: &str, path: &str) -> Result<(), OhttpError> {
+    if method.is_empty() || !path.starts_with('/') {
+        return Err(OhttpError::BadMessage);
+    }
+    Ok(())
+}
+
+fn valid_name(name: &[u8]) -> bool {
+    !name.is_empty() && !name.iter().any(u8::is_ascii_uppercase)
+}
+
+/// Adds headers and body, writes the known-length form and drops the trailing empty sections.
+fn write_message(
+    message: &mut bhttp::Message,
+    fields: &[Header],
+    body: &[u8],
+) -> Result<Vec<u8>, OhttpError> {
+    for field in fields {
+        if !valid_name(field.name.as_bytes()) {
+            return Err(OhttpError::BadMessage);
+        }
+        message.put_header(field.name.as_bytes(), field.value.as_slice());
+    }
+    message.write_content(body);
+    let mut encoded = Vec::new();
+    message
+        .write_bhttp(bhttp::Mode::KnownLength, &mut encoded)
+        .map_err(|_| OhttpError::BadMessage)?;
+    // The last byte is the empty trailer section's zero length; before it, an empty body's,
+    // and before that, an empty header section's (RFC 9292 §3.8 allows omitting all three).
+    let omitted: usize = match (fields.is_empty(), body.is_empty()) {
+        (true, true) => 3,
+        (false, true) => 2,
+        (_, false) => 1,
+    };
+    let kept = encoded
+        .len()
+        .checked_sub(omitted)
+        .ok_or(OhttpError::Internal)?;
+    encoded.truncate(kept);
+    Ok(encoded)
+}
+
+fn read_message(bytes: &[u8]) -> Result<bhttp::Message, OhttpError> {
+    let mut cursor = Cursor::new(bytes);
+    let message = bhttp::Message::read_bhttp(&mut cursor).map_err(|_| OhttpError::BadMessage)?;
+    let consumed = usize::try_from(cursor.position()).map_err(|_| OhttpError::BadMessage)?;
+    let padding = bytes.get(consumed..).ok_or(OhttpError::BadMessage)?;
+    if padding.iter().any(|byte| *byte != 0) || !message.trailer().is_empty() {
+        return Err(OhttpError::BadMessage);
+    }
+    Ok(message)
+}
+
+fn text(bytes: &[u8]) -> Result<String, OhttpError> {
+    String::from_utf8(bytes.to_vec()).map_err(|_| OhttpError::BadMessage)
+}
+
+fn headers(section: &bhttp::Header) -> Result<Vec<Header>, OhttpError> {
+    section
+        .fields()
+        .iter()
+        .map(|field| {
+            if !valid_name(field.name()) {
+                return Err(OhttpError::BadMessage);
+            }
+            Ok(Header {
+                name: text(field.name())?,
+                value: field.value().to_vec(),
+            })
+        })
+        .collect()
 }

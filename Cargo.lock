@@ -3334,10 +3334,15 @@ name = "pingers-ohttp"
 version = "0.1.0"
 dependencies = [
  "bhttp",
+ "hex",
  "ohttp",
  "pingers-crypto",
  "pingers-proto",
+ "pingers-testkit",
+ "proptest",
+ "rand_chacha 0.10.0",
  "rand_core 0.10.1",
+ "serde_json",
  "thiserror",
  "zeroize",
 ]
