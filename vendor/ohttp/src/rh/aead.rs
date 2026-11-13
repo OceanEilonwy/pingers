@@ -96,12 +96,6 @@ impl Aead {
         })
     }
 
-    #[cfg(test)]
-    #[allow(clippy::unnecessary_wraps)]
-    fn import_key(_alg: AeadId, k: &[u8]) -> Res<SymKey> {
-        Ok(SymKey::from(k))
-    }
-
     fn nonce(&self, seq: SequenceNumber) -> Vec<u8> {
         let mut nonce = Vec::from(self.nonce_base);
         for (i, n) in nonce.iter_mut().rev().take(COUNTER_LEN).enumerate() {

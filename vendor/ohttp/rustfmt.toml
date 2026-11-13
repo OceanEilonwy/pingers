@@ -1,0 +1,2 @@
+# Vendored code keeps upstream formatting; `cargo fmt --all` reaches path dependencies.
+disable_all_formatting = true
