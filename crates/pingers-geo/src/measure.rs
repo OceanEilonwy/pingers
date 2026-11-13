@@ -9,7 +9,7 @@ use crate::GeoError;
 
 /// Mean Earth radius (IUGG), in metres. Spherical distances are accurate to about 0.5 %,
 /// far inside GPS accuracy at Spot scale.
-const EARTH_RADIUS_METERS: f64 = 6_371_008.8;
+pub(crate) const EARTH_RADIUS_METERS: f64 = 6_371_008.8;
 
 /// A length in metres: finite and not negative.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
