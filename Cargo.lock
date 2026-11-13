@@ -3796,11 +3796,22 @@ dependencies = [
 name = "pingers-sync"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "hex",
  "pingers-anon",
+ "pingers-crypto",
+ "pingers-delivery",
+ "pingers-ohttp",
  "pingers-proto",
  "pingers-store",
+ "pingers-testkit",
+ "pingers-time",
  "pingers-transport",
+ "rand_chacha 0.10.0",
+ "rand_core 0.10.1",
  "thiserror",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]

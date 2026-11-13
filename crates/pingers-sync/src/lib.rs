@@ -7,6 +7,59 @@
 //! in this wake, with drop rules; token supply (pre-fetched Privacy Pass, RLN proofs made only
 //! in the main app). Knows nothing about what the messages mean; it hands them to their owner.
 //!
-//! Wave 1 scaffold: only the crate's job is fixed here. Its public API is designed by the crate's
-//! owner against the contracts of the crates it depends on.
+//! # Shape
+//!
+//! - [`ApiRequest`] has a typed builder for every route the client uses ([`Route`]); each
+//!   route has a fixed privacy class ([`Route::class`]) and credential scope
+//!   ([`Route::credential`]).
+//! - [`SyncEngine::send`] attaches the credential ([`choose_credential`]: an RLN proof in the
+//!   main app, otherwise a Privacy Pass token), sends through the router inside the
+//!   [`WakeBudget`], and applies the request's [`QueuePolicy`] when it could not be sent.
+//!   Anonymous and stream requests are never sent direct: with no relay they are queued or
+//!   dropped, and [`SyncEngine::flush_queue`] sends the queue on a later wake.
+//! - Typed operations on top: mailboxes ([`SyncEngine::register_mailbox`] and friends),
+//!   group logs ([`SyncEngine::pull_group`], [`SyncEngine::commit`] through the
+//!   [`GroupLogOwner`] and [`CommitOwner`] traits), the board ([`SyncEngine::board_sync`]),
+//!   the membership tree and the token stock ([`SyncEngine::refill_tokens`]).
+//!
+//! # Wire conventions added here
+//!
+//! pingers-server's `wire.rs` fixes paths, queries and the read-key header. Two encodings
+//! were still open and are chosen here (the server must match): a group request (auth mode
+//! Grp) carries `pingers-group-time: <decimal unix seconds>` and
+//! `pingers-group-signature: <hex Ed25519 signature>` over pingers-crypto's
+//! `GroupRequest { method, path with query, body, timestamp }`; an RLN proof travels as
+//! `authorization: PingersRln <base64url, padded, of the 265-byte RlnAuth>` (design D; padded
+//! as pingers-anon pads `PrivateToken`).
 #![forbid(unsafe_code)]
+
+mod base64url;
+mod board;
+mod budget;
+mod clock;
+mod credential;
+mod engine;
+mod error;
+mod group;
+mod mailbox;
+mod pool;
+mod queue;
+mod request;
+mod tokens;
+
+pub use board::{MembershipRefresh, NewLease};
+pub use budget::{MIN_REQUEST_TIME, WakeBudget};
+pub use clock::{ClockOffset, ClockStatus, MAX_CORRECTION, MAX_SKEW};
+pub use credential::{
+    CredentialChoice, CredentialPolicy, ProcessRole, ProverStatus, RlnReadiness, choose_credential,
+};
+pub use engine::{
+    FlushReport, NotSentReason, Outcome, Response, SyncEngine, SyncParts, SyncRng, SyncSettings,
+};
+pub use error::{GroupError, SyncError};
+pub use group::{CommitAttempts, CommitOwner, Committed, GroupCall, GroupLogOwner, Pulled};
+pub use mailbox::{Delivered, NewMailbox, PushSeal};
+pub use pool::{LEASE_BUCKETS, PoolRefill, PoolTarget, WakePush};
+pub use queue::{QueueCapacity, QueuePolicy, Sending};
+pub use request::{ApiRequest, GroupSigner, Route};
+pub use tokens::{Refill, TokenIssuer, TokenStock};
