@@ -1,0 +1,42 @@
+{
+  "name": "hashes",
+  "description": "revoke_commit = SHA-256(revoke_key) (design B.4.2); key config hash = SHA-256(encoded config) (B.4.9, B.12); segment hash = SHA-256 of the segment's 96-byte records concatenated in board order (B.4.3)",
+  "vectors": [
+    {
+      "name": "revoke-commitment",
+      "inputs": {
+        "revoke_key": "5fa28645751f2a7cc88d11dfc5cc7ae3bbe2c55c824f5677b3929e10d573482c"
+      },
+      "expected": {
+        "revoke_commitment": "0e3696d8a0e09aa308a6eb02a76be633f79bc5e403818babfb1ded588bd60e0e"
+      }
+    },
+    {
+      "name": "key-config-hash",
+      "inputs": {
+        "key_config": "6ad2d6798d13b65f1fc6b5e16bdd5bad453b24d91d0e51d6e8c1ac22aa3c0b78d9c64d91daac6fa236"
+      },
+      "expected": {
+        "key_config_hash": "2ba78c97cb331bc8896156e8871a3fd35226cc0029e403b93c8e5c2ea8ee43ed"
+      }
+    },
+    {
+      "name": "empty-segment",
+      "inputs": {
+        "records": ""
+      },
+      "expected": {
+        "segment_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "name": "three-record-segment",
+      "inputs": {
+        "records": "0b849c79e115b7c7a80843a98203cd24bde2dffd2d5a69ba25a2e478ab7280f2ea14c016ea904073f5ddca884d6d06a85598d7d6e025043241ba5137ad8e1dc04604bf02dd831c78793071c06431f7e4e80b51e9f9f651363c88decc4a49186f848d3df767634863ae6bfff4f483fc226802d554123c05daae81ab6571334ed00f1a4089d3284e53d0b279ab2ddc4bead234e6b411b41d0b569f2a75abb5713bfe1433ff15dfa107773a17f7852c00f6f759e8cbf56a88839e953883d2818f42a5de8074f377d20f24babfe3c5f5a5470fc3de409d940210f44be822902657254beb1404efb6581fd53e6719c5507b6eb0639dafb42b2b89b377e1c18007888ce12de487eac887bbaabedcdb0d6a255cc17217fb05e89a9086e6f666302a725d"
+      },
+      "expected": {
+        "segment_hash": "7b4773d1000fa310acf9df8ae6d770691206e1762a05c15ea692d0245a56015c"
+      }
+    }
+  ]
+}

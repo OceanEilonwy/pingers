@@ -30,6 +30,10 @@ mod mailbox;
 mod presence;
 mod primitives;
 mod secret;
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+mod vector_tests;
 
 pub use board::{RevokeKey, revoke_commitment, segment_hash};
 pub use error::CryptoError;

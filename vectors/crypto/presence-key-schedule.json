@@ -1,0 +1,57 @@
+{
+  "name": "presence-key-schedule",
+  "description": "K_spot = HKDF-Expand(PR_e, \"spot\" || spot_id, 32), K_tag = HKDF-Expand(K_spot, \"tag\", 32), tag = HMAC-SHA256(K_tag, be64(b0) || r)[..16], K_seal = HKDF-Expand(K_spot, \"seal\" || be64(b0), 32), K_knock = HKDF-Expand(K_seal, \"knock\" || r, 32), PSK_meet = HKDF-Expand(K_spot, \"psk\" || be64(b), 32); HKDF and HMAC over SHA-256 (design B.4.1)",
+  "vectors": [
+    {
+      "name": "bucket-zero",
+      "inputs": {
+        "presence_root": "ba769c0f175851f88d63626bd4b09529dca55e65b1554a18d28b199a896d5a1a",
+        "spot_id": "7a846c455407acb66144bf6ee5e1bfef",
+        "bucket": 0,
+        "randomness": "3a5ebfa58646923b20fab5a3b45fadae"
+      },
+      "expected": {
+        "spot_key": "71c92cb164193bd5e094a3660b366e8c597e9b141a7c39cf80288bbc8b67813c",
+        "tag_key": "f234aff9744fad432b310569a1c2f3d9347562d0f3c767f17dec2ce24f87a07c",
+        "tag": "4df984e91916d0387256995d316a82f7",
+        "seal_key": "97027cea641b7791a9d811c42983d77b50c448a912bb5630ed04b415c88fbfc8",
+        "knock_key": "b01f1bc0ce22a1892618727872b3f901a1f63f8497e895999f8a852839804b20",
+        "meetup_psk": "5f652c2f7339be1f6478956b13c63403fa342d79a0f6b8fb5eff39f3a50b96b0"
+      }
+    },
+    {
+      "name": "typical-bucket",
+      "inputs": {
+        "presence_root": "0d5eafdf2470b779918aa75083c65cd0f52fc8af656bc1c49dacaaa0d4a07b00",
+        "spot_id": "0802768e774215a76beb0825e9422fee",
+        "bucket": 1966000,
+        "randomness": "168510505aee07f2a3becf3e21346608"
+      },
+      "expected": {
+        "spot_key": "8b4aeb660cd0021458284bc41b577d0dd84688a6a458b0ee3b44097c2ccfffe8",
+        "tag_key": "d6ee1216204166f763c9fd766655e844f402fe4daf51f70dc96200cffa59bfa8",
+        "tag": "fc088c001653ebe3a98bc4ff1ec3d11f",
+        "seal_key": "a66df3451e2261fe1b4dc44c4dd4a6284497c3ff30eb1f3ad9dd9ab688e7110d",
+        "knock_key": "922b39ae831f624920fa87a0022944a03ed1f2323fd3db8bdb9538c8f351c79b",
+        "meetup_psk": "8ffe9a64b84375f0895bf0e8dd5ef5ca163f5c686aaf199772466bd986f918c4"
+      }
+    },
+    {
+      "name": "large-bucket",
+      "inputs": {
+        "presence_root": "54c983efab14e36da3146e785898850d78d98d979d9ac003669c6bccf85adaca",
+        "spot_id": "ddeb378f2ce605d64a06119cb5b7270c",
+        "bucket": 123456789012,
+        "randomness": "76a9c73253e80d8c260b827c2b852b4b"
+      },
+      "expected": {
+        "spot_key": "6dd12b7ba47d3f82ac956a0777e20315268ce53a9727bf7cc282e88349e00e98",
+        "tag_key": "6bd6ebf59eb478710eec638175b3da92d73935a3ea96c6dd947136f4ad548cdc",
+        "tag": "243be28f977eb6ad4fb282e849f175fb",
+        "seal_key": "738d5ab3e4c24631bfdffbbed816cc7f9250f15ffd6c76fba40d5fa54cc93c7c",
+        "knock_key": "67c969e3ec71c53f79bcf911dc1c82a284b6a3e041110db74baffc3545d9afc7",
+        "meetup_psk": "6586163868b2307c020df2200616b39712a1e0a02b94efc2625a715614b6ee83"
+      }
+    }
+  ]
+}

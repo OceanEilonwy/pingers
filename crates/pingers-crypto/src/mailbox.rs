@@ -157,13 +157,23 @@ pub fn seal_push_token(
             .encode_padded()
             .map_err(CryptoError::Encoding)?,
     );
+    seal_push_padded(relay_key, &token.bind, &padded, rng)
+}
+
+/// Seals an already padded plaintext; the part of [`seal_push_token`] after proto encodes.
+pub(crate) fn seal_push_padded(
+    relay_key: &PushRelayPublicKey,
+    bind: &PushBind,
+    padded: &[u8; PushTokenPlaintext::PADDED_SIZE],
+    rng: &mut impl CryptoRng,
+) -> Result<SealedPushBlob, CryptoError> {
     let sealed = hpke::seal(
         Recipient {
             suite: Suite::PushRelay,
             public_key: relay_key.public_key(),
         },
-        &push_info(&token.bind),
-        padded.as_slice(),
+        &push_info(bind),
+        padded,
         rng,
     )?;
     push_blob(&sealed)
@@ -181,7 +191,7 @@ fn push_blob(sealed: &[u8]) -> Result<SealedPushBlob, CryptoError> {
 }
 
 /// Opens a blob to its padded plaintext, before proto decodes it.
-fn open_push_padded(
+pub(crate) fn open_push_padded(
     relay_key: &PushRelayPrivateKey,
     bind: &PushBind,
     blob: &SealedPushBlob,

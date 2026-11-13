@@ -87,7 +87,7 @@ pub fn verify_group_request(
 
 /// `"pingers/v1/grp-request" || be32(len(method)) || method || be32(len(path)) || path ||
 /// SHA-256(body) || be64(timestamp)`.
-fn group_request_message(request: &GroupRequest<'_>) -> Result<Vec<u8>, CryptoError> {
+pub(crate) fn group_request_message(request: &GroupRequest<'_>) -> Result<Vec<u8>, CryptoError> {
     Ok([
         labels::GROUP_REQUEST,
         &length_prefix(request.method.as_bytes())?,

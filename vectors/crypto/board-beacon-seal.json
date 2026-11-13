@@ -1,0 +1,62 @@
+{
+  "name": "board-beacon-seal",
+  "description": "sealed = XChaCha20-Poly1305(K_seal(b0), nonce = r || 0^8, aad = \"pingers/v1/board\" || be64(b0) || r || tag, BoardBeacon) (design B.4.2). Vectors with an `error` open `sealed` and must fail.",
+  "vectors": [
+    {
+      "name": "no-meetup-hint",
+      "inputs": {
+        "seal_key": "226528593867a9f1cd163bf86d0b7c103a8249b6e9c7e86d36bf93d1b5102041",
+        "bucket": 1966201,
+        "randomness": "d5cb10665e6f4727b248d8fe07eaf65c",
+        "tag": "816aeeedafc431b9bd9035ccada161b1",
+        "beacon": "5f402417fc962586211bece0d9da8be80000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "nonce": "d5cb10665e6f4727b248d8fe07eaf65c0000000000000000",
+        "aad": "70696e676572732f76312f626f61726400000000001e0079d5cb10665e6f4727b248d8fe07eaf65c816aeeedafc431b9bd9035ccada161b1",
+        "sealed": "c984a52ea8c14c4f1a8dcf5190a5c8e609f1bbe41b6648218633568d11c59fe9188431ebf832aca7b8c79ca70106516017e2918eabdc3e927d1e597facf0d937"
+      }
+    },
+    {
+      "name": "with-meetup-hint",
+      "inputs": {
+        "seal_key": "b24da270074683459c94ef4ca1a896e31451171fcd921ad8a0ad7c557ec51c1b",
+        "bucket": 1966202,
+        "randomness": "710dc833777659e7dae1a143391c4184",
+        "tag": "356e7ca92d6718fa2ebb4e9f815e69a4",
+        "beacon": "c83570b4b565303e149ac8efea28a538000000000000000000000000000000004266e25360525ea33ed0897c5063a19b"
+      },
+      "expected": {
+        "nonce": "710dc833777659e7dae1a143391c41840000000000000000",
+        "aad": "70696e676572732f76312f626f61726400000000001e007a710dc833777659e7dae1a143391c4184356e7ca92d6718fa2ebb4e9f815e69a4",
+        "sealed": "4b3e9d75c51db6b4ef890f4d5b058a109d3dda8e2639bfa7535741c2f8b018d8517c80ef9f14f8b65572d9f53cf9b26ff449e27adbe331c0748df1c95abad4f6"
+      }
+    },
+    {
+      "name": "next-bucket-does-not-open",
+      "inputs": {
+        "seal_key": "226528593867a9f1cd163bf86d0b7c103a8249b6e9c7e86d36bf93d1b5102041",
+        "bucket": 1966202,
+        "randomness": "d5cb10665e6f4727b248d8fe07eaf65c",
+        "tag": "816aeeedafc431b9bd9035ccada161b1",
+        "sealed": "c984a52ea8c14c4f1a8dcf5190a5c8e609f1bbe41b6648218633568d11c59fe9188431ebf832aca7b8c79ca70106516017e2918eabdc3e927d1e597facf0d937"
+      },
+      "expected": {
+        "error": "OpenFailed"
+      }
+    },
+    {
+      "name": "other-tag-does-not-open",
+      "inputs": {
+        "seal_key": "226528593867a9f1cd163bf86d0b7c103a8249b6e9c7e86d36bf93d1b5102041",
+        "bucket": 1966201,
+        "randomness": "d5cb10665e6f4727b248d8fe07eaf65c",
+        "tag": "806aeeedafc431b9bd9035ccada161b1",
+        "sealed": "c984a52ea8c14c4f1a8dcf5190a5c8e609f1bbe41b6648218633568d11c59fe9188431ebf832aca7b8c79ca70106516017e2918eabdc3e927d1e597facf0d937"
+      },
+      "expected": {
+        "error": "OpenFailed"
+      }
+    }
+  ]
+}

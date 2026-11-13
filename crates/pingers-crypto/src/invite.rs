@@ -38,7 +38,7 @@ pub fn seal_join_request(
 
 /// `HKDF-Expand(invite_secret, "join", 32)`: the invite secret is already uniformly random,
 /// so it serves as the PRK, as the Spot keys do.
-fn join_key(secret: &InviteSecret) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+pub(crate) fn join_key(secret: &InviteSecret) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
     primitives::hkdf_expand_32(secret.expose_bytes(), &[labels::INVITE_JOIN])
 }
 

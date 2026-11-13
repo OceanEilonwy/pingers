@@ -388,7 +388,10 @@ fn subscription_hash(subscription: Option<&Subscription>) -> Result<[u8; 32], Cr
 
 /// The signed bytes, with the subscription already hashed (CONTRACT.md, "Knock signature
 /// input"). Every field has a fixed width, so no length prefixes are needed.
-fn knock_message(fields: &KnockSignedFields<'_>, subscription_hash: &[u8; 32]) -> Vec<u8> {
+pub(crate) fn knock_message(
+    fields: &KnockSignedFields<'_>,
+    subscription_hash: &[u8; 32],
+) -> Vec<u8> {
     [
         labels::KNOCK_SIGNATURE,
         fields.party.as_bytes(),

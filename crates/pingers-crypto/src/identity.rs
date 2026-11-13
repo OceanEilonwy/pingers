@@ -129,7 +129,7 @@ pub fn verify_registration(
 
 /// `"pingers/v1/register" || public key || server origin`. The origin is the only
 /// variable-length field and comes last, so no length prefix is needed.
-fn registration_message(
+pub(crate) fn registration_message(
     public_key: &AccountPublicKey,
     server: &pingers_proto::ServerId,
 ) -> Vec<u8> {

@@ -30,7 +30,4 @@ pub enum CryptoError {
     /// return an error instead of panicking).
     #[error("internal cryptographic error")]
     Internal,
-    /// This part of the contract has no implementation yet.
-    #[error("not implemented")]
-    NotImplemented,
 }

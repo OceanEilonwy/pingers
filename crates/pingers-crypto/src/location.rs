@@ -152,7 +152,7 @@ pub const SEALED_LOCATION_LENGTH: usize = 80;
 
 /// The padded plaintext inside a sealed location: `be16(length) || encoding || zero bytes`,
 /// the padding format of pingers-proto.
-const PADDED_LOCATION_LENGTH: usize = SEALED_LOCATION_LENGTH - TAG_LENGTH;
+pub(crate) const PADDED_LOCATION_LENGTH: usize = SEALED_LOCATION_LENGTH - TAG_LENGTH;
 /// The length prefix of the padded plaintext.
 const LENGTH_PREFIX: usize = 2;
 
@@ -167,7 +167,9 @@ fn location_aad(aad: &LocationAad<'_>) -> Vec<u8> {
     .concat()
 }
 
-fn pad_location(encoded: &[u8]) -> Result<Zeroizing<[u8; PADDED_LOCATION_LENGTH]>, CryptoError> {
+pub(crate) fn pad_location(
+    encoded: &[u8],
+) -> Result<Zeroizing<[u8; PADDED_LOCATION_LENGTH]>, CryptoError> {
     let too_long = || CryptoError::WrongLength {
         expected: PADDED_LOCATION_LENGTH - LENGTH_PREFIX,
         actual: encoded.len(),
@@ -182,7 +184,7 @@ fn pad_location(encoded: &[u8]) -> Result<Zeroizing<[u8; PADDED_LOCATION_LENGTH]
     Ok(padded)
 }
 
-fn unpad_location(padded: &[u8]) -> Result<&[u8], CryptoError> {
+pub(crate) fn unpad_location(padded: &[u8]) -> Result<&[u8], CryptoError> {
     let bad_padding = || CryptoError::Encoding(pingers_proto::ProtoError::BadPadding);
     let (length, body) = padded
         .split_first_chunk::<LENGTH_PREFIX>()
@@ -196,7 +198,7 @@ fn unpad_location(padded: &[u8]) -> Result<&[u8], CryptoError> {
     Ok(encoded)
 }
 
-fn seal_padded_location(
+pub(crate) fn seal_padded_location(
     key: &LocationKey,
     aad: &LocationAad<'_>,
     padded: &[u8; PADDED_LOCATION_LENGTH],
@@ -211,7 +213,7 @@ fn seal_padded_location(
     })
 }
 
-fn open_padded_location(
+pub(crate) fn open_padded_location(
     key: &LocationKey,
     aad: &LocationAad<'_>,
     frame: &SealedLocationFrame,
