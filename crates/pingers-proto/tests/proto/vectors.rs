@@ -8,13 +8,16 @@ use core::time::Duration;
 
 use pingers_proto::{
     AppMessage, BoardBeacon, BoardCursor, BoardPage, ChatBody, ChatMessageId, Delivery,
-    E7Coordinate, Epoch, HeadingDegrees, KeyConfigHash, KeyPackageBytes, Knock, KnockSignature,
+    DisplayName, E7Coordinate, Epoch, HeadingDegrees, InvitePayload, InviteUses,
+    InviterFingerprint, JoinRequest, KeyConfigHash, KeyPackageBytes, Knock, KnockSignature,
     Lamport, LeafIndex, Lease, LocationGeneration, LocationPlaintext, MailboxId, MailboxSpec,
-    MeetPoint, MeetPointLabel, MeetupHint, MeetupMessage, MlsMessageBytes, ProtoError, PushClass,
-    PushHandle, PushPlatform, PushToken, PushTokenPlaintext, Record, RecordRandomness, RecordTag,
-    RelayId, RelayRef, RelayUrl, RevokeCommitment, RlnAuth, RlnScope, SealedBeacon,
-    SealedLocationFrame, SealedPush, SealedPushBlob, SeenSegment, SegmentHash, SegmentInfo,
-    Subscription, SubscriptionId, TimeToLive, Urgency, WireDecode, WireEncode,
+    MeetPoint, MeetPointLabel, MeetupHint, MeetupMessage, MlsMessageBytes, PrivacyPassIssueRequest,
+    PrivacyPassIssueResponse, ProtoError, PushBind, PushClass, PushHandle, PushPlatform,
+    PushRelayConfig, PushRelayKeyConfig, PushRelayKeyId, PushRequest, PushToken,
+    PushTokenPlaintext, Record, RecordRandomness, RecordTag, RelayId, RelayRef, RelayUrl,
+    RevokeCommitment, RlnAuth, RlnScope, SealedBeacon, SealedLocationFrame, SealedPush,
+    SealedPushBlob, SecretBytes, SeenSegment, SegmentHash, SegmentInfo, ServerId, Subscription,
+    SubscriptionId, TimeToLive, Urgency, WireDecode, WireEncode,
 };
 use pingers_testkit::{Vector, VectorError, load_vectors};
 use pingers_time::{Bucket, UnixSeconds};
@@ -359,6 +362,7 @@ fn sealed_push(vector: &Vector) -> Result<SealedPush, TestError> {
     };
     Ok(SealedPush {
         relay,
+        key_id: PushRelayKeyId::new(small(vector, "key_id")?),
         blob: SealedPushBlob::from_bytes(bytes(vector, "blob")?),
         urgency: urgency(vector, "urgency")?,
         handle: PushHandle::from_bytes(bytes(vector, "handle")?),
@@ -393,6 +397,148 @@ fn mailbox_spec_vectors() -> Result<(), TestError> {
 }
 
 #[test]
+fn push_request_vectors() -> Result<(), TestError> {
+    check(&Format {
+        file: "push-request-encoding",
+        bytes_field: "encoding",
+        build: |vector| {
+            Ok(PushRequest {
+                key_id: PushRelayKeyId::new(small(vector, "key_id")?),
+                blob: SealedPushBlob::from_bytes(bytes(vector, "blob")?),
+                bind: PushBind::from_bytes(bytes(vector, "bind")?),
+                urgency: urgency(vector, "urgency")?,
+                handle: PushHandle::from_bytes(bytes(vector, "handle")?),
+            })
+        },
+        encode: PushRequest::encode,
+        decode: PushRequest::decode,
+    })
+}
+
+fn push_relay_config(vector: &Vector) -> Result<PushRelayConfig, TestError> {
+    let platforms = text(vector, "platforms")?
+        .split(',')
+        .map(|name| match name {
+            "fcm" => Ok(PushPlatform::Fcm),
+            "unifiedpush" => Ok(PushPlatform::UnifiedPush),
+            _ => Err(field_error(vector, "platforms")),
+        })
+        .collect::<Result<_, _>>()?;
+    let config = PushRelayConfig {
+        key_config: PushRelayKeyConfig {
+            key_id: PushRelayKeyId::new(small(vector, "key_id")?),
+            public_key: bytes(vector, "public_key")?,
+        },
+        platforms,
+        max_time_to_live: time_to_live(vector, "max_ttl_seconds")?,
+        operator: text(vector, "operator")?,
+    };
+    assert_eq!(
+        config.key_config.to_bytes().as_slice(),
+        vector.expected_bytes("key_config")?,
+        "{}: key config",
+        vector.name
+    );
+    Ok(config)
+}
+
+#[test]
+fn push_relay_config_vectors() -> Result<(), TestError> {
+    check(&Format {
+        file: "push-relay-config-encoding",
+        bytes_field: "encoding",
+        build: push_relay_config,
+        encode: PushRelayConfig::encode,
+        decode: PushRelayConfig::decode,
+    })
+}
+
+#[test]
+fn privacy_pass_issue_request_vectors() -> Result<(), TestError> {
+    check(&Format {
+        file: "privacy-pass-issue-request-encoding",
+        bytes_field: "encoding",
+        build: |vector| {
+            Ok(PrivacyPassIssueRequest::new(
+                vector.input_bytes("token_request")?,
+            )?)
+        },
+        encode: PrivacyPassIssueRequest::encode,
+        decode: PrivacyPassIssueRequest::decode,
+    })
+}
+
+#[test]
+fn privacy_pass_issue_response_vectors() -> Result<(), TestError> {
+    check(&Format {
+        file: "privacy-pass-issue-response-encoding",
+        bytes_field: "encoding",
+        build: |vector| {
+            Ok(PrivacyPassIssueResponse::new(
+                vector.input_bytes("token_response")?,
+            )?)
+        },
+        encode: PrivacyPassIssueResponse::encode,
+        decode: PrivacyPassIssueResponse::decode,
+    })
+}
+
+#[test]
+fn invite_payload_vectors() -> Result<(), TestError> {
+    check(&Format {
+        file: "invite-payload-encoding",
+        bytes_field: "encoding",
+        build: |vector| {
+            Ok(InvitePayload {
+                server: ServerId::new(text(vector, "server")?)?,
+                invite_mailbox: MailboxId::from_bytes(bytes(vector, "invite_mailbox")?),
+                invite_secret: SecretBytes::new(bytes(vector, "invite_secret")?),
+                inviter_fingerprint: InviterFingerprint::from_bytes(bytes(
+                    vector,
+                    "inviter_fingerprint",
+                )?),
+                expires: UnixSeconds::new(number(vector, "expires")?),
+                uses: match text(vector, "uses")?.as_str() {
+                    "single" => InviteUses::Single,
+                    "multiple" => InviteUses::Multiple,
+                    _ => return Err(field_error(vector, "uses")),
+                },
+            })
+        },
+        encode: InvitePayload::encode,
+        decode: InvitePayload::decode,
+    })
+}
+
+#[test]
+fn join_request_vectors() -> Result<(), TestError> {
+    check(&Format {
+        file: "join-request-encoding",
+        bytes_field: "encoding",
+        build: |vector| {
+            Ok(JoinRequest {
+                key_package: KeyPackageBytes::from_bytes(vector.input_bytes("key_package")?),
+                display_name: DisplayName::new(text(vector, "display_name")?)?,
+                reply_mailbox: MailboxId::from_bytes(bytes(vector, "reply_mailbox")?),
+                party_subscription: Subscription {
+                    id: SubscriptionId::from_bytes(bytes(vector, "subscription_id")?),
+                    push: SealedPush {
+                        relay: RelayRef::Listed(RelayId::new(2)),
+                        key_id: PushRelayKeyId::new(1),
+                        blob: SealedPushBlob::from_bytes(blob()),
+                        urgency: Urgency::Quiet,
+                        handle: PushHandle::from_bytes(ramp::<8>(0xf0)),
+                    },
+                    time_to_live: time_to_live(vector, "subscription_ttl_seconds")?,
+                },
+            })
+        },
+        encode: JoinRequest::encode,
+        decode: JoinRequest::decode,
+    })
+}
+
+#[test]
 fn knock_vectors() -> Result<(), TestError> {
     check(&Format {
         file: "knock-encoding",
@@ -403,6 +549,7 @@ fn knock_vectors() -> Result<(), TestError> {
                     id: SubscriptionId::from_bytes(id),
                     push: SealedPush {
                         relay: RelayRef::Listed(RelayId::new(2)),
+                        key_id: PushRelayKeyId::new(1),
                         blob: SealedPushBlob::from_bytes(blob()),
                         urgency: Urgency::Quiet,
                         handle: PushHandle::from_bytes(ramp::<8>(0xf0)),

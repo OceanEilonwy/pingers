@@ -1,28 +1,31 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The HTTP surface (design D, "Push relay API"):
 //!
-//! - `GET /v1/config`: the current key config, no auth, cacheable.
-//! - `POST /v1/push`: `Authorization: Bearer <server credential>`, body [`PushRequest`]. Answers
-//!   202, 400, 401, 410 (delete the blob), 422, 429, 500, 501, 502 or 504, with no body.
+//! - `GET /v1/config`: [`PushRelayConfig`] as CBOR (`application/cbor`), no auth, cacheable.
+//! - `POST /v1/push`: `Authorization: Bearer <server credential>`, body [`PushRequest`] as CBOR.
+//!   Answers 202, 400, 401, 410 (delete the blob), 422, 429, 500, 501, 502 or 504, with no
+//!   body.
 //!
-//! [`PushRequest`]: crate::request::PushRequest
+//! Both bodies are pingers-proto types; the design (D) says bodies are CBOR unless noted.
+//!
+//! [`PushRelayConfig`]: pingers_proto::PushRelayConfig
+//! [`PushRequest`]: pingers_proto::PushRequest
 
 use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, WWW_AUTHENTICATE};
+use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, WWW_AUTHENTICATE};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use pingers_proto::PushPlatform;
+use pingers_proto::WireEncode as _;
 use pingers_time::Clock;
-use serde::Serialize;
 
 use crate::delivery::PushSender;
 use crate::opener::TokenOpener;
-use crate::service::{PublishedConfig, PushOutcome, Relay};
+use crate::service::{PushOutcome, Relay};
 
 /// Larger than any valid push request (about 1.1 kB), small enough that nobody can make the
 /// relay buffer much.
@@ -56,58 +59,22 @@ pub const fn status_of(outcome: PushOutcome) -> StatusCode {
     }
 }
 
-/// `GET /v1/config` body (design D, `RelayConfig`), with byte strings in hex. `key_config` is
-/// the RFC 9458 encoding whose SHA-256 (`key_config_hash`) devices pin.
-#[derive(Serialize)]
-struct ConfigBody {
-    key_id: u8,
-    kem: &'static str,
-    kdf: &'static str,
-    aead: &'static str,
-    public_key: String,
-    key_config: String,
-    key_config_hash: String,
-    platforms: Vec<&'static str>,
-    max_ttl_s: u64,
-    operator: String,
-}
-
-impl ConfigBody {
-    fn new(config: &PublishedConfig) -> Self {
-        let encoded = config.key_config.as_bytes();
-        Self {
-            key_id: encoded.first().copied().unwrap_or_default(),
-            kem: "X25519",
-            kdf: "HkdfSha256",
-            aead: "Aes128Gcm",
-            public_key: hex::encode(encoded.get(3..35).unwrap_or_default()),
-            key_config: hex::encode(encoded),
-            key_config_hash: hex::encode(config.key_config.hash().as_bytes()),
-            platforms: config
-                .platforms
-                .iter()
-                .filter_map(|platform| match platform {
-                    PushPlatform::Fcm => Some("Fcm"),
-                    PushPlatform::UnifiedPush => Some("UnifiedPush"),
-                    _ => None,
-                })
-                .collect(),
-            max_ttl_s: config.max_ttl.as_secs(),
-            operator: config.operator.clone(),
-        }
-    }
-}
-
 async fn config<O: TokenOpener, S: PushSender, C: Clock>(
     State(relay): State<Arc<Relay<O, S, C>>>,
 ) -> Response {
-    match relay.published_config() {
-        Some(config) => (
-            [(CACHE_CONTROL, "public, max-age=3600")],
-            axum::Json(ConfigBody::new(&config)),
+    let Some(config) = relay.published_config() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match config.encode() {
+        Ok(body) => (
+            [
+                (CACHE_CONTROL, "public, max-age=3600"),
+                (CONTENT_TYPE, "application/cbor"),
+            ],
+            body,
         )
             .into_response(),
-        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 

@@ -7,18 +7,21 @@ use pingers_proto::{
     AccountId, AccuracyMeters, AnonymousCredential, AppMessage, AuthRequest, AuthResponse,
     BoardCursor, BoardPage, BoardSyncRequest, BoardSyncResponse, ChatBody, ChatMessageId,
     CommitRequest, CommitResponse, ContentType, CoverReadRatio, CreateGroup, CustomPushRelays,
-    Delivery, E7Coordinate, Epoch, GroupAuthKey, GroupId, GroupLogEntry, GroupMessages, GroupState,
-    HeadingDegrees, KeyConfigHash, KeyPackageBytes, Knock, KnockSignature, Lamport, LeafIndex,
-    Lease, LeaseId, LeaseReplacement, LiveFrame, LocationGeneration, LocationPlaintext, MailboxId,
+    Delivery, DisplayName, E7Coordinate, Epoch, GroupAuthKey, GroupId, GroupLogEntry,
+    GroupMessages, GroupState, HeadingDegrees, InvitePayload, InviteUses, InviterFingerprint,
+    JoinRequest, KeyConfigHash, KeyPackageBytes, Knock, KnockSignature, Lamport, LeafIndex, Lease,
+    LeaseId, LeaseReplacement, LiveFrame, LocationGeneration, LocationPlaintext, MailboxId,
     MailboxMessage, MailboxMessages, MailboxSpec, MeetPoint, MeetPointLabel, MeetupMessage,
     MembershipIndex, MembershipLeafRequest, MembershipLeafResponse, MembershipLeaves,
-    MembershipRoot, MessageAccepted, MlsMessageBytes, Padded, Params, PushClass, PushHandle,
-    PushPlatform, PushRelayInfo, PushToken, PushTokenPlaintext, ReadBoard, Record,
-    RecordRandomness, RecordTag, Redacted, RegisterRequest, RegisterResponse, RelayId, RelayRef,
-    RelayUrl, RevokeCommitment, RlnAuth, RlnScope, RootEpoch, SealedAsk, SealedBeacon, SealedGrant,
-    SealedLocationFrame, SealedPush, SealedPushBlob, SealedSnapshot, SeenSegment, SegmentHash,
-    SegmentInfo, SequenceNumber, SizeClass, Slashing, SpeedCentimetresPerSecond, Subscription,
-    SubscriptionId, TimeToLive, Urgency,
+    MembershipRoot, MessageAccepted, MlsMessageBytes, Padded, Params, PrivacyPassIssueRequest,
+    PrivacyPassIssueResponse, PushBind, PushClass, PushHandle, PushPlatform, PushRelayConfig,
+    PushRelayInfo, PushRelayKeyConfig, PushRelayKeyId, PushRequest, PushToken, PushTokenPlaintext,
+    ReadBoard, Record, RecordRandomness, RecordTag, Redacted, RegisterRequest, RegisterResponse,
+    RelayId, RelayRef, RelayUrl, RevokeCommitment, RlnAuth, RlnScope, RootEpoch, SealedAsk,
+    SealedBeacon, SealedGrant, SealedLocationFrame, SealedPush, SealedPushBlob, SealedSnapshot,
+    SecretBytes, SecretText, SeenSegment, SegmentHash, SegmentInfo, SequenceNumber, ServerId,
+    SizeClass, Slashing, SpeedCentimetresPerSecond, Subscription, SubscriptionId, TimeToLive,
+    Urgency,
 };
 use pingers_time::{Bucket, UnixSeconds};
 use proptest::array::uniform;
@@ -123,17 +126,112 @@ pub(crate) fn relay_ref() -> impl Strategy<Value = RelayRef> {
 
 pub(crate) fn sealed_push() -> impl Strategy<Value = SealedPush> {
     (
-        relay_ref(),
+        (relay_ref(), any::<u8>()),
         uniform::<_, 320>(any::<u8>()),
         urgency(),
         uniform::<_, 8>(any::<u8>()),
     )
-        .prop_map(|(relay, blob, urgency, handle)| SealedPush {
+        .prop_map(|((relay, key_id), blob, urgency, handle)| SealedPush {
             relay,
+            key_id: PushRelayKeyId::new(key_id),
             blob: SealedPushBlob::from_bytes(blob),
             urgency,
             handle: PushHandle::from_bytes(handle),
         })
+}
+
+pub(crate) fn push_request() -> impl Strategy<Value = PushRequest> {
+    (
+        any::<u8>(),
+        uniform::<_, 320>(any::<u8>()),
+        bytes32(),
+        urgency(),
+        uniform::<_, 8>(any::<u8>()),
+    )
+        .prop_map(|(key_id, blob, bind, urgency, handle)| PushRequest {
+            key_id: PushRelayKeyId::new(key_id),
+            blob: SealedPushBlob::from_bytes(blob),
+            bind: PushBind::from_bytes(bind),
+            urgency,
+            handle: PushHandle::from_bytes(handle),
+        })
+}
+
+pub(crate) fn push_relay_config() -> impl Strategy<Value = PushRelayConfig> {
+    (
+        any::<u8>(),
+        bytes32(),
+        vec(
+            prop_oneof![Just(PushPlatform::Fcm), Just(PushPlatform::UnifiedPush)],
+            0..4,
+        ),
+        time_to_live(),
+        text(40),
+    )
+        .prop_map(
+            |(key_id, public_key, platforms, max_time_to_live, operator)| PushRelayConfig {
+                key_config: PushRelayKeyConfig {
+                    key_id: PushRelayKeyId::new(key_id),
+                    public_key,
+                },
+                platforms,
+                max_time_to_live,
+                operator,
+            },
+        )
+}
+
+pub(crate) fn privacy_pass_issue_request() -> impl Strategy<Value = PrivacyPassIssueRequest> {
+    vec(any::<u8>(), 1..200).prop_filter_map("fits a batch", |bytes| {
+        PrivacyPassIssueRequest::new(bytes).ok()
+    })
+}
+
+pub(crate) fn privacy_pass_issue_response() -> impl Strategy<Value = PrivacyPassIssueResponse> {
+    vec(any::<u8>(), 1..200).prop_filter_map("fits a batch", |bytes| {
+        PrivacyPassIssueResponse::new(bytes).ok()
+    })
+}
+
+pub(crate) fn invite_payload() -> impl Strategy<Value = InvitePayload> {
+    (
+        text(40).prop_filter_map("https origin", |host| {
+            ServerId::new(format!("https://{host}")).ok()
+        }),
+        bytes16(),
+        bytes32(),
+        uniform::<_, 8>(any::<u8>()),
+        unix_seconds(),
+        prop_oneof![Just(InviteUses::Multiple), Just(InviteUses::Single)],
+    )
+        .prop_map(
+            |(server, mailbox, secret, fingerprint, expires, uses)| InvitePayload {
+                server,
+                invite_mailbox: MailboxId::from_bytes(mailbox),
+                invite_secret: SecretBytes::new(secret),
+                inviter_fingerprint: InviterFingerprint::from_bytes(fingerprint),
+                expires,
+                uses,
+            },
+        )
+}
+
+pub(crate) fn join_request() -> impl Strategy<Value = JoinRequest> {
+    (
+        opaque(),
+        text(DisplayName::MAX_BYTES)
+            .prop_filter_map("1 to 200 bytes", |name| DisplayName::new(name).ok()),
+        bytes16(),
+        subscription(),
+    )
+        .prop_map(
+            |(key_package, display_name, reply_mailbox, party_subscription)| JoinRequest {
+                key_package: KeyPackageBytes::from_bytes(key_package),
+                display_name,
+                reply_mailbox: MailboxId::from_bytes(reply_mailbox),
+                party_subscription,
+            },
+        )
 }
 
 pub(crate) fn mailbox_spec() -> impl Strategy<Value = MailboxSpec> {
@@ -461,7 +559,7 @@ pub(crate) fn register_request() -> impl Strategy<Value = RegisterRequest> {
     (bytes32(), bytes64(), option::of(text(30))).prop_map(|(key, proof, code)| RegisterRequest {
         signature_key: key,
         proof,
-        registration_code: code.map(Redacted::new),
+        registration_code: code.map(SecretText::new),
     })
 }
 
@@ -482,7 +580,7 @@ pub(crate) fn board_sync_request() -> impl Strategy<Value = BoardSyncRequest> {
             lease,
             replaces: replaces.map(|(lease_id, revoke_key)| LeaseReplacement {
                 lease_id: LeaseId::from_bytes(lease_id),
-                revoke_key: Redacted::new(revoke_key),
+                revoke_key: SecretBytes::new(revoke_key),
             }),
             read,
         })
@@ -506,7 +604,7 @@ pub(crate) fn register_response() -> impl Strategy<Value = RegisterResponse> {
 
 pub(crate) fn auth_response() -> impl Strategy<Value = AuthResponse> {
     (text(60), unix_seconds()).prop_map(|(bearer, server_time)| AuthResponse {
-        bearer: Redacted::new(bearer),
+        bearer: SecretText::new(bearer),
         server_time,
     })
 }

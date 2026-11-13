@@ -6,7 +6,8 @@
 use pingers_proto::{
     Epoch, GroupId, KeyPackageBytes, LeafIndex, LocationGeneration, LocationRequestId, MailboxId,
     PartyId, PushTokenPlaintext, Record, RecordRandomness, RecordTag, SealedAsk, SealedBeacon,
-    SealedGrant, SealedLocationFrame, SealedSnapshot, ServerId, SizeClass, SpotId,
+    SealedGrant, SealedLocationFrame, SealedPushBlob, SealedSnapshot, ServerId, SizeClass, SpotId,
+    SubscriptionId,
 };
 use pingers_testkit::seeded_rng;
 use pingers_time::{Bucket, UnixSeconds};
@@ -17,11 +18,12 @@ use crate::{
     AccountSigningKey, CryptoError, GrantContext, GrantKeyPair, GrantPublicKey, GroupRequest,
     InviteSecret, KnockKey, KnockPlaintext, KnockSignedFields, LocationAad, LocationAsk,
     LocationGrant, LocationKey, LogAuthKeyPair, PresenceRoot, PushBind, PushRelayPrivateKey,
-    SEALED_LOCATION_LENGTH, StateKey, derive_knock_key, derive_meetup_psk, derive_seal_key,
-    derive_spot_key, derive_tag_key, dummy_location, open_join_request, open_knock, open_location,
-    open_location_ask, open_location_grant, open_state_snapshot, record_tag, seal_join_request,
-    seal_knock, seal_location_ask, seal_location_grant, sign_group_request, sign_knock,
-    sign_registration, tag_matches, verify_group_request, verify_knock, verify_registration,
+    PushTokenToOpen, SEALED_LOCATION_LENGTH, StateKey, derive_knock_key, derive_meetup_psk,
+    derive_seal_key, derive_spot_key, derive_tag_key, dummy_location, open_join_request,
+    open_knock, open_location, open_location_ask, open_location_grant, open_state_snapshot,
+    push_bind_for_mailbox, push_bind_for_subscription, record_tag, seal_join_request, seal_knock,
+    seal_location_ask, seal_location_grant, sign_group_request, sign_knock, sign_registration,
+    tag_matches, verify_group_request, verify_knock, verify_registration,
 };
 
 fn root(byte: u8) -> PresenceRoot {
@@ -286,6 +288,7 @@ fn knock_signature_without_subscription_does_not_cover_one_with() -> Result<(), 
         id: pingers_proto::SubscriptionId::from_bytes([6; 16]),
         push: pingers_proto::SealedPush {
             relay: pingers_proto::RelayRef::Listed(pingers_proto::RelayId::new(1)),
+            key_id: pingers_proto::PushRelayKeyId::new(1),
             blob: pingers_proto::SealedPushBlob::from_bytes([7; 320]),
             urgency: pingers_proto::Urgency::Alert,
             handle: pingers_proto::PushHandle::from_bytes([8; 8]),
@@ -451,7 +454,81 @@ fn two_snapshots_of_the_same_state_differ() -> Result<(), TestError> {
     Ok(())
 }
 
+// Lease revocation.
+
+#[test]
+fn a_revoke_key_opens_only_its_own_commitment() {
+    let key = crate::RevokeKey::from_bytes(Zeroizing::new([4; 32]));
+    let commitment = crate::revoke_commitment(&key);
+    assert!(crate::revoke_key_matches(
+        &pingers_proto::SecretBytes::new([4; 32]),
+        &commitment
+    ));
+    assert!(!crate::revoke_key_matches(
+        &pingers_proto::SecretBytes::new([5; 32]),
+        &commitment
+    ));
+    // The commitment itself is public; revealing it is not revealing the key.
+    assert!(!crate::revoke_key_matches(
+        &pingers_proto::SecretBytes::new(*commitment.as_bytes()),
+        &commitment
+    ));
+}
+
+// Join requests.
+
+#[test]
+fn join_requests_fill_the_smallest_mailbox_class_whatever_their_size() -> Result<(), TestError> {
+    let secret = InviteSecret::from_bytes(Zeroizing::new([3; 32]));
+    let mut rng = seeded_rng(1);
+    for (length, class) in [
+        (1, SizeClass::Bytes1024),
+        (982, SizeClass::Bytes1024),
+        (983, SizeClass::Bytes4096),
+    ] {
+        let request = vec![0x5a; length];
+        let sealed = seal_join_request(&secret, &request, &mut rng)?;
+        assert_eq!(sealed.len(), class.size(), "{length}");
+        assert_eq!(*open_join_request(&secret, &sealed)?, request);
+    }
+    Ok(())
+}
+
+#[test]
+fn a_join_request_too_big_for_its_class_is_refused() -> Result<(), TestError> {
+    let secret = InviteSecret::from_bytes(Zeroizing::new([3; 32]));
+    let sealed = crate::seal_join_request_in_class(
+        &secret,
+        &[1; 4054],
+        SizeClass::Bytes4096,
+        &mut seeded_rng(1),
+    )?;
+    assert_eq!(sealed.len(), 4096);
+    assert!(matches!(
+        crate::seal_join_request_in_class(
+            &secret,
+            &[1; 4055],
+            SizeClass::Bytes4096,
+            &mut seeded_rng(1)
+        ),
+        Err(CryptoError::WrongLength {
+            expected: 4054,
+            actual: 4055
+        })
+    ));
+    Ok(())
+}
+
 // Push tokens.
+
+fn open_push(
+    private: &PushRelayPrivateKey,
+    key_id: u8,
+    bind: PushBind,
+    blob: &SealedPushBlob,
+) -> Result<Zeroizing<[u8; PushTokenPlaintext::PADDED_SIZE]>, CryptoError> {
+    crate::mailbox::open_push_padded(private, &PushTokenToOpen { key_id, bind, blob })
+}
 
 #[test]
 fn push_blob_for_one_mailbox_does_not_open_for_another() -> Result<(), TestError> {
@@ -460,12 +537,50 @@ fn push_blob_for_one_mailbox_does_not_open_for_another() -> Result<(), TestError
     let bind = PushBind::from_bytes([1; 32]);
     let padded = [7; PushTokenPlaintext::PADDED_SIZE];
     let blob = crate::mailbox::seal_push_padded(&public, &bind, &padded, &mut seeded_rng(2))?;
-    assert_eq!(
-        *crate::mailbox::open_push_padded(&private, &bind, &blob)?,
-        padded
-    );
+    assert_eq!(*open_push(&private, 1, bind, &blob)?, padded);
     assert!(matches!(
-        crate::mailbox::open_push_padded(&private, &PushBind::from_bytes([2; 32]), &blob),
+        open_push(&private, 1, PushBind::from_bytes([2; 32]), &blob),
+        Err(CryptoError::OpenFailed)
+    ));
+    Ok(())
+}
+
+#[test]
+fn a_subscription_bind_never_equals_the_mailbox_bind_of_the_same_bytes() -> Result<(), TestError> {
+    // With one shared label these were equal, so a blob registered for a subscription would
+    // open when the server presented it for a mailbox with the same id bytes.
+    let id = [9; 16];
+    let mailbox = push_bind_for_mailbox(&MailboxId::from_bytes(id));
+    let subscription = push_bind_for_subscription(&SubscriptionId::from_bytes(id));
+    assert_ne!(mailbox, subscription);
+    let private = PushRelayPrivateKey::generate(&mut seeded_rng(1));
+    let public = private.public_key(1)?;
+    let padded = [7; PushTokenPlaintext::PADDED_SIZE];
+    let blob =
+        crate::mailbox::seal_push_padded(&public, &subscription, &padded, &mut seeded_rng(2))?;
+    assert!(matches!(
+        open_push(&private, 1, mailbox, &blob),
+        Err(CryptoError::OpenFailed)
+    ));
+    Ok(())
+}
+
+#[test]
+fn push_blob_does_not_open_under_another_key_id() -> Result<(), TestError> {
+    // The same private key configured under two ids: without the key id in `info`, a blob
+    // sealed for key 1 would open when presented as key 2.
+    let private = PushRelayPrivateKey::generate(&mut seeded_rng(1));
+    let bind = PushBind::from_bytes([1; 32]);
+    let padded = [7; PushTokenPlaintext::PADDED_SIZE];
+    let blob = crate::mailbox::seal_push_padded(
+        &private.public_key(1)?,
+        &bind,
+        &padded,
+        &mut seeded_rng(2),
+    )?;
+    assert_eq!(*open_push(&private, 1, bind, &blob)?, padded);
+    assert!(matches!(
+        open_push(&private, 2, bind, &blob),
         Err(CryptoError::OpenFailed)
     ));
     Ok(())

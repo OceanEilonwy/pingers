@@ -45,12 +45,23 @@ pub(crate) const KNOCK: &[u8] = b"knock";
 pub(crate) const BOARD: &[u8] = b"pingers/v1/board";
 /// First field of the knock signature (design B.4.2).
 pub(crate) const KNOCK_SIGNATURE: &[u8] = b"pingers/v1/knock";
+/// AEAD associated data of board cursors. Decision: the design says only "server-MACed".
+pub(crate) const BOARD_CURSOR: &[u8] = b"pingers/v1/board-cursor";
 /// Mailbox id derivation (design B.4.9).
 pub(crate) const MAILBOX: &[u8] = b"pingers/v1/mbox";
 /// HPKE info prefix of sealed push tokens (design B.4.9).
 pub(crate) const PUSH: &[u8] = b"pingers/v1/push";
-/// Push bind derivation (design B.4.9).
+/// Push bind derivation for mailboxes (design B.4.9).
 pub(crate) const PUSH_BIND: &[u8] = b"pingers/v1/push-bind";
+/// Push bind derivation for group subscriptions. Decision: the design reuses the mailbox
+/// label ("as for a mailbox"); a separate label keeps a subscription bind from ever equalling
+/// a mailbox bind.
+pub(crate) const SUBSCRIPTION_BIND: &[u8] = b"pingers/v1/sub-bind";
+/// Keyed hash of a push token for the relay's rate limits. Decision: the design hashes the
+/// token with plain SHA-256 and gives no label.
+pub(crate) const RELAY_TOKEN: &[u8] = b"pingers/v1/relay-token";
+/// Keyed hash of a server credential as the relay stores it. Decision: the design gives none.
+pub(crate) const RELAY_CREDENTIAL: &[u8] = b"pingers/v1/relay-credential";
 /// HPKE info prefix of location grants (design B.6.1).
 pub(crate) const LOCATION_GRANT: &[u8] = b"pingers/v1/lk-grant";
 /// HPKE info prefix of location asks. Decision: the design gives none.
@@ -64,7 +75,7 @@ pub(crate) const REGISTRATION: &[u8] = b"pingers/v1/register";
 
 /// Every private label, so tests can check they are distinct and vectors can name them.
 #[cfg(test)]
-pub(crate) const ALL: [&[u8]; 15] = [
+pub(crate) const ALL: [&[u8]; 19] = [
     SPOT,
     TAG,
     SEAL,
@@ -72,9 +83,13 @@ pub(crate) const ALL: [&[u8]; 15] = [
     KNOCK,
     BOARD,
     KNOCK_SIGNATURE,
+    BOARD_CURSOR,
     MAILBOX,
     PUSH,
     PUSH_BIND,
+    SUBSCRIPTION_BIND,
+    RELAY_TOKEN,
+    RELAY_CREDENTIAL,
     LOCATION_GRANT,
     LOCATION_ASK,
     INVITE_JOIN,

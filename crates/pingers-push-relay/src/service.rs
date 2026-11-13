@@ -2,33 +2,37 @@
 //! The relay's logic, without HTTP: authenticate the server, rate-limit, open the blob under
 //! its bind, check expiry, rate-limit the token, send one content-free push (design B.4.9, D).
 
-use std::hash::{BuildHasher as _, RandomState};
 use std::sync::{Mutex, PoisonError};
-use std::time::Duration;
 
-use pingers_proto::PushPlatform;
+use pingers_crypto::{KeyedHashKey, KeyedHashPurpose, keyed_hash};
+use pingers_proto::{PushPlatform, PushRelayConfig, PushRequest, TimeToLive, WireDecode as _};
 use pingers_time::Clock;
 
 use crate::counts::Counts;
 use crate::credentials::{ServerIndex, ServerRegistry};
 use crate::delivery::{DeliveryOutcome, MAX_PUSH_TTL, PushMessage, PushSender, WakeClass};
-use crate::keys::{KeyConfig, KeyRing};
+use crate::keys::KeyRing;
 use crate::opener::{OpenError, TokenOpener};
 use crate::rate::{Decision, Limiter, RateLimit};
-use crate::request::PushRequest;
 
 /// How many partly drained per-token buckets are kept before new tokens are refused. At the
 /// default 30 pushes per minute a bucket refills within two minutes, so this is far above any
 /// honest load.
 const MAX_TRACKED_TOKENS: usize = 1_000_000;
 
+/// How far ahead of the relay's clock a device's clock may be when it seals `not_after`. A blob
+/// whose `not_after` is further than `max_ttl` plus this from now was not sealed under the
+/// published `max_ttl` (or comes from a badly wrong clock) and is refused.
+pub const CLOCK_SKEW_ALLOWANCE: core::time::Duration = core::time::Duration::from_hours(1);
+
 /// What became of one `POST /v1/push`; the HTTP layer maps each to a status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PushOutcome {
     /// Sent to the push service. 202.
     Accepted,
-    /// The blob will never work: its key is retired or unknown, it has expired, its plaintext
-    /// is malformed, or the push service rejected the token. 410; the server deletes it.
+    /// The blob will never work: its key is retired or unknown, it has expired, it lives
+    /// longer than `max_ttl` allows, its plaintext is malformed, or the push service rejected
+    /// the token. 410; the server deletes it.
     TokenGone,
     /// The blob does not open under this bind. 422.
     DoesNotOpen,
@@ -48,11 +52,11 @@ pub enum PushOutcome {
     Internal,
 }
 
-/// A stand-in for `SHA-256(push_token)` (design C.1a) as the per-token rate-limit key: a
-/// keyed `SipHash` with a per-process random key, because only pingers-crypto may call
-/// cryptographic hashes. It never leaves memory; a collision only merges two tokens' budgets.
+/// The per-token rate-limit key: in place of the design's `SHA-256(push_token)` (C.1a), a keyed
+/// hash, so a memory dump does not confirm a guessed token without the key. It never leaves
+/// memory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct TokenFingerprint(u64);
+struct TokenFingerprint([u8; 32]);
 
 /// Everything [`Relay::new`] needs.
 pub struct RelayParts<O, S, C> {
@@ -66,10 +70,12 @@ pub struct RelayParts<O, S, C> {
     pub keys: KeyRing,
     /// Servers allowed to use the relay.
     pub servers: ServerRegistry,
+    /// Keys the per-token rate-limit fingerprints.
+    pub token_hash_key: KeyedHashKey,
     /// Per-token limit.
     pub token_limit: RateLimit,
     /// Published in the key config: the longest lifetime a device should seal.
-    pub max_ttl: Duration,
+    pub max_ttl: TimeToLive,
     /// Published in the key config: who runs this relay.
     pub operator: String,
 }
@@ -82,25 +88,12 @@ pub struct Relay<O, S, C> {
     keys: KeyRing,
     servers: ServerRegistry,
     token_limit: RateLimit,
-    max_ttl: Duration,
+    max_ttl: TimeToLive,
     operator: String,
     server_limiter: Mutex<Limiter<ServerIndex>>,
     token_limiter: Mutex<Limiter<TokenFingerprint>>,
-    fingerprint_key: RandomState,
+    token_hash_key: KeyedHashKey,
     counts: Counts,
-}
-
-/// What `GET /v1/config` publishes.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PublishedConfig {
-    /// The current key, encoded as an OHTTP key config.
-    pub key_config: KeyConfig,
-    /// The platforms this relay delivers on.
-    pub platforms: Vec<PushPlatform>,
-    /// The longest lifetime a device should seal into a token.
-    pub max_ttl: Duration,
-    /// Who runs the relay.
-    pub operator: String,
 }
 
 impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
@@ -119,7 +112,7 @@ impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
             // One bucket per configured server is all this map ever holds.
             server_limiter: Mutex::new(Limiter::new(usize::MAX)),
             token_limiter: Mutex::new(Limiter::new(MAX_TRACKED_TOKENS)),
-            fingerprint_key: RandomState::new(),
+            token_hash_key: parts.token_hash_key,
             counts: Counts::default(),
         }
     }
@@ -129,17 +122,17 @@ impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
         &self.counts
     }
 
-    /// The key config to publish now, or `None` if no key is active.
-    pub fn published_config(&self) -> Option<PublishedConfig> {
+    /// The `GET /v1/config` body to publish now, or `None` if no key is active.
+    pub fn published_config(&self) -> Option<PushRelayConfig> {
         let key = self.keys.published(self.clock.now())?;
         let platforms = [PushPlatform::UnifiedPush, PushPlatform::Fcm]
             .into_iter()
             .filter(|platform| self.sender.supports(*platform))
             .collect();
-        Some(PublishedConfig {
-            key_config: KeyConfig::new(key.public_key()),
+        Some(PushRelayConfig {
+            key_config: key.key_config(),
             platforms,
-            max_ttl: self.max_ttl,
+            max_time_to_live: self.max_ttl,
             operator: self.operator.clone(),
         })
     }
@@ -152,8 +145,13 @@ impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
     }
 
     async fn push_uncounted(&self, bearer: Option<&[u8]>, body: &[u8]) -> PushOutcome {
-        let Some(server) = bearer.and_then(|bearer| self.servers.authenticate(bearer)) else {
+        let Some(bearer) = bearer else {
             return PushOutcome::Unauthorized;
+        };
+        let server = match self.servers.authenticate(bearer) {
+            Ok(Some(server)) => server,
+            Ok(None) => return PushOutcome::Unauthorized,
+            Err(_) => return PushOutcome::Internal,
         };
         let Some(server_limit) = self.servers.limit(server) else {
             return PushOutcome::Internal;
@@ -167,7 +165,7 @@ impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
         if server_decision == Decision::Limited {
             return PushOutcome::RateLimited;
         }
-        let Ok(request) = PushRequest::decode_json(body) else {
+        let Ok(request) = PushRequest::decode(body) else {
             return PushOutcome::BadRequest;
         };
         self.open_and_send(&request).await
@@ -179,10 +177,7 @@ impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
             // Retired (or never ours): the blob can never open here again.
             return PushOutcome::TokenGone;
         };
-        let plaintext = match self
-            .opener
-            .open(key.private_key(), &request.bind, &request.blob)
-        {
+        let plaintext = match self.opener.open(key, &request.bind, &request.blob) {
             Ok(plaintext) => plaintext,
             Err(OpenError::DoesNotOpen) => return PushOutcome::DoesNotOpen,
             Err(OpenError::Malformed) => return PushOutcome::TokenGone,
@@ -191,11 +186,25 @@ impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
         if now > plaintext.not_after {
             return PushOutcome::TokenGone;
         }
+        // Design B.4.9: a blob lives at most max_ttl. Without this a far-future not_after
+        // could be replayed until the key retires.
+        let latest = now
+            .checked_add(self.max_ttl.duration())
+            .and_then(|limit| limit.checked_add(CLOCK_SKEW_ALLOWANCE));
+        if latest.is_none_or(|latest| plaintext.not_after > latest) {
+            return PushOutcome::TokenGone;
+        }
         if !self.sender.supports(plaintext.platform) {
             return PushOutcome::PlatformUnsupported;
         }
-        let fingerprint =
-            TokenFingerprint(self.fingerprint_key.hash_one(plaintext.token.as_bytes()));
+        let Ok(fingerprint) = keyed_hash(
+            &self.token_hash_key,
+            KeyedHashPurpose::PushTokenRateLimit,
+            plaintext.token.as_bytes(),
+        ) else {
+            return PushOutcome::Internal;
+        };
+        let fingerprint = TokenFingerprint(*fingerprint.as_bytes());
         let token_decision = self
             .token_limiter
             .lock()

@@ -22,13 +22,13 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
 - **Identity**: `account_id`, `AccountSigningKey::public_key` (implemented),
   `sign_registration`.
 - **Mailboxes and push**: `mailbox_id`, `push_bind_for_mailbox`, `push_bind_for_subscription`
-  (implemented), `seal_push_token`, `open_push_token`.
+  (implemented), `seal_push_token`, `open_push_token` (with `PushTokenToOpen`).
 - **Groups**: `LogAuthKeyPair::public_key` (implemented), `sign_group_request`,
   `seal_state_snapshot`, `open_state_snapshot`.
 - **Location**: `GrantKeyPair::generate`, `seal_location`, `open_location`, `dummy_location`
   (implemented), `seal_location_grant`, `open_location_grant`, `seal_location_ask`,
   `open_location_ask`.
-- **Invites**: `seal_join_request`, `open_join_request`.
+- **Invites**: `seal_join_request`, `open_join_request` (padded), `seal_join_request_in_class`.
 - Every fallible function returns `CryptoError`; unreachable primitive errors map to
   `CryptoError::Internal`, never a panic.
 
@@ -59,7 +59,9 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
 - **AAD and info encodings** use big-endian integers: `be32` for leaf indexes and generations.
 - **Labels not in the design**: `pingers/v1/lk-ask` (HPKE info for asks, with the group id),
   `pingers/v1/grp-request` (group request signatures), `pingers/v1/register` (registration
-  proof). The design gives no label for these; domain separation needs one.
+  proof), `pingers/v1/sub-bind` (subscription binds), `pingers/v1/relay-token` and
+  `pingers/v1/relay-credential` (keyed hashes), `pingers/v1/board-cursor` (cursor AAD). The design gives no label for these;
+  domain separation needs one.
 - **Grant public keys are variable-length bytes** so the X-Wing variant (feature `x-wing`)
   fits the same type.
 - **Snapshots, join requests and knocks** carry a random 24-byte XChaCha20 nonce in front of
@@ -77,11 +79,36 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
   of `ikmE` per X25519 seal, 64 per X-Wing seal), checked against RFC 9180 A.1.1. This needs
   two new workspace dependencies, `hpke-rs-crypto` (the provider trait) and `x-wing`
   (optional), and hpke-rs's `hazmat` feature (to read derived private-key bytes).
-- **Push relay `key_id`** is not sealed or bound: the 320-byte blob has no room, and the design
-  puts only `bind` in `info`.
-- **Mailbox and subscription binds share the `pingers/v1/push-bind` label** (design D says
-  "as for a mailbox"); ids are 16 random bytes, so the two namespaces do not collide in
-  practice.
+- **`PushBind` is defined in pingers-proto** (the push request carries it) and re-exported
+  here unchanged; `push_bind_for_mailbox` and `push_bind_for_subscription` stay here.
+- **Push relay `key_id` is bound in the HPKE `info`**: `info = "pingers/v1/push" || bind ||
+  key_id` (one byte), which costs no blob space. The design puts only `bind` in `info`; without
+  the key id, a blob sealed for one key would open when presented under another key id that
+  maps to the same private key (an operator reusing a key under a new id). Opening therefore
+  takes the key id: `open_push_token(&PushRelayPrivateKey, &PushTokenToOpen { key_id, bind,
+  blob })` replaces `open_push_token(key, bind, blob)` (only pingers-push-relay calls it).
+  `seal_push_token` is unchanged and takes the id from `PushRelayPublicKey::key_id`.
+- **Subscription binds have their own label**, `pingers/v1/sub-bind` (design D says "as for a
+  mailbox"). Mailbox binds keep the design's `pingers/v1/push-bind`. With one shared label a
+  subscription and a mailbox whose ids had the same bytes would have the same bind, so a blob
+  registered for one would open when presented for the other; the labels rule that out by
+  construction instead of relying on random ids.
+- **`revoke_key_matches(&SecretBytes<32>, &RevokeCommitment) -> bool`** (added, wave 1
+  review): the server's constant-time check that `SHA-256(revealed) == commitment`.
+  `KeyedHash` no longer derives `PartialEq`, `Eq` or `Hash`; compare with `ct_eq`, key maps
+  on `as_bytes()`.
+- **Board cursors** (added): `BoardCursorKey` (secret; `generate`, and `from_bytes` for tests), `seal_board_cursor
+  (key, position, rng) -> BoardCursor` and `open_board_cursor(key, &BoardCursor)`: `nonce ||
+  XChaCha20-Poly1305(key, aad = "pingers/v1/board-cursor", position)`. pingers-board-store had
+  reused `seal_state_snapshot` under a cursor-only key; the label in the AAD keeps the two
+  apart even under equal key bytes. Vectors in `vectors/crypto/board-cursor.json`.
+- **Join requests are padded inside the AEAD** (wave 1 review, high): `nonce || XChaCha20(
+  join_key, be16(len) || request || zeros)`, exactly one mailbox size class long, as knocks
+  are (the two share `padded.rs`). `seal_join_request` keeps its signature and picks the
+  smallest class that fits (a classical join request, about 650 bytes, takes 1 KiB; one with
+  an X-Wing key package 4 KiB), so the post reveals only the class. Added
+  `seal_join_request_in_class(secret, request, SizeClass, rng)` for callers that want a fixed
+  class. `open_join_request` strips the padding and refuses non-zero padding.
 - **Join key** is `HKDF-Expand(invite_secret, "join", 32)` without an Extract step: the invite
   secret is already 32 uniform bytes, as `PR_e` is for the Spot keys.
 - **Group request signature input** uses `be32` length prefixes for method and path.
@@ -91,6 +118,14 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
 - **Grants and asks are not padded here.** The 256-byte frame class is applied when the
   `MeetupMessage` is padded; an X-Wing grant (1,180 bytes) cannot fit 256 bytes and takes the
   4 KiB class.
+- **Keyed hash for the push relay** (added): `KeyedHashKey` (secret, public `from_bytes` and
+  `expose_bytes` because the relay reads it from its configuration), `KeyedHashPurpose`
+  (`PushTokenRateLimit`, `ServerCredential`), `KeyedHash` (32 bytes, `ConstantTimeEq`, `Debug`
+  redacted; no `==`) and `keyed_hash(key, purpose, input) =
+  HMAC-SHA-256(key, label || input)`, labels `pingers/v1/relay-token` and
+  `pingers/v1/relay-credential`. The relay keys its per-token rate limits with it in place of
+  the design's `SHA-256(push_token)`, and stores server credentials as keyed hashes. Vectors in
+  `vectors/crypto/keyed-hash.json`.
 - **Additions** (no fixed signature changed): `verify_group_request` and
   `verify_registration` (server side), `PushRelayPrivateKey::generate` and
   `PushRelayPrivateKey::public_key(key_id)` (relay key config). `CryptoError::NotImplemented`

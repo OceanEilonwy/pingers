@@ -255,6 +255,15 @@ fn the_public_policy_refuses_http_and_local_hosts() {
         "https://[fd00::1]/up",
         "https://[fe80::1]/up",
         "https://[::ffff:127.0.0.1]/up",
+        // Gaps the wave 1 review found.
+        "https://[::127.0.0.1]/up",
+        "https://[64:ff9b::7f00:1]/up",
+        "https://[2002:c0a8:101::1]/up",
+        "https://[ff02::1]/up",
+        "https://0.1.2.3/up",
+        "https://192.0.0.8/up",
+        "https://198.18.0.1/up",
+        "https://224.0.0.1/up",
     ] {
         assert!(
             !public_policy_allows(endpoint),

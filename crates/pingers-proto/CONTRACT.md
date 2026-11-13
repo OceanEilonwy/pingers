@@ -104,6 +104,70 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
   `MembershipLeafResponse`, `MembershipLeaves` (with `MembershipRoot`, `MembershipIndex`,
   `RootEpoch`), `MailboxMessages` (`MailboxMessage` carries a `Padded` body, so its length
   must be a size class), `MessageAccepted`, `GroupMessages`, `GroupState`. Privacy Pass
-  issuance and invite payloads are not added yet: their contents belong to pingers-anon and
-  pingers-parties and are opaque to this crate until those are fixed.
+  issuance and invite payloads were added later (below).
 - The unused `serde` dependency is removed.
+
+### Push relay API (added 2026-11-13, wave 2)
+
+- **`PushRequest`** (`POST /v1/push`) and **`PushRelayConfig`** (`GET /v1/config`) moved here
+  from pingers-push-relay, which had them as JSON. They are CBOR now like every other body
+  (design D: "bodies in CBOR unless noted"): `PushRequest` is `[key id, blob (320), bind (32),
+  urgency, handle (8)]`; `PushRelayConfig` is `[key config (41 bytes), [platform...], max ttl
+  seconds, operator]`. The design's `kem`/`kdf`/`aead`/`public_key` fields are carried as the
+  RFC 9458 key config bytes (`PushRelayKeyConfig`, fixed suite X25519 / HKDF-SHA256 /
+  AES-128-GCM, other suites `OutOfRange`), because SHA-256 of exactly those bytes is what
+  members pin. `max_ttl_s` is a `TimeToLive`.
+- **`PushRelayKeyId`** (`u8`, `new`/`get`) replaces the relay's own `KeyId`.
+- **`SealedPush` carries `key_id: PushRelayKeyId`** (a new public field, so struct literals
+  must add it): layout `[relay, relay key id, blob, urgency, handle]`. pingers-crypto binds the
+  key id into the seal, so the device states which relay key it sealed to and the server
+  forwards that id instead of substituting its configured current key.
+- **`PushBind`** moved here from pingers-crypto so `PushRequest` can carry it; pingers-crypto
+  re-exports it, so `pingers_crypto::PushBind` still works and the derivations stay there.
+- `PushPlatform`'s wire values and `TimeToLive`'s CBOR helpers became `pub(crate)` for reuse.
+- Vectors `push-request-encoding` and `push-relay-config-encoding`; fuzz targets
+  `push_request` and `push_relay_config`.
+
+### Privacy Pass issuance (added 2026-11-13, wave 2)
+
+- **`PrivacyPassIssueRequest`** and **`PrivacyPassIssueResponse`** (`POST /v1/pp/issue`): each
+  `[bytes]`, the bytes being pingers-anon's RFC 9578 batched issuance message (pingers-anon
+  builds on `voprf` directly: request `token_type || truncated_key_id ||
+  blinded_elements<2-byte length>`, response `evaluated_elements<2-byte length> ||
+  proof(96)`). Opaque here, as pingers-anon's contract says ("TLS presentation inside the CBOR
+  body"); constructors refuse empty messages and anything longer than a batch of
+  `MAX_TOKENS_PER_ISSUANCE` (300) tokens (`OutOfRange`). The design's response also lists
+  `key_id`; it is left out because the client already chose the key (the request carries its
+  truncated id) and pingers-anon's `finish` takes only the response bytes.
+- Vectors `privacy-pass-issue-request-encoding` and `privacy-pass-issue-response-encoding`;
+  fuzz targets `privacy_pass_issue_request` and `privacy_pass_issue_response`.
+
+### Wire secrets (wave 1 review, 2026-11-13)
+
+- **`SecretBytes<N>`** and **`SecretText`** carry secrets on the wire: zeroed on drop
+  (`zeroize`), no `PartialEq`, `Default` or `Copy`, compared only through
+  `subtle::ConstantTimeEq`, `Debug` printing only the type, read with `expose()`. Two new
+  dependencies, `subtle` and `zeroize` (already in the workspace; no primitives).
+- **Signature changes** (the review asked for them): `LeaseReplacement::revoke_key` is
+  `SecretBytes<32>` (was `Redacted<[u8; 32]>`), `AuthResponse::bearer` is `SecretText` (was
+  `Redacted<String>`), `RegisterRequest::registration_code` is `Option<SecretText>` (was
+  `Option<Redacted<String>>`), and `InvitePayload::invite_secret` is `SecretBytes<32>`. These
+  structs keep `PartialEq`/`Eq`, implemented by hand so the secret field compares in constant
+  time. The server checks a revealed revoke key with pingers-crypto's `revoke_key_matches`.
+  `Redacted` stays for identifiers; its doc now says it is not for secrets.
+
+### Invites (added 2026-11-13, wave 2)
+
+- **`InvitePayload`**, the link fragment (`https://<host>/j#v1.<base64url(encoding)>`):
+  `[server (ServerId text), invite mailbox (16), invite secret (32, SecretBytes), inviter
+  fingerprint (8), expires (UnixSeconds), uses]`. `InviteUses` replaces the design's
+  `single_use: bool` (0 `Multiple`, 1 `Single`). `InviterFingerprint` is an 8-byte newtype with
+  a redacted `Debug`. The `v1.` prefix and base64url are left to pingers-parties, so this crate
+  needs no base64 dependency; the CBOR carries its own version.
+- **`JoinRequest`**, the plaintext pingers-crypto's `seal_join_request` seals:
+  `[key package, display name, reply mailbox (16), party subscription]`. The AEAD under
+  `HKDF(invite_secret, "join")` is what authenticates the joiner's `KeyPackage` under the
+  secret; this crate only encodes it. `DisplayName` is 1 to 200 bytes of UTF-8 (the design
+  gives no limit; 200 matches pingers-store's `MemberName`) with a redacted `Debug`.
+- Vectors `invite-payload-encoding` and `join-request-encoding`; fuzz targets
+  `invite_payload` and `join_request`.

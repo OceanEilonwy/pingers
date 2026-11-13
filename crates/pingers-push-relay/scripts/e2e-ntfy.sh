@@ -59,22 +59,23 @@ echo "e2e: building pingers-push-relay"
 cargo build --quiet --manifest-path "$repo/Cargo.toml" -p pingers-push-relay
 relay_bin="$repo/target/debug/pingers-push-relay"
 
-# The credential and key pair must match tests/relay/common.rs.
+# The credential, hash key and key pair must match tests/relay/common.rs. credential_hash is
+# HMAC-SHA-256(hash_key, "pingers/v1/relay-credential" || credential), as config.rs documents.
 cat >"$work/relay.toml" <<EOF
 listen = "127.0.0.1:$relay_port"
 operator = "Pingers e2e"
 logging = "counts"
 counts_interval_s = 1
+hash_key = "4242424242424242424242424242424242424242424242424242424242424242"
 
 [[keys]]
 key_id = 1
 private_key = "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"
-public_key = "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"
 activated_at = 0
 
 [[servers]]
 server_id = "e2e"
-credential = "integration-test-credential-0123456789"
+credential_hash = "ff19a6fd804c602f550f469ee2bd1f12cfa347489606c8cc963003753091c20d"
 pushes_per_minute = 600
 
 [unifiedpush]

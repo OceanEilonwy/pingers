@@ -8,9 +8,9 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
-use pingers_crypto::{PushBind, PushRelayPrivateKey, PushRelayPublicKey};
-use pingers_proto::{PushTokenPlaintext, SealedPushBlob};
-use pingers_push_relay::credentials::{ServerCredential, ServerEntry, ServerRegistry};
+use pingers_crypto::{KeyedHashKey, KeyedHashPurpose, PushBind, PushRelayPrivateKey, keyed_hash};
+use pingers_proto::{PushRelayKeyId, PushTokenPlaintext, SealedPushBlob, TimeToLive};
+use pingers_push_relay::credentials::{ServerEntry, ServerRegistry};
 use pingers_push_relay::delivery::PushSender;
 use pingers_push_relay::keys::{KeyLifetime, KeyRing, RelayKey};
 use pingers_push_relay::opener::{OpenError, TokenOpener};
@@ -33,6 +33,12 @@ pub(crate) const RELAY_PUBLIC: [u8; 32] = [
 ];
 pub(crate) const KEY_ID: u8 = 1;
 pub(crate) const CREDENTIAL: &str = "integration-test-credential-0123456789";
+/// The relay's `hash_key`; must match scripts/e2e-ntfy.sh.
+pub(crate) const HASH_KEY: [u8; 32] = [0x42; 32];
+
+pub(crate) fn hash_key() -> KeyedHashKey {
+    KeyedHashKey::from_bytes(Zeroizing::new(HASH_KEY))
+}
 
 /// Opens only the blobs it was given, each under its own bind.
 #[derive(Default)]
@@ -56,7 +62,7 @@ impl FakeOpener {
 impl TokenOpener for FakeOpener {
     fn open(
         &self,
-        _key: &PushRelayPrivateKey,
+        _key: &RelayKey,
         bind: &PushBind,
         blob: &SealedPushBlob,
     ) -> Result<PushTokenPlaintext, OpenError> {
@@ -69,13 +75,13 @@ impl TokenOpener for FakeOpener {
 
 pub(crate) fn key_ring() -> Result<KeyRing, Box<dyn std::error::Error>> {
     Ok(KeyRing::new(vec![RelayKey::new(
+        PushRelayKeyId::new(KEY_ID),
         PushRelayPrivateKey::from_bytes(Zeroizing::new(RELAY_PRIVATE)),
-        PushRelayPublicKey::new(KEY_ID, RELAY_PUBLIC),
         KeyLifetime {
             activated_at: UnixSeconds::EPOCH,
             retired_at: None,
         },
-    )])?)
+    )?])?)
 }
 
 pub(crate) fn per_minute(count: u32) -> RateLimit {
@@ -83,11 +89,19 @@ pub(crate) fn per_minute(count: u32) -> RateLimit {
 }
 
 pub(crate) fn servers(per_minute_limit: u32) -> Result<ServerRegistry, Box<dyn std::error::Error>> {
-    Ok(ServerRegistry::new(vec![ServerEntry {
-        server_id: "pingers.test".to_owned(),
-        credential: ServerCredential::new(Zeroizing::new(CREDENTIAL.as_bytes().to_vec())),
-        limit: per_minute(per_minute_limit),
-    }])?)
+    let credential_hash = keyed_hash(
+        &hash_key(),
+        KeyedHashPurpose::ServerCredential,
+        CREDENTIAL.as_bytes(),
+    )?;
+    Ok(ServerRegistry::new(
+        hash_key(),
+        vec![ServerEntry {
+            server_id: "pingers.test".to_owned(),
+            credential_hash,
+            limit: per_minute(per_minute_limit),
+        }],
+    )?)
 }
 
 /// A relay served on loopback; the server task is aborted when this is dropped.
@@ -108,8 +122,9 @@ impl RunningRelay {
             clock,
             keys: key_ring()?,
             servers: servers(1000)?,
+            token_hash_key: hash_key(),
             token_limit: per_minute(2),
-            max_ttl: Duration::from_hours(24 * 30),
+            max_ttl: TimeToLive::new(Duration::from_hours(24 * 30))?,
             operator: "Integration Test Relay".to_owned(),
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;

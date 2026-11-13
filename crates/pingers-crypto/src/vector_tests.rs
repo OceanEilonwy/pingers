@@ -9,8 +9,9 @@
 
 use pingers_proto::{
     BoardBeacon, Epoch, GroupId, KeyPackageBytes, LeafIndex, LocationGeneration, LocationRequestId,
-    MailboxId, PartyId, Record, RecordRandomness, RecordTag, SealedAsk, SealedBeacon, SealedGrant,
-    SealedLocationFrame, SealedPushBlob, ServerId, SizeClass, SpotId, SubscriptionId,
+    MailboxId, PartyId, Record, RecordRandomness, RecordTag, RevokeCommitment, SealedAsk,
+    SealedBeacon, SealedGrant, SealedLocationFrame, SealedPushBlob, SecretBytes, ServerId,
+    SizeClass, SpotId, SubscriptionId,
 };
 use pingers_testkit::{Vector, VectorFile, load_vectors};
 use pingers_time::{Bucket, UnixSeconds};
@@ -21,16 +22,16 @@ use crate::test_support::{
 };
 use crate::{
     AccountSigningKey, BeaconHeader, GrantContext, GrantKeyPair, GrantSecretKey, GroupRequest,
-    InviteSecret, KnockKey, KnockPlaintext, KnockSignedFields, LocationAad, LocationAsk,
-    LocationGrant, LocationKey, LogAuthKeyPair, MailboxReadKey, PresenceRoot, PushBind,
-    PushRelayPrivateKey, RevokeKey, SealKey, StateKey, account_id, derive_knock_key,
-    derive_meetup_psk, derive_seal_key, derive_spot_key, derive_tag_key, key_config_hash,
-    mailbox_id, open_board_beacon, open_join_request, open_knock, open_location_ask,
-    open_location_grant, open_state_snapshot, push_bind_for_mailbox, push_bind_for_subscription,
-    record_tag, revoke_commitment, seal_board_beacon, seal_join_request, seal_knock,
-    seal_location_ask, seal_location_grant, seal_state_snapshot, segment_hash, sign_group_request,
-    sign_knock, sign_registration, tag_matches, verify_group_request, verify_knock,
-    verify_registration,
+    InviteSecret, KeyedHashKey, KeyedHashPurpose, KnockKey, KnockPlaintext, KnockSignedFields,
+    LocationAad, LocationAsk, LocationGrant, LocationKey, LogAuthKeyPair, MailboxReadKey,
+    PresenceRoot, PushBind, PushRelayPrivateKey, PushTokenToOpen, RevokeKey, SealKey, StateKey,
+    account_id, derive_knock_key, derive_meetup_psk, derive_seal_key, derive_spot_key,
+    derive_tag_key, key_config_hash, keyed_hash, mailbox_id, open_board_beacon, open_join_request,
+    open_knock, open_location_ask, open_location_grant, open_state_snapshot, push_bind_for_mailbox,
+    push_bind_for_subscription, record_tag, revoke_commitment, revoke_key_matches,
+    seal_board_beacon, seal_join_request, seal_knock, seal_location_ask, seal_location_grant,
+    seal_state_snapshot, segment_hash, sign_group_request, sign_knock, sign_registration,
+    tag_matches, verify_group_request, verify_knock, verify_registration,
 };
 
 fn load(name: &str) -> Result<VectorFile, TestError> {
@@ -304,6 +305,24 @@ fn mailbox_and_push_bind() -> Result<(), TestError> {
 }
 
 #[test]
+fn keyed_hashes() -> Result<(), TestError> {
+    for vector in load("keyed-hash")?.vectors {
+        let key = KeyedHashKey::from_bytes(Zeroizing::new(input_array(&vector, "key")?));
+        let purpose = match input_text(&vector, "purpose")? {
+            "ServerCredential" => KeyedHashPurpose::ServerCredential,
+            "PushTokenRateLimit" => KeyedHashPurpose::PushTokenRateLimit,
+            _ => return Err(TestError::Field("purpose")),
+        };
+        let hash = keyed_hash(&key, purpose, &vector.input_bytes("input")?)?;
+        assert_eq!(
+            hash.as_bytes().as_slice(),
+            vector.expected_bytes("keyed_hash")?
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn hashes() -> Result<(), TestError> {
     for vector in load("hashes")?.vectors {
         if vector.inputs.contains_key("revoke_key") {
@@ -312,6 +331,16 @@ fn hashes() -> Result<(), TestError> {
                 revoke_commitment(&key).as_bytes().as_slice(),
                 vector.expected_bytes("revoke_commitment")?
             );
+            let commitment = RevokeCommitment::from_bytes(
+                vector
+                    .expected_bytes("revoke_commitment")?
+                    .try_into()
+                    .map_err(|_length| TestError::Field("revoke_commitment"))?,
+            );
+            assert!(revoke_key_matches(
+                &SecretBytes::new(*key.expose_bytes()),
+                &commitment
+            ));
         } else if vector.inputs.contains_key("key_config") {
             assert_eq!(
                 key_config_hash(&vector.input_bytes("key_config")?)
@@ -338,15 +367,24 @@ fn push_token_seal() -> Result<(), TestError> {
             "relay_private_key",
         )?));
         let bind = PushBind::from_bytes(input_array(&vector, "bind")?);
+        let key_id = u8::try_from(vector.input_u64("key_id")?)
+            .map_err(|_overflow| TestError::Field("key_id"))?;
         if expected_error(&vector).is_some() {
             let blob = SealedPushBlob::from_bytes(input_array(&vector, "blob")?);
             assert_error(
                 &vector,
-                &crate::mailbox::open_push_padded(&private_key, &bind, &blob),
+                &crate::mailbox::open_push_padded(
+                    &private_key,
+                    &PushTokenToOpen {
+                        key_id,
+                        bind,
+                        blob: &blob,
+                    },
+                ),
             );
             continue;
         }
-        let public_key = private_key.public_key(1)?;
+        let public_key = private_key.public_key(key_id)?;
         let padded = input_array(&vector, "padded_plaintext")?;
         let mut rng = FixedRng::new(&vector.input_bytes("randomness")?);
         let blob = crate::mailbox::seal_push_padded(&public_key, &bind, &padded, &mut rng)?;
@@ -357,7 +395,18 @@ fn push_token_seal() -> Result<(), TestError> {
             vector.expected_bytes("relay_public_key")?
         );
         assert_eq!(blob.as_bytes().as_slice(), vector.expected_bytes("blob")?);
-        let opened = crate::mailbox::open_push_padded(&private_key, &bind, &blob)?;
+        assert_eq!(
+            crate::mailbox::push_info(&bind, key_id),
+            vector.expected_bytes("info")?
+        );
+        let opened = crate::mailbox::open_push_padded(
+            &private_key,
+            &PushTokenToOpen {
+                key_id,
+                bind,
+                blob: &blob,
+            },
+        )?;
         assert_eq!(*opened, padded);
     }
     Ok(())
@@ -555,6 +604,30 @@ fn snapshot_and_join_request() -> Result<(), TestError> {
         );
         assert_eq!(sealed, vector.expected_bytes("sealed")?);
         assert_eq!(*open_join_request(&secret, &sealed)?, request);
+    }
+    Ok(())
+}
+
+#[test]
+fn board_cursor() -> Result<(), TestError> {
+    for vector in load("board-cursor")?.vectors {
+        let key = crate::BoardCursorKey::from_bytes(Zeroizing::new(input_array(&vector, "key")?));
+        if expected_error(&vector).is_some() {
+            assert_error(
+                &vector,
+                &crate::open_board_cursor(
+                    &key,
+                    &pingers_proto::BoardCursor::from_bytes(vector.input_bytes("cursor")?),
+                ),
+            );
+            continue;
+        }
+        let position = vector.input_bytes("position")?;
+        let mut rng = FixedRng::new(&vector.input_bytes("nonce")?);
+        let cursor = crate::seal_board_cursor(&key, &position, &mut rng)?;
+        assert!(rng.exhausted_exactly());
+        assert_eq!(cursor.as_bytes(), vector.expected_bytes("cursor")?);
+        assert_eq!(*crate::open_board_cursor(&key, &cursor)?, position);
     }
     Ok(())
 }

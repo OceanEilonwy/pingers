@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Lease revocation and segment hashes (design B.4.2, B.4.3).
 
-use pingers_proto::{Record, RevokeCommitment, SegmentHash};
+use pingers_proto::{Record, RevokeCommitment, SecretBytes, SegmentHash};
 use sha2::{Digest as _, Sha256};
+use subtle::ConstantTimeEq as _;
 
 use crate::secret::{random_secret, secret_key};
 
@@ -20,6 +21,17 @@ random_secret!(RevokeKey);
 #[must_use]
 pub fn revoke_commitment(key: &RevokeKey) -> RevokeCommitment {
     RevokeCommitment::from_bytes(sha256(&[key.expose_bytes()]))
+}
+
+/// Whether a revoke key revealed in a lease replacement or deletion opens `commitment`:
+/// `SHA-256(revealed) == commitment`, compared in constant time (server side).
+#[must_use]
+pub fn revoke_key_matches(revealed: &SecretBytes<32>, commitment: &RevokeCommitment) -> bool {
+    bool::from(
+        sha256(&[revealed.expose()])
+            .as_slice()
+            .ct_eq(commitment.as_bytes().as_slice()),
+    )
 }
 
 /// SHA-256 over a closed segment's records, concatenated in board order (design B.4.3).

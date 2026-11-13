@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Mailbox ids and sealed push tokens (design B.4.9).
 
+/// Re-exported from pingers-proto, where the push request carries it; the derivations stay
+/// here.
+pub use pingers_proto::PushBind;
 use pingers_proto::{MailboxId, PushTokenPlaintext, SealedPushBlob, SubscriptionId};
 use rand_core::CryptoRng;
 use sha2::{Digest as _, Sha256};
@@ -32,48 +35,31 @@ pub fn mailbox_id(read_key: &MailboxReadKey) -> MailboxId {
     MailboxId::from_bytes(id)
 }
 
-/// `bind`: ties a sealed push to one mailbox or subscription, so the server cannot move it
-/// (design B.4.9). The relay is given this hash, never the id.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct PushBind([u8; 32]);
-
-impl PushBind {
-    /// Wraps bind bytes received by the push relay.
-    #[must_use]
-    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-
-    /// The bind bytes.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
 /// `bind = SHA-256("pingers/v1/push-bind" || mailbox_id)`.
 #[must_use]
 pub fn push_bind_for_mailbox(mailbox: &MailboxId) -> PushBind {
-    push_bind(mailbox.as_bytes())
+    push_bind(labels::PUSH_BIND, mailbox.as_bytes())
 }
 
-/// The bind of a group subscription: as for a mailbox, with the subscription id in place of
-/// the mailbox id (design D).
+/// The bind of a group subscription: `SHA-256("pingers/v1/sub-bind" || subscription_id)`.
+/// The design says "as for a mailbox"; its own label means a subscription bind never equals
+/// the bind of a mailbox whose id has the same bytes, so a blob registered for one cannot be
+/// presented as the other.
 #[must_use]
 pub fn push_bind_for_subscription(subscription: &SubscriptionId) -> PushBind {
-    push_bind(subscription.as_bytes())
+    push_bind(labels::SUBSCRIPTION_BIND, subscription.as_bytes())
 }
 
-fn push_bind(id: &[u8; 16]) -> PushBind {
+fn push_bind(label: &[u8], id: &[u8; 16]) -> PushBind {
     let digest = Sha256::new()
-        .chain_update(labels::PUSH_BIND)
+        .chain_update(label)
         .chain_update(id)
         .finalize();
     let mut bind = [0; 32];
     for (target, source) in bind.iter_mut().zip(digest.iter()) {
         *target = *source;
     }
-    PushBind(bind)
+    PushBind::from_bytes(bind)
 }
 
 /// SHA-256 of an encoded OHTTP or push relay key config: the value members pin in Party state
@@ -138,8 +124,8 @@ impl PushRelayPrivateKey {
     }
 }
 
-/// Seals a push token to the relay: `HPKE.Seal(pk, info = "pingers/v1/push" || bind,
-/// padded plaintext)`, giving exactly 320 bytes. Fresh randomness every time, so two blobs
+/// Seals a push token to the relay: `HPKE.Seal(pk, info = "pingers/v1/push" || bind ||
+/// key_id, padded plaintext)`, giving exactly 320 bytes; `key_id` is `relay_key.key_id()`. Fresh randomness every time, so two blobs
 /// for the same token never look alike.
 ///
 /// # Errors
@@ -172,16 +158,18 @@ pub(crate) fn seal_push_padded(
             suite: Suite::PushRelay,
             public_key: relay_key.public_key(),
         },
-        &push_info(bind),
+        &push_info(bind, relay_key.key_id()),
         padded,
         rng,
     )?;
     push_blob(&sealed)
 }
 
-/// `"pingers/v1/push" || bind`.
-fn push_info(bind: &PushBind) -> Vec<u8> {
-    [labels::PUSH, bind.as_bytes()].concat()
+/// `"pingers/v1/push" || bind || key_id`. The key id is bound so a blob sealed to one relay
+/// key cannot be presented under another key id (for example after an operator reuses a
+/// private key under a new id); the design's info has only the bind.
+pub(crate) fn push_info(bind: &PushBind, key_id: u8) -> Vec<u8> {
+    [labels::PUSH, bind.as_bytes(), &[key_id]].concat()
 }
 
 fn push_blob(sealed: &[u8]) -> Result<SealedPushBlob, CryptoError> {
@@ -193,14 +181,13 @@ fn push_blob(sealed: &[u8]) -> Result<SealedPushBlob, CryptoError> {
 /// Opens a blob to its padded plaintext, before proto decodes it.
 pub(crate) fn open_push_padded(
     relay_key: &PushRelayPrivateKey,
-    bind: &PushBind,
-    blob: &SealedPushBlob,
+    token: &PushTokenToOpen<'_>,
 ) -> Result<zeroize::Zeroizing<[u8; PushTokenPlaintext::PADDED_SIZE]>, CryptoError> {
     let plaintext = hpke::open(
         Suite::PushRelay,
         relay_key.expose_bytes(),
-        &push_info(bind),
-        blob.as_bytes(),
+        &push_info(&token.bind, token.key_id),
+        token.blob.as_bytes(),
     )?;
     let padded: [u8; PushTokenPlaintext::PADDED_SIZE] = plaintext
         .as_slice()
@@ -218,17 +205,30 @@ pub struct PushTokenToSeal<'token> {
     pub plaintext: &'token PushTokenPlaintext,
 }
 
-/// Opens a sealed push token on the relay. Fails if `bind` is not the one it was sealed with.
+/// A sealed push token as the relay receives it: the blob, and the bind and key id the server
+/// presented it with.
+#[derive(Clone, Copy, Debug)]
+pub struct PushTokenToOpen<'blob> {
+    /// The key id the request names; must be the id of the key the blob was sealed to.
+    pub key_id: u8,
+    /// The bind of the mailbox or subscription.
+    pub bind: PushBind,
+    /// The sealed token.
+    pub blob: &'blob SealedPushBlob,
+}
+
+/// Opens a sealed push token on the relay with the private key of `token.key_id`. Fails if
+/// the bind or the key id is not the one it was sealed with: `info = "pingers/v1/push" ||
+/// bind || key_id`.
 ///
 /// # Errors
 ///
-/// [`CryptoError::OpenFailed`] if the blob does not open under this key and bind;
+/// [`CryptoError::OpenFailed`] if the blob does not open under this key, bind and key id;
 /// [`CryptoError::Encoding`] if the plaintext is malformed.
 pub fn open_push_token(
     relay_key: &PushRelayPrivateKey,
-    bind: &PushBind,
-    blob: &SealedPushBlob,
+    token: &PushTokenToOpen<'_>,
 ) -> Result<PushTokenPlaintext, CryptoError> {
-    let padded = open_push_padded(relay_key, bind, blob)?;
+    let padded = open_push_padded(relay_key, token)?;
     PushTokenPlaintext::decode_padded(&padded).map_err(CryptoError::Encoding)
 }
