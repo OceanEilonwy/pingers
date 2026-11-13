@@ -7,11 +7,15 @@ use pingers_ohttp::{
     OpenedChunk, OhttpError,
 };
 
-pub fn gateway() -> (Gateway, KeyConfig) {
-    let key = GatewayKey::from_bytes(1, zeroize::Zeroizing::new([0x42; 32]))
-        .expect("fixed key is valid");
-    let config = key.config();
-    (Gateway::new(vec![key]), config)
+/// The fixed gateway and its config, built once per process (key setup is the slow part).
+pub fn gateway() -> &'static (Gateway, KeyConfig) {
+    static GATEWAY: std::sync::OnceLock<(Gateway, KeyConfig)> = std::sync::OnceLock::new();
+    GATEWAY.get_or_init(|| {
+        let key = GatewayKey::from_bytes(1, zeroize::Zeroizing::new([0x42; 32]))
+            .expect("fixed key is valid");
+        let config = key.config();
+        (Gateway::new(vec![key]), config)
+    })
 }
 
 pub fn live_request() -> BinaryRequest {

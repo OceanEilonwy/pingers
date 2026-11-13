@@ -297,6 +297,33 @@ fn chunks_above_sixteen_kibibytes_are_refused() -> Result<(), TestError> {
 }
 
 #[test]
+fn a_head_of_exactly_one_full_chunk_is_accepted() -> Result<(), TestError> {
+    let setup = setup()?;
+    let mut request = live_request();
+    // The body's length prefix shrinks with the body, so converge on the exact size.
+    request.body = vec![0; 16 * 1024 - 100];
+    for _ in 0..4 {
+        let length = request.encode()?.len();
+        request
+            .body
+            .resize(request.body.len() + 16 * 1024 - length, 0);
+    }
+    assert_eq!(request.encode()?.len(), 16 * 1024);
+    let start = ChunkedClient::start(&setup.config, &request, &mut seeded_rng(33))?;
+    let gateway = ChunkedGateway::accept(&setup.gateway, &start.preamble, &mut seeded_rng(34))?;
+    assert_eq!(gateway.request(), &request);
+    Ok(())
+}
+
+#[test]
+fn opened_chunk_debug_shows_the_length_but_never_the_payload() {
+    let chunk = non_final(b"lat=51.5,lon=-0.1");
+    let shown = format!("{chunk:?}");
+    assert!(shown.contains("17"));
+    assert!(!shown.contains("lat"));
+}
+
+#[test]
 fn a_head_longer_than_one_chunk_is_refused() -> Result<(), TestError> {
     let setup = setup()?;
     let mut request = live_request();

@@ -213,3 +213,14 @@ proptest! {
         prop_assert_eq!(BinaryResponse::decode(&encoded)?, original);
     }
 }
+
+#[test]
+fn header_debug_shows_the_name_but_never_the_value() {
+    let header = Header {
+        name: "authorization".to_owned(),
+        value: b"PrivateToken token=secret".to_vec(),
+    };
+    let shown = format!("{header:?}");
+    assert!(shown.contains("authorization"));
+    assert!(!shown.contains("secret"));
+}

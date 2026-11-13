@@ -73,10 +73,9 @@ impl KeyConfig {
         }
         let public_key = <[u8; X25519_KEY_LENGTH]>::try_from(reader.take(X25519_KEY_LENGTH)?)
             .map_err(|_| OhttpError::BadKeyConfig)?;
+        // An empty list offers nothing, and a length that is not whole (KDF, AEAD) pairs fails
+        // while reading them below; both are BadKeyConfig.
         let suites_length = usize::from(reader.u16()?);
-        if suites_length == 0 || suites_length % 4 != 0 {
-            return Err(OhttpError::BadKeyConfig);
-        }
         let mut suites = Reader {
             rest: reader.take(suites_length)?,
         };
