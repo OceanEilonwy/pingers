@@ -1,5 +1,6 @@
 package org.pingers.app.ui.screens
 
+import org.pingers.app.ui.map.LocalMaps
 import android.content.Intent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -260,6 +261,7 @@ fun AdvancedScreen(state: AdvancedState, repo: PingersRepository, nav: Navigator
             }
             Text(stringResource(R.string.advanced_push_help), style = body(12.sp, color = Pc.Muted, lineHeight = 1.4f))
         }
+        LocalMaps.current?.let { maps -> MapsAdvancedSection(maps) { nav.go(Route.MapRegions) } }
         Card(radius = 14.dp) {
             Row(
                 Modifier
@@ -507,7 +509,7 @@ fun PartyScreen(state: PartyState, repo: PingersRepository, nav: Navigator) {
                 .clip(RoundedCornerShape(22.dp))
                 .border(1.dp, Pc.Line, RoundedCornerShape(22.dp)),
         ) {
-            MapBox(Scenes.PartyCard, overlay = {
+            MapBox(Scenes.PartyCard, frame = state.mapFrame, overlay = {
                 val frame = state.mapFrame
                 state.spots.forEach { spot ->
                     when (val fence = spot.fence) {

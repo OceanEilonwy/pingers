@@ -22,6 +22,9 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
     /** The canvas's map: Riverside Park's middle at the centre of the 390-wide artboard, 2 m a unit. */
     private val frame = MapFrame(Coordinate(51.5390, -0.0590), MapPoint(195f, 256f))
 
+    /** The Spot editor's and Draw area's map: the canvas's, until the Spot is moved. */
+    private var drawFrame = frame
+
     /** A canvas position, as a coordinate. */
     private fun at(x: Float, y: Float) = frame.toCoordinate(MapPoint(x, y))
 
@@ -156,12 +159,12 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
     override val party: StateFlow<PartyState> = _party.asStateFlow()
 
     private val _spotEditor = MutableStateFlow(
-        SpotEditorState("Climbing crew", "Riverside Park", ShapeKind.Circle, 300, 100, 1000, areaHectares = null, canSave = true),
+        SpotEditorState("Climbing crew", "Riverside Park", ShapeKind.Circle, 300, 100, 1000, areaHectares = null, canSave = true, centre = frame.origin),
     )
     override val spotEditor: StateFlow<SpotEditorState> = _spotEditor.asStateFlow()
 
     private var editor = PolygonEditor.Example
-    private val _drawArea = MutableStateFlow(editor.state("Riverside Park", frame))
+    private val _drawArea = MutableStateFlow(editor.state("Riverside Park", drawFrame))
     override val drawArea: StateFlow<DrawAreaState> = _drawArea.asStateFlow()
 
     private val _exclusionZones = MutableStateFlow(
@@ -369,12 +372,19 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
 
     override fun setSpotShape(shape: ShapeKind) = _spotEditor.update { it.copy(shape = shape) }
 
+    override fun moveSpot(to: Coordinate) {
+        // The drawn shape (kept in the editor's units) moves with the map, as when the canvas pans.
+        drawFrame = drawFrame.copy(origin = to)
+        _spotEditor.update { it.copy(centre = to) }
+        _drawArea.value = editor.state(_spotEditor.value.name.ifBlank { res.getString(R.string.spot_unnamed) }, drawFrame)
+    }
+
     override fun setSpotRadius(radiusM: Int) = _spotEditor.update { it.copy(radiusM = radiusM.coerceIn(it.minRadiusM, it.maxRadiusM)) }
 
     override fun saveSpot() = Unit
 
     private fun publishDraw() {
-        _drawArea.value = editor.state(_spotEditor.value.name.ifBlank { res.getString(R.string.spot_unnamed) }, frame)
+        _drawArea.value = editor.state(_spotEditor.value.name.ifBlank { res.getString(R.string.spot_unnamed) }, drawFrame)
     }
 
     private fun draw(change: (PolygonEditor) -> PolygonEditor) {
@@ -382,9 +392,9 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
         publishDraw()
     }
 
-    override fun drawTapMap(at: Coordinate) = draw { it.tapMap(frame.toMap(at)) }
+    override fun drawTapMap(at: Coordinate) = draw { it.tapMap(drawFrame.toMap(at)) }
     override fun drawTapPoint(index: Int) = draw { it.tapPoint(index) }
-    override fun drawDragPoint(index: Int, to: Coordinate) = draw { it.drag(index, frame.toMap(to)) }
+    override fun drawDragPoint(index: Int, to: Coordinate) = draw { it.drag(index, drawFrame.toMap(to)) }
     override fun drawDragEnd() = draw { it.dragEnd() }
     override fun drawInsertMidpoint(afterIndex: Int) = draw { it.insertMidpoint(afterIndex) }
     override fun drawDeleteSelected() = draw { it.deleteSelected() }

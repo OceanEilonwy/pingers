@@ -353,4 +353,42 @@
     <string name="ended_messages">messages</string>
     <string name="ended_erased">Chat and locations erased</string>
     <string name="ended_erased_detail">Every phone deleted the meetup keys, so nothing can be read again, including by the server.</string>
+
+    <!-- Maps: region packs (android/docs/maps.md) -->
+    <string name="map_attribution">© OpenStreetMap contributors</string>
+    <string name="map_download_prompt">Download map for this area</string>
+    <string name="maps_title">Maps</string>
+    <string name="maps_intro">Maps are downloaded whole, one area at a time, and shown from this phone. Nobody learns which part of the map you look at or what you search for.</string>
+    <string name="maps_this_area">This area</string>
+    <string name="maps_from_host">From %1$s</string>
+    <string name="maps_data_from">Map data from %1$s</string>
+    <string name="maps_update_available">Update available</string>
+    <string name="maps_download">Download</string>
+    <string name="maps_update">Update</string>
+    <string name="maps_delete">Delete</string>
+    <string name="maps_retry">Try again</string>
+    <string name="maps_downloading">Downloading %1$s of %2$s</string>
+    <string name="maps_preparing">The map host is preparing this area. Trying again in %1$d s</string>
+    <string name="maps_prepared_on_request">Prepared when you ask for it</string>
+    <string name="maps_failed_network">Couldn\'t download. Check your connection and try again.</string>
+    <string name="maps_failed_checksum">The download didn\'t match its checksum, so it was deleted.</string>
+    <string name="maps_failed_relay">Downloads through the privacy relay aren\'t available yet. Turn the setting off in Advanced to download directly.</string>
+    <string name="maps_failed_not_offered">This map host no longer has this area.</string>
+    <string name="maps_loading">Getting the list of areas</string>
+    <string name="maps_none">No map host answered. Check your connection, or the map host in Advanced.</string>
+    <string name="maps_host_failed">%1$s didn\'t answer</string>
+    <string name="maps_installed">On this phone</string>
+    <string name="maps_available">Available</string>
+    <string name="maps_host_label">Map host</string>
+    <string name="maps_host_hint">Leave empty to use your server\'s or the app\'s</string>
+    <string name="maps_regions_link">Downloaded maps</string>
+    <string name="maps_search_none">No places found in your downloaded maps</string>
+    <string name="maps_search_no_maps">Download a map to search places</string>
+    <string name="place_country">Country</string>
+    <string name="place_region">Region</string>
+    <string name="place_city">Town</string>
+    <string name="place_suburb">Suburb</string>
+    <string name="place_street">Street</string>
+    <string name="place_poi">Place</string>
+    <string name="cd_map_search_result">Go to %1$s</string>
 </resources>

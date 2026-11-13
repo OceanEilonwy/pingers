@@ -36,6 +36,11 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
+        // The publisher's map host, the last link of the map host chain (a user override, then
+        // the host the Pingers server advertises, then this). A placeholder until the publisher
+        // decides who hosts: `-PpingersMapHost=https://maps.example.org`.
+        val mapHost = (project.findProperty("pingersMapHost") as String?) ?: "https://maps.pingers.invalid"
+        buildConfigField("String", "MAP_HOST", "\"$mapHost\"")
     }
 
     // Only the ABIs pingers-ffi is built for: JNA's AAR also carries 32-bit libraries, and a
@@ -71,6 +76,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -139,5 +145,7 @@ dependencies {
     implementation(libs.compose.ui.tooling.preview)
     // JNA as an AAR for the app: it carries JNA's own native library. UniFFI's bindings use it.
     implementation("${libs.jna.get()}@aar")
+    implementation(libs.maplibre)
+    testImplementation(libs.junit)
     debugImplementation(libs.compose.ui.tooling)
 }

@@ -217,6 +217,8 @@ data class SpotEditorState(
     val maxRadiusM: Int,
     val areaHectares: Float?,
     val canSave: Boolean,
+    /** Where a circle Spot is centred, and where the editor's map looks. */
+    val centre: Coordinate = Coordinate(0.0, 0.0),
 )
 
 /** What is wrong with a drawn area. */

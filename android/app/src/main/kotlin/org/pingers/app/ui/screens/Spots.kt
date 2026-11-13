@@ -88,7 +88,17 @@ import org.pingers.app.ui.components.SheetHandle
 import org.pingers.app.ui.components.SwitchRow
 import org.pingers.app.ui.components.TopBar
 import org.pingers.app.ui.components.TwoLines
+import org.pingers.app.data.Coordinate
+import org.pingers.app.data.MapFrame
+import org.pingers.app.maps.Place
+import org.pingers.app.ui.map.LocalMaps
 import org.pingers.app.ui.map.MapBox
+import org.pingers.app.ui.map.MapChrome
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalFocusManager
 import org.pingers.app.ui.map.Scenes
 import org.pingers.app.ui.map.hatched
 import org.pingers.app.ui.map.spotCircle
@@ -134,23 +144,44 @@ fun MapLabel(text: String, modifier: Modifier = Modifier, radius: Dp = 8.dp) {
 private const val METRES_PER_UNIT = 300f / 118f
 private val SpotCentre = MapPoint(190f, 235f)
 
+/** Below the buttons over a full-screen map, clear of the status bar and the bottom sheet. */
+@Composable
+private fun fullScreenChrome() = MapChrome(
+    attribution = Alignment.TopEnd,
+    attributionPadding = PaddingValues(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 68.dp, end = 12.dp),
+    promptAt = 0.3f,
+)
+
 @Composable
 fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navigator) {
     val drawn by repo.drawArea.collectAsStateWithLifecycle()
     val radius = state.radiusM / METRES_PER_UNIT
     val density = LocalDensity.current
     val current by rememberUpdatedState(state.radiusM)
+    // The circle sits at SpotCentre; the frame puts the Spot's centre there, so the map moves under it.
+    val frame = MapFrame(state.centre, SpotCentre, METRES_PER_UNIT)
+    val currentFrame by rememberUpdatedState(frame)
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
-        MapBox(Scenes.SpotEditor, overlay = {
+        MapBox(Scenes.SpotEditor, frame = frame, chrome = fullScreenChrome(), overlay = {
             if (state.shape == ShapeKind.Circle) {
                 spotCircle(SpotCentre, radius, dashed = false, strokeWidth = 2.5f, alpha = 0.14f)
                 drawCircle(Pc.Blue, 6f, Offset(SpotCentre.x, SpotCentre.y))
             } else if (drawn.closed) {
-                val path = polygon(drawn.points.map(drawn.mapFrame::toMap), close = true)
+                val path = polygon(drawn.points.map(frame::toMap), close = true)
                 drawPath(path, Pc.Blue.copy(alpha = 0.16f))
                 drawPath(path, Pc.Blue, style = Stroke(2.5f, join = StrokeJoin.Round))
             }
         }) { unit ->
+            // Dragging the map moves the Spot's centre: the map slides, the circle stays put.
+            Box(
+                Modifier.fillMaxSize().pointerInput(Unit) {
+                    val unitPx = with(density) { unit.toPx() }
+                    detectDragGestures { change, amount ->
+                        change.consume()
+                        repo.moveSpot(currentFrame.toCoordinate(MapPoint(SpotCentre.x - amount.x / unitPx, SpotCentre.y - amount.y / unitPx)))
+                    }
+                },
+            )
             if (state.shape == ShapeKind.Circle) {
                 val handleLabel = stringResource(R.string.cd_radius_handle, state.radiusM)
                 Box(
@@ -178,20 +209,12 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
         }
         Row(
             Modifier.statusBarsPadding().padding(start = 16.dp, end = 16.dp, top = 12.dp).fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             MapButton(PIcons.Close, stringResource(R.string.cd_close), { nav.back() })
             Spacer(Modifier.weight(1f))
-            var query by remember { mutableStateOf("") }
-            PField(
-                query, { query = it }, stringResource(R.string.spot_search),
-                background = Pc.Card, border = Color.Transparent, height = 48.dp, fontSize = 15,
-                placeholder = stringResource(R.string.spot_search),
-                shape = RoundedCornerShape(24.dp),
-                leading = { Icon(PIcons.Search, null, tint = Pc.Muted, modifier = Modifier.size(18.dp)) },
-                modifier = Modifier.width(250.dp).shadow(2.dp, RoundedCornerShape(24.dp)),
-            )
+            PlaceSearch { repo.moveSpot(it.at) }
         }
         BottomSheet {
             LabeledField(stringResource(R.string.spot_name), state.name, repo::setSpotName, height = 52.dp)
@@ -234,6 +257,68 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
     }
 }
 
+/**
+ * "Search a place": matches place names in the downloaded packs' indexes, on this phone.
+ * Picking one moves the Spot there.
+ */
+@Composable
+private fun PlaceSearch(onPick: (Place) -> Unit) {
+    val maps = LocalMaps.current
+    val focus = LocalFocusManager.current
+    var query by remember { mutableStateOf("") }
+    var results by remember { mutableStateOf<List<Place>>(emptyList()) }
+    val installed = maps?.installed?.collectAsStateWithLifecycle()?.value.orEmpty()
+    LaunchedEffect(query, installed) { results = if (maps == null || query.isBlank()) emptyList() else maps.search(query) }
+    Column(Modifier.width(250.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        PField(
+            query, { query = it }, stringResource(R.string.spot_search),
+            background = Pc.Card, border = Color.Transparent, height = 48.dp, fontSize = 15,
+            placeholder = stringResource(R.string.spot_search),
+            shape = RoundedCornerShape(24.dp),
+            leading = { Icon(PIcons.Search, null, tint = Pc.Muted, modifier = Modifier.size(18.dp)) },
+            modifier = Modifier.fillMaxWidth().shadow(2.dp, RoundedCornerShape(24.dp)),
+        )
+        if (query.isNotBlank()) {
+            Column(Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(16.dp)).clip(RoundedCornerShape(16.dp)).background(Pc.Card)) {
+                if (results.isEmpty()) {
+                    Text(
+                        stringResource(if (installed.isEmpty()) R.string.maps_search_no_maps else R.string.maps_search_none),
+                        style = body(13.sp, color = Pc.Muted, lineHeight = 1.4f),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    )
+                }
+                results.take(6).forEachIndexed { i, place ->
+                    if (i > 0) RowDivider()
+                    val label = stringResource(R.string.cd_map_search_result, place.name)
+                    TwoLines(
+                        place.name,
+                        stringResource(
+                            when (place.kind) {
+                                org.pingers.app.maps.PlaceKind.Country -> R.string.place_country
+                                org.pingers.app.maps.PlaceKind.Region -> R.string.place_region
+                                org.pingers.app.maps.PlaceKind.City -> R.string.place_city
+                                org.pingers.app.maps.PlaceKind.Suburb -> R.string.place_suburb
+                                org.pingers.app.maps.PlaceKind.Street -> R.string.place_street
+                                org.pingers.app.maps.PlaceKind.Poi -> R.string.place_poi
+                            },
+                        ),
+                        Modifier.fillMaxWidth()
+                            .clickable(role = Role.Button) {
+                                onPick(place)
+                                query = ""
+                                focus.clearFocus()
+                            }
+                            .semantics(mergeDescendants = true) { contentDescription = label }
+                            .heightIn(min = 44.dp).padding(horizontal = 14.dp, vertical = 9.dp),
+                        titleStyle = body(14.sp, 500),
+                        subtitleStyle = body(12.sp, color = Pc.Muted),
+                    )
+                }
+            }
+        }
+    }
+}
+
 private fun polygon(points: List<MapPoint>, close: Boolean): Path = Path().apply {
     points.forEachIndexed { i, p -> if (i == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y) }
     if (close) close()
@@ -260,6 +345,8 @@ fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
         MapBox(
             Scenes.DrawArea,
+            frame = frame,
+            chrome = fullScreenChrome(),
             overlay = {
                 if (points.isNotEmpty()) {
                     val path = polygon(points, state.closed)
@@ -433,10 +520,16 @@ fun ExclusionZonesScreen(state: ExclusionZonesState, repo: PingersRepository, na
             modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 14.dp),
         )
         Box(Modifier.clip(RoundedCornerShape(22.dp)).border(1.dp, Pc.Line, RoundedCornerShape(22.dp))) {
-            MapBox(Scenes.Exclusion, overlay = {
-                // Placeholder geometry for the two example zones, as drawn on the canvas.
-                hatched(Path().apply { addOval(androidx.compose.ui.geometry.Rect(Offset(80f, 60f), 42f)) })
-                hatched(Path().apply { addRoundRect(RoundRect(215f, 25f, 315f, 95f, CornerRadius(8f))) })
+            MapBox(Scenes.Exclusion, frame = state.mapFrame, overlay = {
+                // Circles from their centre and radius. The zones view model carries no
+                // vertices for drawn areas yet, so an area is a fixed-size hatched block at its label.
+                state.zones.forEach { z ->
+                    val at = state.mapFrame.toMap(z.labelAt)
+                    when (val shape = z.shape) {
+                        is ZoneShape.Circle -> hatched(Path().apply { addOval(androidx.compose.ui.geometry.Rect(Offset(at.x, at.y), state.mapFrame.units(shape.radiusM.toDouble()))) })
+                        ZoneShape.Area -> hatched(Path().apply { addRoundRect(RoundRect(at.x - 50f, at.y - 35f, at.x + 50f, at.y + 35f, CornerRadius(8f))) })
+                    }
+                }
                 state.me?.let(state.mapFrame::toMap)?.let { me ->
                     drawCircle(Color.White, 8.5f, Offset(me.x, me.y))
                     drawCircle(Pc.Blue, 7f, Offset(me.x, me.y))

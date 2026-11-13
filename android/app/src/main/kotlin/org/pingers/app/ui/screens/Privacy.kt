@@ -1,5 +1,6 @@
 package org.pingers.app.ui.screens
 
+import org.pingers.app.ui.map.LocalMaps
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -217,6 +218,8 @@ fun ServerViewScreen(state: ServerViewState, nav: Navigator) {
                 }
             }
         }
+        // The map host is a separate operator: what it learns, and the per-region fallback.
+        LocalMaps.current?.let { MapsServerSection(it) }
     }
 }
 
