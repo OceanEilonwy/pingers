@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- First-run onboarding and the device settings (push service, Keep Pingers running) that
+     sit over the platform layer. Kept apart from strings.xml to keep merges clean. -->
+<resources>
+    <string name="onboarding_title">Welcome to Pingers</string>
+    <string name="onboarding_body">Find out when friends are nearby, without anyone, not even your server, knowing where you are.</string>
+
+    <string name="device_keep_running">Keep Pingers running</string>
+    <string name="device_keep_running_help">Shows a lasting notification so Android doesn\'t put Pingers to sleep. Friends nearby are noticed on time.</string>
+
+    <string name="device_push_service">Push service</string>
+    <string name="device_push_none">None installed. Install a UnifiedPush app such as ntfy.</string>
+    <string name="device_push_none_fcm">Google (Firebase). Install a UnifiedPush app such as ntfy to use it instead.</string>
+    <string name="device_push_pick">Choose one</string>
+    <string name="device_push_off">Off: no wake-up pushes</string>
+    <string name="device_push_dialog_title">Push service</string>
+    <string name="device_push_dialog_body">The app that wakes Pingers when something happens. It learns that a push arrived, never what it says.</string>
+    <string name="device_cancel">Cancel</string>
+</resources>

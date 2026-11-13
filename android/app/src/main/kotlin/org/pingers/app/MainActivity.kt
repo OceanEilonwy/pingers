@@ -52,6 +52,8 @@ import org.pingers.app.ui.screens.MeetPointScreen
 import org.pingers.app.ui.screens.MeetupEndedScreen
 import org.pingers.app.ui.screens.MeetupScreen
 import org.pingers.app.ui.screens.NewPartyScreen
+import org.pingers.app.ui.screens.Onboarding
+import org.pingers.app.ui.screens.OnboardingScreen
 import org.pingers.app.ui.screens.PartyScreen
 import org.pingers.app.ui.screens.PrivacyScreen
 import org.pingers.app.ui.screens.SecurityScreen
@@ -76,7 +78,8 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
-        repo = if (debuggable(this) && intent.getBooleanExtra(EXTRA_FAKE, false)) {
+        val fake = debuggable(this) && intent.getBooleanExtra(EXTRA_FAKE, false)
+        repo = if (fake) {
             FakeRepository(resources, lifecycleScope)
         } else {
             CoreRepositories.get(applicationContext).also(::follow)
@@ -84,7 +87,9 @@ class MainActivity : ComponentActivity() {
         pending = intent
         setContent {
             PingersTheme {
-                App(repo, nav, pending) { pending = null }
+                // First run: permissions before anything else (not for the fake screenshots).
+                var onboarded by remember { mutableStateOf(fake || Onboarding.done(this)) }
+                if (onboarded) App(repo, nav, pending) { pending = null } else OnboardingScreen { onboarded = true }
             }
         }
     }
