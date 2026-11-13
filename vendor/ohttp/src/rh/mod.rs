@@ -8,16 +8,8 @@ pub mod aead;
 pub mod hkdf;
 pub mod hpke;
 
-use crate::err::Res;
 
 pub struct SymKey(Vec<u8>);
-
-impl SymKey {
-    #[allow(clippy::unnecessary_wraps)]
-    pub fn key_data(&self) -> Res<&[u8]> {
-        Ok(&self.0)
-    }
-}
 
 impl From<Vec<u8>> for SymKey {
     fn from(v: Vec<u8>) -> Self {
@@ -38,11 +30,7 @@ impl AsRef<[u8]> for SymKey {
 
 impl std::fmt::Debug for SymKey {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        if cfg!(feature = "unsafe-print-secrets") {
-            if let Ok(b) = self.key_data() {
-                return write!(f, "SymKey {}", hex::encode(b));
-            }
-        }
+        // Pingers patch: the unsafe-print-secrets feature is removed.
         write!(f, "Opaque SymKey")
     }
 }

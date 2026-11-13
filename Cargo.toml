@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "xtask"]
+# Vendored third-party crates keep their own style and are not linted or tested as members.
+exclude = ["vendor/*"]
 
 [workspace.package]
 edition = "2024"
@@ -78,8 +80,9 @@ rln = { version = "3.1.0", default-features = false }
 # 0.2.0-pre.4 does not compile (its blind-rsa-signatures dependency breaks against rsa).
 voprf = { version = "0.6.0-pre.2", default-features = false, features = ["alloc"] }
 
-# Oblivious HTTP (pingers-ohttp only); AES-GCM is pinned in code, not here.
-ohttp = { version = "0.8.0", default-features = false, features = ["client", "server", "rust-hpke", "stream"] }
+# Oblivious HTTP (pingers-ohttp only); AES-GCM is pinned in code, not here. Vendored and
+# patched (injected randomness; sans-I/O chunked OHTTP fixing ohttp issue #102): vendor/ohttp/README.md.
+ohttp = { path = "vendor/ohttp" }
 bhttp = "0.8.0"
 
 # Geometry

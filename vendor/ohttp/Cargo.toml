@@ -1,0 +1,26 @@
+# Vendored from ohttp 0.8.0 (https://github.com/martinthomson/ohttp) and patched for Pingers.
+# See README.md for every change. Not a workspace member: it keeps upstream's code style.
+[package]
+name = "ohttp"
+version = "0.8.0"
+authors = ["Martin Thomson <mt@lowentropy.net>"]
+edition = "2024"
+rust-version = "1.86.0"
+description = "Oblivious HTTP (vendored and patched for Pingers)"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/martinthomson/ohttp"
+publish = false
+
+[dependencies]
+aead = { version = "0.6", default-features = false, features = ["alloc"] }
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
+byteorder = "1.4"
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"] }
+hex = "0.4"
+hkdf = "0.13"
+# No "getrandom": every random value comes from the caller's RNG.
+hpke = { version = "0.14", default-features = false, features = ["x25519", "nistp", "mlkem", "aes", "chacha"] }
+log = { version = "0.4", default-features = false }
+rand_core = "0.10.1"
+sha2 = "0.11"
+thiserror = "2"

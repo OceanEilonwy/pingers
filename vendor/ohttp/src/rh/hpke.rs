@@ -9,7 +9,7 @@ use rust_hpke::{
     aead::{AeadCtxR, AeadCtxS, AeadTag, AesGcm128, ChaCha20Poly1305},
     kdf::HkdfSha256,
     kem::{Kem as KemTrait, X25519HkdfSha256, XWing},
-    setup_receiver, setup_sender,
+    setup_receiver, setup_sender_with_rng,
 };
 
 use super::SymKey;
@@ -98,24 +98,9 @@ pub enum PrivateKey {
     XWing(<XWing as KemTrait>::PrivateKey),
 }
 
-impl PrivateKey {
-    #[allow(clippy::unnecessary_wraps)]
-    pub fn key_data(&self) -> Res<Vec<u8>> {
-        Ok(match self {
-            Self::X25519(k) => Vec::from(k.to_bytes().as_slice()),
-            Self::P256(k) => Vec::from(k.to_bytes().as_slice()),
-            Self::XWing(k) => Vec::from(k.to_bytes().as_slice()),
-        })
-    }
-}
-
 impl std::fmt::Debug for PrivateKey {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        if cfg!(feature = "unsafe-print-secrets") {
-            if let Ok(b) = self.key_data() {
-                return write!(f, "PrivateKey {}", hex::encode(b));
-            }
-        }
+        // Pingers patch: the unsafe-print-secrets feature is removed.
         write!(f, "Opaque PrivateKey")
     }
 }
@@ -248,7 +233,13 @@ pub struct HpkeS {
 
 impl HpkeS {
     /// Create a new context that uses the KEM mode for sending.
-    pub fn new(config: Config, pk_r: &PublicKey, info: &[u8]) -> Res<Self> {
+    // Pingers patch: the caller supplies the randomness for the ephemeral key.
+    pub fn new(
+        config: Config,
+        pk_r: &PublicKey,
+        info: &[u8],
+        rng: &mut impl rand_core::CryptoRng,
+    ) -> Res<Self> {
         macro_rules! dispatch_hpkes_new {
             {
                 ($c:expr, $pk:expr): [$( $(#[$meta:meta])* {
@@ -269,10 +260,11 @@ impl HpkeS {
                             },
                             $pke(pk_r),
                         ) => {
-                            let (enc, context) = setup_sender::<$aead, $kdf, $kem>(
+                            let (enc, context) = setup_sender_with_rng::<$aead, $kdf, $kem>(
                                 &OpModeS::Base,
                                 pk_r,
                                 info,
+                                rng,
                             )?;
                             (
                                 $ctxt1($ctxt2($ctxt3(Box::new(context)))),
@@ -699,18 +691,22 @@ impl Deref for HpkeR {
 
 /// Generate a key pair for the identified KEM.
 #[allow(clippy::unnecessary_wraps)]
-pub fn generate_key_pair(kem: Kem) -> Res<(PrivateKey, PublicKey)> {
+// Pingers patch: the caller supplies the randomness.
+pub fn generate_key_pair(
+    kem: Kem,
+    rng: &mut impl rand_core::CryptoRng,
+) -> Res<(PrivateKey, PublicKey)> {
     let (sk, pk) = match kem {
         Kem::X25519Sha256 => {
-            let (sk, pk) = X25519HkdfSha256::gen_keypair();
+            let (sk, pk) = X25519HkdfSha256::gen_keypair_with_rng(rng);
             (PrivateKey::X25519(sk), PublicKey::X25519(pk))
         }
         Kem::P256Sha256 => {
-            let (sk, pk) = DhP256HkdfSha256::gen_keypair();
+            let (sk, pk) = DhP256HkdfSha256::gen_keypair_with_rng(rng);
             (PrivateKey::P256(sk), PublicKey::P256(pk))
         }
         Kem::XWing => {
-            let (sk, pk) = XWing::gen_keypair();
+            let (sk, pk) = XWing::gen_keypair_with_rng(rng);
             (PrivateKey::XWing(sk), PublicKey::XWing(pk))
         }
     };
@@ -738,79 +734,23 @@ pub fn derive_key_pair(kem: Kem, ikm: &[u8]) -> Res<(PrivateKey, PublicKey)> {
     Ok((sk, pk))
 }
 
-#[cfg(test)]
-mod test {
-    use super::{Config, HpkeR, HpkeS, generate_key_pair};
-    use crate::{
-        crypto::{Decrypt, Encrypt},
-        hpke::{Aead, Kem},
-        init,
-    };
-
-    const INFO: &[u8] = b"info";
-    const AAD: &[u8] = b"aad";
-    const PT: &[u8] = b"message";
-
-    #[allow(clippy::similar_names)] // for sk_x and pk_x
-    #[test]
-    fn make() {
-        init();
-        let cfg = Config::default();
-        let (sk_r, pk_r) = generate_key_pair(cfg.kem()).unwrap();
-        let hpke_s = HpkeS::new(cfg, &pk_r, INFO).unwrap();
-        let _hpke_r = HpkeR::new(cfg, &pk_r, &sk_r, &hpke_s.enc().unwrap(), INFO).unwrap();
-    }
-
-    #[allow(clippy::similar_names)] // for sk_x and pk_x
-    fn seal_open(aead: Aead, kem: Kem) {
-        // Setup
-        init();
-        let cfg = Config {
-            kem,
-            aead,
-            ..Config::default()
-        };
-        assert!(cfg.supported());
-        let (sk_r, pk_r) = generate_key_pair(cfg.kem()).unwrap();
-
-        // Send
-        let mut hpke_s = HpkeS::new(cfg, &pk_r, INFO).unwrap();
-        let enc = hpke_s.enc().unwrap();
-        let ct = hpke_s.seal(AAD, PT).unwrap();
-
-        // Receive
-        let mut hpke_r = HpkeR::new(cfg, &pk_r, &sk_r, &enc, INFO).unwrap();
-        let pt = hpke_r.open(AAD, &ct).unwrap();
-        assert_eq!(&pt[..], PT);
-    }
-
-    #[test]
-    fn seal_open_gcm() {
-        seal_open(Aead::Aes128Gcm, Kem::X25519Sha256);
-    }
-
-    #[test]
-    fn seal_open_chacha() {
-        seal_open(Aead::ChaCha20Poly1305, Kem::X25519Sha256);
-    }
-
-    #[test]
-    fn seal_open_gcm_p256() {
-        seal_open(Aead::Aes128Gcm, Kem::P256Sha256);
-    }
-
-    #[test]
-    fn seal_open_chacha_p256() {
-        seal_open(Aead::ChaCha20Poly1305, Kem::P256Sha256);
-    }
-
-    #[test]
-    fn seal_open_gcm_xwing() {
-        seal_open(Aead::Aes128Gcm, Kem::XWing);
-    }
-
-    #[test]
-    fn seal_open_chacha_xwing() {
-        seal_open(Aead::ChaCha20Poly1305, Kem::XWing);
-    }
+/// Pingers patch: loads a stored private key and computes its public key.
+pub fn import_private_key(kem: Kem, sk: &[u8]) -> Res<(PrivateKey, PublicKey)> {
+    Ok(match kem {
+        Kem::X25519Sha256 => {
+            let sk = <X25519HkdfSha256 as KemTrait>::PrivateKey::from_bytes(sk)?;
+            let pk = X25519HkdfSha256::sk_to_pk(&sk);
+            (PrivateKey::X25519(sk), PublicKey::X25519(pk))
+        }
+        Kem::P256Sha256 => {
+            let sk = <DhP256HkdfSha256 as KemTrait>::PrivateKey::from_bytes(sk)?;
+            let pk = DhP256HkdfSha256::sk_to_pk(&sk);
+            (PrivateKey::P256(sk), PublicKey::P256(pk))
+        }
+        Kem::XWing => {
+            let sk = <XWing as KemTrait>::PrivateKey::from_bytes(sk)?;
+            let pk = XWing::sk_to_pk(&sk);
+            (PrivateKey::XWing(sk), PublicKey::XWing(pk))
+        }
+    })
 }
