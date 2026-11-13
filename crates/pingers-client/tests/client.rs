@@ -77,6 +77,7 @@ impl TestDir {
     fn config(&self) -> ClientConfig {
         ClientConfig {
             database: self.0.join("pingers.db"),
+            instance: None,
         }
     }
 }

@@ -32,7 +32,9 @@ pub use callbacks::{
     Events, FixQuality, FocusState, LocationMode, Notice, OsRegion, Platform, PlatformError,
     PushPlatform, PushTokens,
 };
-pub use core::{Core, GeofenceEvent, MeetPointChoice, NewPartyDraft, SettingChange, SpotToSave};
+pub use core::{
+    Core, GeofenceEvent, InstanceConfig, MeetPointChoice, NewPartyDraft, SettingChange, SpotToSave,
+};
 pub use error::CoreError;
 pub use geo::{Coordinate, Fence, Fix};
 pub use ids::{

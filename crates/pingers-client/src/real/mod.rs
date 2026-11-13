@@ -17,6 +17,7 @@
 //! - `records`: the client's own records in the store's key-value table.
 
 mod meetups;
+mod network;
 mod parties;
 mod records;
 mod sync;
@@ -35,6 +36,8 @@ use pingers_store::{Database, Session};
 use pingers_time::{Clock, SystemClock, Timer};
 use pingers_transport::TokioTimer;
 use rand_core::UnwrapErr;
+
+pub use network::Instance;
 
 use crate::ports::Crates;
 use crate::{ClientError, Platform};
@@ -70,15 +73,20 @@ impl Crates {
     ///
     /// # Errors
     ///
-    /// None today; the signature leaves room for crates whose construction can fail.
+    /// [`ClientError::Transport`] if the instance's relay or server URL is not usable.
     pub fn real(
         database: Database,
         platform: Arc<dyn Platform>,
         outside: Outside,
+        instance: Option<&Instance>,
     ) -> Result<Self, ClientError> {
+        let transport = instance
+            .map(|instance| network::router(instance, Arc::clone(&outside.timer), &outside))
+            .transpose()?;
         let backend = Arc::new(Backend {
             database: Arc::new(database),
             outside,
+            transport,
         });
         let outbox = Arc::new(sync::Outbox::default());
         let meetups = Arc::new(meetups::Meetups::new(Arc::clone(&backend)));
@@ -99,6 +107,13 @@ impl Crates {
 pub(crate) struct Backend {
     database: Arc<Database>,
     outside: Outside,
+    /// The router over the configured instance, for pingers-sync's engine.
+    #[expect(
+        dead_code,
+        reason = "WAITING(pingers-sync): its engine holds one store Session for its lifetime, \
+                  locking out every other store step; it is built once it holds the Database"
+    )]
+    transport: Option<Arc<dyn pingers_transport::Transport>>,
 }
 
 impl Backend {

@@ -125,10 +125,11 @@ async fn rig() -> Result<Rig, TestError> {
     let client = Client::open_with(
         ClientConfig {
             database: dir.database(),
+            instance: None,
         },
         Arc::new(platform.clone()),
         Arc::new(RecordingEvents::new()),
-        move |database| Crates::real(database, crates_platform, outside),
+        move |database| Crates::real(database, crates_platform, outside, None),
     )
     .await?;
     Ok(Rig {

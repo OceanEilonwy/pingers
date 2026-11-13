@@ -75,6 +75,7 @@ where
                 .map_err(|_locked| anyhow::anyhow!("{}'s secure store is locked", device.name))?;
             let config = ClientConfig {
                 database: self.directory.join(format!("{}.db", device.name)),
+                instance: None,
             };
             let build = &mut self.build;
             let client = Client::open_with(

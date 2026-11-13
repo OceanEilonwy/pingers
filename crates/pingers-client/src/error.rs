@@ -29,6 +29,9 @@ pub enum ClientError {
     /// The client's own records in the store's key-value table failed.
     #[error("client records")]
     Records(#[from] StorageError),
+    /// The instance's relay or server settings do not make a transport.
+    #[error("transport")]
+    Transport(#[from] pingers_transport::TransportError),
     /// A blocking task panicked.
     #[error("internal")]
     Internal,

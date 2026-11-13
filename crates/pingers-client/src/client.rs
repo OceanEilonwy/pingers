@@ -19,13 +19,15 @@ use crate::ports::{
     SettingChange, SpotDraft, WakeInput, WakeOutcome,
 };
 use crate::snapshot::{ClientSnapshot, InviteLink, InviteUrl, Name, WakePushes};
-use crate::{ClientError, Events, Outside, Platform, SecureStoreKey};
+use crate::{ClientError, Events, Instance, Outside, Platform, SecureStoreKey};
 
 /// Where the client keeps its data.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClientConfig {
     /// The SQLCipher database file.
     pub database: PathBuf,
+    /// The instance to talk to, or `None` to stay offline.
+    pub instance: Option<Instance>,
 }
 
 /// The Pingers client: the L3 crates wired to one [`Platform`] and one [`Events`] sink.
@@ -50,8 +52,14 @@ impl Client {
         events: Arc<dyn Events>,
     ) -> Result<Self, ClientError> {
         let crates_platform = Arc::clone(&platform);
+        let instance = config.instance.clone();
         Self::open_with(config, platform, events, move |database| {
-            Crates::real(database, crates_platform, Outside::system())
+            Crates::real(
+                database,
+                crates_platform,
+                Outside::system(),
+                instance.as_ref(),
+            )
         })
         .await
     }

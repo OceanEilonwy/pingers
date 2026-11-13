@@ -3462,6 +3462,7 @@ dependencies = [
  "pingers-presence",
  "pingers-proto",
  "pingers-store",
+ "pingers-sync",
  "pingers-testkit",
  "pingers-time",
  "pingers-transport",

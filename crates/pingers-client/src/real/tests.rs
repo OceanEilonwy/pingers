@@ -97,6 +97,7 @@ fn store() -> Result<Store, Box<dyn std::error::Error>> {
                 ))
             }),
         },
+        transport: None,
     });
     Ok(Store {
         path,

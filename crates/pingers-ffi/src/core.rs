@@ -185,6 +185,34 @@ impl From<GeofenceEvent> for GeofenceTransition {
     }
 }
 
+/// The Pingers instance the app talks to: origins only, from the app's build configuration
+/// (`PINGERS_SERVER_HOST`, `PINGERS_OHTTP_RELAY`, `PINGERS_PUSH_RELAY`) or an invite.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct InstanceConfig {
+    /// The server and OHTTP gateway, `https://...`.
+    pub server: String,
+    /// The OHTTP relay, `https://...`.
+    pub ohttp_relay: String,
+    /// The push relay, `https://...`, if push is set up.
+    pub push_relay: Option<String>,
+}
+
+impl TryFrom<InstanceConfig> for pingers_client::Instance {
+    type Error = CoreError;
+
+    fn try_from(config: InstanceConfig) -> Result<Self, CoreError> {
+        let server = pingers_proto::ServerId::new(config.server)
+            .map_err(|_invalid| CoreError::invalid("the server must be an https:// URL"))?;
+        Ok(Self {
+            server,
+            relay: config.ohttp_relay,
+            push_relay: config.push_relay,
+            gateway_key: None,
+            token_issuer_key: None,
+        })
+    }
+}
+
 /// The Rust core: one per process.
 #[derive(uniffi::Object)]
 pub struct Core {
@@ -203,6 +231,7 @@ impl Core {
         let client = Client::open_with(
             ClientConfig {
                 database: PathBuf::from(db_path),
+                instance: None,
             },
             Arc::new(PlatformAdapter(platform)),
             Arc::new(EventsAdapter(events)),
@@ -222,20 +251,24 @@ impl core::fmt::Debug for Core {
 #[uniffi::export(async_runtime = "tokio")]
 impl Core {
     /// Opens the core on the database at `db_path`, with the key the platform's secure store
-    /// holds under `pingers.database-key`.
+    /// holds under `pingers.database-key`, talking to `instance` (from the app's build
+    /// configuration, or an invite).
     ///
     /// # Errors
     ///
+    /// [`CoreError::Invalid`] if the instance's server or relay is not an `https://` URL;
     /// [`CoreError::Storage`] if the key is missing or the database does not open.
     #[uniffi::constructor]
     pub async fn open(
         db_path: String,
+        instance: InstanceConfig,
         platform: Arc<dyn Platform>,
         events: Arc<dyn Events>,
     ) -> Result<Arc<Self>, CoreError> {
         let client = Client::open(
             ClientConfig {
                 database: PathBuf::from(db_path),
+                instance: Some(instance.try_into()?),
             },
             Arc::new(PlatformAdapter(platform)),
             Arc::new(EventsAdapter(events)),
@@ -564,7 +597,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex, PoisonError};
 
-    use super::{Core, NewPartyDraft, SettingChange};
+    use super::{Core, InstanceConfig, NewPartyDraft, SettingChange};
     use crate::CoreError;
     use crate::callbacks::{
         Events, FixQuality, FocusState, LocationMode, Notice, OsRegion, Platform, PlatformError,
@@ -626,6 +659,26 @@ mod tests {
         path.to_string_lossy().into_owned()
     }
 
+    /// An instance on reserved names: nothing is contacted while the core opens.
+    fn instance() -> InstanceConfig {
+        InstanceConfig {
+            server: "https://pingers.invalid".into(),
+            ohttp_relay: "https://relay.pingers.invalid".into(),
+            push_relay: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_server_that_is_not_https_is_refused() {
+        let app = Arc::new(App::default());
+        let bad = InstanceConfig {
+            server: "pingers.invalid".into(),
+            ..instance()
+        };
+        let opened = Core::open(db_path("bad"), bad, app.clone(), app).await;
+        assert!(matches!(opened, Err(CoreError::Invalid { .. })));
+    }
+
     async fn open(name: &str) -> Result<Arc<Core>, CoreError> {
         let app = Arc::new(App::default());
         app.secure_store_put("pingers.database-key".into(), vec![7; 32])
@@ -680,7 +733,7 @@ mod tests {
         let app = Arc::new(App::default());
         app.secure_store_put("pingers.database-key".into(), vec![7; 32])
             .map_err(|_| CoreError::invalid("store"))?;
-        let core = Core::open(db_path("real"), app.clone(), app).await?;
+        let core = Core::open(db_path("real"), instance(), app.clone(), app).await?;
         assert!(core.snapshot().home().parties.is_empty(), "a fresh store");
         Ok(())
     }
@@ -688,7 +741,7 @@ mod tests {
     #[tokio::test]
     async fn without_a_database_key_the_core_does_not_open() {
         let app = Arc::new(App::default());
-        let opened = Core::open(db_path("nokey"), app.clone(), app).await;
+        let opened = Core::open(db_path("nokey"), instance(), app.clone(), app).await;
         assert!(matches!(opened, Err(CoreError::Storage { .. })));
     }
 }

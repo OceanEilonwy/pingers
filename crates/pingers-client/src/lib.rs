@@ -32,7 +32,7 @@ pub mod snapshot;
 pub use client::{Client, ClientConfig};
 pub use error::{ClientError, Unavailable};
 pub use ports::Crates;
-pub use real::Outside;
+pub use real::{Instance, Outside};
 
 use std::time::Duration;
 
