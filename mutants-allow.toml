@@ -17,3 +17,11 @@ reason = "equivalent: at 0.0 both branches give a zero length (Meters::ZERO and 
 [[mutant]]
 name = "crates/pingers-geo/src/presence.rs: replace > with >= in SpotPresence::restore"
 reason = "equivalent (two sites): when the compared times are equal, both branches pick the same UnixSeconds"
+
+[[mutant]]
+name = "crates/pingers-client/src/real/meetups.rs: replace Meetups::runtime -> Option<Runtime> with None"
+reason = "equivalent until pingers-sync is wired into the client: with a runtime, creating still fails with PortError::Unavailable (the GroupLogs stub refuses create_group), the same answer as without one. Remove when the real group log lands; the run then fails here to say so."
+
+[[mutant]]
+name = "crates/pingers-client/src/real/meetups.rs: replace <impl MeetupPort for Meetups>::leave -> Result<(), PortError> with Ok(())"
+reason = "equivalent until pingers-sync is wired into the client: no Meetup can go live (admit stops at the GroupLogs stub), so leave always finds none and answers Ok(()). Remove when a Meetup can go live in the client."
