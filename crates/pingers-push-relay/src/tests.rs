@@ -144,7 +144,7 @@ async fn the_http_client_does_not_follow_redirects() -> TestResult {
     let router = axum::Router::new().fallback(|| async {
         (
             axum::http::StatusCode::TEMPORARY_REDIRECT,
-            [(axum::http::header::LOCATION, "http://169.254.169.254/")],
+            [(axum::http::header::LOCATION, "/again")],
         )
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
