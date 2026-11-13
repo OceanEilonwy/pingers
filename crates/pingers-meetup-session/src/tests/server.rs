@@ -47,6 +47,8 @@ struct State {
     refuse_streams: bool,
     hang_posts: bool,
     hung: usize,
+    refuse_commits_from: Vec<&'static str>,
+    ephemeral_posts: usize,
     uplinks: Vec<Uplink>,
     deleted: Vec<GroupId>,
 }
@@ -173,6 +175,25 @@ impl FakeServer {
         .await
     }
 
+    /// Answers every commit `member` posts with `NetworkError::Unavailable`.
+    pub(crate) fn refuse_commits_from(&self, member: &'static str) {
+        self.lock().refuse_commits_from.push(member);
+    }
+
+    /// Ephemeral frames posted to the group log (they never should be).
+    pub(crate) fn ephemeral_posts(&self) -> usize {
+        self.lock().ephemeral_posts
+    }
+
+    /// Attempts by `member` to open a channel that were refused.
+    pub(crate) fn refused(&self, member: &str) -> usize {
+        self.lock()
+            .refused
+            .iter()
+            .filter(|opener| **opener == member)
+            .count()
+    }
+
     /// Makes every message post hang until it is let go.
     pub(crate) fn hang_posts(&self, hang: bool) {
         self.lock().hang_posts = hang;
@@ -280,6 +301,9 @@ impl GroupNetwork for FakeNetwork {
         request: CommitRequest,
     ) -> Result<CommitResponse, NetworkError> {
         let mut state = self.server.lock();
+        if state.refuse_commits_from.contains(&self.member) {
+            return Err(NetworkError::Unavailable);
+        }
         let log = state.groups.get_mut(group).ok_or(NetworkError::Rejected)?;
         if request.epoch.get() != log.head {
             return Ok(CommitResponse::Conflict {
@@ -323,6 +347,9 @@ impl GroupNetwork for FakeNetwork {
             body: message.body,
             delivery: message.delivery,
         };
+        if frame.delivery == Delivery::Ephemeral {
+            state.ephemeral_posts = state.ephemeral_posts.saturating_add(1);
+        }
         FakeServer::append(&mut state, group, &frame, ContentType::Application);
         FakeServer::forward(&state, group, &frame, None);
         drop(state);

@@ -12,7 +12,8 @@ use pingers_proto::{ChatBody, Delivery, LeafIndex, MeetPoint};
 
 use super::{GROUP, Leftovers, TestError, TestResult, World, fix};
 use crate::{
-    AddMember, ChannelState, Ended, MeetupScreen, NETWORK_TIMEOUT, SessionError, knock_key_package,
+    AddMember, ChannelState, Ended, MAX_RECONNECT_DELAY, MeetupScreen, NETWORK_TIMEOUT,
+    SessionError, knock_key_package,
 };
 
 const ALICE: LeafIndex = LeafIndex::new(0);
@@ -185,6 +186,13 @@ async fn a_dropped_channel_reopens_and_catches_up_from_the_log() -> TestResult {
     let world = World::new(2)?;
     let [mut alice, bob] = world.meetup_of_two().await?;
     assert_eq!(world.server.opened("Alice"), 1);
+    // Board hashes are ephemeral: on the channel while it is up.
+    let before = world.server.uplinks("Alice", Delivery::Ephemeral);
+    alice.handle.board_seen(Vec::new()).await?;
+    world
+        .server
+        .until_uplinks("Alice", Delivery::Ephemeral, before.saturating_add(1))
+        .await?;
 
     // The exchange drops and the relay refuses the first attempts.
     world.server.refuse_streams(true);
@@ -196,6 +204,10 @@ async fn a_dropped_channel_reopens_and_catches_up_from_the_log() -> TestResult {
         .await?;
     // It is retried at once, then after a backoff.
     world.server.until_refused("Alice", 1).await?;
+    // No retry before the backoff, and an ephemeral frame is dropped, not posted.
+    alice.handle.board_seen(Vec::new()).await?;
+    assert_eq!(world.server.refused("Alice"), 1);
+    assert_eq!(world.server.ephemeral_posts(), 0);
     // Meanwhile Bob writes: it reaches only the group log.
     bob.handle.act(chat("Where are you?")?).await?;
 
@@ -234,6 +246,77 @@ async fn a_silent_member_is_removed() -> TestResult {
         .await?;
     assert!(view.peer(BOB).is_none());
     assert_eq!(world.server.commits(&GROUP), 2);
+
+    // Alone for 30 minutes: the Meetup ends, on the server too.
+    world.clock.advance(Duration::from_mins(31));
+    assert_eq!(alice.handle.finished().await?, Ended::AloneTooLong);
+    assert_eq!(world.device(0)?.leftovers(&GROUP)?, Leftovers::NOTHING);
+    assert_eq!(world.server.deleted(), vec![GROUP]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_member_removed_while_away_ends_its_meetup() -> TestResult {
+    let world = World::new(2)?;
+    let [alice, bob] = world.meetup_of_two().await?;
+    // Bob loses the network: no channel, and his own commits fail.
+    world.server.refuse_commits_from("Bob");
+    world.server.refuse_streams(true);
+    world.server.drop_channels("Bob");
+    world.clock.advance(Duration::from_mins(11));
+    alice
+        .view_until("Bob removed", |view| view.peers.is_empty())
+        .await?;
+
+    // Back online, Bob reads Alice's commit from the log and learns he was removed.
+    world.server.refuse_streams(false);
+    world.clock.advance(MAX_RECONNECT_DELAY);
+    let ended = tokio::time::timeout(super::PATIENCE, bob.handle.finished())
+        .await
+        .map_err(|_| TestError::Timeout("Bob's end"))?;
+    assert_eq!(ended?, Ended::Removed);
+    assert_eq!(world.device(1)?.leftovers(&GROUP)?, Leftovers::NOTHING);
+    assert!(world.server.deleted().is_empty());
+    alice.handle.act(chat("Still here")?).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn refused_actions_and_adds_leave_the_meetup_running() -> TestResult {
+    let world = World::new(2)?;
+    let [alice, mut bob] = world.meetup_of_two().await?;
+    assert!(matches!(
+        alice.handle.act(MeetupAction::AskLocation(ALICE)).await,
+        Err(SessionError::Meetup(_))
+    ));
+    assert!(matches!(
+        alice
+            .handle
+            .add_member(AddMember {
+                key_package: pingers_proto::KeyPackageBytes::from_bytes(vec![1, 2, 3]),
+                subscription: None,
+            })
+            .await,
+        Err(SessionError::Mls(_))
+    ));
+    alice.handle.act(chat("Still fine")?).await?;
+    bob.event("the chat", |event| {
+        matches!(event, MeetupEvent::Chat { .. })
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn meetups_left_by_a_killed_process_are_discarded() -> TestResult {
+    let world = World::new(2)?;
+    let [alice, bob] = world.meetup_of_two().await?;
+    drop(alice);
+    drop(bob);
+    let alice_device = world.device(0)?;
+    assert_eq!(crate::discard_stale(alice_device.database()).await?, 1);
+    assert_eq!(alice_device.leftovers(&GROUP)?, Leftovers::NOTHING);
+    assert_eq!(crate::discard_stale(alice_device.database()).await?, 0);
     Ok(())
 }
 
