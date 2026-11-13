@@ -192,6 +192,9 @@ const fn not_sent_error(route: Route, reason: NotSentReason) -> SyncError {
 }
 
 /// One try at sending.
+/// The status for a missing or stale anonymous credential.
+const UNAUTHORIZED: u16 = 401;
+
 enum Attempt {
     Answered(Response),
     NotSent(ApiRequest, NotSentReason),
@@ -502,7 +505,20 @@ impl SyncEngine {
     /// started; [`SyncError::NoRelay`] for a non-anonymous request with no relay;
     /// [`SyncError::NoCredential`]; [`SyncError::Transport`]; [`SyncError::Store`].
     pub async fn send(&self, request: ApiRequest, sending: Sending) -> Result<Outcome, SyncError> {
-        match self.attempt(request, sending.budget).await? {
+        let credentialed = request.route().credential().is_some();
+        let retry = credentialed.then(|| request.clone());
+        let attempt = match self.attempt(request, sending.budget).await? {
+            // 401: the credential was missing or stale (a token of a rotated key, a proof of
+            // a past bucket). One more try attaches a fresh one; a second 401, or any 403 (a
+            // bad credential, a reused nullifier, a double spend), is answered as is and never
+            // retried.
+            Attempt::Answered(response) if response.status() == UNAUTHORIZED => match retry {
+                Some(request) => self.attempt(request, sending.budget).await?,
+                None => Attempt::Answered(response),
+            },
+            attempt @ (Attempt::Answered(_) | Attempt::NotSent(..)) => attempt,
+        };
+        match attempt {
             Attempt::Answered(response) => Ok(Outcome::Answered(response)),
             Attempt::NotSent(request, reason) => self.hold(request, sending.policy, reason),
         }
