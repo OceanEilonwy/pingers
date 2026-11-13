@@ -64,7 +64,8 @@ pub use meetup::{
 };
 pub use padding::{Padded, SizeClass};
 pub use privacy_pass::{
-    MAX_TOKENS_PER_ISSUANCE, PrivacyPassIssueRequest, PrivacyPassIssueResponse,
+    MAX_TOKENS_PER_ISSUANCE, PrivacyPassIssueRequest, PrivacyPassIssueResponse, PrivacyPassKey,
+    PrivacyPassKeys,
 };
 pub use push::{
     KeyConfigHash, MailboxSpec, PushBind, PushClass, PushPlatform, PushToken, PushTokenPlaintext,
