@@ -61,6 +61,7 @@ import org.pingers.app.R
 import org.pingers.app.Route
 import org.pingers.app.data.AcceptInviteState
 import org.pingers.app.data.AdvancedState
+import org.pingers.app.data.Fence
 import org.pingers.app.data.Invitation
 import org.pingers.app.data.InviteState
 import org.pingers.app.data.NewPartyState
@@ -90,6 +91,7 @@ import org.pingers.app.ui.components.TwoLines
 import org.pingers.app.ui.components.color
 import org.pingers.app.ui.map.MapBox
 import org.pingers.app.ui.map.Scenes
+import org.pingers.app.ui.map.spotArea
 import org.pingers.app.ui.map.spotCircle
 import org.pingers.app.ui.theme.Pc
 import org.pingers.app.ui.theme.body
@@ -102,10 +104,11 @@ fun partyCounts(members: Int, spots: Int): String =
     pluralStringResource(R.plurals.members, members, members) + " · " + pluralStringResource(R.plurals.spots, spots, spots)
 
 @Composable
-fun privacyLabel(p: PrivacyLevel): String = stringResource(
+fun privacyLabel(p: PrivacyLevel?): String = stringResource(
     when (p) {
         PrivacyLevel.Full -> R.string.privacy_full
         PrivacyLevel.Reduced -> R.string.privacy_reduced
+        null -> R.string.privacy_checking
     },
 )
 
@@ -145,11 +148,12 @@ fun NewPartyScreen(state: NewPartyState, repo: PingersRepository, nav: Navigator
     Page(
         top = { TopBar(stringResource(R.string.new_party_title), { nav.back() }, stringResource(R.string.cd_back)) },
         bottom = {
+            state.error?.let { Text(it, style = body(14.sp, color = Pc.OrangeText)) }
             PillButton(stringResource(R.string.new_party_create), {
                 repo.createParty()
                 nav.replace(Route.Party)
                 nav.go(Route.Invite)
-            })
+            }, enabled = state.canCreate)
         },
         spacing = 18,
     ) {
@@ -340,14 +344,14 @@ fun InviteScreen(state: InviteState, repo: PingersRepository, nav: Navigator) {
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Image(QrCode, stringResource(R.string.cd_invite_qr), Modifier.size(160.dp))
                 Text(
-                    stringResource(R.string.invite_scan, state.expiresInHours),
+                    state.expiresInHours?.let { stringResource(R.string.invite_scan, it) } ?: stringResource(R.string.invite_making),
                     style = body(13.sp, color = Pc.Muted, lineHeight = 1.45f),
                     textAlign = TextAlign.Center,
                 )
                 PillButton(stringResource(R.string.invite_share), {
                     val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, state.link)
                     context.startActivity(Intent.createChooser(send, shareTitle))
-                }, height = 50.dp, icon = PIcons.Share)
+                }, height = 50.dp, icon = PIcons.Share, enabled = state.link != null)
             }
         }
         SectionLabel(stringResource(R.string.invite_invitations), Modifier.padding(start = 4.dp, top = 4.dp))
@@ -504,7 +508,16 @@ fun PartyScreen(state: PartyState, repo: PingersRepository, nav: Navigator) {
                 .border(1.dp, Pc.Line, RoundedCornerShape(22.dp)),
         ) {
             MapBox(Scenes.PartyCard, overlay = {
-                state.mapSpots.forEach { spotCircle(it.center, it.radius, dashed = true, small = it.small) }
+                val frame = state.mapFrame
+                state.spots.forEach { spot ->
+                    when (val fence = spot.fence) {
+                        is Fence.Circle -> {
+                            val radius = frame.units(fence.radiusM)
+                            spotCircle(frame.toMap(fence.center), radius, dashed = true, small = radius < 20f)
+                        }
+                        is Fence.Polygon -> spotArea(fence.vertices.map(frame::toMap))
+                    }
+                }
             })
             Row(
                 Modifier

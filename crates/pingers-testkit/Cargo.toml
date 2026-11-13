@@ -15,7 +15,7 @@ layer = "dev"
 # RecordingEvents`. Only for crates that already sit at or above pingers-client (pingers-ffi,
 # pingers-screens, pingers-cli, pingers-client's own integration tests). The crate docs
 # ("Dependencies and layers") say why it is not on by default.
-client = ["dep:pingers-client", "dep:pingers-meetup"]
+client = ["dep:pingers-client", "dep:pingers-meetup", "dep:async-trait"]
 # `InProcessHarness::start` runs pingers-server, an OHTTP relay and pingers-push-relay on
 # ephemeral ports. Off by default so crates that only need the fake platform do not compile
 # the server (harness module docs).
@@ -57,6 +57,7 @@ rcgen = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 tokio-rustls = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["net"], optional = true }
+async-trait = { workspace = true, optional = true }
 hex = { workspace = true }
 rand_chacha = { workspace = true }
 rand_core = { workspace = true }

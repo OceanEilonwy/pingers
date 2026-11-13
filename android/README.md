@@ -1,10 +1,17 @@
 # Pingers for Android
 
 The Android shell: Kotlin, Jetpack Compose and Material 3, min SDK 29. It draws
-every screen of the design canvas (`docs/design-canvas`) on **fake data**. The Rust
-core is linked (`crates/pingers-ffi`, through UniFFI), but so far it answers only two
-calls: the core version and the current time bucket, shown under "Under the hood" on
-"How Pingers keeps you private". Networking and push arrive with the client API.
+every screen of the design canvas (`docs/design-canvas`). The app runs on
+`CoreRepository`, over the Rust core (`crates/pingers-ffi`, through UniFFI): each
+pingers-screens view model arrives as a record and maps one to one onto `UiState`.
+Until pingers-client's API merges, `Core` opens but every other call answers
+`CoreException.Unavailable`, so the screens show their empty states. Debug builds
+launched with `--ez fake true` run on `FakeRepository` (the canvas's example) instead,
+for screenshots:
+
+```sh
+adb shell am start -n org.pingers.app.debug/org.pingers.app.MainActivity --ez fake true --es screen Compass
+```
 
 ## Build
 
@@ -49,8 +56,9 @@ one Kotlin caller today.
 |---|---|
 | `data/UiState.kt` | One plain data class per screen (`HomeState`, `PartyState`, `MeetupState`, ...). No behaviour. |
 | `data/PingersRepository.kt` | The one interface the UI uses: a `StateFlow` per screen and a method per user action. |
-| `data/FakeRepository.kt` | The canvas's example data (Climbing crew at Riverside Park) with just enough behaviour for every control. |
-| `data/PolygonEditor.kt` | The Draw area editing model (tap to add, close on the first point, drag, midpoints, select and delete, undo, clear), kept out of the composables. |
+| `data/CoreRepository.kt`, `CoreMapping.kt` | The repository over the Rust core, and the record-to-UiState mapping. |
+| `data/FakeRepository.kt` | The canvas's example data (Climbing crew at Riverside Park), for previews and screenshots. |
+| `data/PolygonEditor.kt` | FakeRepository's Draw area editing model (tap to add, close on the first point, drag, midpoints, select and delete, undo, clear), kept out of the composables. |
 | `Navigator.kt` | `Route` (every canvas screen) and a plain back stack, as in monokulo-fob. |
 | `MainActivity.kt` | Edge-to-edge host, routes, notification and invite-link intents. |
 | `CoPresenceNotifier.kt` | The co-presence alert as a real notification with "Open meetup" and "Hide me here". |
@@ -78,21 +86,21 @@ Screenshots of every screen from a Pixel 9 Pro emulator are in `docs/screenshots
 ## Where the Rust core plugs in
 
 1. **Build.** Done: see "Build" above.
-2. **Repository.** Write `CoreRepository : PingersRepository`. It opens `Core` with a
-   `Platform` and an `Events` implementation, maps each pingers-screens view model to the
-   matching `UiState` class, and turns each action into one `Core` call (for example
-   `createParty` to `create_party`, `answerLocationRequest` to `answer_location_request`,
-   `drawTapMap` to the pingers-screens polygon model). Swap it in for `FakeRepository`
-   in `MainActivity`. The composables don't change.
-3. **Events.** `Events` callbacks update the flows. `meetup_started` posts through
-   `CoPresenceNotifier`, and `location_request` and `meetup_ended` go to their routes.
-   Today the Home debug menu raises these by hand (the `simulate*` methods).
-4. **Platform.** Implement the shell's jobs from `docs/architecture.md` section 4 here:
-   Keystore secure store, Fused Location, geofences, DND, WorkManager wake, push tokens,
-   and the foreground service. The compass heading (`Heading.kt`) stays in the shell. The
-   core supplies only the bearing (`Core.compass`).
-5. **Words.** Text that pingers-words generates (the "What your server sees" lists, the
+2. **Repository.** Done: `data/CoreRepository.kt` opens `Core` (one per process, in
+   `CoreRepositories`), takes a fresh `Snapshot` on every event, and maps each view model
+   with `data/CoreMapping.kt`. Drafts (New party, Spot editor, meet point, an answer) are
+   sent to Rust with each read, so pingers-screens decides the `can*` fields. Draw area
+   uses pingers-screens' polygon model through `AreaEditor`.
+3. **Events.** Done: `CoreRepository.events` routes `meetup_started` (with the
+   notification), `location_request` and `meetup_ended` in `MainActivity`.
+4. **Platform.** `data/InterimPlatform.kt` stands in (in-memory secure store, no
+   location) until the platform package implements `uniffi.pingers.Platform`; then
+   `CoreRepositories` passes that instead. The compass heading (`Heading.kt`) stays in
+   the shell.
+5. **Client.** `Core`'s calls answer `Unavailable` until pingers-client's async API
+   merges; each then becomes one client call in `crates/pingers-ffi/src/core.rs`.
+6. **Words.** Text that pingers-words generates (the "What your server sees" lists, the
    pause reason, zone schedules) is already plain strings in the state. `Words.kt` and the
    format strings can move to pingers-words once it covers them.
-6. **Maps.** Swap `StylisedMap` for MapLibre. Overlays already take `MapPoint`s, so only
-   the unit-to-screen mapping changes.
+7. **Maps.** Swap `StylisedMap` for MapLibre. State carries coordinates and a `MapFrame`, so only
+   the frame-to-screen mapping changes.

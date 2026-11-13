@@ -387,7 +387,7 @@ mod tests {
     }
 
     fn name() -> Result<Name, ScreenError> {
-        Name::new("Riverside Park")
+        Ok(Name::new("Riverside Park")?)
     }
 
     /// An open shape of the given points.

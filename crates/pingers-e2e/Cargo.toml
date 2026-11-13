@@ -1,0 +1,39 @@
+[package]
+name = "pingers-e2e"
+description = "End-to-end protocol scenarios and privacy checks against the real server behind a relay."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = "dev"
+
+[dependencies]
+pingers-crypto = { workspace = true }
+pingers-delivery = { workspace = true, features = ["sqlite"] }
+pingers-geo = { workspace = true }
+pingers-mailbox = { workspace = true }
+pingers-mls = { workspace = true, features = ["test-util"] }
+pingers-ohttp = { workspace = true }
+pingers-presence = { workspace = true }
+pingers-proto = { workspace = true }
+# The binary's library target has no workspace entry (pingers-testkit does the same).
+pingers-server = { path = "../pingers-server" }
+pingers-testkit = { workspace = true, features = ["harness"] }
+pingers-time = { workspace = true, features = ["test-util"] }
+pingers-transport = { workspace = true }
+async-trait = { workspace = true }
+hex = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+rand_chacha = { workspace = true }
+rand_core = { workspace = true }
+rusqlite = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util"] }
+zeroize = { workspace = true }
+
+[lints]
+workspace = true
