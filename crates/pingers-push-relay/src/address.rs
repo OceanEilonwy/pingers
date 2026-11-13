@@ -63,10 +63,9 @@ fn ipv4_is_public(address: Ipv4Addr) -> bool {
 fn ipv6_is_public(address: Ipv6Addr) -> bool {
     let segments = address.segments();
     let [first, second, ..] = segments;
-    let reserved = address.is_loopback()
-        || address.is_unspecified()
-        // fc00::/7 unique local, fe80::/10 link local, fec0::/10 site local, ff00::/8 multicast.
-        || first & 0xfe00 == 0xfc00
+    // :: and ::1 never get here: embedded_ipv4 refuses all of ::/96.
+    // fc00::/7 unique local, fe80::/10 link local, fec0::/10 site local, ff00::/8 multicast.
+    let reserved = first & 0xfe00 == 0xfc00
         || first & 0xffc0 == 0xfe80
         || first & 0xffc0 == 0xfec0
         || first & 0xff00 == 0xff00
