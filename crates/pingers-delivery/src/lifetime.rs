@@ -61,14 +61,8 @@ mod tests {
 
     #[test]
     fn meetups_live_two_hours_and_parties_half_a_year() {
-        assert_eq!(
-            GroupLifetime::Meetup.idle_lifetime(),
-            Duration::from_secs(7_200)
-        );
-        assert_eq!(
-            GroupLifetime::Party.idle_lifetime(),
-            Duration::from_secs(180 * 86_400)
-        );
+        assert_eq!(GroupLifetime::Meetup.idle_lifetime().as_secs(), 7_200);
+        assert_eq!(GroupLifetime::Party.idle_lifetime().as_secs(), 15_552_000);
     }
 
     #[test]
