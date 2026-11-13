@@ -50,7 +50,8 @@
 //!   synchronisation: two threads in one process serialise exactly as two processes do.
 //! - **`MlsStorage` is implemented on [`Session`]**, so MLS writes join the session's
 //!   transaction. The trait's error kinds have no source, so database errors become
-//!   `StorageError::Unavailable` and undecodable values `StorageError::Corrupt`.
+//!   `StorageError::Failed` (busy or locked: `StorageError::Unavailable`) and undecodable
+//!   values `StorageError::Corrupt`.
 //! - **[`Meetups::end`] deletes the group's MLS rows too**, under pingers-mls's
 //!   `group_storage_prefix`, so no caller can end a Meetup and leave its epoch secrets behind
 //!   (style guide §8, design B.5). Calling `delete_group` as well is harmless.
