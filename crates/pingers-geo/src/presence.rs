@@ -211,10 +211,11 @@ impl SpotPresence {
     /// confirming pair, exit evidence is forgotten, and the Inside timeout and the stale-input
     /// cut-off run from the later of `since` and `last_fix_at`.
     #[must_use]
-    pub fn restore(fence: Fence, snapshot: PresenceSnapshot) -> Self {
-        let latest = snapshot
-            .last_fix_at
-            .map_or(snapshot.since, |last_fix| last_fix.max(snapshot.since));
+    pub const fn restore(fence: Fence, snapshot: PresenceSnapshot) -> Self {
+        let latest = match snapshot.last_fix_at {
+            Some(last_fix) if last_fix.get() > snapshot.since.get() => last_fix,
+            Some(_) | None => snapshot.since,
+        };
         Self {
             fence,
             snapshot,
