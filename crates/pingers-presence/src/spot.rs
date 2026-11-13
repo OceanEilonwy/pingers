@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Spot keys that exist only while the device is Inside (design B.4.3).
-use pingers_crypto::{PresenceRoot, SpotKey, TagKey, derive_spot_key, derive_tag_key};
+use pingers_crypto::{
+    MeetupPsk, PresenceRoot, SpotKey, TagKey, derive_meetup_psk, derive_spot_key, derive_tag_key,
+};
 use pingers_geo::PresenceState;
 use pingers_proto::{Epoch, PartyId, SpotId};
+use pingers_time::Bucket;
 
 use crate::PresenceError;
 
@@ -85,5 +88,61 @@ impl ActiveSpot {
     /// `K_tag`, for tags and trial matching.
     pub(crate) const fn tag_key(&self) -> &TagKey {
         &self.tag_key
+    }
+
+    /// `PSK_meet(b) = HKDF-Expand(K_spot, "psk" || be64(b), 32)`, the external PSK that binds
+    /// a Meetup group created in bucket `bucket` to this Party and Spot (design B.5). This is
+    /// how pingers-meetup-session gets the PSK without ever holding `K_spot`; the result is a
+    /// zeroising secret type.
+    ///
+    /// # Errors
+    ///
+    /// [`PresenceError::Crypto`] if derivation fails.
+    pub fn meetup_psk(&self, bucket: Bucket) -> Result<MeetupPsk, PresenceError> {
+        Ok(derive_meetup_psk(&self.spot_key, bucket)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use pingers_testkit::load_vectors;
+    use zeroize::Zeroizing;
+
+    use super::*;
+    use crate::test_support::TestError;
+
+    /// The PSK matches design B.5's `PSK_meet(b) = HKDF-Expand(K_spot, "psk" || be64(b), 32)`,
+    /// using the shared key-schedule vectors (`vectors/crypto/presence-key-schedule.json`).
+    #[test]
+    fn the_meetup_psk_follows_the_design_derivation() -> Result<(), TestError> {
+        for vector in load_vectors("crypto/presence-key-schedule")?.vectors {
+            let root =
+                PresenceRoot::from_bytes(Zeroizing::new(vector.input_array("presence_root")?));
+            let status = SpotStatus {
+                spot: SpotRef {
+                    party: PartyId::from_bytes([1; 16]),
+                    spot: SpotId::from_bytes(vector.input_array("spot_id")?),
+                },
+                epoch: Epoch::new(3),
+                state: PresenceState::Inside,
+            };
+            let active = ActiveSpot::derive(&root, &status)?;
+            let bucket = Bucket::from_index(vector.input_u64("bucket")?)?;
+            assert_eq!(
+                active.meetup_psk(bucket)?.expose_bytes().as_slice(),
+                vector.expected_bytes("meetup_psk")?,
+                "{}",
+                vector.name
+            );
+            let next = bucket.next().ok_or(TestError::Malformed("bucket"))?;
+            assert_ne!(
+                active.meetup_psk(next)?.expose_bytes(),
+                active.meetup_psk(bucket)?.expose_bytes(),
+                "each bucket has its own PSK"
+            );
+        }
+        Ok(())
     }
 }
