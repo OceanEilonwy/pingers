@@ -68,6 +68,30 @@ impl MemoryStorage {
         )
     }
 
+    /// Every stored row whose key contains one of `labels`, with its value, so a test can
+    /// tell whether a secret survived (same key and value) or was deleted or replaced.
+    #[cfg(test)]
+    pub(crate) fn rows_labelled(
+        &self,
+        labels: &[&[u8]],
+    ) -> std::collections::BTreeSet<(Vec<u8>, Vec<u8>)> {
+        self.state.lock().map_or_else(
+            |_| std::collections::BTreeSet::new(),
+            |state| {
+                state
+                    .values
+                    .iter()
+                    .filter(|(key, _)| {
+                        labels
+                            .iter()
+                            .any(|label| key.windows(label.len()).any(|part| part == *label))
+                    })
+                    .map(|(key, value)| (key.clone(), value.to_vec()))
+                    .collect()
+            },
+        )
+    }
+
     /// From now on every call fails with `failure`; `None` heals the store.
     pub fn fail_with(&self, failure: Option<StorageError>) {
         if let Ok(mut state) = self.state.lock() {

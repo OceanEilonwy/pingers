@@ -90,6 +90,11 @@ pub struct PresenceSnapshot {
     pub since: UnixSeconds,
     /// When the last fix was processed, if any.
     pub last_fix_at: Option<UnixSeconds>,
+    /// While Inside: when presence was last confirmed (entry, or a later fix inside the fence),
+    /// which the 60-minute Inside timeout runs from. `None` in every other state, and in
+    /// snapshots stored before this field existed; restoring one of those falls back to the
+    /// later of `since` and `last_fix_at`.
+    pub confirmed_at: Option<UnixSeconds>,
 }
 
 /// The F.2 state machine for one Spot.
@@ -197,6 +202,7 @@ impl SpotPresence {
             state: PresenceState::Outside,
             since: now,
             last_fix_at: None,
+            confirmed_at: None,
         };
         Self {
             fence,
@@ -207,19 +213,32 @@ impl SpotPresence {
 
     /// Restores a state machine from a stored snapshot.
     ///
-    /// What the snapshot does not hold restarts conservatively: a Candidate needs a fresh
-    /// confirming pair, exit evidence is forgotten, and the Inside timeout and the stale-input
-    /// cut-off run from the later of `since` and `last_fix_at`.
+    /// The Inside timeout runs from the stored `confirmed_at`, so a restart neither extends nor
+    /// shortens it. What the snapshot does not hold restarts conservatively: a Candidate needs
+    /// a fresh confirming pair, exit evidence is forgotten, and the stale-input cut-off runs
+    /// from the latest of `since`, `last_fix_at` and `confirmed_at`. A snapshot without
+    /// `confirmed_at` (stored before it existed) runs the Inside timeout from the later of
+    /// `since` and `last_fix_at`, as before.
     #[must_use]
     pub const fn restore(fence: Fence, snapshot: PresenceSnapshot) -> Self {
-        let latest = match snapshot.last_fix_at {
+        let mut latest = match snapshot.last_fix_at {
             Some(last_fix) if last_fix.get() > snapshot.since.get() => last_fix,
             Some(_) | None => snapshot.since,
         };
+        let confirmed_at = match snapshot.confirmed_at {
+            Some(confirmed) if confirmed.get() > snapshot.since.get() => confirmed,
+            Some(_) => snapshot.since,
+            None => latest,
+        };
+        if confirmed_at.get() > latest.get() {
+            latest = confirmed_at;
+        }
+        let mut progress = Progress::fresh(latest);
+        progress.confirmed_at = confirmed_at;
         Self {
             fence,
             snapshot,
-            progress: Progress::fresh(latest),
+            progress,
         }
     }
 
@@ -232,7 +251,15 @@ impl SpotPresence {
     /// What to store.
     #[must_use]
     pub const fn snapshot(&self) -> PresenceSnapshot {
-        self.snapshot
+        PresenceSnapshot {
+            confirmed_at: match self.snapshot.state {
+                PresenceState::Inside => Some(self.progress.confirmed_at),
+                PresenceState::Outside | PresenceState::Candidate | PresenceState::Suppressed => {
+                    None
+                }
+            },
+            ..self.snapshot
+        }
     }
 
     /// The fence this machine watches.
@@ -481,6 +508,7 @@ mod tests {
                 state: PresenceState::Outside,
                 since: time(0),
                 last_fix_at: None,
+                confirmed_at: None,
             }
         );
         assert_eq!(presence.fence(), &circle_fence()?);
@@ -1025,12 +1053,82 @@ mod tests {
         Ok(())
     }
 
+    /// The review's restart case: a fix beyond the fence moves `last_fix_at` but confirms
+    /// nothing, so after a restart the Inside timeout must still run from the confirmation.
+    #[test]
+    fn a_restart_keeps_the_inside_timeout_from_the_last_confirmation() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        let _ = presence.handle(fix(f64::from(RADIUS) + 80.0, 10, 600)?)?;
+        assert_eq!(presence.state(), PresenceState::Inside);
+        let snapshot = presence.snapshot();
+        assert_eq!(snapshot.last_fix_at, Some(time(600)));
+        assert_eq!(snapshot.confirmed_at, Some(time(30)));
+
+        let mut restored = SpotPresence::restore(circle_fence()?, snapshot);
+        assert_eq!(restored.snapshot(), snapshot);
+        let hour = SpotPresence::INSIDE_TIMEOUT.as_secs();
+        let _ = restored.handle(PresenceInput::Tick {
+            at: time(30 + hour - 1),
+        })?;
+        assert_eq!(restored.state(), PresenceState::Inside);
+        let _ = restored.handle(PresenceInput::Tick {
+            at: time(30 + hour),
+        })?;
+        assert_eq!(restored.state(), PresenceState::Outside);
+        assert_eq!(
+            restored.snapshot().confirmed_at,
+            None,
+            "only Inside has one"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_stored_confirmation_before_the_state_began_counts_from_since() -> Result<(), GeoError> {
+        let snapshot = PresenceSnapshot {
+            state: PresenceState::Inside,
+            since: time(100),
+            last_fix_at: None,
+            confirmed_at: Some(time(5)),
+        };
+        let mut restored = SpotPresence::restore(circle_fence()?, snapshot);
+        assert_eq!(restored.snapshot().confirmed_at, Some(time(100)));
+        let hour = SpotPresence::INSIDE_TIMEOUT.as_secs();
+        let _ = restored.handle(PresenceInput::Tick {
+            at: time(100 + hour - 1),
+        })?;
+        assert_eq!(restored.state(), PresenceState::Inside);
+        Ok(())
+    }
+
+    #[test]
+    fn a_confirmation_after_the_last_fix_is_the_stale_input_cut_off() -> Result<(), GeoError> {
+        let snapshot = PresenceSnapshot {
+            state: PresenceState::Inside,
+            since: time(100),
+            last_fix_at: Some(time(200)),
+            confirmed_at: Some(time(300)),
+        };
+        let mut restored = SpotPresence::restore(circle_fence()?, snapshot);
+        assert_eq!(
+            restored.handle(PresenceInput::Tick { at: time(299) }),
+            Err(GeoError::StaleInput)
+        );
+        assert!(
+            restored
+                .handle(PresenceInput::Tick { at: time(300) })
+                .is_ok()
+        );
+        Ok(())
+    }
+
     #[test]
     fn restore_rejects_inputs_older_than_the_last_fix() -> Result<(), GeoError> {
         let snapshot = PresenceSnapshot {
             state: PresenceState::Inside,
             since: time(30),
             last_fix_at: Some(time(500)),
+            confirmed_at: None,
         };
         let mut restored = SpotPresence::restore(circle_fence()?, snapshot);
         assert_eq!(
@@ -1056,6 +1154,7 @@ mod tests {
             state: PresenceState::Candidate,
             since: time(500),
             last_fix_at: None,
+            confirmed_at: None,
         };
         let mut restored = SpotPresence::restore(circle_fence()?, snapshot);
         assert_eq!(
@@ -1071,6 +1170,7 @@ mod tests {
             state: PresenceState::Outside,
             since: time(500),
             last_fix_at: Some(time(100)),
+            confirmed_at: None,
         };
         let mut restored = SpotPresence::restore(circle_fence()?, snapshot);
         assert_eq!(

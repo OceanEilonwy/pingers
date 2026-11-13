@@ -4,8 +4,6 @@
 #![expect(dead_code, reason = "each test binary uses a different subset")]
 #![expect(unreachable_pub, reason = "test helper module")]
 
-use std::convert::Infallible;
-
 use pingers_ohttp::{
     BinaryRequest, BinaryResponse, Gateway, GatewayKey, Header, KeyConfig, OhttpError, StatusCode,
 };
@@ -37,64 +35,6 @@ impl From<hex::FromHexError> for TestError {
         Self::Hex(error)
     }
 }
-
-/// Yields exactly the given bytes, so a computation's randomness can be fixed by a vector.
-/// Asking for more than it holds yields zeros and is reported by [`ReplayRng::overdrawn`].
-pub struct ReplayRng {
-    bytes: Vec<u8>,
-    position: usize,
-    overdrawn: bool,
-}
-
-impl ReplayRng {
-    pub fn new(bytes: &[u8]) -> Self {
-        Self {
-            bytes: bytes.to_vec(),
-            position: 0,
-            overdrawn: false,
-        }
-    }
-
-    /// Whether every byte was used and no more were asked for.
-    pub fn used_exactly(&self) -> bool {
-        !self.overdrawn && self.position == self.bytes.len()
-    }
-
-    pub fn overdrawn(&self) -> bool {
-        self.overdrawn
-    }
-}
-
-impl rand_core::TryRng for ReplayRng {
-    type Error = Infallible;
-
-    fn try_next_u32(&mut self) -> Result<u32, Infallible> {
-        let mut word = [0; 4];
-        self.try_fill_bytes(&mut word)?;
-        Ok(u32::from_le_bytes(word))
-    }
-
-    fn try_next_u64(&mut self) -> Result<u64, Infallible> {
-        let mut word = [0; 8];
-        self.try_fill_bytes(&mut word)?;
-        Ok(u64::from_le_bytes(word))
-    }
-
-    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Infallible> {
-        for byte in destination {
-            if let Some(next) = self.bytes.get(self.position) {
-                *byte = *next;
-                self.position = self.position.saturating_add(1);
-            } else {
-                *byte = 0;
-                self.overdrawn = true;
-            }
-        }
-        Ok(())
-    }
-}
-
-impl rand_core::TryCryptoRng for ReplayRng {}
 
 /// The gateway key every test uses unless it needs another.
 pub const SECRET: [u8; 32] = [

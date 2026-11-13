@@ -176,24 +176,11 @@ impl TokenKeyId {
     }
 }
 
-/// A leaf position in the RLN membership tree (pingers-anon's `LeafPosition`, which exists
-/// only with its `prover` feature).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TreePosition(u32);
-
-impl TreePosition {
-    /// Wraps a position.
-    #[must_use]
-    pub const fn new(position: u32) -> Self {
-        Self(position)
-    }
-
-    /// The position.
-    #[must_use]
-    pub const fn get(self) -> u32 {
-        self.0
-    }
-}
+/// A leaf position in the RLN membership tree: pingers-proto's [`MembershipIndex`], which owns
+/// the concept. The alias keeps the store's earlier name working.
+///
+/// [`MembershipIndex`]: pingers_proto::MembershipIndex
+pub type TreePosition = pingers_proto::MembershipIndex;
 
 /// A level of the RLN membership tree; leaves are level 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -228,25 +215,6 @@ impl TreeNodeHash {
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
-    }
-}
-
-/// The hourly membership-root epoch from which a registered RLN leaf is live (design B.4.8:
-/// a new leaf can prove only once a root containing it is accepted).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RootEpoch(u64);
-
-impl RootEpoch {
-    /// Wraps an epoch number.
-    #[must_use]
-    pub const fn new(epoch: u64) -> Self {
-        Self(epoch)
-    }
-
-    /// The epoch number.
-    #[must_use]
-    pub const fn get(self) -> u64 {
-        self.0
     }
 }
 

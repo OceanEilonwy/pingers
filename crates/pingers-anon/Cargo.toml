@@ -13,13 +13,14 @@ layer = 1
 [features]
 default = []
 # Client: membership tree copy, witness and proof generation, Privacy Pass token requests.
-prover = ["dep:voprf", "dep:p384"]
+prover = ["dep:voprf", "dep:p384", "dep:sha2"]
 # Server: proof verification and nullifier classification.
 verifier = []
 # Server: Privacy Pass issuance and redemption checks.
-issuer = ["dep:voprf", "dep:p384", "dep:subtle"]
+issuer = ["dep:voprf", "dep:p384", "dep:subtle", "dep:sha2"]
 
 [dependencies]
+pingers-crypto = { workspace = true }
 pingers-proto = { workspace = true }
 pingers-time = { workspace = true }
 rand_core = { workspace = true }
@@ -27,7 +28,7 @@ rand_core = { workspace = true }
 # are Poseidon hashes, which come from rln.
 rln = { workspace = true }
 ark-ff = { workspace = true }
-sha2 = { workspace = true }
+sha2 = { workspace = true, optional = true }
 thiserror = { workspace = true }
 subtle = { workspace = true, optional = true }
 voprf = { workspace = true, optional = true }

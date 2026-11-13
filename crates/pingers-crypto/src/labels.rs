@@ -72,10 +72,16 @@ pub(crate) const INVITE_JOIN: &[u8] = b"join";
 pub(crate) const GROUP_REQUEST: &[u8] = b"pingers/v1/grp-request";
 /// Signature prefix for account registration. Decision: the design gives none.
 pub(crate) const REGISTRATION: &[u8] = b"pingers/v1/register";
+/// Prefix of the RLN external nullifier preimage (design B.4.8). Moved from pingers-anon.
+pub(crate) const RLN_EXTERNAL_NULLIFIER: &[u8] = b"pingers/v1/rln";
+/// Prefix of the RLN request digest `x` preimage (design B.4.8). Moved from pingers-anon.
+pub(crate) const RLN_REQUEST_DIGEST: &[u8] = b"pingers/v1/rln/x";
 
 /// Every private label, so tests can check they are distinct and vectors can name them.
 #[cfg(test)]
-pub(crate) const ALL: [&[u8]; 19] = [
+pub(crate) const ALL: [&[u8]; 21] = [
+    RLN_EXTERNAL_NULLIFIER,
+    RLN_REQUEST_DIGEST,
     SPOT,
     TAG,
     SEAL,

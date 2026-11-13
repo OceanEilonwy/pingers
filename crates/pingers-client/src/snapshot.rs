@@ -9,7 +9,7 @@
 
 use core::fmt;
 
-use pingers_gate::{FocusState, GateDecision, LocationSharing, MinuteOfDay};
+use pingers_gate::{FocusState, GateDecision, LocationSharing};
 use pingers_geo::{Bearing, Coordinate, Fence, Fix};
 use pingers_meetup::{LocationVisibility, TargetPosition};
 use pingers_proto::{
@@ -257,39 +257,10 @@ pub struct QuietHoursPreference {
 }
 
 /// A daily window from a start minute (inside) to an end minute (outside), which may wrap past
-/// midnight. The same shape as pingers-gate's `QuietHours`, kept here because the screens print
-/// its ends.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DailyWindow {
-    start: MinuteOfDay,
-    end: MinuteOfDay,
-}
-
-impl DailyWindow {
-    /// A window from `start` to `end`.
-    ///
-    /// # Errors
-    ///
-    /// [`SnapshotError::EmptyWindow`] if they are equal.
-    pub fn new(start: MinuteOfDay, end: MinuteOfDay) -> Result<Self, SnapshotError> {
-        if start == end {
-            return Err(SnapshotError::EmptyWindow);
-        }
-        Ok(Self { start, end })
-    }
-
-    /// Where it starts.
-    #[must_use]
-    pub const fn start(self) -> MinuteOfDay {
-        self.start
-    }
-
-    /// Where it ends.
-    #[must_use]
-    pub const fn end(self) -> MinuteOfDay {
-        self.end
-    }
-}
+/// midnight: pingers-gate's `QuietHours`, which exposes its ends, under the name the screens
+/// use for quiet hours and zone times alike. `DailyWindow::new` reports an empty window as
+/// `GateError::EmptyQuietHours`.
+pub type DailyWindow = pingers_gate::QuietHours;
 
 /// "No wake-up pushes (maximum privacy)" (design §0, B.4.9).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -850,6 +821,8 @@ impl Meetup {
 #[cfg(test)]
 mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use pingers_gate::MinuteOfDay;
 
     use super::*;
 

@@ -11,8 +11,8 @@ use pingers_transport::{KeyPin, PrivacyClass, Transport, TransportError};
 use tokio::net::TcpListener;
 
 use crate::support::{
-    STEP, TestError, advancing, closed_address, live_request, relay_at, request, serve_h2,
-    start_relay, world,
+    STEP, TestError, advancing_through, after, closed_address, live_request, relay_at, request,
+    serve_h2, start_relay, world,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -189,9 +189,10 @@ async fn a_silent_relay_times_out_on_the_injected_timer_and_then_rests() -> Resu
         vec![relay_at(silent)?],
         KeyPin::Pinned(world.gateway.config.hash()),
     )?;
-    let result = advancing(
+    // Time moves only once the client waits on its 30 s request deadline.
+    let result = advancing_through(
         &world.clock,
-        Duration::from_secs(5),
+        &[after(&world.clock, Duration::from_secs(30))],
         client.request(PrivacyClass::Anonymous, request("/v1/board/sync", b"x")),
     )
     .await?;

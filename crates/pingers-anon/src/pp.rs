@@ -16,6 +16,36 @@ use sha2::{Digest as _, Sha256};
 
 use crate::AnonError;
 
+/// How many tokens one batch asks for, 1 to 300 (the daily allowance, design B.4.8). The
+/// client chooses it; the issuer reads it back from a request with
+/// [`batch_token_count`](crate::batch_token_count).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TokenCount(u16);
+
+impl TokenCount {
+    /// The most tokens one batch may ask for: the only definition of the batch limit.
+    pub const MAX: u16 = 300;
+
+    /// Checks the range 1 to 300.
+    ///
+    /// # Errors
+    ///
+    /// [`AnonError::BadIssuance`] outside that range.
+    pub const fn new(count: u16) -> Result<Self, AnonError> {
+        if count >= 1 && count <= Self::MAX {
+            Ok(Self(count))
+        } else {
+            Err(AnonError::BadIssuance)
+        }
+    }
+
+    /// The count.
+    #[must_use]
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+}
+
 /// The VOPRF suite: P384-SHA384.
 pub(crate) type Suite = p384::NistP384;
 
@@ -29,8 +59,6 @@ pub(crate) const PROOF_LEN: usize = 96;
 const AUTHENTICATOR_LEN: usize = 48;
 /// The token nonce.
 pub(crate) const NONCE_LEN: usize = 32;
-/// The most tokens one batch may carry (design B.4.8).
-pub(crate) const MAX_BATCH: usize = 300;
 /// The issuer name in the fixed token challenge.
 const ISSUER_NAME: &[u8] = b"pingers";
 
@@ -204,11 +232,11 @@ fn read_vector(bytes: &[u8]) -> Result<(&[u8], &[u8]), AnonError> {
         .ok_or(AnonError::BadIssuance)
 }
 
-/// Splits a vector body into 1 to [`MAX_BATCH`] elements.
+/// Splits a vector body into 1 to [`TokenCount::MAX`] elements.
 fn split_elements(body: &[u8]) -> Result<Vec<&[u8]>, AnonError> {
     let elements: Vec<&[u8]> = body.chunks(ELEMENT_LEN).collect();
     let whole = elements.iter().all(|element| element.len() == ELEMENT_LEN);
-    if !whole || elements.is_empty() || elements.len() > MAX_BATCH {
+    if !whole || elements.is_empty() || elements.len() > usize::from(TokenCount::MAX) {
         return Err(AnonError::BadIssuance);
     }
     Ok(elements)
@@ -293,7 +321,10 @@ mod tests {
             .unwrap_or(&[]);
         let empty = encode_request(0, &[[0_u8; 0]])?;
         let ragged = encode_request(0, &[[1_u8; ELEMENT_LEN - 1]])?;
-        let too_many = encode_request(0, &vec![[1_u8; ELEMENT_LEN]; MAX_BATCH + 1])?;
+        let too_many = encode_request(
+            0,
+            &vec![[1_u8; ELEMENT_LEN]; usize::from(TokenCount::MAX).saturating_add(1)],
+        )?;
         for bad in [
             &wrong_type[..],
             &trailing,
@@ -304,7 +335,13 @@ mod tests {
         ] {
             assert!(matches!(decode_request(bad), Err(AnonError::BadIssuance)));
         }
-        assert!(decode_request(&encode_request(0, &vec![[1_u8; ELEMENT_LEN]; MAX_BATCH])?).is_ok());
+        assert!(
+            decode_request(&encode_request(
+                0,
+                &vec![[1_u8; ELEMENT_LEN]; usize::from(TokenCount::MAX)]
+            )?)
+            .is_ok()
+        );
         Ok(())
     }
 

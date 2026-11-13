@@ -14,6 +14,7 @@
 //! - Location keys, grants and asks inside a Meetup (B.6.1).
 //! - Invite join requests (D).
 //! - Keyed hashes for the push relay's rate limits and stored credentials (C.1a).
+//! - The SHA-256 preimage hashes of RLN's external nullifier and request digest (B.4.8).
 //!
 //! Secret types wrap `zeroize::Zeroizing` and implement neither `Debug`, `Display`, `Clone`
 //! nor `Serialize`. MACs and tags are compared with `subtle`, never `==`.
@@ -36,6 +37,7 @@ mod negative_tests;
 mod padded;
 mod presence;
 mod primitives;
+mod rln;
 mod secret;
 #[cfg(test)]
 mod test_support;
@@ -73,3 +75,4 @@ pub use presence::{
     derive_tag_key, open_board_beacon, open_knock, record_tag, seal_board_beacon, seal_knock,
     sign_knock, tag_matches, verify_knock,
 };
+pub use rln::{RlnPreimageHash, rln_external_nullifier_hash, rln_request_hash};

@@ -133,3 +133,7 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
 - **Vectors** live in `vectors/crypto/` and load as `load_vectors("crypto/<name>")`. Fields that
   need no AEAD or curve arithmetic (derivations, tags, hashes, signed messages, AAD, info) were
   recomputed independently with Python's standard library when the files were written.
+- **Wave 3 (2026-11-13), additive:** `rln_external_nullifier_hash`, `rln_request_hash` and
+  `RlnPreimageHash` take over the RLN preimage labels and framing from pingers-anon, which now
+  only reduces the hash into the field and applies Poseidon. Outputs are unchanged
+  (`vectors/rln.json` still passes).

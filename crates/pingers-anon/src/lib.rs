@@ -36,15 +36,17 @@ pub use identity::{
     Nullifier, RequestDigest, RlnSecret, external_nullifier, request_digest,
 };
 #[cfg(feature = "issuer")]
-pub use issuer::{IssuerKey, check_redemption, issue_tokens};
+pub use issuer::{IssuerKey, batch_token_count, check_redemption, issue_tokens};
+#[cfg(any(feature = "prover", feature = "issuer"))]
+pub use pp::TokenCount;
 #[cfg(feature = "prover")]
 pub use prove::{ProofRequest, prove};
 #[cfg(feature = "prover")]
-pub use token::{PendingIssuance, PrivacyPassToken, TokenCount, begin_token_issuance};
+pub use token::{PendingIssuance, PrivacyPassToken, begin_token_issuance};
 #[cfg(any(feature = "prover", feature = "verifier"))]
 pub use tree::{LeafPosition, LeafUpdate, MembershipTree, MerklePath};
 #[cfg(feature = "verifier")]
 pub use verify::{
     AcceptedRoots, NullifierOutcome, NullifierRecord, VerificationContext, VerifiedProof,
-    classify_nullifier, verify,
+    classify_nullifier, classify_request, verify,
 };

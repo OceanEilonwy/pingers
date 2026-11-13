@@ -233,14 +233,21 @@ pub struct MembershipLeafResponse {
     pub live_from: RootEpoch,
 }
 
-/// One hourly root of the membership tree.
+/// One hourly root of the membership tree, as it travels: the hour and the root's encoding.
+///
+/// pingers-anon's `MembershipRoot` owns the root value itself (a checked field element); this
+/// record only carries its bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MembershipRoot {
+pub struct HourlyRoot {
     /// Which hour.
     pub epoch: RootEpoch,
-    /// The root.
+    /// The root's 32-byte encoding.
     pub root: [u8; 32],
 }
+
+/// The earlier name of [`HourlyRoot`], kept so existing callers build. New code should say
+/// `HourlyRoot`, leaving "membership root" to mean pingers-anon's root value.
+pub type MembershipRoot = HourlyRoot;
 
 /// The answer to `GET /v1/rln/leaves?after=n` (design D).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -250,7 +257,7 @@ pub struct MembershipLeaves {
     /// Leaves that have been zeroed (banned or deleted accounts).
     pub zeroed: Vec<MembershipIndex>,
     /// The recent hourly roots.
-    pub roots: Vec<MembershipRoot>,
+    pub roots: Vec<HourlyRoot>,
     /// Where the next request starts.
     pub next: MembershipIndex,
 }
@@ -644,7 +651,7 @@ impl CborBody for MembershipIndex {
 }
 
 /// Layout: `[root epoch, root]`.
-impl CborBody for MembershipRoot {
+impl CborBody for HourlyRoot {
     fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
         writer.array(2)?;
         writer.unsigned(self.epoch.get());

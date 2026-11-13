@@ -1171,11 +1171,7 @@ pub enum PeerLocation {
         distance_m: Option<f64>,
         /// Which way.
         direction: Option<Direction>,
-        /// "Updated 40 s ago", "Updated just now".
-        ///
-        /// PLACEHOLDER(w3-cleanup): pingers-screens and pingers-words are gaining the
-        /// position's age and its words. Until they merge this is always `None` and the app
-        /// shows nothing; fill it from the new field then.
+        /// "Updated 40 s ago", "Updated just now"; `None` when the age is not known.
         updated: Option<String>,
     },
     /// Not shared.
@@ -1240,11 +1236,12 @@ impl From<screens::meetup::MeetupView> for MeetupView {
                             at,
                             distance,
                             direction,
+                            age,
                         } => PeerLocation::Shared {
                             at: at.into(),
                             distance_m: distance.map(pingers_geo::Meters::get),
                             direction: direction.map(Into::into),
-                            updated: None,
+                            updated: age.map(|age| pingers_words::common::updated(LANGUAGE, age)),
                         },
                         screens::meetup::PeerLocation::Private => PeerLocation::Private,
                         screens::meetup::PeerLocation::Asked => PeerLocation::Asked,
@@ -1561,9 +1558,8 @@ pub struct CompassReading {
     pub distance_m: f64,
     /// Minutes on foot.
     pub walk_minutes: u32,
-    /// "Updated 40 s ago", "Updated just now", under the distance.
-    ///
-    /// PLACEHOLDER(w3-cleanup): see [`PeerLocation::Shared::updated`].
+    /// "Updated 40 s ago", "Updated just now", under the distance; `None` for the meet point,
+    /// which does not move.
     pub updated: Option<String>,
 }
 
@@ -1596,7 +1592,9 @@ impl From<screens::compass::CompassView> for CompassView {
                 direction: reading.direction.into(),
                 distance_m: reading.distance.get(),
                 walk_minutes: reading.walk.get(),
-                updated: None,
+                updated: reading
+                    .age
+                    .map(|age| pingers_words::common::updated(LANGUAGE, age)),
             }),
             gps_accuracy_m: view.gps_accuracy.map(pingers_geo::Meters::get),
             watchers: names(&view.watchers),

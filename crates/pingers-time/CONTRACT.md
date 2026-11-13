@@ -19,7 +19,8 @@ Implemented in full. Other crates build against everything below.
 - `SystemClock` (the one production reader of the wall clock; a pre-1970 clock reads as the
   epoch, and `try_now` reports it).
 - `ManualClock` behind feature `test-util`: `new`, `advance` (moves wall and monotonic time,
-  wakes due sleepers), `set_wall` (moves wall time only, for skew tests). Clones share one clock.
+  wakes due sleepers), `set_wall` (moves wall time only, for skew tests), `is_sleeping_until` (whether a task
+  is parked on that deadline, so a test can wait for a timer before advancing). Clones share one clock.
 - `TimeError`: `BucketOutOfRange`, `BeforeEpoch`.
 
 ## Decisions

@@ -123,8 +123,8 @@ A narrow wrapper over OpenMLS 0.9. No other crate touches OpenMLS types.
 - **`MlsError::NotImplemented`** is no longer returned; kept so the variant list is unchanged.
 - **Mutation testing** (`cargo mutants -p pingers-mls`): 283 mutants, 163 caught, 95
   unviable, 25 missed, all justified. 11 are the per-group `delete_*` adapter methods
-  (`delete_tree`, `delete_group_state`, ..., `delete_encryption_epoch_key_pairs`), which only
-  `MlsGroup::delete` calls; `delete_group` uses `delete_prefix` instead, and tests check that
+  (`delete_tree`, `delete_group_state`, ...), which only `MlsGroup::delete` calls;
+  `delete_group` uses `delete_prefix` instead, and tests check that
   it leaves storage empty. 13 are adapter methods OpenMLS 0.9.2 calls only from APIs the
   wrapper never uses: the signature key
   store (`write/read/delete_signature_key_pair`, application-managed), update-proposal leaves
@@ -135,3 +135,9 @@ A narrow wrapper over OpenMLS 0.9. No other crate touches OpenMLS types.
   `queued_proposals`). They are implemented so the adapter stays a complete
   `StorageProvider`. The last replaces `Provider::crypto` with a fresh backend, which is
   equivalent: the crypto backend holds no state the wrapper relies on.
+- **Wave 3 (2026-11-13).** Correction to the mutation Decision above: OpenMLS calls
+  `delete_encryption_epoch_key_pairs` on every merge, not only from `MlsGroup::delete`;
+  `each_commit_deletes_the_previous_epochs_private_keys` now checks that no epoch-n-1 key
+  pair, epoch secret or message secret (nor the committer's old leaf key) survives a commit,
+  and fails if that delete is a no-op. Additive: `MlsContext::delete_key_package(&KeyPackageBytes)`
+  removes the private keys of a KeyPackage that will not be used (an unanswered knock).

@@ -11,6 +11,10 @@
 //! What it never holds: mailbox or group ids (only the bind hash), accounts, device IP
 //! addresses, message content. What it learns, as design A.2 says: that token T was woken at
 //! time t, with what class, on behalf of which server.
+//!
+//! Operators: the configuration file and the FCM service-account setup (a dedicated account
+//! with only "Firebase Cloud Messaging API Admin", its JSON key at mode 600) are documented in
+//! [`config`]. Access tokens are minted and renewed by [`fcm_auth`].
 #![forbid(unsafe_code)]
 
 pub mod address;
@@ -19,6 +23,7 @@ pub mod counts;
 pub mod credentials;
 pub mod delivery;
 pub mod error;
+pub mod fcm_auth;
 pub mod http;
 pub mod keys;
 pub mod opener;
@@ -38,10 +43,9 @@ use zeroize::Zeroizing;
 
 use crate::config::{Logging, RelayConfig};
 use crate::counts::{CountsSnapshot, report_counts};
-use crate::delivery::{
-    Dispatcher, DispatcherSettings, EndpointPolicy, FcmAccessToken, FcmSettings, PushSender,
-};
+use crate::delivery::{Dispatcher, DispatcherSettings, EndpointPolicy, FcmSettings, PushSender};
 use crate::error::{ConfigError, RelayError};
+use crate::fcm_auth::{FcmAuth, ServiceAccount};
 use crate::opener::CryptoOpener;
 use crate::service::{Relay, RelayParts};
 
@@ -110,16 +114,28 @@ pub async fn listen(config: &RelayConfig) -> Result<tokio::net::TcpListener, Rel
 /// The production [`PushSender`]: UnifiedPush and FCM HTTP v1 over a non-redirecting client,
 /// as the configuration enables them. Must be called inside a tokio runtime.
 ///
+/// `clock` judges when FCM access tokens are due for renewal.
+///
 /// # Errors
 ///
-/// [`RelayError::ReadFile`] if the FCM access token file cannot be read,
-/// [`RelayError::HttpClient`] if the client cannot be built.
-pub fn dispatcher(config: &RelayConfig) -> Result<Dispatcher<TokioTimer>, RelayError> {
+/// [`RelayError::ReadFile`] if the FCM service-account file cannot be read,
+/// [`RelayError::ServiceAccount`] if it is not a usable key, [`RelayError::HttpClient`] if the
+/// client cannot be built.
+pub fn dispatcher(
+    config: &RelayConfig,
+    clock: Arc<dyn Clock>,
+) -> Result<Dispatcher<TokioTimer>, RelayError> {
     let fcm = match &config.fcm {
         Some(fcm) => {
-            let token = read_secret(&fcm.access_token_file)?;
+            let path = &fcm.service_account_file;
+            let text = read_secret(path)?;
+            let account =
+                ServiceAccount::from_json(&text).map_err(|source| RelayError::ServiceAccount {
+                    path: path.clone(),
+                    source,
+                })?;
             Some(
-                FcmSettings::new(&fcm.project_id, &fcm.endpoint, FcmAccessToken::new(&token))
+                FcmSettings::new(&fcm.project_id, &fcm.endpoint, FcmAuth::new(account, clock))
                     .ok_or(RelayError::Config(ConfigError::BadFcmEndpoint))?,
             )
         }
@@ -154,7 +170,9 @@ pub async fn serve(
     clock: impl Clock + 'static,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), RelayError> {
-    let sender = dispatcher(&config)?;
+    let clock = Arc::new(clock);
+    let shared: Arc<dyn Clock> = clock.clone();
+    let sender = dispatcher(&config, shared)?;
     serve_with(config, Outside { sender, clock }, listener, shutdown).await
 }
 

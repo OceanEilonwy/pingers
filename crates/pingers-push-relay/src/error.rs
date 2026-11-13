@@ -5,6 +5,8 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+pub use crate::fcm_auth::{ServiceAccountError, TokenError};
+
 /// Why the relay could not start or keep serving.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -21,6 +23,15 @@ pub enum RelayError {
     /// The configuration is not valid.
     #[error("invalid configuration")]
     Config(#[source] ConfigError),
+    /// The FCM service-account file is not a usable service-account key.
+    #[error("invalid FCM service account file {path}")]
+    ServiceAccount {
+        /// The file.
+        path: PathBuf,
+        /// What is wrong, by field name only.
+        #[source]
+        source: ServiceAccountError,
+    },
     /// The command line is not `pingers-push-relay <config.toml>`.
     #[error("usage: pingers-push-relay <config.toml>")]
     Usage,

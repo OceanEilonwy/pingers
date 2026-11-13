@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 use pingers_anon::{IssuerKey, LeafValue};
-use pingers_proto::{AccountId, MembershipIndex, MembershipRoot, RootEpoch};
+use pingers_proto::{AccountId, HourlyRoot, MembershipIndex, RootEpoch};
 use pingers_time::UnixSeconds;
 use rusqlite::{Connection, OptionalExtension as _, Transaction, TransactionBehavior, params};
 use zeroize::Zeroizing;
@@ -168,7 +168,7 @@ impl MembershipStore for SqliteQuotaStore {
         self.transact(|transaction| zero_row(transaction, zeroing))
     }
 
-    fn recent_roots(&self) -> Result<Vec<MembershipRoot>, QuotaError> {
+    fn recent_roots(&self) -> Result<Vec<HourlyRoot>, QuotaError> {
         self.transact(|transaction| {
             let mut statement = transaction.prepare(
                 "SELECT root_epoch, root FROM rln_root ORDER BY root_epoch DESC LIMIT 2",
@@ -179,7 +179,7 @@ impl MembershipStore for SqliteQuotaStore {
             let mut roots = rows
                 .map(|row| {
                     let (epoch, root) = row?;
-                    Ok(MembershipRoot {
+                    Ok(HourlyRoot {
                         epoch: RootEpoch::new(epoch),
                         root: fixed(root, "root")?,
                     })
@@ -190,7 +190,7 @@ impl MembershipStore for SqliteQuotaStore {
         })
     }
 
-    fn insert_root(&self, root: MembershipRoot) -> Result<(), QuotaError> {
+    fn insert_root(&self, root: HourlyRoot) -> Result<(), QuotaError> {
         self.transact(|transaction| {
             transaction.execute(
                 "INSERT INTO rln_root (root_epoch, root) VALUES (?1, ?2)",

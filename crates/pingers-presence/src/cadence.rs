@@ -247,14 +247,15 @@ mod tests {
 
     #[test]
     fn a_draw_must_be_below_the_ratio_to_read() -> Result<(), ProtoError> {
-        // 0x4000_0000 / 2^32 is exactly 0.25: not below it, so skip; one less reads.
+        // 0x4000_0000 / 2^32 is exactly 0.25: not below it, so skip; one less reads. `next_u32`
+        // reads its four bytes little-endian, as rand_core and ChaCha do.
         let quarter = policy(DataMode::Normal, EpochChange::Unchanged, 0.25)?;
-        let mut at = FixedRng::new(&[0x40, 0, 0, 0]);
+        let mut at = FixedRng::new(&[0, 0, 0, 0x40]);
         assert_eq!(
             read_board(UploadTrigger::Wake, &quarter, &mut at),
             ReadBoard::Skip
         );
-        let mut below = FixedRng::new(&[0x3f, 0xff, 0xff, 0xff]);
+        let mut below = FixedRng::new(&[0xff, 0xff, 0xff, 0x3f]);
         assert_eq!(
             read_board(UploadTrigger::Wake, &quarter, &mut below),
             ReadBoard::Read

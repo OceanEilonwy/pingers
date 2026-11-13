@@ -4,9 +4,9 @@
 
 mod common;
 
-use common::{ReplayRng, SECRET, TestError, gateway_key, request, response, setup};
+use common::{SECRET, TestError, gateway_key, request, response, setup};
 use pingers_ohttp::{Gateway, GatewayKey, KeyConfig, OhttpError, check_pin, encapsulate_request};
-use pingers_testkit::seeded_rng;
+use pingers_testkit::{FixedRng, seeded_rng};
 
 #[test]
 fn request_and_response_round_trip() -> Result<(), TestError> {
@@ -223,9 +223,9 @@ fn generated_keys_are_deterministic_for_a_seed_and_differ_across_seeds() -> Resu
 
 #[test]
 fn generate_draws_exactly_one_key_worth_of_randomness() -> Result<(), TestError> {
-    let mut rng = ReplayRng::new(&[7; 32]);
+    let mut rng = FixedRng::new(&[7; 32]);
     let key = GatewayKey::generate(3, &mut rng)?;
-    assert!(rng.used_exactly());
+    assert!(rng.exhausted_exactly());
     assert_eq!(key.config().key_id(), 3);
     Ok(())
 }

@@ -198,6 +198,7 @@ fn presence_from_row(row: &Row<'_>) -> Result<SpotPresenceRecord, StoreError> {
             },
             since: read_time(row, 2, "presence.since")?,
             last_fix_at: read_optional_time(row, 3, "presence.last_fix_at")?,
+            confirmed_at: read_optional_time(row, 4, "presence.confirmed_at")?,
         },
     })
 }
@@ -211,8 +212,8 @@ impl Presence<'_> {
     pub fn save(&self, spot: &SpotId, snapshot: &PresenceSnapshot) -> Result<(), StoreError> {
         self.session.with(|connection| {
             connection.execute(
-                "INSERT OR REPLACE INTO presence (spot_id, state, since, last_fix_at) \
-                 VALUES (?1, ?2, ?3, ?4)",
+                "INSERT OR REPLACE INTO presence \
+                 (spot_id, state, since, last_fix_at, confirmed_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
                     spot.as_bytes(),
                     state_code(snapshot.state),
@@ -220,6 +221,10 @@ impl Presence<'_> {
                     snapshot
                         .last_fix_at
                         .map(|at| time(at, "presence.last_fix_at"))
+                        .transpose()?,
+                    snapshot
+                        .confirmed_at
+                        .map(|at| time(at, "presence.confirmed_at"))
                         .transpose()?,
                 ],
             )?;
@@ -236,7 +241,8 @@ impl Presence<'_> {
         self.session.with(|connection| {
             connection
                 .query_row(
-                    "SELECT spot_id, state, since, last_fix_at FROM presence WHERE spot_id = ?1",
+                    "SELECT spot_id, state, since, last_fix_at, confirmed_at FROM presence \
+                     WHERE spot_id = ?1",
                     [spot.as_bytes()],
                     |row| Ok(presence_from_row(row)),
                 )
@@ -254,7 +260,8 @@ impl Presence<'_> {
     pub fn list(&self) -> Result<Vec<SpotPresenceRecord>, StoreError> {
         self.session.with(|connection| {
             let mut statement = connection.prepare(
-                "SELECT spot_id, state, since, last_fix_at FROM presence ORDER BY spot_id",
+                "SELECT spot_id, state, since, last_fix_at, confirmed_at FROM presence \
+                 ORDER BY spot_id",
             )?;
             let rows = statement.query_map([], |row| Ok(presence_from_row(row)))?;
             rows.map(|row| row?).collect()
@@ -435,6 +442,7 @@ mod tests {
             state: PresenceState::Inside,
             since: UnixSeconds::new(100),
             last_fix_at: Some(UnixSeconds::new(130)),
+            confirmed_at: Some(UnixSeconds::new(120)),
         };
         let states = [
             PresenceState::Outside,
@@ -447,6 +455,7 @@ mod tests {
                 state,
                 since: UnixSeconds::new(5),
                 last_fix_at: None,
+                confirmed_at: None,
             };
             session.presence().save(&work.id, &snapshot)?;
             assert_eq!(session.presence().load(&work.id)?, Some(snapshot));

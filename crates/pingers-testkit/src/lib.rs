@@ -76,6 +76,6 @@ pub use platform::{
     FakePlatform, FixQuality, FixRequest, Geofence, LocationMode, PushRegistration,
     SecureStoreError, StoreAvailability, WakeRequest,
 };
-pub use rng::{TestRng, random_array, seeded_rng};
+pub use rng::{FixedRng, TestRng, random_array, seeded_rng};
 pub use time::{ClockError, TEST_START, advance_to, test_clock};
 pub use vectors::{Vector, VectorError, VectorFile, load_vectors, load_vectors_from};

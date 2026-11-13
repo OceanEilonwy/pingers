@@ -39,8 +39,8 @@ data class CoreNotification(
 
 /**
  * The core's entry points the shell calls when the OS reports something (design E.2: "shell
- * calls core.on_*()"). pingers-ffi exports these as methods on its core object; until then this
- * interface stands in for them, and tests record what reaches it.
+ * calls core.on_*()"). data/CoreHost.kt implements it over pingers-ffi's `Core`; tests record
+ * what reaches it.
  *
  * Calls come from receivers, services and workers on background threads; each may block for
  * as long as the core needs (a receiver's goAsync window, about ten seconds, or a worker's).

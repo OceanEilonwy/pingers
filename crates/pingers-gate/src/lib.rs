@@ -82,6 +82,18 @@ impl QuietHours {
             now >= self.start || now < self.end
         }
     }
+
+    /// The first minute inside the window, for showing the window ("23:00–07:00").
+    #[must_use]
+    pub const fn start(&self) -> MinuteOfDay {
+        self.start
+    }
+
+    /// The first minute after the window.
+    #[must_use]
+    pub const fn end(&self) -> MinuteOfDay {
+        self.end
+    }
 }
 
 /// Whether quiet hours are configured.
@@ -228,6 +240,14 @@ mod tests {
             ..sharing()?
         };
         assert_eq!(decide(&unknown), GateDecision::Share);
+        Ok(())
+    }
+
+    #[test]
+    fn quiet_hours_report_their_ends_as_given() -> Result<(), GateError> {
+        let window = QuietHours::new(minute(22 * 60)?, minute(7 * 60)?)?;
+        assert_eq!(window.start(), minute(22 * 60)?);
+        assert_eq!(window.end(), minute(7 * 60)?);
         Ok(())
     }
 

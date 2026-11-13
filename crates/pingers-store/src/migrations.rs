@@ -19,10 +19,16 @@ pub(crate) struct Migration {
 }
 
 /// Every migration, in order, versions 1, 2, 3, ... without gaps.
-pub(crate) const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    sql: include_str!("migrations/v1.sql"),
-}];
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: include_str!("migrations/v1.sql"),
+    },
+    Migration {
+        version: 2,
+        sql: include_str!("migrations/v2.sql"),
+    },
+];
 
 /// The version a fully migrated database has.
 pub(crate) const LATEST: u32 = match MIGRATIONS.last() {

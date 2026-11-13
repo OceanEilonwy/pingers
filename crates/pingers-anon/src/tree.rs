@@ -18,23 +18,11 @@ pub(crate) const DEPTH: usize = 20;
 /// The number of leaf positions.
 const CAPACITY: usize = 1 << DEPTH;
 
-/// A leaf's position in the tree.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct LeafPosition(u32);
-
-impl LeafPosition {
-    /// Wraps a position from the wire (`idx`).
-    #[must_use]
-    pub const fn new(position: u32) -> Self {
-        Self(position)
-    }
-
-    /// The position.
-    #[must_use]
-    pub const fn get(self) -> u32 {
-        self.0
-    }
-}
+/// A leaf's position in the tree: pingers-proto's [`MembershipIndex`], which owns the
+/// concept, so a position from the wire needs no conversion. The alias keeps the earlier name.
+///
+/// [`MembershipIndex`]: pingers_proto::MembershipIndex
+pub type LeafPosition = pingers_proto::MembershipIndex;
 
 /// One change from `GET /v1/rln/leaves`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,7 +60,7 @@ impl MerklePath {
     #[cfg(any(feature = "prover", test))]
     pub(crate) fn index_bits(&self) -> Vec<u8> {
         (0..DEPTH)
-            .map(|level| u8::from((self.position.0 >> level) & 1 == 1))
+            .map(|level| u8::from((self.position.get() >> level) & 1 == 1))
             .collect()
     }
 
@@ -141,7 +129,8 @@ impl MembershipTree {
                     leaves.push(field::decode(value.as_bytes())?);
                 }
                 LeafUpdate::Zeroed(position) => {
-                    let index = usize::try_from(position.0).map_err(|_| AnonError::NoSuchLeaf)?;
+                    let index =
+                        usize::try_from(position.get()).map_err(|_| AnonError::NoSuchLeaf)?;
                     let leaf = leaves.get_mut(index).ok_or(AnonError::NoSuchLeaf)?;
                     *leaf = Fr::from(0_u64);
                     dirty.push(index);
@@ -219,10 +208,10 @@ impl MembershipTree {
     ///
     /// [`AnonError::NoSuchLeaf`] if the position has no leaf.
     pub fn path(&self, position: LeafPosition) -> Result<MerklePath, AnonError> {
-        if position.0 >= self.leaf_count() {
+        if position.get() >= self.leaf_count() {
             return Err(AnonError::NoSuchLeaf);
         }
-        let mut index = usize::try_from(position.0).map_err(|_| AnonError::NoSuchLeaf)?;
+        let mut index = usize::try_from(position.get()).map_err(|_| AnonError::NoSuchLeaf)?;
         let mut siblings = Vec::with_capacity(DEPTH);
         for height in 0..DEPTH {
             let empty = *self.empty.get(height).ok_or(AnonError::Internal)?;
@@ -272,11 +261,6 @@ mod tests {
             );
         }
         Ok(())
-    }
-
-    #[test]
-    fn positions_keep_their_value() {
-        assert_eq!(LeafPosition::new(77).get(), 77);
     }
 
     #[test]

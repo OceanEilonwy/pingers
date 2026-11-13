@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 use pingers_anon::{
     AcceptedRoots, AnonError, LeafPosition, LeafUpdate, LeafValue, MembershipRoot, MembershipTree,
     MessageId, NullifierOutcome, ProofRequest, RequestDigest, RlnSecret, VerificationContext,
-    VerifiedProof, classify_nullifier, prove, request_digest, verify,
+    VerifiedProof, classify_nullifier, classify_request, prove, request_digest, verify,
 };
 use pingers_proto::{RlnAuth, RlnScope, ServerId};
 use pingers_testkit::seeded_rng;
@@ -282,6 +282,12 @@ fn a_reused_slot_in_the_same_bucket_conflicts() -> Result<(), TestError> {
         classify_nullifier(Some(&stored.record), &reused),
         NullifierOutcome::Conflict
     );
+    // A server that keeps only the digest (slashing off) reaches the same answer.
+    assert_eq!(classify_request(None, &stored), NullifierOutcome::Fresh);
+    assert_eq!(
+        classify_request(Some(&stored.record.x), &reused),
+        NullifierOutcome::Conflict
+    );
     Ok(())
 }
 
@@ -292,6 +298,10 @@ fn a_retransmission_is_a_replay() -> Result<(), TestError> {
     let again = shared.world.accepts(&shared.retransmitted)?;
     assert_eq!(
         classify_nullifier(Some(&stored.record), &again),
+        NullifierOutcome::Replay
+    );
+    assert_eq!(
+        classify_request(Some(&stored.record.x), &again),
         NullifierOutcome::Replay
     );
     Ok(())
