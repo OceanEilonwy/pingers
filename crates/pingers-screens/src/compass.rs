@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The compass: points at the meet point or at a member whose location is shared.
 
+use core::time::Duration;
+
 use pingers_geo::{Bearing, Meters};
 use pingers_meetup::{Observer, TargetPosition, compass as point};
 use pingers_proto::{GroupId, LeafIndex};
@@ -47,6 +49,9 @@ pub struct CompassReading {
     pub distance: Meters,
     /// About how long a walk.
     pub walk: Minutes,
+    /// How old a member's shared position is, measured against this device's own fix
+    /// ("Updated 40 s ago"); `None` for the meet point, which does not move on its own.
+    pub age: Option<Duration>,
 }
 
 /// The compass screen.
@@ -139,6 +144,10 @@ pub fn compass(
             direction: Direction::from_bearing(reading.bearing),
             distance: reading.distance,
             walk: Minutes::walking(reading.distance),
+            age: match selected {
+                CompassSelection::Member(_) => Some(reading.age),
+                CompassSelection::MeetPoint => None,
+            },
         }
     });
     Ok(CompassView {
@@ -194,6 +203,7 @@ mod tests {
         assert_eq!(reading.direction, Direction::NE);
         assert_eq!(reading.walk.get(), 1);
         assert_eq!(reading.relative_bearing, None);
+        assert_eq!(reading.age, None, "the meet point does not age");
         assert_eq!(view.gps_accuracy, Some(Meters::from_whole(6)));
         let watchers: Vec<_> = view.watchers.iter().map(Name::as_str).collect();
         assert_eq!(watchers, ["Ben"]);
@@ -218,6 +228,8 @@ mod tests {
         let reading = view.reading.ok_or(FixtureError::Missing)?;
         assert!((reading.distance.get() - 120.0).abs() < 1.0);
         assert_eq!(reading.walk, Minutes::walking(reading.distance));
+        // Ben shared at 19:29; this device's fix is from 19:30.
+        assert_eq!(reading.age, Some(Duration::from_secs(60)));
         let relative = reading.relative_bearing.ok_or(FixtureError::Missing)?;
         assert!(
             (relative.degrees() - 30.0).abs() < 1.0,

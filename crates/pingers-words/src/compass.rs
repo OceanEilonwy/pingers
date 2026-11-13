@@ -4,7 +4,7 @@
 use pingers_screens::compass::{CompassTarget, CompassView};
 
 use crate::Language;
-use crate::common::{direction, distance, list};
+use crate::common::{direction, distance, list, updated};
 use crate::meetup::meet_point_name;
 
 /// A target chip, in words.
@@ -27,6 +27,8 @@ pub struct CompassText {
     pub distance: Option<String>,
     /// "About 1 min walk · north-east", when known.
     pub walk: Option<String>,
+    /// "Updated 40 s ago", how fresh a member's position is; `None` for the meet point.
+    pub updated: Option<String>,
     /// "Arrow pointing north-east, 42 degrees, toward the bandstand", the arrow's spoken label.
     pub arrow_label: Option<String>,
     /// "GPS ±6 m", when a fix is held.
@@ -84,6 +86,10 @@ pub fn compass(language: Language, view: &CompassView) -> CompassText {
                 direction(language, reading.direction)
             )
         }),
+        updated: view
+            .reading
+            .and_then(|reading| reading.age)
+            .map(|age| updated(language, age)),
         arrow_label: view.reading.map(|reading| {
             format!(
                 "Arrow pointing {}, {:.0} degrees, toward {}",
@@ -165,6 +171,22 @@ mod tests {
             ("N", "Close compass")
         );
         assert_eq!(text.taps, "Phone taps when you face the right way.");
+        assert_eq!(text.updated, None, "the meet point has no age");
+        Ok(())
+    }
+
+    #[test]
+    fn a_member_target_says_how_fresh_their_position_is() -> Result<(), FixtureError> {
+        let snapshot = fixtures::snapshot()?;
+        let text = compass(
+            EN,
+            &screen(
+                &snapshot,
+                fixtures::meetup_id(),
+                CompassSelection::Member(fixtures::ben()),
+            )?,
+        );
+        assert_eq!(text.updated.as_deref(), Some("Updated 1 min ago"));
         Ok(())
     }
 

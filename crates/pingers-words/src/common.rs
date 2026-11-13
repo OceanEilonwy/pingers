@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Words several screens share: lists, plurals, distances, areas, times, directions, colours.
+//! Words several screens share: lists, plurals, distances, areas, times, ages, directions,
+//! colours.
+
+use core::time::Duration;
 
 use pingers_geo::{Meters, SquareMeters};
 use pingers_screens::clock::LocalTime;
@@ -75,6 +78,21 @@ pub fn distance(language: Language, distance: Meters) -> String {
         format!("{metres:.0} m")
     } else {
         format!("{:.1} km", metres / 1000.0)
+    }
+}
+
+/// How fresh a shared position is: "Updated just now" under 10 s, "Updated 40 s ago" under a
+/// minute, then whole minutes ("Updated 3 min ago") and whole hours ("Updated 2 h ago").
+/// Counts are rounded down, so "1 min" means 60 to 119 seconds.
+#[must_use]
+pub fn updated(language: Language, age: Duration) -> String {
+    let Language::English = language;
+    let seconds = age.as_secs();
+    match seconds {
+        0..10 => "Updated just now".into(),
+        10..60 => format!("Updated {seconds} s ago"),
+        60..3600 => format!("Updated {} min ago", seconds / 60),
+        _ => format!("Updated {} h ago", seconds / 3600),
     }
 }
 
@@ -197,6 +215,22 @@ mod tests {
         assert_eq!(members(EN, 0), "0 members");
         assert_eq!(spots(EN, 3), "3 spots");
         assert_eq!(spots(EN, 1), "1 spot");
+    }
+
+    #[test]
+    fn ages_roll_over_from_seconds_to_minutes_to_hours() {
+        let say = |seconds| updated(EN, Duration::from_secs(seconds));
+        assert_eq!(say(0), "Updated just now");
+        assert_eq!(say(9), "Updated just now");
+        assert_eq!(say(10), "Updated 10 s ago");
+        assert_eq!(say(40), "Updated 40 s ago");
+        assert_eq!(say(59), "Updated 59 s ago");
+        assert_eq!(say(60), "Updated 1 min ago");
+        assert_eq!(say(119), "Updated 1 min ago");
+        assert_eq!(say(120), "Updated 2 min ago");
+        assert_eq!(say(3599), "Updated 59 min ago");
+        assert_eq!(say(3600), "Updated 1 h ago");
+        assert_eq!(say(7300), "Updated 2 h ago");
     }
 
     #[test]
