@@ -721,8 +721,16 @@ async fn open_live(
     server: &Running,
     path: &str,
 ) -> Result<(mpsc::UnboundedSender<Bytes>, ChunkedClient, Body), TestError> {
+    open_live_with(server, &inner("POST", path)).await
+}
+
+/// As [`open_live`], with any request head.
+async fn open_live_with(
+    server: &Running,
+    head: &BinaryRequest,
+) -> Result<(mpsc::UnboundedSender<Bytes>, ChunkedClient, Body), TestError> {
     let mut relay = connect(server.address, LOOPBACK).await?;
-    let start = ChunkedClient::start(&server.config, &inner("POST", path), &mut rng(5))?;
+    let start = ChunkedClient::start(&server.config, head, &mut rng(5))?;
     let (sender, body) = channel();
     sender.send(Bytes::from(start.preamble))?;
     let response = send(

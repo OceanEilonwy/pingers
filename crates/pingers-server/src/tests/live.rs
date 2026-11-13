@@ -195,3 +195,45 @@ async fn uplinks_wait_on_pingers_delivery() -> TestResult {
     assert_eq!(answer.map(|answer| answer.status.get()), Some(501));
     server.stop().await
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_head_with_large_headers_opens_an_exchange() -> TestResult {
+    let server = start(Setup::default(), Arc::new(Hub::default())).await?;
+    // A group credential of several KiB still fits the preamble limit.
+    let head = BinaryRequest {
+        method: "POST".to_owned(),
+        path: "/v1/groups/g1/live".to_owned(),
+        headers: vec![pingers_ohttp::Header {
+            name: "authorization".to_owned(),
+            value: vec![b'a'; 8 * 1024],
+        }],
+        body: Vec::new(),
+    };
+    let (_sender, _client, _body) = super::open_live_with(&server, &head).await?;
+    server.stop().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropping_a_downlink_closes_the_members_side() -> TestResult {
+    let hub = Arc::new(Hub::default());
+    let server = start(Setup::default(), Arc::clone(&hub)).await?;
+    let (sender, mut client, body) = open_live(&server, "/v1/groups/g1/live").await?;
+    sender.send(Bytes::from(client.seal_chunk(&[], ChunkPosition::Final)?))?;
+    let mut inbound = hub
+        .inbound
+        .lock()
+        .map_err(|_| "lock")?
+        .pop()
+        .ok_or("not opened")?;
+    // Held open while the downlink lives...
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), inbound.recv())
+            .await
+            .is_err()
+    );
+    // ...and closed once the member walks away from it.
+    drop(body);
+    drop(sender);
+    assert_eq!(tokio::time::timeout(STEP, inbound.recv()).await?, None);
+    server.stop().await
+}

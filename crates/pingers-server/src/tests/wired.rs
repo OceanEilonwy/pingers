@@ -267,12 +267,14 @@ async fn mailboxes_register_post_read_and_delete_through_ohttp() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_post_does_not_wait_for_its_wake() -> TestResult {
-    // A listed relay nobody answers at: the post is stored and answered all the same.
+async fn a_post_answers_at_once_and_its_wake_goes_to_the_relay() -> TestResult {
+    // A listed relay that accepts connections and never completes TLS: the post is answered
+    // all the same, and the push job's connection shows the wake was sent.
+    let relay_socket = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let relays = ListedRelays::new([(
         RelayId::new(1),
         RelayTarget {
-            url: RelayUrl::new("https://127.0.0.1:1".to_owned())?,
+            url: RelayUrl::new(format!("https://{}", relay_socket.local_addr()?))?,
             credential: RelayCredential::new("credential".to_owned()),
             key_id: RelayKeyId::new(1),
         },
@@ -319,7 +321,24 @@ async fn a_post_does_not_wait_for_its_wake() -> TestResult {
     )
     .await?;
     assert_eq!(posted.status.get(), 202);
-    server.stop().await
+    let (wake, _) = tokio::time::timeout(super::STEP, relay_socket.accept()).await??;
+    // Stopping the server cancels the job, which closes its connection.
+    server.stop().await?;
+    let closed = async {
+        let mut buffer = [0_u8; 1024];
+        loop {
+            if wake.readable().await.is_err() {
+                return;
+            }
+            match wake.try_read(&mut buffer) {
+                Ok(0) => return,
+                Err(error) if error.kind() != std::io::ErrorKind::WouldBlock => return,
+                Ok(_) | Err(_) => {}
+            }
+        }
+    };
+    tokio::time::timeout(super::STEP, closed).await?;
+    Ok(())
 }
 
 /// What a test push relay received.
