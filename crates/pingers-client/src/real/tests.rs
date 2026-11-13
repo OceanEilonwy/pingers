@@ -16,7 +16,7 @@ use pingers_geo::{
 use pingers_meetup::LocationVisibility;
 use pingers_presence::SpotRef;
 use pingers_proto::{
-    Epoch, KeyConfigHash, Lease, MailboxId, PartyId, RecordRandomness, ServerId, SpotId,
+    Epoch, KeyConfigHash, LeafIndex, Lease, MailboxId, PartyId, RecordRandomness, ServerId, SpotId,
 };
 use pingers_store::{Database, DatabaseKey, Identity, Session};
 use pingers_time::{Bucket, Clock as _, ManualClock, UnixSeconds};
@@ -36,7 +36,10 @@ use super::sync::Outbox;
 use super::wake::Wake;
 use super::wake_ports::{region_id, region_text};
 use super::{Backend, Outside, wake_codec};
-use crate::ports::{PartiesPort as _, PartyDraft, SettingChange, SpotDraft, WakePort as _};
+use crate::ports::{
+    AllowListChange, JoinDecision, PartiesPort as _, PartyDraft, SettingChange, SpotDraft,
+    WakePort as _,
+};
 use crate::snapshot::{
     DailyWindow, Days, ExclusionZone, HideTrail, Name, PartyColour, PauseInFocus, PostQuantum,
     QuietHoursPreference, Toggle, ZoneId, ZoneParties, ZoneSchedule, ZoneTimes,
@@ -412,5 +415,93 @@ async fn a_wake_confirmed_inside_a_spot_ends_at_the_sync_stub() -> TestResult {
         stored.spots.first().map(|spot| spot.presence.state),
         Some(PresenceState::Inside)
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn party_commands_reach_pingers_parties_and_the_store() -> TestResult {
+    let store = store()?;
+    let parties = Parties::new(Arc::clone(&store.backend), Arc::new(Outbox::default()));
+    let mut ids = Vec::new();
+    for colour in PartyColour::ALL {
+        let draft = PartyDraft {
+            name: Name::new("Crew")?,
+            my_name: Name::new("Sam")?,
+            colour,
+            post_quantum: PostQuantum::Off,
+        };
+        ids.push(parties.create_party(draft).await?);
+    }
+    let section = parties.section().await?;
+    for (id, colour) in ids.iter().zip(PartyColour::ALL) {
+        let shown = section.parties.iter().find(|party| party.id == *id);
+        assert_eq!(shown.map(|party| party.colour), Some(colour));
+    }
+    let party = *ids.first().ok_or("a party")?;
+    let me = section
+        .parties
+        .iter()
+        .find(|shown| shown.id == party)
+        .and_then(|shown| shown.members.first())
+        .map(|member| member.leaf)
+        .ok_or("a member")?;
+
+    let key = session(&store, |session| {
+        Ok(session
+            .identity()
+            .load()?
+            .map(|identity| identity.signing_key.public_key()))
+    })
+    .await?
+    .ok_or("an identity")?;
+    for (change, expected) in [
+        (AllowListChange::Add, true),
+        (AllowListChange::Remove, false),
+    ] {
+        parties.set_always_allow(party, me, change).await?;
+        let allowed = session(&store, move |session| {
+            Ok(session.always_allow().contains(&party, &key)?)
+        })
+        .await?;
+        assert_eq!(allowed, expected);
+    }
+    assert!(matches!(
+        parties
+            .set_always_allow(party, LeafIndex::new(9), AllowListChange::Add)
+            .await,
+        Err(ClientError::Parties(
+            pingers_parties::PartiesError::UnknownMember
+        ))
+    ));
+    assert!(
+        parties
+            .remove_member(party, LeafIndex::new(9))
+            .await
+            .is_err()
+    );
+
+    let link = crate::snapshot::InviteUrl::new("https://pingers.test/j#x")?;
+    let unavailable = [
+        parties.open_invite(link, Name::new("Al")?).await,
+        parties
+            .decide_join(party, MailboxId::from_bytes([1; 16]), JoinDecision::Admit)
+            .await,
+        parties.accept_invite().await.map(drop),
+    ];
+    for result in unavailable {
+        assert!(matches!(
+            result,
+            Err(ClientError::Unavailable(crate::Unavailable::Sync))
+        ));
+    }
+
+    parties.leave_party(party).await?;
+    let colour_kept = session(&store, move |session| {
+        super::records::read(session, &super::records::Key::Colour(&party), |reader| {
+            reader.byte()
+        })
+    })
+    .await?;
+    assert_eq!(colour_kept, None, "leaving deletes the colour record");
     Ok(())
 }
