@@ -219,6 +219,8 @@ async fn dropping_a_downlink_closes_the_members_side() -> TestResult {
     let server = start(Setup::default(), Arc::clone(&hub)).await?;
     let (sender, mut client, body) = open_live(&server, "/v1/groups/g1/live").await?;
     sender.send(Bytes::from(client.seal_chunk(&[], ChunkPosition::Final)?))?;
+    // The request stream ends: from here only the exchange's lifetime holds the inbound side.
+    drop(sender);
     let mut inbound = hub
         .inbound
         .lock()
@@ -233,7 +235,6 @@ async fn dropping_a_downlink_closes_the_members_side() -> TestResult {
     );
     // ...and closed once the member walks away from it.
     drop(body);
-    drop(sender);
     assert_eq!(tokio::time::timeout(STEP, inbound.recv()).await?, None);
     server.stop().await
 }
