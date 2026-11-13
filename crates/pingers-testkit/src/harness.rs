@@ -2,35 +2,41 @@
 //! The in-process server harness: pingers-server, an OHTTP relay and a push relay on
 //! ephemeral loopback ports, for end-to-end tests and pingers-cli.
 //!
-//! # Status: API fixed, wiring pending
+//! # Feature `harness`
 //!
-//! The three binaries are stubs today and expose no library entry point, so
-//! [`InProcessHarness::start`] returns [`HarnessError::NotWired`]. The API below is what the
-//! end-to-end tests and pingers-cli program against; the wiring replaces the body of `start`
-//! without changing it.
+//! With the feature, [`InProcessHarness::start`] binds three listeners on
+//! [`HarnessConfig::bind`], generates the server's OHTTP key and the push relay's HPKE key from
+//! [`HarnessConfig::seed`], and runs the three services on a multi-thread tokio runtime of their
+//! own thread (so the harness works from sync and async tests alike, and its runtime is never
+//! dropped inside another). The server allows the OHTTP relay as its only relay; the relay
+//! forwards to the server's gateway; the push relay opens sealed tokens with its real key and
+//! captures each push ([`InProcessHarness::pushes`]) instead of sending it. All three read
+//! [`HarnessConfig::clock`]. [`InProcessHarness::shutdown`] (or dropping the harness) stops
+//! them and waits for the thread.
 //!
-//! ## TODO (issue): wire the in-process harness
+//! Without the feature `start` returns [`HarnessError::NotWired`], so crates that only need
+//! the fake platform do not compile the server.
 //!
-//! - **Blocked on:** each of pingers-server, pingers-ohttp-relay and pingers-push-relay
-//!   exposing a library target with an entry point shaped like
-//!   `pub async fn serve(config: Config, listener: tokio::net::TcpListener, clock: Arc<dyn Clock>, shutdown: impl Future)`,
-//!   so the harness can bind `127.0.0.1:0` itself and pass the listener in (no port races)
-//!   and inject the [`ManualClock`]. The push relay additionally needs its outbound sender
-//!   (FCM, UnifiedPush) behind a trait so the harness can capture pushes instead of sending.
-//! - **Work:** start a dedicated multi-thread tokio runtime on its own thread (so the harness
-//!   works from both sync and async tests and dropping it never happens inside a runtime);
-//!   bind three listeners; start the server with the OHTTP relay as its only allowed relay;
-//!   start the OHTTP relay pointing at the server's gateway; start the push relay with a
-//!   capturing sender; generate the server's OHTTP key config and the push relay's HPKE key
-//!   from [`HarnessConfig::seed`] and publish both in [`Endpoints`] so clients can pin them;
-//!   shut everything down on [`InProcessHarness::shutdown`] and on drop.
-//! - **Done when:** G.3 to G.7 run headless through pingers-cli against the harness
-//!   (architecture §6 step 4), and `start` no longer returns `NotWired`.
-//! - **Adds testkit dependencies:** tokio (dev crate, allowed), the three binaries as
-//!   libraries. Keep them behind a `harness` feature so crates that only need the fake platform
-//!   do not compile the server.
+//! # Known gaps
+//!
+//! - **The OHTTP relay is a stand-in.** pingers-ohttp-relay has no library target yet, so the
+//!   harness runs a forward-only relay of its own that behaves the same way (strips the client,
+//!   streams both directions). TODO(wave 2 follow-up): call `pingers_ohttp_relay::serve` once
+//!   it exists.
+//! - **The relay-only rule cannot bite on loopback**: relay and test clients connect from the
+//!   same address. pingers-server's own tests check the rule with two loopback addresses.
+//! - **The server does not forward pushes yet**: the wake rule belongs to pingers-mailbox and
+//!   pingers-delivery, which have no API on main. Once they do, the server is configured with
+//!   [`Endpoints::push_relay`] and the harness's credential.
+//! - **Most routes answer 501** until the four server crates are wired (pingers-server docs).
+
+#[cfg(feature = "harness")]
+mod relay;
+#[cfg(feature = "harness")]
+mod wiring;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use pingers_proto::{PushClass, PushPlatform, PushToken};
 use pingers_time::{ManualClock, UnixSeconds};
@@ -41,12 +47,15 @@ use crate::time::test_clock;
 #[derive(Clone, Debug)]
 pub struct HarnessConfig {
     /// Wall and monotonic time for all three services. Share it with the clients' fakes so
-    /// leases, buckets and expiries agree.
+    /// leases, buckets and expiries agree. Request timeouts run on it too, so a test that
+    /// advances it past 30 seconds while a request body is still arriving times that request
+    /// out.
     pub clock: ManualClock,
     /// Seed for every key the harness generates (OHTTP key config, push relay key, Privacy
     /// Pass issuer key), so runs are reproducible.
     pub seed: u64,
-    /// The address to bind; each service gets an ephemeral port on it.
+    /// The address to bind; each service gets an ephemeral port on it. Use a concrete address
+    /// (the services connect to each other on it), not `0.0.0.0`.
     pub bind: IpAddr,
 }
 
@@ -66,13 +75,14 @@ impl Default for HarnessConfig {
 pub struct Endpoints {
     /// pingers-server: identified endpoints directly, anonymous ones only via the relay.
     pub server: SocketAddr,
-    /// The OHTTP relay clients send anonymous requests to.
+    /// The OHTTP relay clients send anonymous requests to (`POST /ohttp`, and
+    /// `GET /v1/ohttp/config` for the key config).
     pub ohttp_relay: SocketAddr,
     /// The push relay the server forwards sealed pushes to.
     pub push_relay: SocketAddr,
-    /// The server's OHTTP key configuration (RFC 9458 `application/ohttp-keys`).
+    /// The server's OHTTP key configuration (RFC 9458 `application/ohttp-keys`, one config).
     pub ohttp_key_config: Vec<u8>,
-    /// The push relay's HPKE public key, which clients seal push tokens to.
+    /// The push relay's X25519 HPKE public key (key id 1), which clients seal push tokens to.
     pub push_relay_key: Vec<u8>,
 }
 
@@ -105,8 +115,10 @@ pub enum Service {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum HarnessError {
-    /// The service has no library entry point yet (see the module docs' TODO).
-    #[error("{service:?} is not wired into the in-process harness yet")]
+    /// The testkit was built without the `harness` feature.
+    #[error(
+        "{service:?} is not wired into the in-process harness (enable the testkit's `harness` feature)"
+    )]
     NotWired {
         /// The first service that could not be started.
         service: Service,
@@ -120,13 +132,28 @@ pub enum HarnessError {
         #[source]
         source: std::io::Error,
     },
+    /// A service's keys or configuration could not be made.
+    #[error("cannot set up the keys or configuration of {service:?}")]
+    Keys {
+        /// The service.
+        service: Service,
+    },
+    /// The harness runtime or its thread could not be started.
+    #[error("cannot start the harness runtime")]
+    Runtime {
+        /// Why.
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 /// The running server and relays. Dropping it shuts them down.
 #[derive(Debug)]
 pub struct InProcessHarness {
     endpoints: Endpoints,
-    pushes: Vec<CapturedPush>,
+    pushes: Arc<Mutex<Vec<CapturedPush>>>,
+    #[cfg(feature = "harness")]
+    running: wiring::Running,
 }
 
 impl InProcessHarness {
@@ -134,8 +161,27 @@ impl InProcessHarness {
     ///
     /// # Errors
     ///
-    /// Today always [`HarnessError::NotWired`] for [`Service::Server`]; once wired,
-    /// [`HarnessError::Bind`] if a port cannot be bound.
+    /// [`HarnessError::NotWired`] without the `harness` feature; otherwise
+    /// [`HarnessError::Bind`] if a port cannot be bound, [`HarnessError::Keys`] or
+    /// [`HarnessError::Runtime`].
+    #[cfg(feature = "harness")]
+    pub fn start(config: &HarnessConfig) -> Result<Self, HarnessError> {
+        let pushes = Arc::new(Mutex::new(Vec::new()));
+        let started = wiring::start(config, Arc::clone(&pushes))?;
+        Ok(Self {
+            endpoints: started.endpoints,
+            pushes,
+            running: started.running,
+        })
+    }
+
+    /// Starts the server, the OHTTP relay and the push relay on ephemeral ports.
+    ///
+    /// # Errors
+    ///
+    /// Always [`HarnessError::NotWired`] for [`Service::Server`]: this build has no `harness`
+    /// feature.
+    #[cfg(not(feature = "harness"))]
     pub fn start(_config: &HarnessConfig) -> Result<Self, HarnessError> {
         Err(HarnessError::NotWired {
             service: Service::Server,
@@ -148,10 +194,14 @@ impl InProcessHarness {
         &self.endpoints
     }
 
-    /// Pushes the push relay sent so far, oldest first.
+    /// The pushes the push relay sent so far, oldest first: a snapshot, since pushes arrive
+    /// on the harness's own thread.
     #[must_use]
-    pub fn pushes(&self) -> &[CapturedPush] {
-        &self.pushes
+    pub fn pushes(&self) -> Vec<CapturedPush> {
+        self.pushes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Stops all three services and waits for them to finish.
@@ -160,25 +210,24 @@ impl InProcessHarness {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn start_reports_the_first_unwired_service() {
-        assert!(matches!(
-            InProcessHarness::start(&HarnessConfig::default()),
-            Err(HarnessError::NotWired {
-                service: Service::Server
-            })
-        ));
-    }
-
-    #[test]
-    fn default_config_binds_loopback_at_the_test_start() {
-        let config = HarnessConfig::default();
-        assert_eq!(config.bind, IpAddr::V4(Ipv4Addr::LOCALHOST));
-        assert_eq!(pingers_time::Clock::now(&config.clock), crate::TEST_START);
-        assert_eq!(config.seed, 0);
+#[cfg(feature = "harness")]
+impl Drop for InProcessHarness {
+    fn drop(&mut self) {
+        self.running.stop();
     }
 }
+
+/// Runs the harness's OHTTP relay on `listener`, forwarding to the gateway at `gateway`, until
+/// `shutdown` completes: for tests that need a relay in front of a server they started
+/// themselves (for example with an injected live channel).
+#[cfg(feature = "harness")]
+pub async fn run_ohttp_relay(
+    listener: tokio::net::TcpListener,
+    gateway: SocketAddr,
+    shutdown: impl Future<Output = ()>,
+) {
+    relay::serve(listener, gateway, shutdown).await;
+}
+
+#[cfg(test)]
+mod tests;

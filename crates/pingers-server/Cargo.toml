@@ -13,13 +13,36 @@ layer = 5
 [dependencies]
 pingers-board-store = { workspace = true }
 pingers-delivery = { workspace = true }
-pingers-mailbox = { workspace = true }
+# Mailboxes persist in SQLite (in memory when no file is configured).
+pingers-mailbox = { workspace = true, features = ["sqlite"] }
 pingers-ohttp = { workspace = true }
 pingers-quota = { workspace = true }
 pingers-time = { workspace = true }
-anyhow = { workspace = true }
+# Mailbox read keys (the Cap credential) are pingers-crypto types.
+pingers-crypto = { workspace = true }
+# Request and response bodies of the wired routes.
+pingers-proto = { workspace = true }
+# The push relay client: POST {relay}/v1/push.
+reqwest = { workspace = true }
+# The production Timer (TokioTimer) for request timeouts and the counts report.
+pingers-transport = { workspace = true }
 axum = { workspace = true }
-tokio = { workspace = true }
+hex = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true, features = ["server", "service"] }
+rand_chacha = { workspace = true }
+rand_core = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["net", "signal"] }
+toml = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+# The in-process harness and its OHTTP relay (integration tests only: the testkit depends on
+# this crate's library, so unit tests would see a second copy of its types).
+pingers-testkit = { workspace = true, features = ["harness"] }
+pingers-time = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

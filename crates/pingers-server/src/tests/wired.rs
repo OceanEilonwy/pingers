@@ -1,0 +1,489 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! The board and mailbox routes through OHTTP, the push relay client, and push jobs.
+
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use axum::Router;
+use axum::http::{HeaderMap, StatusCode};
+use axum::routing::post;
+use pingers_crypto::{MailboxReadKey, RevokeKey, mailbox_id, revoke_commitment};
+use pingers_mailbox::{
+    ListedRelays, PushRelay as _, PushRequest, RelayAnswer, RelayCredential, RelayTarget,
+    RelayUnreachable,
+};
+use pingers_ohttp::{BinaryRequest, BinaryResponse, Header};
+use pingers_proto::{
+    BoardSyncRequest, BoardSyncResponse, Lease, LeaseId, MailboxMessages, MailboxSpec,
+    MessageAccepted, Padded, PushHandle, ReadBoard, Record, RecordRandomness, RecordTag, RelayId,
+    RelayRef, RelayUrl, SealedBeacon, SealedPush, SealedPushBlob, SizeClass, TimeToLive, Urgency,
+    WireDecode, WireEncode,
+};
+use pingers_time::{Clock as _, ManualClock, UnixSeconds};
+use zeroize::Zeroizing;
+
+use super::{Echo, Running, Setup, TestError, TestResult, connect, oblivious, start};
+use crate::tasks::{HttpPushRelay, push_url};
+use crate::wire::READ_KEY_HEADER;
+
+/// An inner request with a body and headers.
+fn inner(method: &str, path: String, headers: Vec<Header>, body: Vec<u8>) -> BinaryRequest {
+    BinaryRequest {
+        method: method.to_owned(),
+        path,
+        headers,
+        body,
+    }
+}
+
+/// Sends `request` through OHTTP and returns the inner response.
+async fn call(server: &Running, request: &BinaryRequest) -> Result<BinaryResponse, TestError> {
+    let mut client = connect(server.address, super::LOOPBACK).await?;
+    let (status, opened) = oblivious(&mut client, &server.config, request).await?;
+    assert_eq!(status, StatusCode::OK);
+    opened.ok_or_else(|| "no inner response".into())
+}
+
+fn record(fill: u8) -> Record {
+    Record {
+        randomness: RecordRandomness::from_bytes([fill; 16]),
+        tag: RecordTag::from_bytes([fill; 16]),
+        sealed: SealedBeacon::from_bytes([fill; 64]),
+    }
+}
+
+fn lease(server: &Running, key: u8) -> Lease {
+    Lease {
+        start: server.clock.now().bucket(),
+        records: [0, 1, 2, 3].map(|slot| record(key.wrapping_add(slot))),
+        revoke_commitment: revoke_commitment(&RevokeKey::from_bytes(Zeroizing::new([key; 32]))),
+    }
+}
+
+fn sync_body(lease: &Lease, read: ReadBoard) -> Result<Vec<u8>, TestError> {
+    Ok(BoardSyncRequest {
+        lease: *lease,
+        replaces: None,
+        read,
+    }
+    .encode()?)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_board_syncs_reads_and_revokes_through_ohttp() -> TestResult {
+    let server = start(Setup::default(), Echo).await?;
+    let synced = call(
+        &server,
+        &inner(
+            "POST",
+            "/v1/board/sync".to_owned(),
+            Vec::new(),
+            sync_body(&lease(&server, 1), ReadBoard::Read)?,
+        ),
+    )
+    .await?;
+    assert_eq!(synced.status.get(), 200);
+    assert!(
+        synced
+            .headers
+            .iter()
+            .any(|header| header.name == "content-type" && header.value == b"application/cbor")
+    );
+    let response = BoardSyncResponse::decode(&synced.body)?;
+    let page = response.page.ok_or("asked for a page")?;
+    assert_eq!(page.records.len(), 4);
+    assert_eq!(response.server_time, server.clock.now());
+
+    // A lease from long ago is refused; an undecodable body too.
+    let mut stale = lease(&server, 2);
+    stale.start = UnixSeconds::new(1_000).bucket();
+    for (body, expected) in [
+        (sync_body(&stale, ReadBoard::Skip)?, 422),
+        (vec![1, 2, 3], 400),
+    ] {
+        let refused = call(
+            &server,
+            &inner("POST", "/v1/board/sync".to_owned(), Vec::new(), body),
+        )
+        .await?;
+        assert_eq!(refused.status.get(), expected);
+    }
+
+    let lease_path = format!(
+        "/v1/board/lease/{}",
+        hex::encode(response.lease_id.as_bytes())
+    );
+    let unknown_path = format!("/v1/board/lease/{}", hex::encode([7_u8; LeaseId::LENGTH]));
+    for (path, body, expected) in [
+        (lease_path.clone(), vec![2; 32], 403),
+        (lease_path.clone(), vec![1; 31], 400),
+        ("/v1/board/lease/zz".to_owned(), vec![1; 32], 400),
+        (unknown_path, vec![1; 32], 404),
+        (lease_path.clone(), vec![1; 32], 204),
+        (lease_path, vec![1; 32], 404),
+    ] {
+        let answer = call(&server, &inner("DELETE", path.clone(), Vec::new(), body)).await?;
+        assert_eq!(answer.status.get(), expected, "{path}");
+    }
+    server.stop().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn board_pages_need_a_cursor_this_board_sealed() -> TestResult {
+    let server = start(Setup::default(), Echo).await?;
+    for (path, expected) in [
+        ("/v1/board/page", 400),
+        ("/v1/board/page?c=zz", 400),
+        ("/v1/board/page?c=00112233", 400),
+    ] {
+        let answer = call(
+            &server,
+            &inner("GET", path.to_owned(), Vec::new(), Vec::new()),
+        )
+        .await?;
+        assert_eq!(answer.status.get(), expected, "{path}");
+    }
+    server.stop().await
+}
+
+fn read_key_header(key: &[u8; 32]) -> Vec<Header> {
+    vec![Header {
+        name: READ_KEY_HEADER.to_owned(),
+        value: hex::encode(key).into_bytes(),
+    }]
+}
+
+fn spec(key: &[u8; 32], push: Option<SealedPush>) -> Result<Vec<u8>, TestError> {
+    let id = mailbox_id(&MailboxReadKey::from_bytes(Zeroizing::new(*key)));
+    Ok(MailboxSpec {
+        mailbox_id: id,
+        time_to_live: TimeToLive::new(Duration::from_secs(3600))?,
+        push,
+    }
+    .encode()?)
+}
+
+fn mailbox_path(key: &[u8; 32], rest: &str) -> String {
+    let id = mailbox_id(&MailboxReadKey::from_bytes(Zeroizing::new(*key)));
+    format!("/v1/mailboxes/{}{rest}", hex::encode(id.as_bytes()))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mailboxes_register_post_read_and_delete_through_ohttp() -> TestResult {
+    let server = start(Setup::default(), Echo).await?;
+    let key = [5_u8; 32];
+    let register = inner(
+        "POST",
+        "/v1/mailboxes".to_owned(),
+        Vec::new(),
+        spec(&key, None)?,
+    );
+    assert_eq!(call(&server, &register).await?.status.get(), 201);
+    assert_eq!(call(&server, &register).await?.status.get(), 409);
+
+    let post_path = mailbox_path(&key, "/msgs");
+    let post_body = Padded::pad(b"knock", SizeClass::Bytes1024)?;
+    let posted = call(
+        &server,
+        &inner(
+            "POST",
+            post_path.clone(),
+            Vec::new(),
+            post_body.as_bytes().to_vec(),
+        ),
+    )
+    .await?;
+    assert_eq!(posted.status.get(), 202);
+    let first = MessageAccepted::decode(&posted.body)?.sequence;
+    let unpadded = call(
+        &server,
+        &inner("POST", post_path.clone(), Vec::new(), vec![0; 100]),
+    )
+    .await?;
+    assert_eq!(unpadded.status.get(), 422);
+
+    let read = call(
+        &server,
+        &inner("GET", post_path.clone(), read_key_header(&key), Vec::new()),
+    )
+    .await?;
+    assert_eq!(read.status.get(), 200);
+    let messages = MailboxMessages::decode(&read.body)?.messages;
+    assert_eq!(messages.len(), 1);
+    assert_eq!(
+        messages.first().map(|message| message.sequence),
+        Some(first)
+    );
+    assert_eq!(
+        messages.first().map(|message| &message.body),
+        Some(&post_body)
+    );
+    let after_first = call(
+        &server,
+        &inner(
+            "GET",
+            format!("{post_path}?after={}", first.get()),
+            read_key_header(&key),
+            Vec::new(),
+        ),
+    )
+    .await?;
+    assert!(
+        MailboxMessages::decode(&after_first.body)?
+            .messages
+            .is_empty()
+    );
+
+    for (method, path, headers, expected) in [
+        ("GET", post_path.clone(), read_key_header(&[6; 32]), 403),
+        ("GET", post_path.clone(), Vec::new(), 403),
+        (
+            "GET",
+            format!("{post_path}?after=x"),
+            read_key_header(&key),
+            400,
+        ),
+        (
+            "GET",
+            "/v1/mailboxes/zz/msgs".to_owned(),
+            read_key_header(&key),
+            400,
+        ),
+        (
+            "GET",
+            mailbox_path(&[6; 32], "/msgs"),
+            read_key_header(&[6; 32]),
+            404,
+        ),
+        ("DELETE", mailbox_path(&key, ""), read_key_header(&key), 204),
+        ("GET", post_path.clone(), read_key_header(&key), 404),
+        ("DELETE", mailbox_path(&key, ""), read_key_header(&key), 404),
+    ] {
+        let answer = call(&server, &inner(method, path.clone(), headers, Vec::new())).await?;
+        assert_eq!(answer.status.get(), expected, "{method} {path}");
+    }
+    server.stop().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_post_answers_at_once_and_its_wake_goes_to_the_relay() -> TestResult {
+    // A listed relay that accepts connections and never completes TLS: the post is answered
+    // all the same, and the push job's connection shows the wake was sent.
+    let relay_socket = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let relays = ListedRelays::new([(
+        RelayId::new(1),
+        RelayTarget {
+            url: RelayUrl::new(format!("https://{}", relay_socket.local_addr()?))?,
+            credential: RelayCredential::new("credential".to_owned()),
+        },
+    )]);
+    let server = start(
+        Setup {
+            push_relays: relays,
+            ..Setup::default()
+        },
+        Echo,
+    )
+    .await?;
+    let key = [8_u8; 32];
+    let push = |relay| SealedPush {
+        relay: RelayRef::Listed(RelayId::new(relay)),
+        key_id: pingers_proto::PushRelayKeyId::new(1),
+        blob: SealedPushBlob::from_bytes([3; 320]),
+        urgency: Urgency::Alert,
+        handle: PushHandle::from_bytes([4; 8]),
+    };
+    // A relay this server does not forward to is refused at registration.
+    let unknown = inner(
+        "POST",
+        "/v1/mailboxes".to_owned(),
+        Vec::new(),
+        spec(&key, Some(push(2)))?,
+    );
+    assert_eq!(call(&server, &unknown).await?.status.get(), 422);
+    let register = inner(
+        "POST",
+        "/v1/mailboxes".to_owned(),
+        Vec::new(),
+        spec(&key, Some(push(1)))?,
+    );
+    assert_eq!(call(&server, &register).await?.status.get(), 201);
+    let body = Padded::pad(b"knock", SizeClass::Bytes1024)?;
+    let posted = call(
+        &server,
+        &inner(
+            "POST",
+            mailbox_path(&key, "/msgs"),
+            Vec::new(),
+            body.as_bytes().to_vec(),
+        ),
+    )
+    .await?;
+    assert_eq!(posted.status.get(), 202);
+    let (wake, _) = tokio::time::timeout(super::STEP, relay_socket.accept()).await??;
+    // Stopping the server cancels the job, which closes its connection.
+    server.stop().await?;
+    let closed = async {
+        let mut buffer = [0_u8; 1024];
+        loop {
+            if wake.readable().await.is_err() {
+                return;
+            }
+            match wake.try_read(&mut buffer) {
+                Ok(0) => return,
+                Err(error) if error.kind() != std::io::ErrorKind::WouldBlock => return,
+                Ok(_) | Err(_) => {}
+            }
+        }
+    };
+    tokio::time::timeout(super::STEP, closed).await?;
+    Ok(())
+}
+
+/// What a test push relay received.
+#[derive(Clone, Debug, Default)]
+struct Received {
+    authorization: Option<String>,
+    content_type: Option<String>,
+    body: Vec<u8>,
+}
+
+/// A push relay on loopback answering every push with `status`.
+async fn fake_relay(
+    status: StatusCode,
+) -> Result<(SocketAddr, Arc<Mutex<Vec<Received>>>), TestError> {
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&received);
+    let router = Router::new().route(
+        "/v1/push",
+        post(move |headers: HeaderMap, body: axum::body::Bytes| {
+            let sink = Arc::clone(&sink);
+            async move {
+                let text = |name: &str| {
+                    headers
+                        .get(name)
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_owned)
+                };
+                if let Ok(mut sink) = sink.lock() {
+                    sink.push(Received {
+                        authorization: text("authorization"),
+                        content_type: text("content-type"),
+                        body: body.to_vec(),
+                    });
+                }
+                status
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    Ok((address, received))
+}
+
+fn push_request() -> PushRequest {
+    PushRequest {
+        key_id: pingers_proto::PushRelayKeyId::new(3),
+        blob: SealedPushBlob::from_bytes([0xab; 320]),
+        bind: pingers_proto::PushBind::from_bytes([1; 32]),
+        urgency: Urgency::Quiet,
+        handle: PushHandle::from_bytes([0xfe; 8]),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_push_client_sends_the_credential_and_body_and_maps_the_status() -> TestResult {
+    let clock = ManualClock::new(UnixSeconds::new(1));
+    for (status, expected) in [
+        (StatusCode::ACCEPTED, RelayAnswer::Accepted),
+        (StatusCode::GONE, RelayAnswer::Gone),
+        (StatusCode::TOO_MANY_REQUESTS, RelayAnswer::RateLimited),
+    ] {
+        let (address, received) = fake_relay(status).await?;
+        let relay = HttpPushRelay::new(Arc::new(clock.clone()), Duration::from_secs(10))?;
+        let answer = relay
+            .post(
+                &format!("http://{address}/v1/push"),
+                "Bearer secret".to_owned(),
+                &push_request(),
+            )
+            .await;
+        assert_eq!(answer, Ok(expected));
+        let received = received.lock().map_err(|_| "lock")?.clone();
+        let only = received.first().ok_or("nothing received")?;
+        assert_eq!(received.len(), 1);
+        assert_eq!(only.authorization.as_deref(), Some("Bearer secret"));
+        assert_eq!(only.content_type.as_deref(), Some("application/cbor"));
+        assert_eq!(only.body, push_request().encode()?);
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unreachable_or_silent_relay_is_unreachable() -> TestResult {
+    let clock = ManualClock::new(UnixSeconds::new(1));
+    let relay = HttpPushRelay::new(Arc::new(clock.clone()), Duration::from_secs(10))?;
+    // Nothing listens on port 1.
+    let refused = relay
+        .post("http://127.0.0.1:1/v1/push", String::new(), &push_request())
+        .await;
+    assert_eq!(refused, Err(RelayUnreachable));
+
+    // Accepts the connection, never answers: the injected timer ends the wait.
+    let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = silent.local_addr()?;
+    let pending = relay.post(
+        &format!("http://{address}/v1/push"),
+        String::new(),
+        &push_request(),
+    );
+    let mut pending = std::pin::pin!(pending);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut pending)
+            .await
+            .is_err()
+    );
+    for _ in 0..100 {
+        clock.advance(Duration::from_secs(10));
+        if let Ok(answer) = tokio::time::timeout(Duration::from_millis(50), &mut pending).await {
+            assert_eq!(answer, Err(RelayUnreachable));
+            drop(silent);
+            return Ok(());
+        }
+    }
+    Err("the push never timed out".into())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn push_urls_join_the_relay_and_the_push_path() -> TestResult {
+    for (url, expected) in [
+        ("https://push.example", "https://push.example/v1/push"),
+        ("https://push.example/", "https://push.example/v1/push"),
+        (
+            "https://push.example/base",
+            "https://push.example/base/v1/push",
+        ),
+    ] {
+        let target = RelayTarget {
+            url: RelayUrl::new(url.to_owned())?,
+            credential: RelayCredential::new("credential".to_owned()),
+        };
+        assert_eq!(push_url(&target), expected);
+    }
+    // `push` goes to that URL with the target's credential: an https URL nobody serves.
+    let clock = ManualClock::new(UnixSeconds::new(1));
+    let relay = HttpPushRelay::new(Arc::new(clock), Duration::from_secs(10))?;
+    let target = RelayTarget {
+        url: RelayUrl::new("https://127.0.0.1:1".to_owned())?,
+        credential: RelayCredential::new("credential".to_owned()),
+    };
+    assert_eq!(
+        relay.push(&target, &push_request()).await,
+        Err(RelayUnreachable)
+    );
+    Ok(())
+}

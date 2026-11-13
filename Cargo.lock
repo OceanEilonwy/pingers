@@ -3663,15 +3663,28 @@ dependencies = [
 name = "pingers-server"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "axum",
+ "hex",
+ "hyper",
+ "hyper-util",
  "pingers-board-store",
+ "pingers-crypto",
  "pingers-delivery",
  "pingers-mailbox",
  "pingers-ohttp",
+ "pingers-proto",
  "pingers-quota",
+ "pingers-testkit",
  "pingers-time",
+ "pingers-transport",
+ "rand_chacha 0.10.0",
+ "rand_core 0.10.1",
+ "reqwest",
+ "serde",
+ "thiserror",
  "tokio",
+ "toml",
+ "zeroize",
 ]
 
 [[package]]
@@ -3704,18 +3717,26 @@ dependencies = [
 name = "pingers-testkit"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "hex",
+ "hyper",
+ "hyper-util",
  "pingers-client",
+ "pingers-crypto",
  "pingers-gate",
  "pingers-geo",
  "pingers-meetup",
+ "pingers-ohttp",
  "pingers-proto",
+ "pingers-push-relay",
+ "pingers-server",
  "pingers-time",
  "rand_chacha 0.10.0",
  "rand_core 0.10.1",
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
  "zeroize",
 ]
 
