@@ -3,7 +3,7 @@
 //! (an HTTP POST to the distributor endpoint in the token) or FCM HTTP v1. No APNs for now.
 
 use std::future::Future;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 use std::time::Duration;
 
 use pingers_proto::{PushClass, PushHandle, PushPlatform, PushToken, Urgency};
@@ -11,6 +11,8 @@ use pingers_time::Timer;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{StatusCode, Url};
 use zeroize::Zeroizing;
+
+use crate::address::ip_is_public;
 
 /// The longest a push service should hold an undelivered push. A wake that arrives an hour
 /// late has missed the knock's lease; later ones do nothing useful.
@@ -109,8 +111,9 @@ pub trait PushSender: Send + Sync + 'static {
 /// seal a token.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EndpointPolicy {
-    /// `https://` only, and not to loopback, private, link-local or `localhost` hosts.
-    /// Host names are not resolved here; run the relay where it cannot reach internal services.
+    /// `https://` only, and only to globally routable addresses: literal IPs are checked when
+    /// the endpoint is parsed, host names after resolution at connect time
+    /// ([`crate::address::PublicOnlyResolver`], installed by [`crate::public_http_client`]).
     PublicHttpsOnly,
     /// Also `http://` and local hosts: for testing against a local distributor only.
     AllowInsecureLocal,
@@ -308,6 +311,8 @@ fn unifiedpush_endpoint(token: &PushToken, policy: EndpointPolicy) -> Option<Url
 
 fn host_is_public(url: &Url) -> bool {
     match url.host() {
+        // Names are checked again after resolution, at connect time, by the client's
+        // PublicOnlyResolver (see `crate::address`).
         Some(url::Host::Domain(domain)) => {
             let domain = domain.trim_end_matches('.').to_ascii_lowercase();
             domain != "localhost" && !domain.ends_with(".localhost")
@@ -316,35 +321,6 @@ fn host_is_public(url: &Url) -> bool {
         Some(url::Host::Ipv6(address)) => ip_is_public(IpAddr::V6(address)),
         None => false,
     }
-}
-
-fn ip_is_public(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(v4) => ipv4_is_public(v4),
-        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
-            Some(v4) => ipv4_is_public(v4),
-            None => ipv6_is_public(v6),
-        },
-    }
-}
-
-fn ipv4_is_public(address: Ipv4Addr) -> bool {
-    let [first, second, ..] = address.octets();
-    let shared_address_space = first == 100 && (64..128).contains(&second);
-    !(address.is_loopback()
-        || address.is_private()
-        || address.is_link_local()
-        || address.is_unspecified()
-        || address.is_broadcast()
-        || address.is_documentation()
-        || shared_address_space)
-}
-
-fn ipv6_is_public(address: Ipv6Addr) -> bool {
-    let [first, ..] = address.segments();
-    let unique_local = first & 0xfe00 == 0xfc00;
-    let link_local = first & 0xffc0 == 0xfe80;
-    !(address.is_loopback() || address.is_unspecified() || unique_local || link_local)
 }
 
 fn unifiedpush_outcome(status: StatusCode) -> DeliveryOutcome {
