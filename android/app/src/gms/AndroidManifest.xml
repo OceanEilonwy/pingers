@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The gms flavour: the Geofencing API's receiver and FCM. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name="org.pingers.app.platform.GeofenceReceiver"
+            android:exported="false" />
+
+        <!-- FCM data messages. Inert in a build without google-services.json. -->
+        <service
+            android:name="org.pingers.app.platform.FcmService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The foss flavour: proximity alerts stand in for the Geofencing API. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name="org.pingers.app.platform.ProximityReceiver"
+            android:exported="false" />
+    </application>
+</manifest>
