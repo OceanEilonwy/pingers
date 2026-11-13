@@ -3787,12 +3787,17 @@ dependencies = [
 name = "pingers-wake"
 version = "0.1.0"
 dependencies = [
+ "pingers-crypto",
  "pingers-gate",
  "pingers-geo",
- "pingers-parties",
  "pingers-presence",
- "pingers-sync",
+ "pingers-proto",
+ "pingers-testkit",
+ "pingers-time",
+ "rand_core 0.10.1",
  "thiserror",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]

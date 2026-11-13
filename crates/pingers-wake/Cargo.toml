@@ -10,13 +10,23 @@ publish.workspace = true
 [package.metadata.pingers]
 layer = 3
 
+# pingers-sync, pingers-parties and pingers-meetup-session are reached through the ports in
+# `ports.rs`, which pingers-client implements, so this crate does not depend on them.
 [dependencies]
+pingers-crypto = { workspace = true }
 pingers-gate = { workspace = true }
 pingers-geo = { workspace = true }
-pingers-parties = { workspace = true }
 pingers-presence = { workspace = true }
-pingers-sync = { workspace = true }
+pingers-proto = { workspace = true }
+pingers-time = { workspace = true }
+rand_core = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+pingers-testkit = { workspace = true }
+pingers-time = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true }
+zeroize = { workspace = true }
 
 [lints]
 workspace = true
