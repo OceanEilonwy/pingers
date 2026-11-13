@@ -138,10 +138,24 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
 - Vectors `privacy-pass-issue-request-encoding` and `privacy-pass-issue-response-encoding`;
   fuzz targets `privacy_pass_issue_request` and `privacy_pass_issue_response`.
 
+### Wire secrets (wave 1 review, 2026-11-13)
+
+- **`SecretBytes<N>`** and **`SecretText`** carry secrets on the wire: zeroed on drop
+  (`zeroize`), no `PartialEq`, `Default` or `Copy`, compared only through
+  `subtle::ConstantTimeEq`, `Debug` printing only the type, read with `expose()`. Two new
+  dependencies, `subtle` and `zeroize` (already in the workspace; no primitives).
+- **Signature changes** (the review asked for them): `LeaseReplacement::revoke_key` is
+  `SecretBytes<32>` (was `Redacted<[u8; 32]>`), `AuthResponse::bearer` is `SecretText` (was
+  `Redacted<String>`), `RegisterRequest::registration_code` is `Option<SecretText>` (was
+  `Option<Redacted<String>>`), and `InvitePayload::invite_secret` is `SecretBytes<32>`. These
+  structs keep `PartialEq`/`Eq`, implemented by hand so the secret field compares in constant
+  time. The server checks a revealed revoke key with pingers-crypto's `revoke_key_matches`.
+  `Redacted` stays for identifiers; its doc now says it is not for secrets.
+
 ### Invites (added 2026-11-13, wave 2)
 
 - **`InvitePayload`**, the link fragment (`https://<host>/j#v1.<base64url(encoding)>`):
-  `[server (ServerId text), invite mailbox (16), invite secret (32, Redacted), inviter
+  `[server (ServerId text), invite mailbox (16), invite secret (32, SecretBytes), inviter
   fingerprint (8), expires (UnixSeconds), uses]`. `InviteUses` replaces the design's
   `single_use: bool` (0 `Multiple`, 1 `Single`). `InviterFingerprint` is an 8-byte newtype with
   a redacted `Debug`. The `v1.` prefix and base64url are left to pingers-parties, so this crate

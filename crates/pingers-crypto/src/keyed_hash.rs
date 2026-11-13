@@ -44,10 +44,9 @@ impl KeyedHashPurpose {
 
 /// A 32-byte keyed hash.
 ///
-/// `==` and `Hash` exist so it can key a rate-limit map, where timing reveals nothing the
-/// caller does not already hold. To check a presented secret, compare with
-/// [`ConstantTimeEq::ct_eq`] (style guide §8).
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+/// Compared only with [`ConstantTimeEq::ct_eq`] (style guide §8); there is no `==`. A
+/// rate-limit map can key on [`KeyedHash::as_bytes`].
+#[derive(Clone, Copy)]
 pub struct KeyedHash([u8; 32]);
 
 impl KeyedHash {

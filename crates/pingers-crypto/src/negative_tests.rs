@@ -453,6 +453,27 @@ fn two_snapshots_of_the_same_state_differ() -> Result<(), TestError> {
     Ok(())
 }
 
+// Lease revocation.
+
+#[test]
+fn a_revoke_key_opens_only_its_own_commitment() {
+    let key = crate::RevokeKey::from_bytes(Zeroizing::new([4; 32]));
+    let commitment = crate::revoke_commitment(&key);
+    assert!(crate::revoke_key_matches(
+        &pingers_proto::SecretBytes::new([4; 32]),
+        &commitment
+    ));
+    assert!(!crate::revoke_key_matches(
+        &pingers_proto::SecretBytes::new([5; 32]),
+        &commitment
+    ));
+    // The commitment itself is public; revealing it is not revealing the key.
+    assert!(!crate::revoke_key_matches(
+        &pingers_proto::SecretBytes::new(*commitment.as_bytes()),
+        &commitment
+    ));
+}
+
 // Join requests.
 
 #[test]

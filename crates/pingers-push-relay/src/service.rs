@@ -4,7 +4,7 @@
 
 use std::sync::{Mutex, PoisonError};
 
-use pingers_crypto::{KeyedHash, KeyedHashKey, KeyedHashPurpose, keyed_hash};
+use pingers_crypto::{KeyedHashKey, KeyedHashPurpose, keyed_hash};
 use pingers_proto::{PushPlatform, PushRelayConfig, PushRequest, TimeToLive, WireDecode as _};
 use pingers_time::Clock;
 
@@ -50,7 +50,7 @@ pub enum PushOutcome {
 /// hash, so a memory dump does not confirm a guessed token without the key. It never leaves
 /// memory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct TokenFingerprint(KeyedHash);
+struct TokenFingerprint([u8; 32]);
 
 /// Everything [`Relay::new`] needs.
 pub struct RelayParts<O, S, C> {
@@ -190,7 +190,7 @@ impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
         ) else {
             return PushOutcome::Internal;
         };
-        let fingerprint = TokenFingerprint(fingerprint);
+        let fingerprint = TokenFingerprint(*fingerprint.as_bytes());
         let token_decision = self
             .token_limiter
             .lock()

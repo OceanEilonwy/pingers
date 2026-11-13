@@ -11,7 +11,9 @@ use minicbor::Decoder;
 use pingers_time::UnixSeconds;
 
 use crate::cbor::{self, CborBody, Writer, versioned_cbor};
-use crate::{KeyPackageBytes, MailboxId, ProtoError, Redacted, ServerId, Subscription};
+use subtle::ConstantTimeEq as _;
+
+use crate::{KeyPackageBytes, MailboxId, ProtoError, SecretBytes, ServerId, Subscription};
 
 /// The first 8 bytes of the inviter's MLS leaf signature key hash: the joiner checks that the
 /// group in the Welcome contains a leaf that matches (design D). `Debug` does not print it.
@@ -72,14 +74,15 @@ impl InviteUses {
 
 /// What an invite link's fragment carries (design D): where to post, the secret that
 /// authenticates the join request, who to expect in the Welcome, and until when.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// `==` compares the secret in constant time.
+#[derive(Clone, Debug)]
 pub struct InvitePayload {
     /// The Pingers server the Party lives on; the joiner registers there.
     pub server: ServerId,
     /// The anonymous mailbox the inviter reads join requests from.
     pub invite_mailbox: MailboxId,
     /// The 32-byte invite secret (pingers-crypto's `InviteSecret`); a bearer capability.
-    pub invite_secret: Redacted<[u8; 32]>,
+    pub invite_secret: SecretBytes<32>,
     /// Checked against the Welcome's leaves.
     pub inviter_fingerprint: InviterFingerprint,
     /// After this the link is refused.
@@ -88,6 +91,19 @@ pub struct InvitePayload {
     pub uses: InviteUses,
 }
 
+impl PartialEq for InvitePayload {
+    fn eq(&self, other: &Self) -> bool {
+        self.server == other.server
+            && self.invite_mailbox == other.invite_mailbox
+            && bool::from(self.invite_secret.ct_eq(&other.invite_secret))
+            && self.inviter_fingerprint == other.inviter_fingerprint
+            && self.expires == other.expires
+            && self.uses == other.uses
+    }
+}
+
+impl Eq for InvitePayload {}
+
 /// Layout: `[server (text), invite mailbox (16 bytes), invite secret (32 bytes), inviter
 /// fingerprint (8 bytes), expires (seconds), uses (0 multiple, 1 single)]`.
 impl CborBody for InvitePayload {
@@ -95,7 +111,7 @@ impl CborBody for InvitePayload {
         writer.array(6)?;
         writer.text(self.server.as_str())?;
         writer.bytes(self.invite_mailbox.as_bytes())?;
-        writer.bytes(self.invite_secret.get())?;
+        writer.bytes(self.invite_secret.expose())?;
         writer.bytes(self.inviter_fingerprint.as_bytes())?;
         writer.unsigned(self.expires.get());
         self.uses.encode_cbor(writer);
@@ -107,7 +123,7 @@ impl CborBody for InvitePayload {
         Ok(Self {
             server: ServerId::new(decoder.str()?.to_owned())?,
             invite_mailbox: MailboxId::from_bytes(cbor::fixed_bytes(decoder)?),
-            invite_secret: Redacted::new(cbor::fixed_bytes(decoder)?),
+            invite_secret: SecretBytes::new(cbor::fixed_bytes(decoder)?),
             inviter_fingerprint: InviterFingerprint::from_bytes(cbor::fixed_bytes(decoder)?),
             expires: UnixSeconds::new(decoder.u64()?),
             uses: InviteUses::decode_cbor(decoder)?,

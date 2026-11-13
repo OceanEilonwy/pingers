@@ -40,7 +40,7 @@ mod test_support;
 #[cfg(test)]
 mod vector_tests;
 
-pub use board::{RevokeKey, revoke_commitment, segment_hash};
+pub use board::{RevokeKey, revoke_commitment, revoke_key_matches, segment_hash};
 pub use error::CryptoError;
 pub use group::{
     GroupRequest, LogAuthKeyPair, StateKey, open_state_snapshot, seal_state_snapshot,

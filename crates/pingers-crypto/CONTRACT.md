@@ -93,6 +93,10 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
   subscription and a mailbox whose ids had the same bytes would have the same bind, so a blob
   registered for one would open when presented for the other; the labels rule that out by
   construction instead of relying on random ids.
+- **`revoke_key_matches(&SecretBytes<32>, &RevokeCommitment) -> bool`** (added, wave 1
+  review): the server's constant-time check that `SHA-256(revealed) == commitment`.
+  `KeyedHash` no longer derives `PartialEq`, `Eq` or `Hash`; compare with `ct_eq`, key maps
+  on `as_bytes()`.
 - **Join requests are padded inside the AEAD** (wave 1 review, high): `nonce || XChaCha20(
   join_key, be16(len) || request || zeros)`, exactly one mailbox size class long, as knocks
   are (the two share `padded.rs`). `seal_join_request` keeps its signature and picks the
@@ -112,7 +116,7 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
 - **Keyed hash for the push relay** (added): `KeyedHashKey` (secret, public `from_bytes` and
   `expose_bytes` because the relay reads it from its configuration), `KeyedHashPurpose`
   (`PushTokenRateLimit`, `ServerCredential`), `KeyedHash` (32 bytes, `ConstantTimeEq`, `Debug`
-  redacted; `==`/`Hash` only for map keys) and `keyed_hash(key, purpose, input) =
+  redacted; no `==`) and `keyed_hash(key, purpose, input) =
   HMAC-SHA-256(key, label || input)`, labels `pingers/v1/relay-token` and
   `pingers/v1/relay-credential`. The relay keys its per-token rate limits with it in place of
   the design's `SHA-256(push_token)`, and stores server credentials as keyed hashes. Vectors in

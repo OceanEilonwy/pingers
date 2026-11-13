@@ -14,10 +14,10 @@ use pingers_proto::{
     MeetPoint, MeetPointLabel, MeetupHint, MeetupMessage, MlsMessageBytes, PrivacyPassIssueRequest,
     PrivacyPassIssueResponse, ProtoError, PushBind, PushClass, PushHandle, PushPlatform,
     PushRelayConfig, PushRelayKeyConfig, PushRelayKeyId, PushRequest, PushToken,
-    PushTokenPlaintext, Record, RecordRandomness, RecordTag, Redacted, RelayId, RelayRef, RelayUrl,
+    PushTokenPlaintext, Record, RecordRandomness, RecordTag, RelayId, RelayRef, RelayUrl,
     RevokeCommitment, RlnAuth, RlnScope, SealedBeacon, SealedLocationFrame, SealedPush,
-    SealedPushBlob, SeenSegment, SegmentHash, SegmentInfo, ServerId, Subscription, SubscriptionId,
-    TimeToLive, Urgency, WireDecode, WireEncode,
+    SealedPushBlob, SecretBytes, SeenSegment, SegmentHash, SegmentInfo, ServerId, Subscription,
+    SubscriptionId, TimeToLive, Urgency, WireDecode, WireEncode,
 };
 use pingers_testkit::{Vector, VectorError, load_vectors};
 use pingers_time::{Bucket, UnixSeconds};
@@ -491,7 +491,7 @@ fn invite_payload_vectors() -> Result<(), TestError> {
             Ok(InvitePayload {
                 server: ServerId::new(text(vector, "server")?)?,
                 invite_mailbox: MailboxId::from_bytes(bytes(vector, "invite_mailbox")?),
-                invite_secret: Redacted::new(bytes(vector, "invite_secret")?),
+                invite_secret: SecretBytes::new(bytes(vector, "invite_secret")?),
                 inviter_fingerprint: InviterFingerprint::from_bytes(bytes(
                     vector,
                     "inviter_fingerprint",

@@ -9,8 +9,9 @@
 
 use pingers_proto::{
     BoardBeacon, Epoch, GroupId, KeyPackageBytes, LeafIndex, LocationGeneration, LocationRequestId,
-    MailboxId, PartyId, Record, RecordRandomness, RecordTag, SealedAsk, SealedBeacon, SealedGrant,
-    SealedLocationFrame, SealedPushBlob, ServerId, SizeClass, SpotId, SubscriptionId,
+    MailboxId, PartyId, Record, RecordRandomness, RecordTag, RevokeCommitment, SealedAsk,
+    SealedBeacon, SealedGrant, SealedLocationFrame, SealedPushBlob, SecretBytes, ServerId,
+    SizeClass, SpotId, SubscriptionId,
 };
 use pingers_testkit::{Vector, VectorFile, load_vectors};
 use pingers_time::{Bucket, UnixSeconds};
@@ -27,10 +28,10 @@ use crate::{
     account_id, derive_knock_key, derive_meetup_psk, derive_seal_key, derive_spot_key,
     derive_tag_key, key_config_hash, keyed_hash, mailbox_id, open_board_beacon, open_join_request,
     open_knock, open_location_ask, open_location_grant, open_state_snapshot, push_bind_for_mailbox,
-    push_bind_for_subscription, record_tag, revoke_commitment, seal_board_beacon,
-    seal_join_request, seal_knock, seal_location_ask, seal_location_grant, seal_state_snapshot,
-    segment_hash, sign_group_request, sign_knock, sign_registration, tag_matches,
-    verify_group_request, verify_knock, verify_registration,
+    push_bind_for_subscription, record_tag, revoke_commitment, revoke_key_matches,
+    seal_board_beacon, seal_join_request, seal_knock, seal_location_ask, seal_location_grant,
+    seal_state_snapshot, segment_hash, sign_group_request, sign_knock, sign_registration,
+    tag_matches, verify_group_request, verify_knock, verify_registration,
 };
 
 fn load(name: &str) -> Result<VectorFile, TestError> {
@@ -330,6 +331,16 @@ fn hashes() -> Result<(), TestError> {
                 revoke_commitment(&key).as_bytes().as_slice(),
                 vector.expected_bytes("revoke_commitment")?
             );
+            let commitment = RevokeCommitment::from_bytes(
+                vector
+                    .expected_bytes("revoke_commitment")?
+                    .try_into()
+                    .map_err(|_length| TestError::Field("revoke_commitment"))?,
+            );
+            assert!(revoke_key_matches(
+                &SecretBytes::new(*key.expose_bytes()),
+                &commitment
+            ));
         } else if vector.inputs.contains_key("key_config") {
             assert_eq!(
                 key_config_hash(&vector.input_bytes("key_config")?)

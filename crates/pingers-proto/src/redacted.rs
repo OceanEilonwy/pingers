@@ -6,7 +6,9 @@ use core::fmt;
 /// A value that could identify someone if logged: its `Debug` prints only the type name
 /// (style guide §9).
 ///
-/// Wrap fields of this kind in structs that derive `Debug`, so the derive stays safe.
+/// Wrap fields of this kind in structs that derive `Debug`, so the derive stays safe. Not for
+/// secrets: it compares with `==` and is not zeroed; use [`crate::SecretBytes`] or
+/// [`crate::SecretText`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Redacted<T>(T);
 

@@ -19,8 +19,9 @@ use pingers_proto::{
     ReadBoard, Record, RecordRandomness, RecordTag, Redacted, RegisterRequest, RegisterResponse,
     RelayId, RelayRef, RelayUrl, RevokeCommitment, RlnAuth, RlnScope, RootEpoch, SealedAsk,
     SealedBeacon, SealedGrant, SealedLocationFrame, SealedPush, SealedPushBlob, SealedSnapshot,
-    SeenSegment, SegmentHash, SegmentInfo, SequenceNumber, ServerId, SizeClass, Slashing,
-    SpeedCentimetresPerSecond, Subscription, SubscriptionId, TimeToLive, Urgency,
+    SecretBytes, SecretText, SeenSegment, SegmentHash, SegmentInfo, SequenceNumber, ServerId,
+    SizeClass, Slashing, SpeedCentimetresPerSecond, Subscription, SubscriptionId, TimeToLive,
+    Urgency,
 };
 use pingers_time::{Bucket, UnixSeconds};
 use proptest::array::uniform;
@@ -206,7 +207,7 @@ pub(crate) fn invite_payload() -> impl Strategy<Value = InvitePayload> {
             |(server, mailbox, secret, fingerprint, expires, uses)| InvitePayload {
                 server,
                 invite_mailbox: MailboxId::from_bytes(mailbox),
-                invite_secret: Redacted::new(secret),
+                invite_secret: SecretBytes::new(secret),
                 inviter_fingerprint: InviterFingerprint::from_bytes(fingerprint),
                 expires,
                 uses,
@@ -557,7 +558,7 @@ pub(crate) fn register_request() -> impl Strategy<Value = RegisterRequest> {
     (bytes32(), bytes64(), option::of(text(30))).prop_map(|(key, proof, code)| RegisterRequest {
         signature_key: key,
         proof,
-        registration_code: code.map(Redacted::new),
+        registration_code: code.map(SecretText::new),
     })
 }
 
@@ -578,7 +579,7 @@ pub(crate) fn board_sync_request() -> impl Strategy<Value = BoardSyncRequest> {
             lease,
             replaces: replaces.map(|(lease_id, revoke_key)| LeaseReplacement {
                 lease_id: LeaseId::from_bytes(lease_id),
-                revoke_key: Redacted::new(revoke_key),
+                revoke_key: SecretBytes::new(revoke_key),
             }),
             read,
         })
@@ -602,7 +603,7 @@ pub(crate) fn register_response() -> impl Strategy<Value = RegisterResponse> {
 
 pub(crate) fn auth_response() -> impl Strategy<Value = AuthResponse> {
     (text(60), unix_seconds()).prop_map(|(bearer, server_time)| AuthResponse {
-        bearer: Redacted::new(bearer),
+        bearer: SecretText::new(bearer),
         server_time,
     })
 }

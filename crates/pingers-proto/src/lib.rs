@@ -30,6 +30,7 @@ mod privacy_pass;
 mod push;
 mod redacted;
 mod relay;
+mod secret;
 
 pub use api::{
     AnonymousCredential, AuthRequest, AuthResponse, BoardSyncRequest, BoardSyncResponse,
@@ -71,3 +72,4 @@ pub use push::{
 };
 pub use redacted::Redacted;
 pub use relay::{PushRelayConfig, PushRelayKeyConfig, PushRelayKeyId, PushRequest};
+pub use secret::{SecretBytes, SecretText};

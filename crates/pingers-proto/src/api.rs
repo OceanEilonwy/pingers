@@ -9,10 +9,12 @@ use minicbor::Decoder;
 use pingers_time::UnixSeconds;
 
 use crate::cbor::{self, CborBody, Writer, versioned_cbor};
+use crate::secret::option_ct_eq;
 use crate::{
     AccountId, BoardPage, Epoch, GroupLogEntry, KeyConfigHash, Lease, LeaseId, Padded, ProtoError,
-    Redacted, RelayId, RelayUrl, SealedSnapshot, SequenceNumber,
+    Redacted, RelayId, RelayUrl, SealedSnapshot, SecretBytes, SecretText, SequenceNumber,
 };
+use subtle::ConstantTimeEq as _;
 
 /// A push relay the server advertises (design D, `PushRelayInfo`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,16 +110,29 @@ pub struct Params {
     pub server_time: UnixSeconds,
 }
 
-/// `POST /v1/accounts` (design D).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// `POST /v1/accounts` (design D). `==` compares the registration code in constant time.
+#[derive(Clone, Debug)]
 pub struct RegisterRequest {
     /// The account's Ed25519 public key.
     pub signature_key: [u8; 32],
     /// Signature proving possession of the key.
     pub proof: [u8; 64],
     /// The operator-issued registration code, if the server requires one.
-    pub registration_code: Option<Redacted<String>>,
+    pub registration_code: Option<SecretText>,
 }
+
+impl PartialEq for RegisterRequest {
+    fn eq(&self, other: &Self) -> bool {
+        self.signature_key == other.signature_key
+            && self.proof == other.proof
+            && option_ct_eq(
+                self.registration_code.as_ref(),
+                other.registration_code.as_ref(),
+            )
+    }
+}
+
+impl Eq for RegisterRequest {}
 
 /// `POST /v1/auth` (design D).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,14 +143,23 @@ pub struct AuthRequest {
     pub nonce_signature: [u8; 64],
 }
 
-/// The lease a board sync replaces, proven by revealing its revoke key.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The lease a board sync replaces, proven by revealing its revoke key. `==` compares the key
+/// in constant time; the server checks it with pingers-crypto's `revoke_key_matches`.
+#[derive(Clone, Debug)]
 pub struct LeaseReplacement {
     /// The lease being replaced.
     pub lease_id: LeaseId,
     /// The revoke key whose SHA-256 is that lease's commitment.
-    pub revoke_key: Redacted<[u8; 32]>,
+    pub revoke_key: SecretBytes<32>,
 }
+
+impl PartialEq for LeaseReplacement {
+    fn eq(&self, other: &Self) -> bool {
+        self.lease_id == other.lease_id && bool::from(self.revoke_key.ct_eq(&other.revoke_key))
+    }
+}
+
+impl Eq for LeaseReplacement {}
 
 /// Whether a board sync also returns the first page of the board.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -175,14 +199,22 @@ pub struct RegisterResponse {
     pub account_id: AccountId,
 }
 
-/// The answer to `POST /v1/auth` (design D).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The answer to `POST /v1/auth` (design D). `==` compares the bearer in constant time.
+#[derive(Clone, Debug)]
 pub struct AuthResponse {
     /// The bearer token for `Authorization: Bearer`, valid for one hour.
-    pub bearer: Redacted<String>,
+    pub bearer: SecretText,
     /// The server's clock.
     pub server_time: UnixSeconds,
 }
+
+impl PartialEq for AuthResponse {
+    fn eq(&self, other: &Self) -> bool {
+        self.server_time == other.server_time && bool::from(self.bearer.ct_eq(&other.bearer))
+    }
+}
+
+impl Eq for AuthResponse {}
 
 /// `POST /v1/rln/leaf` (design D): adds the account's identity commitment to the membership
 /// tree.
@@ -422,7 +454,7 @@ impl CborBody for RegisterRequest {
         writer.bytes(&self.signature_key)?;
         writer.bytes(&self.proof)?;
         writer.option(self.registration_code.as_ref(), |writer, code| {
-            writer.text(code.get())
+            writer.text(code.expose())
         })
     }
 
@@ -432,7 +464,7 @@ impl CborBody for RegisterRequest {
             signature_key: cbor::fixed_bytes(decoder)?,
             proof: cbor::fixed_bytes(decoder)?,
             registration_code: cbor::option(decoder, |decoder| {
-                Ok(Redacted::new(decoder.str()?.to_owned()))
+                Ok(SecretText::new(decoder.str()?.to_owned()))
             })?,
         })
     }
@@ -460,14 +492,14 @@ impl CborBody for LeaseReplacement {
     fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
         writer.array(2)?;
         writer.bytes(self.lease_id.as_bytes())?;
-        writer.bytes(self.revoke_key.get())
+        writer.bytes(self.revoke_key.expose())
     }
 
     fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
         cbor::array_of(decoder, 2)?;
         Ok(Self {
             lease_id: LeaseId::from_bytes(cbor::fixed_bytes(decoder)?),
-            revoke_key: Redacted::new(cbor::fixed_bytes(decoder)?),
+            revoke_key: SecretBytes::new(cbor::fixed_bytes(decoder)?),
         })
     }
 }
@@ -543,7 +575,7 @@ impl CborBody for RegisterResponse {
 impl CborBody for AuthResponse {
     fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
         writer.array(2)?;
-        writer.text(self.bearer.get())?;
+        writer.text(self.bearer.expose())?;
         writer.unsigned(self.server_time.get());
         Ok(())
     }
@@ -551,7 +583,7 @@ impl CborBody for AuthResponse {
     fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
         cbor::array_of(decoder, 2)?;
         Ok(Self {
-            bearer: Redacted::new(decoder.str()?.to_owned()),
+            bearer: SecretText::new(decoder.str()?.to_owned()),
             server_time: read_time(decoder)?,
         })
     }

@@ -13,7 +13,10 @@ layer = 0
 [dependencies]
 pingers-time = { workspace = true }
 minicbor = { workspace = true }
+# Constant-time comparison and zeroing of wire secrets (bearer tokens, revoke keys).
+subtle = { workspace = true }
 thiserror = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 pingers-testkit = { workspace = true }

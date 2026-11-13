@@ -76,3 +76,24 @@ fn text_and_frames_hide_their_content() -> Result<(), ProtoError> {
     );
     Ok(())
 }
+
+#[test]
+fn wire_secrets_stay_out_of_debug_and_compare_by_content() {
+    use pingers_proto::{AuthResponse, LeaseId, LeaseReplacement, SecretBytes, SecretText};
+    use pingers_time::UnixSeconds;
+
+    let response = AuthResponse {
+        bearer: SecretText::new(String::from("bearer-0123456789")),
+        server_time: UnixSeconds::new(1),
+    };
+    let printed = format!("{response:?}");
+    assert!(!printed.contains("bearer-0123456789"), "{printed}");
+    let replacement = |byte| LeaseReplacement {
+        lease_id: LeaseId::from_bytes([1; 16]),
+        revoke_key: SecretBytes::new([byte; 32]),
+    };
+    assert!(!format!("{:?}", replacement(0xab)).contains("171"));
+    // `==` on the containers still sees the secret, compared in constant time.
+    assert_eq!(replacement(1), replacement(1));
+    assert_ne!(replacement(1), replacement(2));
+}
