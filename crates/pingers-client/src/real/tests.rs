@@ -20,7 +20,7 @@ use pingers_proto::{
 };
 use pingers_store::{Database, DatabaseKey, Identity, Session};
 use pingers_time::{Bucket, Clock as _, ManualClock, UnixSeconds};
-use pingers_wake::ports::RegionId;
+use pingers_wake::ports::{PartyView as _, RegionId};
 use pingers_wake::{
     DecidedKnock, KnockStatus, KnownEpoch, LeaseSlot, LiveLease, PeerActivity, PortError,
     RETRY_AFTER, RealRecord, SentKnock, SpotSnapshot, WakeEnding, WakeSnapshot, WakeStep,
@@ -34,7 +34,7 @@ use super::meetups::Meetups;
 use super::parties::Parties;
 use super::sync::Outbox;
 use super::wake::Wake;
-use super::wake_ports::{region_id, region_text};
+use super::wake_ports::{Lens, region_id, region_text};
 use super::{Backend, Outside, wake_codec};
 use crate::ports::{
     AllowListChange, JoinDecision, PartiesPort as _, PartyDraft, SettingChange, SpotDraft,
@@ -306,6 +306,10 @@ async fn settings_and_zones_round_trip_through_the_store() -> TestResult {
     assert_eq!(first.settings.pause_in_focus, PauseInFocus::On);
     assert_eq!(first.settings.hide_trail, HideTrail::On);
     assert_eq!(first.settings.quiet_hours.state, Toggle::Off);
+    assert_eq!(
+        first.settings.quiet_hours.window,
+        DailyWindow::new(MinuteOfDay::new(22 * 60)?, MinuteOfDay::new(7 * 60)?)?
+    );
     assert_eq!(first.settings.focus, FocusState::On);
     assert!(first.zones.is_empty());
     assert_eq!(
@@ -415,6 +419,36 @@ async fn a_wake_confirmed_inside_a_spot_ends_at_the_sync_stub() -> TestResult {
         stored.spots.first().map(|spot| spot.presence.state),
         Some(PresenceState::Inside)
     );
+    assert!(
+        first_outcome.geofences.is_some() || outcome.geofences.is_some(),
+        "the Spot's geofence reaches the shell"
+    );
+
+    // The party view hands out the current epoch's root and roster, nothing else.
+    let (root, wrong_epoch, own_key, stranger, no_party) = session(&store, move |session| {
+        let clock = ManualClock::new(UnixSeconds::new(1_800_000_000));
+        let lens = Lens::load(session, &clock, &mut ChaCha20Rng::seed_from_u64(3))?;
+        let info = lens
+            .parties()
+            .first()
+            .cloned()
+            .ok_or_else(super::records::corrupt)?;
+        let epoch = info.epoch.current;
+        let other = Epoch::new(epoch.get().saturating_add(1));
+        Ok((
+            lens.presence_root(party, epoch).is_some(),
+            lens.presence_root(party, other).is_some(),
+            lens.signature_key(party, info.own_leaf, epoch)
+                == Some(lens.signing_key().public_key()),
+            lens.signature_key(party, LeafIndex::new(9), epoch)
+                .is_some(),
+            lens.presence_root(PartyId::from_bytes([0; 16]), epoch)
+                .is_some(),
+        ))
+    })
+    .await?;
+    assert!(root && own_key, "this Party's root and this device's key");
+    assert!(!wrong_epoch && !stranger && !no_party);
     Ok(())
 }
 
