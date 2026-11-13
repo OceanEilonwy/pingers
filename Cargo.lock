@@ -3388,6 +3388,7 @@ dependencies = [
  "pingers-gate",
  "pingers-geo",
  "pingers-proto",
+ "pingers-store",
  "pingers-testkit",
  "pingers-time",
  "serde",
@@ -3401,6 +3402,7 @@ dependencies = [
 name = "pingers-client"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "pingers-gate",
  "pingers-geo",
  "pingers-meetup",
@@ -3409,10 +3411,12 @@ dependencies = [
  "pingers-proto",
  "pingers-store",
  "pingers-sync",
+ "pingers-testkit",
  "pingers-time",
  "pingers-transport",
  "pingers-wake",
  "thiserror",
+ "tokio",
  "zeroize",
 ]
 
@@ -3754,6 +3758,7 @@ dependencies = [
 name = "pingers-testkit"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "hex",
  "hyper",

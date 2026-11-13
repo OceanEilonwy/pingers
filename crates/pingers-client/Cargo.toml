@@ -11,6 +11,7 @@ publish.workspace = true
 layer = 3
 
 [dependencies]
+async-trait = { workspace = true }
 pingers-gate = { workspace = true }
 pingers-geo = { workspace = true }
 pingers-meetup = { workspace = true }
@@ -23,7 +24,12 @@ pingers-time = { workspace = true }
 pingers-transport = { workspace = true }
 pingers-wake = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 zeroize = { workspace = true }
+
+[dev-dependencies]
+pingers-testkit = { workspace = true, features = ["client"] }
+tokio = { workspace = true }
 
 [lints]
 workspace = true

@@ -190,6 +190,9 @@ pub(crate) async fn serve(
                 let Ok((stream, _address)) = accepted else {
                     continue;
                 };
+                // Live frames are small; without this each one waits on Nagle and delayed
+                // acknowledgements (about 40 ms per frame). The upstream connector sets it too.
+                let _ = stream.set_nodelay(true);
                 // The client address is dropped here and never used again.
                 let relay = Arc::clone(&relay);
                 connections.spawn(async move {

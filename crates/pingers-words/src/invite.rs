@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Invite people and Accept invite, in words.
 
+use pingers_screens::common::Initials;
 use pingers_screens::invite::{AcceptInvite, Invitation, InviteView};
 
 use crate::Language;
@@ -63,7 +64,7 @@ pub fn invite(language: Language, view: &InviteView) -> InviteText {
             .iter()
             .map(|invitation| match invitation {
                 Invitation::Opened { name, code, .. } => InvitationText {
-                    avatar: Some(name.initials().as_str().to_owned()),
+                    avatar: Some(Initials::of(name).as_str().to_owned()),
                     title: name.as_str().to_owned(),
                     status: format!("Opened the link · compare code {}", code.as_str()),
                     shared: None,

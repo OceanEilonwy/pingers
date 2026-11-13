@@ -6,59 +6,10 @@ use core::fmt;
 use pingers_geo::{Bearing, Coordinate};
 use pingers_proto::LeafIndex;
 
+pub use pingers_client::snapshot::{Host, Me, Name, Operator, PartyColour};
+
 use crate::ScreenError;
-
-/// A name a person gave something: a Party, a Spot, a member, an exclusion zone. Never empty,
-/// trimmed, at most [`Name::MAX_CHARACTERS`]. `Debug` does not print it (style guide §9).
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct Name(String);
-
-impl Name {
-    /// The longest name, in characters.
-    pub const MAX_CHARACTERS: usize = 80;
-
-    /// Trims and checks a name.
-    ///
-    /// # Errors
-    ///
-    /// [`ScreenError::InvalidName`] if it is empty after trimming or too long.
-    pub fn new(text: &str) -> Result<Self, ScreenError> {
-        let trimmed = text.trim();
-        if trimmed.is_empty() || trimmed.chars().count() > Self::MAX_CHARACTERS {
-            return Err(ScreenError::InvalidName);
-        }
-        Ok(Self(trimmed.to_owned()))
-    }
-
-    /// The name.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Two letters for an avatar: the first letters of the first two words, or the first two
-    /// letters of a one-word name ("Climbing crew" is "CC", "Ben" is "BE").
-    #[must_use]
-    pub fn initials(&self) -> Initials {
-        let mut words = self.0.split_whitespace();
-        let first = words.next().unwrap_or_default();
-        let letters: String = match words.next() {
-            Some(second) => first
-                .chars()
-                .take(1)
-                .chain(second.chars().take(1))
-                .collect(),
-            None => first.chars().take(2).collect(),
-        };
-        Initials(letters.to_uppercase())
-    }
-}
-
-impl fmt::Debug for Name {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Name(redacted)")
-    }
-}
+use crate::snapshot::Meetup;
 
 /// Text the user is still typing, before it is a [`Name`]. May be empty. `Debug` does not print
 /// it.
@@ -96,6 +47,23 @@ impl fmt::Debug for DraftText {
 pub struct Initials(String);
 
 impl Initials {
+    /// Two letters for a name's avatar: the first letters of the first two words, or the first
+    /// two letters of a one-word name ("Climbing crew" is "CC", "Ben" is "BE").
+    #[must_use]
+    pub fn of(name: &Name) -> Self {
+        let mut words = name.as_str().split_whitespace();
+        let first = words.next().unwrap_or_default();
+        let letters: String = match words.next() {
+            Some(second) => first
+                .chars()
+                .take(1)
+                .chain(second.chars().take(1))
+                .collect(),
+            None => first.chars().take(2).collect(),
+        };
+        Self(letters.to_uppercase())
+    }
+
     /// The letters.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -141,35 +109,6 @@ impl Tint {
     }
 }
 
-/// The five Party colours offered on New party.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum PartyColour {
-    /// Blue.
-    Blue,
-    /// Orange.
-    Orange,
-    /// Ink.
-    Ink,
-    /// Teal.
-    Teal,
-    /// Plum.
-    Plum,
-}
-
-impl PartyColour {
-    /// Every colour, in the order New party offers them.
-    pub const ALL: [Self; 5] = [Self::Blue, Self::Orange, Self::Ink, Self::Teal, Self::Plum];
-}
-
-/// Whether a member is this device's user.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Me {
-    /// This device.
-    Me,
-    /// Someone else.
-    Other,
-}
-
 /// A person as an avatar row shows them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Person {
@@ -191,12 +130,38 @@ impl Person {
     pub fn new(leaf: LeafIndex, name: &Name, me: Me) -> Self {
         Self {
             leaf,
-            initials: name.initials(),
+            initials: Initials::of(name),
             name: name.clone(),
             tint: Tint::for_member(leaf, me),
             me,
         }
     }
+}
+
+/// The member of `meetup` with this leaf, this device included, as an avatar shows them.
+///
+/// # Errors
+///
+/// [`ScreenError::UnknownMember`].
+pub fn person(meetup: &Meetup, leaf: LeafIndex) -> Result<Person, ScreenError> {
+    if leaf == meetup.me.leaf {
+        return Ok(Person::new(leaf, &meetup.me.name, Me::Me));
+    }
+    let peer = meetup.peer(leaf)?;
+    Ok(Person::new(leaf, &peer.name, Me::Other))
+}
+
+/// Everyone in `meetup`, this device first.
+#[must_use]
+pub fn people(meetup: &Meetup) -> Vec<Person> {
+    core::iter::once(Person::new(meetup.me.leaf, &meetup.me.name, Me::Me))
+        .chain(
+            meetup
+                .others
+                .iter()
+                .map(|peer| Person::new(peer.leaf, &peer.name, Me::Other)),
+        )
+        .collect()
 }
 
 /// How private a Party's setup is, from who runs the server and the two relays.
@@ -255,65 +220,6 @@ impl Direction {
     }
 }
 
-/// A server or relay host as the user typed or the server advertised it ("pingers.flat7.org").
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Host(String);
-
-impl Host {
-    /// Checks a host: not empty, no spaces.
-    ///
-    /// # Errors
-    ///
-    /// [`ScreenError::InvalidHost`].
-    pub fn new(text: &str) -> Result<Self, ScreenError> {
-        let trimmed = text.trim();
-        if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
-            return Err(ScreenError::InvalidHost);
-        }
-        Ok(Self(trimmed.to_ascii_lowercase()))
-    }
-
-    /// The host.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// The operator a server or relay declares (design B.4.9). Compared without regard to case or
-/// surrounding space, so "Flat 7" and "flat 7 " are one operator.
-#[derive(Clone, Debug)]
-pub struct Operator(String);
-
-impl Operator {
-    /// Checks an operator name: not empty.
-    ///
-    /// # Errors
-    ///
-    /// [`ScreenError::InvalidOperator`].
-    pub fn new(text: &str) -> Result<Self, ScreenError> {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return Err(ScreenError::InvalidOperator);
-        }
-        Ok(Self(trimmed.to_owned()))
-    }
-
-    /// The name as declared.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl PartialEq for Operator {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.to_lowercase() == other.0.to_lowercase()
-    }
-}
-
-impl Eq for Operator {}
-
 /// The midpoint of two nearby coordinates, by averaging (accurate enough for the points of one
 /// Spot or the members of one Meetup), the short way round across the antimeridian.
 pub(crate) fn midpoint(a: Coordinate, b: Coordinate) -> Coordinate {
@@ -355,28 +261,19 @@ mod tests {
 
     #[test]
     fn initials_take_two_words_or_two_letters() -> Result<(), ScreenError> {
-        assert_eq!(Name::new("Climbing crew")?.initials().as_str(), "CC");
-        assert_eq!(Name::new("Ben")?.initials().as_str(), "BE");
-        assert_eq!(Name::new("chloé martin")?.initials().as_str(), "CM");
-        assert_eq!(Name::new("Q")?.initials().as_str(), "Q");
+        assert_eq!(Initials::of(&Name::new("Climbing crew")?).as_str(), "CC");
+        assert_eq!(Initials::of(&Name::new("Ben")?).as_str(), "BE");
+        assert_eq!(Initials::of(&Name::new("chloé martin")?).as_str(), "CM");
+        assert_eq!(Initials::of(&Name::new("Q")?).as_str(), "Q");
         Ok(())
     }
 
     #[test]
-    fn names_are_trimmed_and_never_empty_or_too_long() -> Result<(), ScreenError> {
-        assert_eq!(Name::new("  Uni flat ")?.as_str(), "Uni flat");
-        assert_eq!(Name::new("   "), Err(ScreenError::InvalidName));
-        assert!(Name::new(&"a".repeat(Name::MAX_CHARACTERS)).is_ok());
-        assert_eq!(
-            Name::new(&"a".repeat(Name::MAX_CHARACTERS + 1)),
-            Err(ScreenError::InvalidName)
-        );
-        assert_eq!(format!("{:?}", Name::new("Home")?), "Name(redacted)");
+    fn draft_text_is_redacted() {
         assert_eq!(
             format!("{:?}", DraftText::new("Home".into())),
             "DraftText(redacted)"
         );
-        Ok(())
     }
 
     #[test]
@@ -432,21 +329,6 @@ mod tests {
         assert_eq!(direction(337.4)?, Direction::NW);
         assert_eq!(direction(337.5)?, Direction::N);
         assert_eq!(direction(359.9)?, Direction::N);
-        Ok(())
-    }
-
-    #[test]
-    fn hosts_and_operators_are_normalised() -> Result<(), ScreenError> {
-        assert_eq!(
-            Host::new(" Pingers.Flat7.org ")?.as_str(),
-            "pingers.flat7.org"
-        );
-        assert_eq!(Host::new("a b"), Err(ScreenError::InvalidHost));
-        assert_eq!(Host::new(" "), Err(ScreenError::InvalidHost));
-        assert_eq!(Operator::new("Flat 7")?, Operator::new(" flat 7 ")?);
-        assert_ne!(Operator::new("Flat 7")?, Operator::new("Flat 8")?);
-        assert_eq!(Operator::new(" Flat 7 ")?.as_str(), "Flat 7");
-        assert_eq!(Operator::new(""), Err(ScreenError::InvalidOperator));
         Ok(())
     }
 

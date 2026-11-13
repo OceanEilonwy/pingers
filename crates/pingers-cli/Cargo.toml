@@ -17,6 +17,7 @@ pingers-e2e = { path = "../pingers-e2e" }
 pingers-gate = { workspace = true }
 pingers-geo = { workspace = true }
 pingers-proto = { workspace = true }
+pingers-store = { workspace = true }
 pingers-testkit = { workspace = true, features = ["client"] }
 pingers-time = { workspace = true, features = ["test-util"] }
 anyhow = { workspace = true }

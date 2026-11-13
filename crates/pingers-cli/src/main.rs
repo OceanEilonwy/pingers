@@ -12,9 +12,10 @@
 //!   whole board. Prints the board size, the bytes of one read and one upload, and the daily
 //!   totals they imply. Knocks are planned but not generated yet.
 //!
-//! Until pingers-client has its API (wave 3) only `--dry-run` runs: the timeline is replayed
-//! without clients and expectations are skipped. The runner calls the `ScenarioDriver` trait
-//! in `scenario/runner.rs`; a pingers-client driver implementing it is the wave-3 work.
+//! Until the L3 crates land only `--dry-run` runs: the timeline is replayed without clients
+//! and expectations are skipped. The runner calls the `ScenarioDriver` trait in
+//! `scenario/runner.rs`; `scenario/client_driver.rs` implements it over pingers-client and
+//! needs only the real crates to build each device's client from.
 #![forbid(unsafe_code)]
 
 mod args;
@@ -128,7 +129,7 @@ fn run_scenarios<'text>(
                 runtime.block_on(scenario::run(&scenario, &mut driver, Checks::Skip))?
             }
             RunMode::Client => anyhow::bail!(
-                "no client driver yet: pingers-client's API arrives in wave 3 (target: {}); use --dry-run",
+                "the client driver has no L3 crates to build clients from yet (target: {}); use --dry-run",
                 describe(&config.target)
             ),
         };
