@@ -24,6 +24,9 @@ pub(crate) enum Route {
     PrivacyPassIssue,
     /// `GET /v1/pp/keys`.
     PrivacyPassKeys,
+    /// `GET /v1/push-relays/{relay id}/config`: a listed push relay's key config, fetched
+    /// from the relay so devices can ask for it through the OHTTP relay (design B.12).
+    PushRelayConfig,
     /// `POST /v1/board/sync`.
     BoardSync,
     /// `GET /v1/board/page?c=`.
@@ -100,7 +103,9 @@ impl Route {
     pub(crate) const fn class(self) -> Class {
         match self {
             // The parameters and key configs are needed before a client can do anything else.
-            Self::Params | Self::OhttpConfig | Self::PrivacyPassKeys => Class::Public,
+            Self::Params | Self::OhttpConfig | Self::PrivacyPassKeys | Self::PushRelayConfig => {
+                Class::Public
+            }
             Self::CreateAccount
             | Self::Auth
             | Self::DeleteAccount
@@ -171,6 +176,7 @@ pub(crate) fn resolve(method: &str, path: &str) -> Resolved {
         ["rln", "leaves"] => by_method(method, &[("GET", Route::RlnLeaves)]),
         ["pp", "issue"] => by_method(method, &[("POST", Route::PrivacyPassIssue)]),
         ["pp", "keys"] => by_method(method, &[("GET", Route::PrivacyPassKeys)]),
+        ["push-relays", _, "config"] => by_method(method, &[("GET", Route::PushRelayConfig)]),
         ["board", "sync"] => by_method(method, &[("POST", Route::BoardSync)]),
         ["board", "page"] => by_method(method, &[("GET", Route::BoardPage)]),
         ["board", "lease", _] => by_method(method, &[("DELETE", Route::BoardRevokeLease)]),

@@ -61,6 +61,8 @@ pub(crate) enum TestError {
     #[error(transparent)]
     Crypto(#[from] pingers_crypto::CryptoError),
     #[error(transparent)]
+    Ohttp(#[from] pingers_ohttp::OhttpError),
+    #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("timed out")]
     Timeout,
@@ -358,6 +360,13 @@ impl Transport for Link {
             return Err(TransportError::NoRelay);
         }
         self.relay.stream(request).await
+    }
+
+    async fn check_gateway_key(&self) -> Result<(), TransportError> {
+        if self.offline.load(Ordering::SeqCst) {
+            return Err(TransportError::NoRelay);
+        }
+        self.relay.check_gateway_key().await
     }
 
     fn kind(&self) -> TransportKind {

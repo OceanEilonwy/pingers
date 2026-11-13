@@ -12,7 +12,9 @@ use pingers_mailbox::{
     ListedRelays, PUSH_CONTENT_TYPE, PUSH_PATH, PushJob, PushRelay, PushRequest, RelayAnswer,
     RelayDirectory as _, RelayTarget, RelayUnreachable, forward,
 };
-use pingers_proto::{GroupId, WireEncode as _};
+use pingers_proto::{
+    GroupId, PushRelayConfig, RelayId, RelayRef, WireDecode as _, WireEncode as _,
+};
 use pingers_time::Timer;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use tokio::task::JoinSet;
@@ -79,7 +81,43 @@ impl HttpPushRelay {
             }
         }
     }
+
+    /// `GET {url}/v1/config` from a push relay: its published key config, at most
+    /// [`MAX_RELAY_CONFIG_BYTES`], only on a 200 and only if it decodes. No credential goes
+    /// with it: the route is public at the relay.
+    pub(crate) fn fetch_config(
+        &self,
+        target: &RelayTarget,
+    ) -> impl Future<Output = Result<Vec<u8>, RelayUnreachable>> + Send + use<> {
+        let url = format!("{}{CONFIG_PATH}", target.url.as_str().trim_end_matches('/'));
+        let sent = self.client.get(url).send();
+        let timer = Arc::clone(&self.timer);
+        let timeout = self.timeout;
+        async move {
+            let fetched = async {
+                let response = sent.await.map_err(|_| RelayUnreachable)?;
+                if response.status() != reqwest::StatusCode::OK {
+                    return Err(RelayUnreachable);
+                }
+                let body = response.bytes().await.map_err(|_| RelayUnreachable)?;
+                if body.len() > MAX_RELAY_CONFIG_BYTES || PushRelayConfig::decode(&body).is_err() {
+                    return Err(RelayUnreachable);
+                }
+                Ok(body.to_vec())
+            };
+            tokio::select! {
+                fetched = fetched => fetched,
+                () = timer.sleep(timeout) => Err(RelayUnreachable),
+            }
+        }
+    }
 }
+
+/// The push relay's key config path (design D, push relay API).
+const CONFIG_PATH: &str = "/v1/config";
+
+/// The most a push relay's config may hold: 41 bytes of key, a few platforms, an operator.
+const MAX_RELAY_CONFIG_BYTES: usize = 4096;
 
 /// `{url}/v1/push`, without doubling a trailing slash.
 pub(crate) fn push_url(target: &RelayTarget) -> String {
@@ -189,6 +227,16 @@ impl Tasks {
                 .await;
             }
         });
+    }
+
+    /// The key config of the listed push relay `relay`, fetched from it now: `None` if this
+    /// server lists no such relay, `Some(Err)` if it did not answer with a config.
+    pub(crate) fn push_relay_config(
+        &self,
+        relay: RelayId,
+    ) -> Option<impl Future<Output = Result<Vec<u8>, RelayUnreachable>> + Send + use<>> {
+        let target = self.directory.resolve(&RelayRef::Listed(relay))?;
+        Some(self.relay.fetch_config(&target))
     }
 
     /// Runs `sweep` every `interval`.

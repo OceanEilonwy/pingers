@@ -45,6 +45,7 @@ mod mailbox;
 mod pool;
 mod queue;
 mod request;
+mod server;
 mod tokens;
 
 pub use board::{MembershipRefresh, NewLease};
@@ -62,4 +63,5 @@ pub use mailbox::{Delivered, NewMailbox, PushSeal};
 pub use pool::{LEASE_BUCKETS, PoolRefill, PoolTarget, WakePush};
 pub use queue::{QueueCapacity, QueuePolicy, Sending};
 pub use request::{ApiRequest, GroupLifetime, GroupSigner, GroupStart, Route};
+pub use server::VerifiedPushRelay;
 pub use tokens::{Refill, TokenIssuer, TokenStock};

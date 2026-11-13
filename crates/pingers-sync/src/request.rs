@@ -13,8 +13,8 @@ use pingers_ohttp::{BinaryRequest, Header};
 use pingers_proto::{
     AppMessage, AuthRequest, BoardCursor, BoardSyncRequest, CommitRequest, CreateGroup, GroupId,
     LeaseId, MailboxId, MailboxSpec, MembershipIndex, MembershipLeafRequest, Padded,
-    PrivacyPassIssueRequest, RegisterRequest, RlnScope, SecretBytes, SecretText, SequenceNumber,
-    Subscription, SubscriptionId, WireEncode,
+    PrivacyPassIssueRequest, RegisterRequest, RelayId, RlnScope, SecretBytes, SecretText,
+    SequenceNumber, Subscription, SubscriptionId, WireEncode,
 };
 use pingers_time::UnixSeconds;
 use pingers_transport::PrivacyClass;
@@ -85,6 +85,14 @@ pub enum Route {
     DeleteGroup,
     /// `POST /v1/groups/{id}/live?sub=`: the chunked live channel.
     Live,
+    /// `GET /v1/ohttp/config`, asked of the OHTTP relay (which forwards it to the gateway) by
+    /// the transport itself and never built as an [`ApiRequest`]: named for the reachability
+    /// check's errors.
+    OhttpConfig,
+    /// `GET /v1/push-relays/{relay id}/config`: a listed push relay's key config, which the
+    /// server fetches from the relay so that devices ask for it through the OHTTP relay too
+    /// (design B.12: the push relay key config is anonymous traffic).
+    PushRelayConfig,
 }
 
 impl Route {
@@ -101,6 +109,8 @@ impl Route {
             | Self::PrivacyPassIssue => PrivacyClass::Identified,
             Self::Live => PrivacyClass::Stream,
             Self::Params
+            | Self::OhttpConfig
+            | Self::PushRelayConfig
             | Self::PrivacyPassKeys
             | Self::RlnLeaves
             | Self::BoardSync
@@ -133,6 +143,8 @@ impl Route {
                 Some(RlnScope::Group)
             }
             Self::Params
+            | Self::OhttpConfig
+            | Self::PushRelayConfig
             | Self::CreateAccount
             | Self::Auth
             | Self::DeleteAccount
@@ -410,6 +422,16 @@ impl ApiRequest {
     #[must_use]
     pub fn privacy_pass_keys() -> Self {
         Self::new(Route::PrivacyPassKeys, "GET", "/v1/pp/keys".to_owned())
+    }
+
+    /// `GET /v1/push-relays/{relay id}/config`.
+    #[must_use]
+    pub fn push_relay_config(relay: RelayId) -> Self {
+        Self::new(
+            Route::PushRelayConfig,
+            "GET",
+            format!("/v1/push-relays/{}/config", relay.get()),
+        )
     }
 
     /// `POST /v1/board/sync`.

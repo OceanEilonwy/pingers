@@ -11,6 +11,7 @@ mod mailbox;
 mod queue;
 mod restart;
 mod rln;
+mod server;
 mod support;
 mod tokens;
 mod wake_port;

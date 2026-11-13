@@ -31,7 +31,7 @@ enum TestError {
     BadHeader(&'static str),
 }
 
-const ALL: [Route; 24] = [
+const ALL: [Route; 26] = [
     Route::Params,
     Route::CreateAccount,
     Route::Auth,
@@ -56,6 +56,8 @@ const ALL: [Route; 24] = [
     Route::GroupState,
     Route::DeleteGroup,
     Route::Live,
+    Route::OhttpConfig,
+    Route::PushRelayConfig,
 ];
 
 fn header<'request>(
@@ -91,6 +93,8 @@ fn only_account_routes_are_identified_and_only_the_live_channel_is_a_stream() {
             | Route::PrivacyPassIssue => PrivacyClass::Identified,
             Route::Live => PrivacyClass::Stream,
             Route::Params
+            | Route::OhttpConfig
+            | Route::PushRelayConfig
             | Route::RlnLeaves
             | Route::PrivacyPassKeys
             | Route::BoardSync
@@ -138,6 +142,8 @@ fn writes_carry_a_credential_of_their_scope_and_capability_requests_none() {
             | Route::DeleteSubscription
             | Route::ReadGroupMessages
             | Route::GroupState
+            | Route::OhttpConfig
+            | Route::PushRelayConfig
             | Route::DeleteGroup
             | Route::Live => None,
         };
@@ -205,6 +211,15 @@ fn identifiers_travel_as_hex_in_the_path() -> Result<(), TestError> {
         "a5".repeat(32).as_bytes()
     );
     Ok(())
+}
+
+#[test]
+fn a_push_relay_config_is_asked_by_its_listed_id() {
+    let request = ApiRequest::push_relay_config(pingers_proto::RelayId::new(513));
+    assert_eq!(request.method(), "GET");
+    assert_eq!(request.path(), "/v1/push-relays/513/config");
+    assert_eq!(request.route(), Route::PushRelayConfig);
+    assert!(request.body().is_empty());
 }
 
 #[test]

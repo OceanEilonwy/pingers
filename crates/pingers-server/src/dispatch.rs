@@ -106,6 +106,7 @@ async fn dispatch(shared: &Arc<Shared>, route: Route, request: &BinaryRequest) -
                 body: shared.served_config.encoded().to_vec(),
             };
         }
+        Route::PushRelayConfig => return push_relay_config(shared, request).await,
         Route::BoardPage => return board_routes::page(shared, request),
         Route::BoardRevokeLease => return board_routes::revoke(shared, request),
         Route::CreateMailbox => return either(mailbox_routes::register(shared, request).await),
@@ -137,6 +138,36 @@ async fn dispatch(shared: &Arc<Shared>, route: Route, request: &BinaryRequest) -
     };
     blocking(shared, request, handler).await
 }
+
+/// `GET /v1/push-relays/{relay id}/config`: the listed relay's key config as the relay
+/// publishes it. 404 for a relay this server does not list, 502 if it did not answer with a
+/// config. Devices check its hash against their pins: the server cannot substitute a key.
+async fn push_relay_config(shared: &Arc<Shared>, request: &BinaryRequest) -> Reply {
+    let path = request
+        .path
+        .split_once('?')
+        .map_or(request.path.as_str(), |(path, _query)| path);
+    let relay = path
+        .strip_prefix("/v1/push-relays/")
+        .and_then(|rest| rest.strip_suffix("/config"))
+        .and_then(|id| id.parse::<u16>().ok())
+        .map(pingers_proto::RelayId::new);
+    let Some(fetch) = relay.and_then(|relay| shared.tasks.push_relay_config(relay)) else {
+        return Reply::status(StatusCode::NOT_FOUND);
+    };
+    match fetch.await {
+        Ok(body) => Reply {
+            status: StatusCode::OK,
+            content_type: Some(CBOR),
+            headers: Vec::new(),
+            body,
+        },
+        Err(_unreachable) => Reply::status(StatusCode::BAD_GATEWAY),
+    }
+}
+
+/// The media type of a push relay's config, as the relay serves it.
+const CBOR: &str = "application/cbor";
 
 /// `POST /v1/groups/{id}/live` as a one-shot request: one uplink frame of a split channel.
 fn live_uplink(channel: &dyn crate::LiveChannel, request: &BinaryRequest) -> Reply {

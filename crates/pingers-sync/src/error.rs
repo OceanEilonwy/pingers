@@ -20,6 +20,10 @@ pub enum SyncError {
     /// repinned.
     #[error("the OHTTP gateway key does not match the pin")]
     RelayKeyMismatch,
+    /// A push relay's key config is not one of its pinned hashes: seal no push token to
+    /// it, and raise `Notice::RelayKeyMismatch` (design B.4.9).
+    #[error("the push relay key does not match its pins")]
+    PushRelayKeyMismatch,
     /// The device clock is more than half a bucket from the server's (design F.1): nothing is
     /// posted. Raise `Notice::ClockSkew`.
     #[error("device clock is skewed from the server's")]
