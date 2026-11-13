@@ -83,3 +83,6 @@ Implemented in full.
   kilometres is not a Spot or zone, and the local projection's guarantees stop holding.
   **`GeoError::NotImplemented` removed**, with the stub module, now that nothing is stubbed;
   no other crate referred to it.
+- **Wave 3 (2026-11-13), additive:** `Meters::constant` is public (`const`, for slider limits
+  and the like). It saturates instead of failing: negative or NaN gives zero, infinity the
+  largest finite length.

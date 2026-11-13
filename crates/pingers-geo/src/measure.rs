@@ -32,9 +32,20 @@ impl Meters {
         }
     }
 
-    /// A length known at compile time to be finite and not negative.
-    pub(crate) const fn constant(meters: f64) -> Self {
-        Self(meters)
+    /// A length for a `const` item, such as a slider's limit: `Meters::constant(1000.0)`.
+    ///
+    /// Meant for literals. A value that is not a valid length cannot be refused in a `const`
+    /// without panicking, so it saturates instead: negative or NaN gives [`Meters::ZERO`] and
+    /// infinity the largest finite length. Use [`Meters::new`] for values from outside.
+    #[must_use]
+    pub const fn constant(meters: f64) -> Self {
+        if meters.is_nan() || meters < 0.0 {
+            Self::ZERO
+        } else if meters.is_infinite() {
+            Self(f64::MAX)
+        } else {
+            Self(meters)
+        }
     }
 
     /// A whole number of metres; always valid.
@@ -247,6 +258,15 @@ mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
     use super::*;
+
+    #[test]
+    fn constants_keep_valid_lengths_and_saturate_the_rest() {
+        assert_eq!(Meters::constant(150.0), Meters::from_whole(150));
+        assert_eq!(Meters::constant(0.0), Meters::ZERO);
+        assert_eq!(Meters::constant(-1.0), Meters::ZERO);
+        assert_eq!(Meters::constant(f64::NAN), Meters::ZERO);
+        assert_eq!(Meters::constant(f64::INFINITY), Meters::new(f64::MAX).unwrap_or(Meters::ZERO));
+    }
 
     #[test]
     fn one_degree_of_latitude_is_about_111_km() -> Result<(), GeoError> {
