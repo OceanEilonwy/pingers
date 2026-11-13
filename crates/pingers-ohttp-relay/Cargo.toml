@@ -14,7 +14,13 @@ layer = 5
 anyhow = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
-tokio = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true, features = ["net", "signal"] }
+toml = { workspace = true }
+
+[dev-dependencies]
+pingers-ohttp = { workspace = true }
+pingers-testkit = { workspace = true }
 
 [lints]
 workspace = true
