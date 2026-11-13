@@ -12,8 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use pingers_anon::{
-    NullifierOutcome, NullifierRecord, RequestDigest, VerificationContext, classify_nullifier,
-    verify,
+    NullifierOutcome, RequestDigest, VerificationContext, classify_request, verify,
 };
 use pingers_proto::{RlnAuth, ServerId};
 use pingers_time::{Bucket, Clock};
@@ -38,8 +37,10 @@ pub enum Admission {
 }
 
 /// Keyed by bucket only: the external nullifier already commits to the scope, so the same
-/// nullifier cannot arise in two scopes.
-type Sets = BTreeMap<Bucket, HashMap<[u8; 32], NullifierRecord>>;
+/// nullifier cannot arise in two scopes. Each nullifier keeps only its request digest `x`:
+/// slashing is off, so the share `y` is dropped after verification and two shares are never
+/// held together.
+type Sets = BTreeMap<Bucket, HashMap<[u8; 32], RequestDigest>>;
 
 /// The nullifier sets of the current and previous bucket, per scope.
 pub struct Nullifiers {
@@ -94,9 +95,9 @@ impl Nullifiers {
         sets.retain(|bucket, _| *bucket >= oldest);
         let set = sets.entry(proof.bucket).or_default();
         let key = *proof.nullifier.as_bytes();
-        match classify_nullifier(set.get(&key), &proof) {
+        match classify_request(set.get(&key), &proof) {
             NullifierOutcome::Fresh => {
-                set.insert(key, proof.record);
+                set.insert(key, proof.record.x);
                 Ok(Admission::Fresh)
             }
             NullifierOutcome::Replay => Ok(Admission::Replay),

@@ -153,9 +153,21 @@ pub fn classify_nullifier(
     existing: Option<&NullifierRecord>,
     proof: &VerifiedProof,
 ) -> NullifierOutcome {
+    classify_request(existing.map(|record| &record.x), proof)
+}
+
+/// Classifies a verified proof against the request digest stored with its nullifier.
+///
+/// For servers with slashing off (the launch default, design B.4.8): telling a replay from a
+/// conflict needs only `x`, so such a server stores the digest and never the share `y`, and
+/// a leaked nullifier set cannot recover any device's secret.
+pub fn classify_request(
+    existing: Option<&RequestDigest>,
+    proof: &VerifiedProof,
+) -> NullifierOutcome {
     match existing {
         None => NullifierOutcome::Fresh,
-        Some(record) if record.x == proof.record.x => NullifierOutcome::Replay,
+        Some(x) if *x == proof.record.x => NullifierOutcome::Replay,
         Some(_) => NullifierOutcome::Conflict,
     }
 }

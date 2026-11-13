@@ -134,6 +134,11 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
   need no AEAD or curve arithmetic (derivations, tags, hashes, signed messages, AAD, info) were
   recomputed independently with Python's standard library when the files were written.
 
+- **Wave 3 (2026-11-13), additive:** `rln_external_nullifier_hash`, `rln_request_hash` and
+  `RlnPreimageHash` take over the RLN preimage labels and framing from pingers-anon, which now
+  only reduces the hash into the field and applies Poseidon. Outputs are unchanged
+  (`vectors/rln.json` still passes).
+
 ### Account auth challenge (added 2026-11-13, wave 3 server)
 
 - **`sign_auth_challenge` / `verify_auth_challenge`** (additive): the `nonce_sig` of

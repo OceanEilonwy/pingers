@@ -95,3 +95,5 @@ Implemented in full (2026-11-13).
   `closed_segment_hash` treat it as closed from bucket `start + 2`.
 - **New `PresenceError` variants**: `SpotMismatch`, `WrongEpoch`, `DuplicateRecord`,
   `Internal`. `NotImplemented` is removed.
+- **Wave 3 (2026-11-13), additive:** `ActiveSpot::meetup_psk(Bucket) -> MeetupPsk` gives
+  pingers-meetup-session `PSK_meet(b)` (design B.5) without exposing `K_spot`.

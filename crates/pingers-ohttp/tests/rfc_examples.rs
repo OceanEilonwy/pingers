@@ -8,8 +8,9 @@
 
 mod common;
 
-use common::{ReplayRng, SECRET, TestError, gateway_key};
+use common::{SECRET, TestError, gateway_key};
 use pingers_ohttp::{BinaryRequest, BinaryResponse, Gateway, StatusCode};
+use pingers_testkit::FixedRng;
 
 const ENCAPSULATED_REQUEST: &str = "010020000100014b28f881333e7c164ffc499ad9796f877f4e1051ee6d31bad1\
                                     9dec96c208b4726374e469135906992e1268c594d2a10c695d858c40a026e796\
@@ -38,9 +39,9 @@ fn gateway_reproduces_rfc_9458_appendix_a() -> Result<(), TestError> {
         body: Vec::new(),
     };
     assert_eq!(response.encode()?, [0x01, 0x40, 0xc8]);
-    let mut rng = ReplayRng::new(&hex::decode(RESPONSE_NONCE)?);
+    let mut rng = FixedRng::new(&hex::decode(RESPONSE_NONCE)?);
     let sealed = decapsulated.responder.seal(&response, &mut rng)?;
-    assert!(rng.used_exactly());
+    assert!(rng.exhausted_exactly());
     assert_eq!(hex::encode(sealed), ENCAPSULATED_RESPONSE);
     Ok(())
 }

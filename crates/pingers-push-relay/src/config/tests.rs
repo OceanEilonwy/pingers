@@ -86,7 +86,7 @@ fn every_setting_is_read() -> Result<(), ConfigError> {
         "logging = \"counts\"\ncounts_interval_s = 60\nupstream_timeout_ms = 1500\n\
          token_pushes_per_minute = 5\nmax_ttl_s = 3600\n{}\
          allow_insecure_local_endpoints = true\n\n[fcm]\nproject_id = \"p-1\"\n\
-         access_token_file = \"/run/token\"\nendpoint = \"http://127.0.0.1:9/\"\n",
+         service_account_file = \"/run/sa.json\"\nendpoint = \"http://127.0.0.1:9/\"\n",
         minimal()
     );
     let config = RelayConfig::parse(&text)?;
@@ -105,7 +105,7 @@ fn every_setting_is_read() -> Result<(), ConfigError> {
         Some(FcmConfig {
             project_id: "p-1".to_owned(),
             endpoint: Url::parse("http://127.0.0.1:9/").map_err(|_| ConfigError::BadFcmEndpoint)?,
-            access_token_file: PathBuf::from("/run/token"),
+            service_account_file: PathBuf::from("/run/sa.json"),
         })
     );
     Ok(())
@@ -115,7 +115,7 @@ fn every_setting_is_read() -> Result<(), ConfigError> {
 fn fcm_alone_is_enough_and_defaults_to_googles_endpoint() -> Result<(), ConfigError> {
     let text = minimal().replace(
         "[unifiedpush]",
-        "[fcm]\nproject_id = \"p\"\naccess_token_file = \"/t\"",
+        "[fcm]\nproject_id = \"p\"\nservice_account_file = \"/t\"",
     );
     let config = RelayConfig::parse(&text)?;
     assert_eq!(config.unifiedpush, None);
@@ -250,7 +250,7 @@ fn fcm_settings_are_checked() {
         minimal().replace(
             "[unifiedpush]",
             &format!(
-                "[fcm]\nproject_id = \"{project}\"\naccess_token_file = \"/t\"\nendpoint = \"{endpoint}\""
+                "[fcm]\nproject_id = \"{project}\"\nservice_account_file = \"/t\"\nendpoint = \"{endpoint}\""
             ),
         )
     };

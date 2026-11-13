@@ -26,9 +26,9 @@
 //! allow_insecure_local_endpoints = false   # true only for tests against a local ntfy
 //!
 //! [fcm]                            # optional: FCM HTTP v1
-//! project_id = "my-project"
-//! access_token_file = "/run/secrets/fcm-access-token"
-//! endpoint = "https://fcm.googleapis.com/"
+//! project_id = "my-project"        # the Firebase project id
+//! service_account_file = "/etc/pingers-push-relay/fcm-service-account.json"
+//! endpoint = "https://fcm.googleapis.com/"   # optional; the default
 //! ```
 //!
 //! The file holds private keys and the hash key: keep it readable by the relay only. It holds
@@ -47,6 +47,33 @@
 //! The last line prints the `credential_hash` for the server's entry. The server presents the
 //! credential as `Authorization: Bearer <credential>`; credentials shorter than 32 characters
 //! are refused. Changing `hash_key` invalidates every credential hash.
+//!
+//! # FCM setup
+//!
+//! The relay signs its own OAuth 2 assertions with a Google service-account key and exchanges
+//! them for access tokens, which it caches and renews five minutes before they expire. To set
+//! it up:
+//!
+//! 1. In the Google Cloud console for the Firebase project, under IAM & Admin > Service
+//!    Accounts, create a service account used for nothing else (for example
+//!    `pingers-push-relay`), and grant it the single role **Firebase Cloud Messaging API
+//!    Admin** (`roles/firebasecloudmessaging.admin`). Do not use the Firebase Admin SDK
+//!    account the console creates: it can do far more than send messages.
+//! 2. Make sure the Firebase Cloud Messaging API (V1) is enabled for the project.
+//! 3. Under the account's Keys tab, add a JSON key and download it. Copy it to the relay host
+//!    and make it readable by the relay's user only:
+//!
+//!    ```sh
+//!    install -m 600 -o pingers-relay key.json /etc/pingers-push-relay/fcm-service-account.json
+//!    shred -u key.json
+//!    ```
+//!
+//! 4. Set `service_account_file` to that path and `project_id` to the Firebase project id.
+//!
+//! The relay reads `client_email`, `private_key`, `token_uri` and `private_key_id` from the file
+//! at start and never writes, logs or reports any of them; a malformed file stops the relay
+//! with an error naming the field, not its value. To rotate the key, add a new key to the
+//! account, replace the file, restart the relay, then delete the old key in the console.
 
 use std::net::SocketAddr;
 use std::num::NonZeroU32;
@@ -85,8 +112,8 @@ pub struct FcmConfig {
     pub project_id: String,
     /// Where to send; normally `https://fcm.googleapis.com/`.
     pub endpoint: Url,
-    /// A file holding an OAuth 2 access token for the project.
-    pub access_token_file: PathBuf,
+    /// The service account's JSON key file, read at start.
+    pub service_account_file: PathBuf,
 }
 
 /// The validated configuration.
@@ -194,7 +221,7 @@ struct FileUnifiedPush {
 #[serde(deny_unknown_fields)]
 struct FileFcm {
     project_id: String,
-    access_token_file: PathBuf,
+    service_account_file: PathBuf,
     #[serde(default = "default_fcm_endpoint")]
     endpoint: String,
 }
@@ -332,7 +359,7 @@ fn fcm_config(fcm: FileFcm) -> Result<FcmConfig, ConfigError> {
     Ok(FcmConfig {
         project_id: fcm.project_id,
         endpoint,
-        access_token_file: fcm.access_token_file,
+        service_account_file: fcm.service_account_file,
     })
 }
 

@@ -2,15 +2,13 @@
 //! `pp_token`, `rln_identity`, `rln_counter` and the RLN tree tables.
 
 use pingers_anon::{LeafValue, MESSAGE_LIMIT, MessageId, RlnSecret};
-use pingers_proto::RlnScope;
+use pingers_proto::{RlnScope, RootEpoch};
 use pingers_time::Bucket;
 use rusqlite::{OptionalExtension as _, params};
 use zeroize::Zeroizing;
 
-use crate::codec::{bucket, from_int, narrow, read_array, read_secret, to_int};
-use crate::{
-    RootEpoch, Session, StoreError, TokenKeyId, TreeLevel, TreeNodeHash, TreePosition, UnspentToken,
-};
+use crate::codec::{bucket, narrow, read_array, read_secret};
+use crate::{Session, StoreError, TokenKeyId, TreeLevel, TreeNodeHash, TreePosition, UnspentToken};
 
 impl Session {
     /// Unspent Privacy Pass tokens, shared with background handlers (`pp_token` table).
@@ -158,8 +156,7 @@ impl RlnIdentities<'_> {
     ///
     /// # Errors
     ///
-    /// [`StoreError::OutOfRange`] if the root epoch does not fit; [`StoreError::Database`] if
-    /// the write fails.
+    /// [`StoreError::Database`] if the write fails.
     pub fn save(&self, identity: &RlnIdentity) -> Result<(), StoreError> {
         self.save_row(&RlnIdentityRow {
             secret: Zeroizing::new(*identity.secret.expose_bytes()),
@@ -193,11 +190,7 @@ impl RlnIdentities<'_> {
             connection.execute(
                 "INSERT OR REPLACE INTO rln_identity (singleton, sk, leaf_idx, \
                  live_from_root_epoch) VALUES (1, ?1, ?2, ?3)",
-                params![
-                    row.secret.as_slice(),
-                    row.leaf.get(),
-                    to_int(row.live_from.get(), "rln_identity.live_from_root_epoch")?,
-                ],
+                params![row.secret.as_slice(), row.leaf.get(), row.live_from.get(),],
             )?;
             Ok(())
         })
@@ -217,7 +210,7 @@ impl RlnIdentities<'_> {
                                     row.get(1)?,
                                     "rln_identity.leaf_idx",
                                 )?),
-                                live_from: RootEpoch::new(from_int(
+                                live_from: RootEpoch::new(narrow(
                                     row.get(2)?,
                                     "rln_identity.live_from_root_epoch",
                                 )?),
@@ -492,6 +485,35 @@ mod tests {
             live_from: RootEpoch::new(2),
         })?;
         assert_eq!(fixture.rows("rln_identity")?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn a_stored_root_epoch_beyond_the_wire_range_is_corrupt() -> Result<(), TestError> {
+        let fixture = Fixture::new()?;
+        let identities = fixture.session.rln_identity();
+        identities.save_row(&RlnIdentityRow {
+            secret: Zeroizing::new([6; 32]),
+            leaf: TreePosition::new(12),
+            live_from: RootEpoch::new(u32::MAX),
+        })?;
+        assert_eq!(
+            identities.load_row()?.map(|row| row.live_from),
+            Some(RootEpoch::new(u32::MAX))
+        );
+        fixture.session.with(|connection| {
+            connection.execute(
+                "UPDATE rln_identity SET live_from_root_epoch = ?1",
+                [i64::from(u32::MAX).saturating_add(1)],
+            )?;
+            Ok(())
+        })?;
+        assert!(matches!(
+            identities.load_row(),
+            Err(StoreError::Corrupt {
+                field: "rln_identity.live_from_root_epoch"
+            })
+        ));
         Ok(())
     }
 

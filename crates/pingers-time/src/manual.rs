@@ -71,6 +71,20 @@ impl ManualClock {
         self.lock().wall = Duration::from_secs(instant.get());
     }
 
+    /// Whether some task is parked on a [`Timer::sleep_until`] for exactly `deadline`.
+    ///
+    /// Lets a test wait until the code under test has reached a timer before moving time, so
+    /// an [`advance`](Self::advance) cannot race ahead of the deadline being computed. A sleep
+    /// dropped before its deadline stays registered until an advance passes it, so pick a
+    /// deadline only the awaited timer uses.
+    #[must_use]
+    pub fn is_sleeping_until(&self, deadline: MonotonicTime) -> bool {
+        self.lock()
+            .sleepers
+            .iter()
+            .any(|sleeper| sleeper.deadline == deadline)
+    }
+
     fn lock(&self) -> MutexGuard<'_, State> {
         // A test that panicked while holding the lock has already failed; keep the state usable.
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
@@ -198,6 +212,20 @@ mod tests {
         assert_eq!(poll_once(&mut sleep, &waker), Poll::Pending);
         clock.advance(Duration::from_secs(1));
         assert_eq!(counter.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_parked_sleep_is_visible_until_its_deadline_passes() {
+        let clock = ManualClock::new(UnixSeconds::EPOCH);
+        let deadline = MonotonicTime::from_elapsed(Duration::from_secs(4));
+        let mut sleep = clock.sleep_until(deadline);
+        assert!(!clock.is_sleeping_until(deadline), "not polled yet");
+        assert_eq!(poll_once(&mut sleep, Waker::noop()), Poll::Pending);
+        assert!(clock.is_sleeping_until(deadline));
+        let earlier = MonotonicTime::from_elapsed(Duration::from_secs(3));
+        assert!(!clock.is_sleeping_until(earlier));
+        clock.advance(Duration::from_secs(4));
+        assert!(!clock.is_sleeping_until(deadline));
     }
 
     #[test]

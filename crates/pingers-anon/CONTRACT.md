@@ -74,8 +74,9 @@ RLN-v2 membership proofs and Privacy Pass type 0x0001. Features: `prover` (clien
 - **Encodings** (`vectors/rln.json`): field elements 32-byte little-endian canonical;
   `external_nullifier = Poseidon(SHA-256("pingers/v1/rln" ‖ u64be(len) ‖ server_id ‖ scope ‖
   u64be(bucket)) mod r)`; `request_digest = SHA-256("pingers/v1/rln/x" ‖ u64be(len) ‖ method ‖
-  u64be(len) ‖ path ‖ body) mod r`, hashes read little-endian. The labels live here rather than
-  in pingers-crypto because the field reduction and Poseidon are this crate's.
+  u64be(len) ‖ path ‖ body) mod r`, hashes read little-endian. The labels and the SHA-256
+  framing are pingers-crypto's (`rln_external_nullifier_hash`, `rln_request_hash`, wave 3); the
+  field reduction and Poseidon stay here.
 - **Privacy Pass encodings** (`vectors/privacy-pass.json`): P384-SHA384 VOPRF; public key 49-byte
   compressed point, `token_key_id = SHA-256(pkI)`; request `token_type ‖ truncated_key_id ‖
   blinded<2-byte length>`, response `evaluated<2-byte length> ‖ proof(96)`; token
@@ -89,3 +90,11 @@ RLN-v2 membership proofs and Privacy Pass type 0x0001. Features: `prover` (clien
   No sled code is reachable: `nm` finds no `sled::` symbol in the release benchmark binary.
   The `deny.toml` ignores that come from rln are all still needed (reasons updated).
 - **Performance**: see `BENCHMARK.md`.
+- **Wave 3 (2026-11-13):** `LeafPosition` is now an alias of `pingers_proto::MembershipIndex`
+  (same `new`/`get`), so wire positions need no conversion.
+- **Wave 3 (2026-11-13), additive:** `classify_request(Option<&RequestDigest>, &VerifiedProof)`
+  lets a server with slashing off store only `x` per nullifier (pingers-quota now does), so
+  no share `y` is kept; `classify_nullifier` remains for a slashing server. `TokenCount` moved
+  to the shared Privacy Pass module (available with `prover` or `issuer`) and is the only
+  definition of the 300-token batch limit; `batch_token_count(request)` (issuer) gives the
+  count of a batch request, replacing pingers-quota's copy of the wire layout.

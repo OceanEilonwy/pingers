@@ -8,7 +8,9 @@ use pingers_screens::meetup::{
 };
 
 use crate::Language;
-use crate::common::{avatar, direction, distance, list, person_in_sentence, plural, time_range};
+use crate::common::{
+    avatar, direction, distance, list, person_in_sentence, plural, time_range, updated,
+};
 
 /// What the meet point is called in a sentence: "the bandstand", "the pin", "Ben".
 #[must_use]
@@ -44,6 +46,8 @@ pub struct MemberText {
     pub name: String,
     /// "120 m north-east · sharing with you", "Here · exact spot private".
     pub status: String,
+    /// "Updated 40 s ago", for a member who shares, when this device has a fix.
+    pub updated: Option<String>,
     /// "Ask to see Chloé's exact location", for a member whose location is private.
     pub ask: Option<String>,
     /// "Navigate to Ben", for a member who shares.
@@ -138,6 +142,12 @@ pub fn meetup(language: Language, view: &MeetupView) -> MeetupText {
                     avatar: avatar(language, &member.person),
                     name: name.to_owned(),
                     status: peer_status(language, &member.location),
+                    updated: match member.location {
+                        PeerLocation::Shared { age: Some(age), .. } => Some(updated(language, age)),
+                        PeerLocation::Shared { age: None, .. }
+                        | PeerLocation::Private
+                        | PeerLocation::Asked => None,
+                    },
                     ask: matches!(member.location, PeerLocation::Private)
                         .then(|| format!("Ask to see {name}'s exact location")),
                     navigate: matches!(member.location, PeerLocation::Shared { .. })
@@ -264,6 +274,8 @@ mod tests {
             (ben.ask.as_deref(), ben.navigate.as_deref()),
             (None, Some("Navigate to Ben"))
         );
+        assert_eq!(ben.updated.as_deref(), Some("Updated 1 min ago"));
+        assert_eq!(chloe.updated, None);
         assert_eq!(chloe.status, "Here · exact spot private");
         assert_eq!(
             chloe.ask.as_deref(),
@@ -303,6 +315,11 @@ mod tests {
         assert_eq!(
             text.members.first().map(|row| row.status.as_str()),
             Some("Sharing with you")
+        );
+        assert_eq!(
+            text.members.first().map(|row| row.updated.is_none()),
+            Some(true),
+            "without a fix, no age"
         );
         assert_eq!(text.shared_with, "Your exact spot: private");
         let point = text.meet_point.ok_or(FixtureError::Missing)?;

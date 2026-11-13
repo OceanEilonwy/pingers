@@ -11,11 +11,23 @@ publish.workspace = true
 layer = 3
 
 [dependencies]
+# Derivations and seals this crate names but does not implement: the join-request seal, state
+# snapshots, account ids (inviter fingerprints and safety codes).
+pingers-crypto = { workspace = true }
 pingers-geo = { workspace = true }
 pingers-mls = { workspace = true }
+# `RosterLookup`, which this crate implements for knock verification, and `EpochTransition`.
+pingers-presence = { workspace = true }
 pingers-proto = { workspace = true }
 pingers-store = { workspace = true }
+pingers-time = { workspace = true }
+rand_core = { workspace = true }
 thiserror = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+pingers-time = { workspace = true, features = ["test-util"] }
+rand_chacha = { workspace = true }
 
 [lints]
 workspace = true

@@ -4,7 +4,7 @@ The Android shell: Kotlin, Jetpack Compose and Material 3, min SDK 29. It draws
 every screen of the design canvas (`docs/design-canvas`). The app runs on
 `CoreRepository`, over the Rust core (`crates/pingers-ffi`, through UniFFI): each
 pingers-screens view model arrives as a record and maps one to one onto `UiState`.
-Until pingers-client's API merges, `Core` opens but every other call answers
+Until the crates behind pingers-client merge, `Core.open` answers
 `CoreException.Unavailable`, so the screens show their empty states. Debug builds
 launched with `--ez fake true` run on `FakeRepository` (the canvas's example) instead,
 for screenshots:
@@ -42,6 +42,19 @@ the crates:
 Their outputs are added as generated Kotlin sources and `jniLibs`. JNA comes as an
 `@aar` (it carries its own native library); `proguard-rules.pro` keeps JNA and the
 bindings through R8. Set `CARGO_BUILD_JOBS` to limit cargo's parallelism.
+
+**Flavours and app ids.** `gms` (Play services location, FCM and UnifiedPush) is
+`org.pingers.app`; `foss` (no Google code, UnifiedPush only) is `org.pingers.app.foss`.
+Debug builds add `.debug`, so all four install side by side.
+
+**FCM.** The gms flavour reads Firebase's `google-services.json` from the Gradle property
+`pingers.googleServicesJson` or `PINGERS_GOOGLE_SERVICES_JSON`; it is never in the
+repository. The file needs a client for `org.pingers.app`, and the gms debug build
+(`org.pingers.app.debug`) uses that client too. That works while the Firebase API key is
+not restricted to Android apps by package name. If it is, register a second Android app
+`org.pingers.app.debug` in the Firebase project (with the debug signing certificate's
+SHA-1 if the key is restricted by certificate as well), download the new
+`google-services.json`, and set `firebasePackage` in `app/build.gradle.kts` per build type.
 
 **Adding a call.** Export it from `crates/pingers-ffi` (`#[uniffi::export]`, records with
 `uniffi::Record`, errors with `uniffi::Error`, which Kotlin sees as `...Exception`),
@@ -93,12 +106,17 @@ Screenshots of every screen from a Pixel 9 Pro emulator are in `docs/screenshots
    uses pingers-screens' polygon model through `AreaEditor`.
 3. **Events.** Done: `CoreRepository.events` routes `meetup_started` (with the
    notification), `location_request` and `meetup_ended` in `MainActivity`.
-4. **Platform.** `data/InterimPlatform.kt` stands in (in-memory secure store, no
-   location) until the platform package implements `uniffi.pingers.Platform`; then
-   `CoreRepositories` passes that instead. The compass heading (`Heading.kt`) stays in
-   the shell.
-5. **Client.** `Core`'s calls answer `Unavailable` until pingers-client's async API
-   merges; each then becomes one client call in `crates/pingers-ffi/src/core.rs`.
+4. **Platform.** Done: `data/FfiPlatform.kt` implements `uniffi.pingers.Platform` over
+   the platform package's `AndroidPlatform` (Keystore secure store, location, geofences,
+   DND, WorkManager, push). `data/CoreHost.kt` holds the process's one `Core`, opened on
+   first use by the UI or by a receiver, service or worker; `PingersApp` points
+   `PlatformHost.sinkProvider` at it, so geofences, pushes, wakes, fixes and DND changes
+   reach the core. It creates the database key in the secure store on first run. Logcat
+   tag `PingersCore` marks each entry point and its outcome (no coordinates, ids or
+   tokens). The compass heading (`Heading.kt`) stays in the shell.
+5. **Client.** `Core.open` answers `Unavailable` until the L3 crates behind
+   pingers-client (parties, sync, wake, meetup-session) merge; until then every entry
+   point logs `core not open`.
 6. **Words.** Text that pingers-words generates (the "What your server sees" lists, the
    pause reason, zone schedules) is already plain strings in the state. `Words.kt` and the
    format strings can move to pingers-words once it covers them.

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! A live Meetup's screen, and the Meetup ended summary.
 
+use core::time::Duration;
+
 use pingers_geo::{Coordinate, Meters, bearing, distance};
 use pingers_proto::{GroupId, LeafIndex, MeetPointLabel};
 
@@ -45,6 +47,9 @@ pub enum PeerLocation {
         distance: Option<Meters>,
         /// Which way.
         direction: Option<Direction>,
+        /// How old their shared position is against this device's own fix ("Updated 40 s
+        /// ago"), when this device has a fix.
+        age: Option<Duration>,
     },
     /// Private: "Here · exact spot private".
     Private,
@@ -161,6 +166,9 @@ pub fn meetup(snapshot: &ClientSnapshot, id: GroupId) -> Result<MeetupView, Scre
                     distance: from_me(target.position),
                     direction: me
                         .map(|here| Direction::from_bearing(bearing(here, target.position))),
+                    age: snapshot
+                        .own_position
+                        .map(|own| own.fix.taken_at.saturating_duration_since(target.taken_at)),
                 },
                 PeerAccess::Private => PeerLocation::Private,
                 PeerAccess::Asked => PeerLocation::Asked,
@@ -258,6 +266,7 @@ mod tests {
             at,
             distance,
             direction,
+            age,
         } = ben.location
         else {
             return Err(FixtureError::Missing);
@@ -265,6 +274,11 @@ mod tests {
         assert_eq!(at, fixtures::ben_position()?);
         assert!(close(distance, 120.0), "{distance:?}");
         assert_eq!(direction, Some(Direction::NE));
+        assert_eq!(
+            age,
+            Some(Duration::from_secs(60)),
+            "shared at 19:29, own fix 19:30"
+        );
         assert_eq!(chloe.location, PeerLocation::Private);
         Ok(())
     }
@@ -282,6 +296,7 @@ mod tests {
             PeerLocation::Shared {
                 distance: None,
                 direction: None,
+                age: None,
                 ..
             }
         ));

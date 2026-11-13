@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -71,6 +72,7 @@ import org.pingers.app.ui.theme.heading
 
 @Composable
 fun PrivacyScreen(state: PrivacyState, repo: PingersRepository, nav: Navigator) {
+    val context = LocalContext.current
     Column(Modifier.fillMaxSize().background(Pc.Paper)) {
         Column(
             Modifier
@@ -133,7 +135,9 @@ fun PrivacyScreen(state: PrivacyState, repo: PingersRepository, nav: Navigator) 
             }
             Section(stringResource(R.string.privacy_delivery))
             Card {
-                SwitchRow(stringResource(R.string.privacy_no_wake), stringResource(R.string.privacy_no_wake_help), state.noWakePushes, repo::setNoWakePushes)
+                SwitchRow(stringResource(R.string.privacy_no_wake), stringResource(R.string.privacy_no_wake_help), state.noWakePushes, { setNoWakePushes(context, repo, it) })
+                RowDivider()
+                DeviceSettingsRows(state.noWakePushes)
             }
             Row(
                 Modifier

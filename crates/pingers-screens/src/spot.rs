@@ -11,8 +11,8 @@ use crate::snapshot::ClientSnapshot;
 /// The largest radius the slider offers: 1 km. Larger places are better drawn as an area, and a
 /// huge circle would match people who are nowhere near each other.
 #[must_use]
-pub fn maximum_spot_radius() -> Meters {
-    Meters::from_whole(1000)
+pub const fn maximum_spot_radius() -> Meters {
+    Meters::constant(1000.0)
 }
 
 /// Circle or drawn area.

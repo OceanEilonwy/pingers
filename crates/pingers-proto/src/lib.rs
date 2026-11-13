@@ -23,6 +23,7 @@ mod error;
 mod group;
 mod ids;
 mod invite;
+mod key_config;
 mod knock;
 mod meetup;
 mod padding;
@@ -34,10 +35,10 @@ mod secret;
 
 pub use api::{
     AnonymousCredential, AuthRequest, AuthResponse, BoardSyncRequest, BoardSyncResponse,
-    CoverReadRatio, CustomPushRelays, GroupMessages, GroupState, LeaseReplacement, MailboxMessage,
-    MailboxMessages, MembershipIndex, MembershipLeafRequest, MembershipLeafResponse,
-    MembershipLeaves, MembershipRoot, MessageAccepted, Params, PushRelayInfo, ReadBoard,
-    RegisterRequest, RegisterResponse, RootEpoch, Slashing,
+    CoverReadRatio, CustomPushRelays, GroupMessages, GroupState, HourlyRoot, LeaseReplacement,
+    MailboxMessage, MailboxMessages, MembershipIndex, MembershipLeafRequest,
+    MembershipLeafResponse, MembershipLeaves, MembershipRoot, MessageAccepted, Params,
+    PushRelayInfo, ReadBoard, RegisterRequest, RegisterResponse, RootEpoch, Slashing,
 };
 pub use auth::{RlnAuth, RlnScope, ServerId};
 pub use board::{
@@ -56,6 +57,7 @@ pub use ids::{
     SpotId, SubscriptionId,
 };
 pub use invite::{DisplayName, InvitePayload, InviteUses, InviterFingerprint, JoinRequest};
+pub use key_config::SingleSuiteKeyConfig;
 pub use knock::{Knock, KnockSignature};
 pub use meetup::{
     AccuracyMeters, ChatBody, E7Coordinate, HeadingDegrees, LocationPlaintext, MeetPoint,

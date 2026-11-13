@@ -1,14 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- The co-presence alert. Location, the foreground service and push come
-         with the Rust core (docs/architecture.md section 4). -->
+    <!-- The co-presence alert, and what the core returns from a push. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- The platform layer (org.pingers.app.platform, docs/architecture.md section 4):
+         Fused Location and the Geofencing API, the location foreground service for
+         Meetups and "Keep Pingers running", and geofences registered again after a reboot. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
 
     <uses-feature android:name="android.hardware.sensor.compass" android:required="false" />
 
     <!-- Nothing is backed up: Parties, Spots, zones and keys stay on this phone. -->
     <application
+        android:name=".PingersApp"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
@@ -33,5 +45,31 @@
                 <data android:scheme="pingers" android:host="join" />
             </intent-filter>
         </activity>
+
+        <!-- Platform layer. The flavours add their geofence receiver (gms: Geofencing API,
+             foss: proximity alerts) and, in gms, the FCM service. -->
+        <service
+            android:name=".platform.LocationService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
+        <receiver
+            android:name=".platform.BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- UnifiedPush: the connector's manifest brings the distributor <queries>, its
+             receiver and WAKE_LOCK; the app declares the service it binds to. -->
+        <service
+            android:name=".platform.PingersPushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

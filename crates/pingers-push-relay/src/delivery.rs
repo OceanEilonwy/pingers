@@ -8,11 +8,11 @@ use std::time::Duration;
 
 use pingers_proto::{PushClass, PushHandle, PushPlatform, PushToken, Urgency};
 use pingers_time::Timer;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue};
 use reqwest::{StatusCode, Url};
-use zeroize::Zeroizing;
 
 use crate::address::ip_is_public;
+use crate::fcm_auth::FcmAuth;
 
 /// The longest a push service should hold an undelivered push. A wake that arrives an hour
 /// late has missed the knock's lease; later ones do nothing useful.
@@ -119,45 +119,29 @@ pub enum EndpointPolicy {
     AllowInsecureLocal,
 }
 
-/// An OAuth 2 access token for FCM HTTP v1. No `Debug` or `Clone`: it is a secret.
-pub struct FcmAccessToken(Zeroizing<String>);
-
-impl FcmAccessToken {
-    /// Wraps a token (surrounding whitespace is removed).
-    #[must_use]
-    pub fn new(token: &str) -> Self {
-        Self(Zeroizing::new(token.trim().to_owned()))
-    }
-}
-
 /// FCM HTTP v1 settings.
+#[derive(Debug)]
 pub struct FcmSettings {
     send_url: Url,
-    access_token: FcmAccessToken,
+    auth: FcmAuth,
 }
 
 impl FcmSettings {
-    /// FCM for `project_id`, at `endpoint` (normally `https://fcm.googleapis.com/`).
-    ///
-    /// Minting the access token from a service account needs an RS256 JWT, which this crate
-    /// cannot sign (only pingers-crypto calls primitives). Until then the operator supplies a
-    /// token, for example from `gcloud auth print-access-token`.
+    /// FCM for `project_id`, at `endpoint` (normally `https://fcm.googleapis.com/`), with
+    /// access tokens from `auth`.
     ///
     /// # Errors
     ///
     /// `None` if the project id is not a valid FCM project id or the URL cannot be built.
     #[must_use]
-    pub fn new(project_id: &str, endpoint: &Url, access_token: FcmAccessToken) -> Option<Self> {
+    pub fn new(project_id: &str, endpoint: &Url, auth: FcmAuth) -> Option<Self> {
         if !is_valid_fcm_project_id(project_id) {
             return None;
         }
         let send_url = endpoint
             .join(&format!("v1/projects/{project_id}/messages:send"))
             .ok()?;
-        Some(Self {
-            send_url,
-            access_token,
-        })
+        Some(Self { send_url, auth })
     }
 }
 
@@ -249,27 +233,39 @@ impl<T: Timer + 'static> Dispatcher<T> {
         let Ok(token) = std::str::from_utf8(token.as_bytes()) else {
             return DeliveryOutcome::TokenGone;
         };
+        // Minting a token, when one is due, counts against the same timeout as the push.
         let exchange = async {
-            let response = self
+            let Ok(authorization) = settings.auth.authorization(&self.client).await else {
+                return DeliveryOutcome::Failed;
+            };
+            let Ok(mut authorization) = HeaderValue::from_str(&authorization) else {
+                return DeliveryOutcome::Failed;
+            };
+            authorization.set_sensitive(true);
+            let sent = self
                 .client
                 .post(settings.send_url.clone())
-                .header(
-                    AUTHORIZATION,
-                    format!("Bearer {}", settings.access_token.0.as_str()),
-                )
+                .header(AUTHORIZATION, authorization)
                 .header(CONTENT_TYPE, "application/json")
                 .body(fcm_body(token, message))
                 .send()
-                .await?;
+                .await;
+            let Ok(response) = sent else {
+                return DeliveryOutcome::Failed;
+            };
             let status = response.status();
-            let body = response.bytes().await?;
-            Ok::<_, reqwest::Error>(fcm_outcome(status, &body))
+            if status == StatusCode::UNAUTHORIZED {
+                // Revoked or expired early: mint a new one for the next push.
+                settings.auth.forget().await;
+            }
+            match response.bytes().await {
+                Ok(body) => fcm_outcome(status, &body),
+                Err(_) => DeliveryOutcome::Failed,
+            }
         };
-        match self.with_timeout(exchange).await {
-            None => DeliveryOutcome::TimedOut,
-            Some(Err(_)) => DeliveryOutcome::Failed,
-            Some(Ok(outcome)) => outcome,
-        }
+        self.with_timeout(exchange)
+            .await
+            .unwrap_or(DeliveryOutcome::TimedOut)
     }
 }
 
@@ -353,6 +349,15 @@ fn fcm_body(token: &str, message: &PushMessage) -> Vec<u8> {
 /// FCM error codes that mean the token will never work again.
 const FCM_GONE_CODES: [&str; 2] = ["UNREGISTERED", "SENDER_ID_MISMATCH"];
 
+/// What FCM's answer means for the blob:
+///
+/// - 2xx: delivered.
+/// - 404, `UNREGISTERED`, `SENDER_ID_MISMATCH`: the token is gone.
+/// - 400 `INVALID_ARGUMENT` whose field violation names `message.token`: the token is malformed
+///   and never will work, so it is gone too. `INVALID_ARGUMENT` about any other field is a
+///   relay bug, and deleting every blob would be the wrong reaction to it.
+/// - Everything else (`QUOTA_EXCEEDED`, 401, 5xx, unreadable bodies): a failure the server
+///   may retry; the blob stays.
 fn fcm_outcome(status: StatusCode, body: &[u8]) -> DeliveryOutcome {
     if status.is_success() {
         return DeliveryOutcome::Delivered;
@@ -360,22 +365,35 @@ fn fcm_outcome(status: StatusCode, body: &[u8]) -> DeliveryOutcome {
     if status == StatusCode::NOT_FOUND {
         return DeliveryOutcome::TokenGone;
     }
-    let error_code = serde_json::from_slice::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .pointer("/error/details")
-                .and_then(serde_json::Value::as_array)
-                .and_then(|details| {
-                    details
-                        .iter()
-                        .find_map(|detail| detail.get("errorCode")?.as_str().map(str::to_owned))
-                })
-        });
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return DeliveryOutcome::Failed;
+    };
+    let details = value
+        .pointer("/error/details")
+        .and_then(serde_json::Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
+    let error_code = details
+        .iter()
+        .find_map(|detail| detail.get("errorCode")?.as_str());
+    let token_is_malformed = status == StatusCode::BAD_REQUEST
+        && error_code == Some("INVALID_ARGUMENT")
+        && names_the_token(details);
     match error_code {
-        Some(code) if FCM_GONE_CODES.contains(&code.as_str()) => DeliveryOutcome::TokenGone,
+        Some(code) if FCM_GONE_CODES.contains(&code) => DeliveryOutcome::TokenGone,
+        _ if token_is_malformed => DeliveryOutcome::TokenGone,
         _ => DeliveryOutcome::Failed,
     }
+}
+
+/// Whether a `google.rpc.BadRequest` detail blames `message.token`.
+fn names_the_token(details: &[serde_json::Value]) -> bool {
+    details
+        .iter()
+        .filter_map(|detail| detail.get("fieldViolations")?.as_array())
+        .flatten()
+        .any(|violation| {
+            violation.get("field").and_then(serde_json::Value::as_str) == Some("message.token")
+        })
 }
 
 #[cfg(test)]

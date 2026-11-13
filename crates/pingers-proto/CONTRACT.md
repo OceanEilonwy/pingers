@@ -101,7 +101,7 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
   `AnonymousCredential` MembershipProof 0, PrivacyPass 1; `Slashing`, `CustomPushRelays` and
   `ReadBoard` are 0 for off, not allowed and skip.
 - **Added API bodies** (design D): `RegisterResponse`, `AuthResponse`, `MembershipLeafRequest`,
-  `MembershipLeafResponse`, `MembershipLeaves` (with `MembershipRoot`, `MembershipIndex`,
+  `MembershipLeafResponse`, `MembershipLeaves` (with `HourlyRoot`, `MembershipIndex`,
   `RootEpoch`), `MailboxMessages` (`MailboxMessage` carries a `Padded` body, so its length
   must be a size class), `MessageAccepted`, `GroupMessages`, `GroupState`. Privacy Pass
   issuance and invite payloads were added later (below).
@@ -180,3 +180,12 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
   fields pingers-quota's `IssuerPublicKey` has and the client needs (the public key for
   `begin_token_issuance`, when to fetch the next). A unit round trip pins the layout; the
   vector and fuzz target are still to add.
+
+### Wave 3 cleanup (2026-11-13)
+
+- **One owner per concept.** `SingleSuiteKeyConfig` is the only RFC 9458 key config encoder;
+  `PushRelayKeyConfig` and pingers-ohttp both use it, so the pinned hashes cannot drift. The
+  hourly root record is now `HourlyRoot` (`MembershipRoot` stays as an alias), leaving
+  "membership root" to pingers-anon's root value. `MembershipIndex` and `RootEpoch` (u32) are
+  the only leaf position and root epoch types; pingers-anon and pingers-store alias or
+  re-export them. Additive, except that pingers-store's `RootEpoch` is now this `u32` type.

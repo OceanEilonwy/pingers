@@ -28,3 +28,5 @@ Implemented in full, with a test per path. The only place that decides whether t
 - **One reason is reported** when several apply, in the order above.
 - pingers-presence and pingers-meetup cannot depend on this crate (same layer), so they take
   their own two-valued `Sharing` input; pingers-wake maps `GateDecision` onto it.
+- **Wave 3 (2026-11-13), additive:** `QuietHours::start()` and `end()`, so pingers-screens can
+  show the window without its own copy of the type.

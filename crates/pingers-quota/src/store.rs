@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use pingers_anon::{IssuerKey, LeafValue};
-use pingers_proto::{AccountId, MembershipIndex, MembershipRoot, RootEpoch};
+use pingers_proto::{AccountId, HourlyRoot, MembershipIndex, RootEpoch};
 use pingers_time::UnixSeconds;
 
 use crate::QuotaError;
@@ -68,14 +68,14 @@ pub trait MembershipStore: Send + Sync {
     /// # Errors
     ///
     /// Storage errors.
-    fn recent_roots(&self) -> Result<Vec<MembershipRoot>, QuotaError>;
+    fn recent_roots(&self) -> Result<Vec<HourlyRoot>, QuotaError>;
 
     /// Records a new hourly root.
     ///
     /// # Errors
     ///
     /// Storage errors, including an epoch that already has a root.
-    fn insert_root(&self, root: MembershipRoot) -> Result<(), QuotaError>;
+    fn insert_root(&self, root: HourlyRoot) -> Result<(), QuotaError>;
 }
 
 /// A Privacy Pass issuer key with its validity (design C.1 `pp_key`; rotated weekly).
@@ -225,11 +225,11 @@ impl<S: MembershipStore + ?Sized> MembershipStore for Arc<S> {
         (**self).zero(zeroing)
     }
 
-    fn recent_roots(&self) -> Result<Vec<MembershipRoot>, QuotaError> {
+    fn recent_roots(&self) -> Result<Vec<HourlyRoot>, QuotaError> {
         (**self).recent_roots()
     }
 
-    fn insert_root(&self, root: MembershipRoot) -> Result<(), QuotaError> {
+    fn insert_root(&self, root: HourlyRoot) -> Result<(), QuotaError> {
         (**self).insert_root(root)
     }
 }
