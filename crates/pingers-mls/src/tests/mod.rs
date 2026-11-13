@@ -6,8 +6,6 @@
 mod meetup;
 mod party;
 mod vectors;
-#[cfg(feature = "x-wing")]
-mod x_wing;
 
 use pingers_crypto::{AccountPublicKey, AccountSigningKey, GrantPublicKey, MeetupPsk};
 use pingers_proto::{
