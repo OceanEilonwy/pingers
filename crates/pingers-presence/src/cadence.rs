@@ -17,6 +17,10 @@ pub enum UploadTrigger {
     ExitWithRealRecord,
     /// Sharing became suppressed while holding a real record: upload now.
     SuppressedWithRealRecord,
+    /// A Party Commit woke the device (design B.4.7): re-post now, so records carry the new
+    /// epoch's tags. Every member woken by the Commit does this, whether or not it holds a
+    /// real record, so the uploads that follow a Commit say nothing about who is in a Spot.
+    EpochChanged,
     /// Any other wake of the main app: a cover upload, subject to spacing.
     Wake,
 }
@@ -81,7 +85,8 @@ pub fn plan_upload(
         (
             UploadTrigger::ConfirmedEntry
             | UploadTrigger::ExitWithRealRecord
-            | UploadTrigger::SuppressedWithRealRecord,
+            | UploadTrigger::SuppressedWithRealRecord
+            | UploadTrigger::EpochChanged,
             _,
         )
         | (UploadTrigger::Wake, None) => UploadPlan::UploadNow,
@@ -119,7 +124,13 @@ pub fn read_board(
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use pingers_proto::ProtoError;
+    use pingers_testkit::seeded_rng;
+
     use super::*;
+    use crate::test_support::FixedRng;
 
     #[test]
     fn cover_upload_waits_for_minimum_spacing() {
@@ -153,5 +164,101 @@ mod tests {
             plan_upload(UploadTrigger::SuppressedWithRealRecord, recent, now),
             UploadPlan::UploadNow
         );
+        assert_eq!(
+            plan_upload(UploadTrigger::EpochChanged, recent, now),
+            UploadPlan::UploadNow
+        );
+    }
+
+    #[test]
+    fn first_cover_upload_goes_at_once() {
+        assert_eq!(
+            plan_upload(UploadTrigger::Wake, None, UnixSeconds::new(5)),
+            UploadPlan::UploadNow
+        );
+    }
+
+    fn policy(
+        mode: DataMode,
+        epoch_change: EpochChange,
+        ratio: f32,
+    ) -> Result<ReadPolicy, ProtoError> {
+        Ok(ReadPolicy {
+            mode,
+            epoch_change,
+            ratio: CoverReadRatio::new(ratio)?,
+        })
+    }
+
+    #[test]
+    fn confirmed_entry_always_reads() -> Result<(), ProtoError> {
+        let mut rng = seeded_rng(1);
+        let low = policy(DataMode::LowData, EpochChange::Unchanged, 0.0)?;
+        let never = policy(DataMode::Normal, EpochChange::Unchanged, 0.0)?;
+        for policy in [low, never] {
+            assert_eq!(
+                read_board(UploadTrigger::ConfirmedEntry, &policy, &mut rng),
+                ReadBoard::Read
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn low_data_reads_only_after_an_epoch_change() -> Result<(), ProtoError> {
+        let mut rng = seeded_rng(2);
+        let changed = policy(DataMode::LowData, EpochChange::Changed, 0.0)?;
+        assert_eq!(
+            read_board(UploadTrigger::Wake, &changed, &mut rng),
+            ReadBoard::Read
+        );
+        let unchanged = policy(DataMode::LowData, EpochChange::Unchanged, 1.0)?;
+        assert_eq!(
+            read_board(UploadTrigger::Wake, &unchanged, &mut rng),
+            ReadBoard::Skip
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn normal_mode_reads_at_the_cover_ratio() -> Result<(), ProtoError> {
+        let mut rng = seeded_rng(3);
+        let always = policy(DataMode::Normal, EpochChange::Unchanged, 1.0)?;
+        let never = policy(DataMode::Normal, EpochChange::Changed, 0.0)?;
+        let quarter = policy(DataMode::Normal, EpochChange::Unchanged, 0.25)?;
+        let mut reads = 0_u32;
+        for _ in 0..1_000 {
+            assert_eq!(
+                read_board(UploadTrigger::ExitWithRealRecord, &always, &mut rng),
+                ReadBoard::Read
+            );
+            assert_eq!(
+                read_board(UploadTrigger::Wake, &never, &mut rng),
+                ReadBoard::Skip
+            );
+            if read_board(UploadTrigger::Wake, &quarter, &mut rng) == ReadBoard::Read {
+                reads = reads.saturating_add(1);
+            }
+        }
+        // Binomial(1000, 0.25): mean 250, standard deviation about 14; the seed is fixed.
+        assert!((200..=300).contains(&reads), "{reads} reads");
+        Ok(())
+    }
+
+    #[test]
+    fn a_draw_must_be_below_the_ratio_to_read() -> Result<(), ProtoError> {
+        // 0x4000_0000 / 2^32 is exactly 0.25: not below it, so skip; one less reads.
+        let quarter = policy(DataMode::Normal, EpochChange::Unchanged, 0.25)?;
+        let mut at = FixedRng::new(&[0x40, 0, 0, 0]);
+        assert_eq!(
+            read_board(UploadTrigger::Wake, &quarter, &mut at),
+            ReadBoard::Skip
+        );
+        let mut below = FixedRng::new(&[0x3f, 0xff, 0xff, 0xff]);
+        assert_eq!(
+            read_board(UploadTrigger::Wake, &quarter, &mut below),
+            ReadBoard::Read
+        );
+        Ok(())
     }
 }

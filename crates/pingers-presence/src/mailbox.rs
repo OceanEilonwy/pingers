@@ -3,13 +3,17 @@
 
 use core::time::Duration;
 
-use pingers_crypto::{MailboxReadKey, PushRelayPublicKey};
-use pingers_proto::{MailboxSpec, PushTokenPlaintext, RelayRef, TimeToLive, Urgency};
-use pingers_time::UnixSeconds;
+use pingers_crypto::{
+    MailboxReadKey, PushRelayPublicKey, PushTokenToSeal, mailbox_id, push_bind_for_mailbox,
+    seal_push_token,
+};
+use pingers_proto::{
+    MailboxSpec, PushHandle, PushTokenPlaintext, RelayRef, SealedPush, TimeToLive, Urgency,
+};
+use pingers_time::{Bucket, UnixSeconds};
 use rand_core::CryptoRng;
 
 use crate::PresenceError;
-use crate::stub::not_implemented;
 
 /// What a mailbox is for (design C.2 `mailbox.purpose`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -61,18 +65,96 @@ pub struct MailboxRequest<'push> {
 /// mailbox with a random handle. Register at most one per wake, never in the wake that uses
 /// it (design B.4.4, F.3); that scheduling is pingers-sync's job.
 ///
+/// Randomness is drawn in this order: the 32-byte read key, then (when sealing) the 8-byte
+/// push handle and the HPKE randomness of `pingers_crypto::seal_push_token`.
+///
 /// # Errors
 ///
+/// [`PresenceError::MailboxRule`] if the lifetime is over [`MAX_MAILBOX_LIFETIME`];
 /// [`PresenceError::Crypto`] if sealing the push token fails.
 pub fn prepare_mailbox(
     request: &MailboxRequest<'_>,
     rng: &mut impl CryptoRng,
 ) -> Result<MailboxRegistration, PresenceError> {
-    not_implemented((request, rng))
+    if request.time_to_live.duration() > MAX_MAILBOX_LIFETIME {
+        return Err(PresenceError::MailboxRule);
+    }
+    let read_key = MailboxReadKey::generate(rng);
+    let mailbox = mailbox_id(&read_key);
+    let push = match &request.push {
+        PushSealing::NoWake => None,
+        PushSealing::Seal {
+            relay,
+            relay_key,
+            token,
+            urgency,
+        } => {
+            let mut handle = [0; PushHandle::LENGTH];
+            rng.fill_bytes(&mut handle);
+            let blob = seal_push_token(
+                relay_key,
+                &PushTokenToSeal {
+                    bind: push_bind_for_mailbox(&mailbox),
+                    plaintext: token,
+                },
+                rng,
+            )?;
+            Some(SealedPush {
+                relay: relay.clone(),
+                blob,
+                urgency: *urgency,
+                handle: PushHandle::from_bytes(handle),
+            })
+        }
+    };
+    Ok(MailboxRegistration {
+        read_key,
+        spec: MailboxSpec {
+            mailbox_id: mailbox,
+            time_to_live: request.time_to_live,
+            push,
+        },
+    })
 }
 
 /// One lease: how long knock and reply mailboxes live, and how long a knock may go unanswered.
 pub const LEASE_DURATION: Duration = Duration::from_hours(1);
+
+/// The longest a mailbox may live: 30 days (design B.4.9).
+pub const MAX_MAILBOX_LIFETIME: Duration = Duration::from_hours(30 * 24);
+
+/// When a mailbox registered at `registered_at` expires, or `None` if that is past the end of
+/// time. The server drops it then, and the device forgets its read key.
+#[must_use]
+pub fn mailbox_expires_at(
+    registered_at: UnixSeconds,
+    time_to_live: TimeToLive,
+) -> Option<UnixSeconds> {
+    registered_at.checked_add(time_to_live.duration())
+}
+
+/// Whether a pooled knock mailbox lives at least as long as a lease starting in `lease_start`
+/// (until bucket `lease_start + 4` starts), so a knock posted in the record's last minute still
+/// finds it. The pool hands out only mailboxes for which this holds.
+#[must_use]
+pub fn mailbox_covers_lease(
+    registered_at: UnixSeconds,
+    time_to_live: TimeToLive,
+    lease_start: Bucket,
+) -> bool {
+    let needed_until = lease_start
+        .checked_add(crate::LEASE_BUCKETS)
+        .map(Bucket::start);
+    match (
+        mailbox_expires_at(registered_at, time_to_live),
+        needed_until,
+    ) {
+        (Some(expires), Some(needed)) => expires >= needed,
+        // A lease that never ends cannot be covered; a mailbox that never expires covers any.
+        (_, None) => false,
+        (None, Some(_)) => true,
+    }
+}
 
 /// Whether a knock sent at `sent_at` and not answered by `now` should raise
 /// `Notice::UnansweredKnock` (design B.4.4 step 7: nothing answered within one lease).
