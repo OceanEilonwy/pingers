@@ -70,6 +70,27 @@ fn a_sleep_without_a_deadline_never_ends() {
     assert!(sleep.as_mut().poll(&mut context).is_pending());
 }
 
+/// Creating and joining run inside pingers-wake's hand-off, whose futures must be `Send`; a
+/// non-`Sync` value (the random generator) borrowed across an await once broke that. The
+/// check is at compile time: `check` is never called.
+#[test]
+fn creating_and_joining_are_send() {
+    fn send<T: Send>(_future: T) {}
+    fn check(runtime: &crate::Runtime, creation: crate::CreateMeetup, joining: crate::JoinMeetup) {
+        send(crate::create(
+            runtime,
+            creation,
+            Box::new(pingers_testkit::seeded_rng(1)),
+        ));
+        send(crate::join(
+            runtime,
+            joining,
+            Box::new(pingers_testkit::seeded_rng(2)),
+        ));
+    }
+    let _: fn(&crate::Runtime, crate::CreateMeetup, crate::JoinMeetup) = check;
+}
+
 #[test]
 fn only_storage_failures_stop_a_meetup() {
     assert!(SessionError::Store(StoreError::Busy).is_fatal());

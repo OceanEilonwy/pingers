@@ -8,8 +8,9 @@ pingers-meetup-session and the shell.
 
 - `WakeState` (`new`, `restore(WakeSnapshot)`, `snapshot()`, `async run(&WakeEnv, WakeInput,
   rng) -> Result<WakeReport, WakeError>`), `WakeSnapshot` and the stored types it holds
-  (`SpotSnapshot`, `LiveLease`, `LeaseSlot`, `RealRecord`, `SentKnock`, `KnockStatus`,
-  `DecidedKnock`, `KnownEpoch`, `PeerActivity`). The snapshot holds no coordinates.
+  (`SpotSnapshot`, `LiveLease`, `LeaseSlot`, `RealRecord`, `SentKnock` (with `matched_start`),
+  `KnockStatus`, `DecidedKnock`, `KnownEpoch`, `PeerActivity`). The snapshot holds no
+  coordinates.
 - Inputs: `WakeEnv { device, parties, server, meetups, time }`, `WakeInput { trigger, settings,
   budget }`, `WakeTrigger::{Fix, Geofence(GeofenceEvent), Scheduled, Push(PushReason),
   FocusChanged}`, `WakeSettings`, `MailboxReads`.
@@ -17,8 +18,8 @@ pingers-meetup-session and the shell.
   welcomes, notices, next_wake, ending }`, `UploadOutcome`, `KnockOutcome`, `WakeNotice`,
   `WakeEnding::{Completed, OutOfBudget(WakeStep), PortFailed { step, error }}`, `WakeStep`.
 - Ports (`ports` module): `DevicePort`, `PartyView` (+ `PartyInfo`, `SpotInfo`), `ServerPort`
-  (+ `LeaseUpload`), `MeetupPort` (+ `MeetupAdmission`, `ReplyPost`), and the mirror types
-  `FixQuality`, `LocationMode`, `RegionId`, `OsRegion`. Async methods return
+  (+ `LeaseUpload`), `MeetupPort` (+ `MeetupAdmission`, `ReplyPost`; `leave(spot)`), and the
+  mirror types `FixQuality`, `LocationMode`, `RegionId`, `OsRegion`. Async methods return
   `impl Future + Send`.
 - Constants: `FIX_MAX_AGE` (60 s), `ROUTINE_FIX_TIMEOUT` (15 s), `LIVENESS_FIX_TIMEOUT` (10 s),
   `RETRY_AFTER` (60 s).
@@ -67,14 +68,21 @@ pingers-meetup-session and the shell.
   Meetup is live.
 - **Geofences** are chosen again when the Spots change, a fix leaves the horizon, or the OS
   reports a horizon exit; the selection needs a known position.
+- **`PSK_meet`** (design B.5, wave 4): `MeetupAdmission` and `ReplyPost` carry a
+  pingers-presence `MeetupKey` instead of the Spot, epoch and bucket. It is derived from the
+  wake's `ActiveSpot` for the record the knock answered, with that record's start bucket as
+  `b` (`SentKnock::matched_start` remembers it for the knocker), so the poster and the knocker
+  hand pingers-meetup-session the same key whichever bucket they act in. A knocker no longer
+  `Inside` the Spot has no keys: it still reads its reply mailbox, but hands nothing on and the
+  knock stays `Waiting`. Neither port type is `Clone` or `Debug` any more.
+- **Leaving on exit** (design B.5, "Leaving"): a Spot that is `Outside` while a Meetup is live
+  there is left through `MeetupPort::leave(spot)` (new), under `WakeStep::LeaveMeetups`;
+  suppression still leaves every Meetup with `leave_all`.
 - **Slot rotation**: among equal peer activity, Spots without a record in the last lease go
   first.
 
 ## Needs from other crates
 
-- pingers-presence: a way to hand `PSK_meet(b)` to pingers-meetup-session without exposing
-  `K_spot` (for example `ActiveSpot::meetup_psk(bucket)`); `MeetupAdmission` carries the Spot,
-  epoch and bucket until then.
 - pingers-geo: store the Inside confirmation time in `PresenceSnapshot` (review wave 1); the
   restart rule above then becomes a second line of defence.
 - pingers-sync: the mailbox pool behind `take_mailbox` and `refill_mailbox_pool`, the previous

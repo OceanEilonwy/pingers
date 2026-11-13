@@ -95,5 +95,10 @@ Implemented in full (2026-11-13).
   `closed_segment_hash` treat it as closed from bucket `start + 2`.
 - **New `PresenceError` variants**: `SpotMismatch`, `WrongEpoch`, `DuplicateRecord`,
   `Internal`. `NotImplemented` is removed.
-- **Wave 3 (2026-11-13), additive:** `ActiveSpot::meetup_psk(Bucket) -> MeetupPsk` gives
-  pingers-meetup-session `PSK_meet(b)` (design B.5) without exposing `K_spot`.
+- **Wave 4 (2026-11-13): `PSK_meet`.** `ActiveSpot::meetup_key(start: Bucket) -> MeetupKey`
+  replaces `meetup_psk`: `MeetupKey` holds `PSK_meet(b)` together with its id `MeetupKeyId {
+  spot, epoch, bucket }` = `(party_id, epoch, spot_id, b)` (design B.5), so the value and the id
+  it is bound under cannot drift apart, and only a device `Inside` the Spot can make one.
+  `b` is the start bucket of the record the knock answered: the poster and the knocker both
+  know it from that record, so both derive the same key in different wakes and buckets.
+  `MeetupKey` is neither `Clone` nor `Debug`; `K_spot` never leaves this crate.

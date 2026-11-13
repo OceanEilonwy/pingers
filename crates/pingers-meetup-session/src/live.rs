@@ -6,12 +6,13 @@ use core::time::Duration;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use pingers_crypto::{GrantKeyPair, GrantSecretKey, LogAuthKeyPair, MeetupPsk};
+use pingers_crypto::{GrantKeyPair, GrantSecretKey, LogAuthKeyPair};
 use pingers_geo::Fix;
 use pingers_meetup::{CadenceMode, EndReason, MeetupAction, MeetupEvent, MeetupInput};
 use pingers_mls::{
     CipherSuitePolicy, KeyPackagePurpose, MeetupCreation, MeetupPskBinding, MeetupPskId,
 };
+use pingers_presence::{MeetupKey, SpotRef};
 use pingers_proto::{
     AppMessage, CommitRequest, CommitResponse, CreateGroup, GroupId, KeyPackageBytes, LiveFrame,
     PartyId, SeenSegment, SequenceNumber, SpotId, Subscription, SubscriptionId, Urgency,
@@ -81,16 +82,11 @@ pub enum Ended {
 
 /// Creating a Meetup after a knock passed this device's liveness check (design B.5, G.4).
 pub struct CreateMeetup {
-    /// The Party it forms in.
-    pub party: PartyId,
-    /// The Spot it forms at.
-    pub spot: SpotId,
+    /// `PSK_meet(b)` and its id, from the Spot's keys in pingers-presence: it names the Party
+    /// and Spot the Meetup forms at and binds the group to them.
+    pub key: MeetupKey,
     /// A random 32-byte group id.
     pub group: GroupId,
-    /// The external PSK id binding it to the Party and Spot.
-    pub psk_id: MeetupPskId,
-    /// `PSK_meet(b)`.
-    pub psk: MeetupPsk,
     /// The knocker's KeyPackage.
     pub knocker: KeyPackageBytes,
     /// The creator's and the knocker's sealed-push subscriptions.
@@ -103,21 +99,30 @@ pub struct CreateMeetup {
 
 /// Joining a Meetup from the Welcome its creator or a member sent (design B.5, G.4, G.5).
 pub struct JoinMeetup {
-    /// The Party.
-    pub party: PartyId,
-    /// The Spot.
-    pub spot: SpotId,
+    /// `PSK_meet(b)` and its id for the record this device knocked on: the Meetup must be
+    /// bound to them. It names the Party and Spot.
+    pub key: MeetupKey,
     /// The Welcome from the reply mailbox.
     pub welcome: WelcomeBytes,
-    /// The PSK id the Meetup must be bound to.
-    pub psk_id: MeetupPskId,
-    /// `PSK_meet(b)`.
-    pub psk: MeetupPsk,
     /// The grant secret whose public half is in the KeyPackage this device knocked with
     /// ([`KnockKeyPackage::grant_key`]).
     pub grant_key: GrantSecretKey,
     /// This device's own subscription, named on the live channel.
     pub own_subscription: Option<SubscriptionId>,
+}
+
+/// The MLS PSK id `(party_id, epoch, spot_id, b)` and value of `key` (design B.5).
+fn binding(key: &MeetupKey) -> MeetupPskBinding<'_> {
+    let id = key.id();
+    MeetupPskBinding {
+        id: MeetupPskId {
+            party: id.spot.party,
+            epoch: id.epoch,
+            spot: id.spot.spot,
+            bucket: id.bucket,
+        },
+        value: key.psk(),
+    }
 }
 
 /// A Meetup KeyPackage for a knock, with the grant secret to keep for [`JoinMeetup`].
@@ -189,26 +194,21 @@ pub async fn create(
     mut rng: SessionRng,
 ) -> Result<Created, SessionError> {
     let CreateMeetup {
-        party,
-        spot,
+        key,
         group,
-        psk_id,
-        psk,
         knocker,
         subscriptions,
         own_subscription,
         suite,
     } = request;
+    let SpotRef { party, spot } = key.id().spot;
     let prepared = run_blocking(&runtime.database, move |local| {
         let grant = GrantKeyPair::generate(&mut rng)?;
         let roster = group::party_context(local, &party)?.roster;
         let created = local.mls().create_meetup_group(
             &MeetupCreation {
                 group_id: group,
-                psk: MeetupPskBinding {
-                    id: psk_id,
-                    value: &psk,
-                },
+                psk: binding(&key),
                 party_roster: &roster,
                 first_member: &knocker,
                 own_grant_key: &grant.public,
@@ -217,16 +217,25 @@ pub async fn create(
             &mut rng,
         )?;
         Ok(Prepared {
-            auth: created.group.log_auth_key_pair()?,
-            next_auth: created.group.pending_log_auth_key_pair()?,
-            epoch: created.group.epoch(),
-            commit: created.commit,
+            registration: Registration {
+                auth: created.group.log_auth_key_pair()?,
+                next_auth: created.group.pending_log_auth_key_pair()?,
+                epoch: created.group.epoch(),
+                commit: created.commit,
+            },
             grant_key: grant.secret,
             rng,
         })
     })
     .await?;
-    let welcome = match register(runtime, group, &prepared, subscriptions).await {
+    // The random generator is not `Sync`, so it is kept out of what `register` borrows across
+    // its awaits: the future stays `Send`.
+    let Prepared {
+        registration,
+        grant_key,
+        rng,
+    } = prepared;
+    let welcome = match register(runtime, group, &registration, subscriptions).await {
         Ok(welcome) => welcome,
         Err(error) => {
             let _cleanup = run_blocking(&runtime.database, move |local| {
@@ -236,7 +245,6 @@ pub async fn create(
             return Err(error);
         }
     };
-    let Prepared { grant_key, rng, .. } = prepared;
     let now = runtime.clock.now();
     let core = run_blocking(&runtime.database, move |local| {
         local.mls().meetup_group(&group)?.merge_pending_commit()?;
@@ -263,19 +271,24 @@ pub async fn create(
 
 /// A Meetup group created locally, its first commit still pending.
 struct Prepared {
+    registration: Registration,
+    grant_key: GrantSecretKey,
+    rng: SessionRng,
+}
+
+/// What registering the new group and posting its first commit needs.
+struct Registration {
     auth: LogAuthKeyPair,
     next_auth: LogAuthKeyPair,
     epoch: pingers_proto::Epoch,
     commit: pingers_mls::Commit,
-    grant_key: GrantSecretKey,
-    rng: SessionRng,
 }
 
 /// Registers a new group on the server and posts its first commit; returns the Welcome.
 async fn register(
     runtime: &Runtime,
     group: GroupId,
-    prepared: &Prepared,
+    prepared: &Registration,
     subscriptions: Vec<Subscription>,
 ) -> Result<WelcomeBytes, SessionError> {
     let timer = &*runtime.timer;
@@ -329,27 +342,18 @@ pub async fn join(
     rng: SessionRng,
 ) -> Result<Joined, SessionError> {
     let JoinMeetup {
-        party,
-        spot,
+        key,
         welcome,
-        psk_id,
-        psk,
         grant_key,
         own_subscription,
     } = request;
+    let SpotRef { party, spot } = key.id().spot;
     let now = runtime.clock.now();
     let core = run_blocking(&runtime.database, move |local| {
         let roster = group::party_context(local, &party)?.roster;
         let group = local
             .mls()
-            .join_meetup_group(
-                &welcome,
-                &MeetupPskBinding {
-                    id: psk_id,
-                    value: &psk,
-                },
-                &roster,
-            )?
+            .join_meetup_group(&welcome, &binding(&key), &roster)?
             .group_id();
         start_core(
             local,

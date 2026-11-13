@@ -177,7 +177,7 @@ Client side:
 
 **pingers-meetup-session**: a meetup while it is live.
 - Creates or joins the meetup group; holds the chunked OHTTP live channel; sends location or dummy frames on the cadence; applies consent decisions from pingers-meetup; removes silent members; ends the meetup and deletes its keys and content.
-- Deps: pingers-meetup, pingers-mls, pingers-transport, pingers-store.
+- Deps: pingers-meetup, pingers-mls, pingers-transport, pingers-store, pingers-presence (only for `MeetupKey`: `PSK_meet` with its id, so the Spot keys never leave pingers-presence).
 
 **pingers-client**: the composition root, the only crate pingers-ffi and pingers-screens see.
 - Builds the crates above from a `Platform` (secure store, OS geofences, fixes, DND, wake scheduling) and an `Events` sink, and exposes one async API.

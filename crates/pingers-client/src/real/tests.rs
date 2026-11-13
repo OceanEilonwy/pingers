@@ -190,6 +190,7 @@ async fn a_full_wake_snapshot_round_trips_through_the_store() -> TestResult {
         epoch: Epoch::new(u64::from(seed)),
         knock_mailbox: MailboxId::from_bytes([seed; 16]),
         matched: RecordRandomness::from_bytes([seed.wrapping_add(1); 16]),
+        matched_start: Bucket::containing(UnixSeconds::new(u64::from(seed).saturating_mul(900))),
         reply_mailbox: MailboxId::from_bytes([seed.wrapping_add(2); 16]),
         sent_at: UnixSeconds::new(u64::from(seed)),
         status,
@@ -646,5 +647,62 @@ async fn the_display_name_is_kept_in_the_store() -> TestResult {
         again.section().await?.display_name,
         Some(Name::new("Samira")?)
     );
+    Ok(())
+}
+
+/// An admission the client cannot carry out is reported, not swallowed: without an instance
+/// there is no transport for the Meetup's live channel, and an add names no live Meetup. The
+/// wake then ends with `PortFailed` and retries instead of believing the knocker was admitted.
+#[tokio::test]
+async fn an_admission_the_client_cannot_carry_out_is_reported() -> TestResult {
+    use pingers_meetup_session::knock_key_package;
+    use pingers_mls::CipherSuitePolicy;
+    use pingers_presence::{ActiveSpot, Admission, SpotStatus, VerifiedKnock};
+    use pingers_proto::{GroupId, Knock, KnockSignature};
+    use pingers_wake::ports::{MeetupAdmission, MeetupPort as _};
+
+    let store = store()?;
+    let meetups = Meetups::new(Arc::clone(&store.backend));
+    let key_package = knock_key_package(
+        &store.backend.database,
+        CipherSuitePolicy::Classical,
+        Box::new(ChaCha20Rng::seed_from_u64(4)),
+    )
+    .await?
+    .key_package;
+    let status = SpotStatus {
+        spot: spot_ref(1),
+        epoch: Epoch::new(1),
+        state: PresenceState::Inside,
+    };
+    let root = pingers_crypto::PresenceRoot::from_bytes(Zeroizing::new([3; 32]));
+    let start = Bucket::containing(store.clock.now());
+    for admission in [
+        Admission::CreateMeetup,
+        Admission::AddToMeetup(GroupId::from_bytes([7; 32])),
+    ] {
+        let knocker = AccountSigningKey::generate(&mut ChaCha20Rng::seed_from_u64(8));
+        let outcome = meetups
+            .admit(MeetupAdmission {
+                key: ActiveSpot::derive(&root, &status)?.meetup_key(start)?,
+                admission,
+                knock: VerifiedKnock {
+                    knocker: LeafIndex::new(1),
+                    knocker_key: knocker.public_key(),
+                    knock: Knock {
+                        matched_randomness: RecordRandomness::from_bytes([1; 16]),
+                        own_randomness: None,
+                        leaf_index: LeafIndex::new(1),
+                        party_epoch: Epoch::new(1),
+                        key_package: key_package.clone(),
+                        reply_mailbox: MailboxId::from_bytes([2; 16]),
+                        meetup_subscription: None,
+                        signature: KnockSignature::from_bytes([0; 64]),
+                    },
+                },
+            })
+            .await;
+        assert_eq!(outcome, Err(PortError::Unavailable));
+    }
     Ok(())
 }

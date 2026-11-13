@@ -65,6 +65,7 @@ fn encode(writer: &mut Writer, snapshot: &WakeSnapshot) {
         writer.u64(knock.epoch.get());
         writer.fixed(knock.knock_mailbox.as_bytes());
         writer.fixed(knock.matched.as_bytes());
+        writer.u64(knock.matched_start.index());
         writer.fixed(knock.reply_mailbox.as_bytes());
         writer.u64(knock.sent_at.get());
         writer.byte(match knock.status {
@@ -142,6 +143,7 @@ fn decode(reader: &mut Reader<'_>) -> Result<WakeSnapshot, ClientError> {
             epoch: Epoch::new(reader.u64()?),
             knock_mailbox: MailboxId::from_bytes(reader.fixed()?),
             matched: RecordRandomness::from_bytes(reader.fixed()?),
+            matched_start: Bucket::from_index(reader.u64()?).map_err(|_bad| corrupt())?,
             reply_mailbox: MailboxId::from_bytes(reader.fixed()?),
             sent_at: time(reader)?,
             status: match reader.byte()? {
