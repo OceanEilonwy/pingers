@@ -137,3 +137,19 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
   truncated id) and pingers-anon's `finish` takes only the response bytes.
 - Vectors `privacy-pass-issue-request-encoding` and `privacy-pass-issue-response-encoding`;
   fuzz targets `privacy_pass_issue_request` and `privacy_pass_issue_response`.
+
+### Invites (added 2026-11-13, wave 2)
+
+- **`InvitePayload`**, the link fragment (`https://<host>/j#v1.<base64url(encoding)>`):
+  `[server (ServerId text), invite mailbox (16), invite secret (32, Redacted), inviter
+  fingerprint (8), expires (UnixSeconds), uses]`. `InviteUses` replaces the design's
+  `single_use: bool` (0 `Multiple`, 1 `Single`). `InviterFingerprint` is an 8-byte newtype with
+  a redacted `Debug`. The `v1.` prefix and base64url are left to pingers-parties, so this crate
+  needs no base64 dependency; the CBOR carries its own version.
+- **`JoinRequest`**, the plaintext pingers-crypto's `seal_join_request` seals:
+  `[key package, display name, reply mailbox (16), party subscription]`. The AEAD under
+  `HKDF(invite_secret, "join")` is what authenticates the joiner's `KeyPackage` under the
+  secret; this crate only encodes it. `DisplayName` is 1 to 200 bytes of UTF-8 (the design
+  gives no limit; 200 matches pingers-store's `MemberName`) with a redacted `Debug`.
+- Vectors `invite-payload-encoding` and `join-request-encoding`; fuzz targets
+  `invite_payload` and `join_request`.

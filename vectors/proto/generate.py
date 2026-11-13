@@ -785,3 +785,144 @@ write(
         },
     ],
 )
+
+# --- invites ---
+inv_server = "https://pingers.example"
+inv_mailbox = ramp(0x21, 16)
+inv_secret = ramp(0xa0, 32)
+inv_fpr = ramp(0x08, 8)
+write(
+    "invite-payload-encoding",
+    "Invite link fragment payload (https://<host>/j#v1.<base64url(this)>) as canonical CBOR: [server, invite mailbox, invite secret, inviter fingerprint, expires, uses (0 multiple, 1 single)] (design D, invite flow)",
+    [
+        {
+            "name": "single-use",
+            "inputs": {
+                "server": inv_server,
+                "invite_mailbox": h(inv_mailbox),
+                "invite_secret": h(inv_secret),
+                "inviter_fingerprint": h(inv_fpr),
+                "expires": 1_800_604_800,
+                "uses": "single",
+            },
+            "expected": {
+                "encoding": h(
+                    versioned(
+                        a(t(inv_server), b(inv_mailbox), b(inv_secret), b(inv_fpr), u(1_800_604_800), u(1))
+                    )
+                )
+            },
+        },
+        {
+            "name": "multiple-use",
+            "inputs": {
+                "server": inv_server,
+                "invite_mailbox": h(inv_mailbox),
+                "invite_secret": h(inv_secret),
+                "inviter_fingerprint": h(inv_fpr),
+                "expires": 1_800_000_000,
+                "uses": "multiple",
+            },
+            "expected": {
+                "encoding": h(
+                    versioned(
+                        a(t(inv_server), b(inv_mailbox), b(inv_secret), b(inv_fpr), u(1_800_000_000), u(0))
+                    )
+                )
+            },
+        },
+        {
+            "name": "http-server",
+            "inputs": {
+                "encoding": h(
+                    versioned(
+                        a(t("http://pingers.example"), b(inv_mailbox), b(inv_secret), b(inv_fpr), u(1), u(0))
+                    )
+                )
+            },
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "short-secret",
+            "inputs": {
+                "encoding": h(
+                    versioned(
+                        a(t(inv_server), b(inv_mailbox), b(inv_secret[:31]), b(inv_fpr), u(1), u(0))
+                    )
+                )
+            },
+            "expected": {"error": "WrongLength"},
+        },
+        {
+            "name": "unknown-uses",
+            "inputs": {
+                "encoding": h(
+                    versioned(
+                        a(t(inv_server), b(inv_mailbox), b(inv_secret), b(inv_fpr), u(1), u(2))
+                    )
+                )
+            },
+            "expected": {"error": "OutOfRange"},
+        },
+    ],
+)
+
+join_kp = ramp(0x40, 40)
+join_reply = ramp(0x51, 16)
+join_sub_id = ramp(0x61, 16)
+join_subscription = a(b(join_sub_id), listed, u(2_592_000))
+write(
+    "join-request-encoding",
+    "Join request plaintext (sealed with seal_join_request, posted to the invite mailbox) as canonical CBOR: [key package, display name, reply mailbox, party subscription] (design D, invite flow)",
+    [
+        {
+            "name": "bob",
+            "inputs": {
+                "key_package": h(join_kp),
+                "display_name": "Bob",
+                "reply_mailbox": h(join_reply),
+                "subscription_id": h(join_sub_id),
+                "subscription_ttl_seconds": 2_592_000,
+            },
+            "expected": {
+                "encoding": h(versioned(a(b(join_kp), t("Bob"), b(join_reply), join_subscription)))
+            },
+        },
+        {
+            "name": "longest-name",
+            "inputs": {
+                "key_package": h(join_kp),
+                "display_name": "é" * 100,
+                "reply_mailbox": h(join_reply),
+                "subscription_id": h(join_sub_id),
+                "subscription_ttl_seconds": 2_592_000,
+            },
+            "expected": {
+                "encoding": h(
+                    versioned(a(b(join_kp), t("é" * 100), b(join_reply), join_subscription))
+                )
+            },
+        },
+        {
+            "name": "name-too-long",
+            "inputs": {
+                "encoding": h(
+                    versioned(a(b(join_kp), t("a" * 201), b(join_reply), join_subscription))
+                )
+            },
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "empty-name",
+            "inputs": {
+                "encoding": h(versioned(a(b(join_kp), t(""), b(join_reply), join_subscription)))
+            },
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "no-subscription",
+            "inputs": {"encoding": h(versioned(a(b(join_kp), t("Bob"), b(join_reply), NULL)))},
+            "expected": {"error": "Cbor"},
+        },
+    ],
+)

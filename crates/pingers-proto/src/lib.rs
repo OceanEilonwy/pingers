@@ -22,6 +22,7 @@ mod codec;
 mod error;
 mod group;
 mod ids;
+mod invite;
 mod knock;
 mod meetup;
 mod padding;
@@ -53,6 +54,7 @@ pub use ids::{
     LocationRequestId, MailboxId, PartyId, PushHandle, RecordRandomness, RelayId, SequenceNumber,
     SpotId, SubscriptionId,
 };
+pub use invite::{DisplayName, InvitePayload, InviteUses, InviterFingerprint, JoinRequest};
 pub use knock::{Knock, KnockSignature};
 pub use meetup::{
     AccuracyMeters, ChatBody, E7Coordinate, HeadingDegrees, LocationPlaintext, MeetPoint,

@@ -7,9 +7,10 @@ use pingers_proto::{
     AccountId, AccuracyMeters, AnonymousCredential, AppMessage, AuthRequest, AuthResponse,
     BoardCursor, BoardPage, BoardSyncRequest, BoardSyncResponse, ChatBody, ChatMessageId,
     CommitRequest, CommitResponse, ContentType, CoverReadRatio, CreateGroup, CustomPushRelays,
-    Delivery, E7Coordinate, Epoch, GroupAuthKey, GroupId, GroupLogEntry, GroupMessages, GroupState,
-    HeadingDegrees, KeyConfigHash, KeyPackageBytes, Knock, KnockSignature, Lamport, LeafIndex,
-    Lease, LeaseId, LeaseReplacement, LiveFrame, LocationGeneration, LocationPlaintext, MailboxId,
+    Delivery, DisplayName, E7Coordinate, Epoch, GroupAuthKey, GroupId, GroupLogEntry,
+    GroupMessages, GroupState, HeadingDegrees, InvitePayload, InviteUses, InviterFingerprint,
+    JoinRequest, KeyConfigHash, KeyPackageBytes, Knock, KnockSignature, Lamport, LeafIndex, Lease,
+    LeaseId, LeaseReplacement, LiveFrame, LocationGeneration, LocationPlaintext, MailboxId,
     MailboxMessage, MailboxMessages, MailboxSpec, MeetPoint, MeetPointLabel, MeetupMessage,
     MembershipIndex, MembershipLeafRequest, MembershipLeafResponse, MembershipLeaves,
     MembershipRoot, MessageAccepted, MlsMessageBytes, Padded, Params, PrivacyPassIssueRequest,
@@ -18,7 +19,7 @@ use pingers_proto::{
     ReadBoard, Record, RecordRandomness, RecordTag, Redacted, RegisterRequest, RegisterResponse,
     RelayId, RelayRef, RelayUrl, RevokeCommitment, RlnAuth, RlnScope, RootEpoch, SealedAsk,
     SealedBeacon, SealedGrant, SealedLocationFrame, SealedPush, SealedPushBlob, SealedSnapshot,
-    SeenSegment, SegmentHash, SegmentInfo, SequenceNumber, SizeClass, Slashing,
+    SeenSegment, SegmentHash, SegmentInfo, SequenceNumber, ServerId, SizeClass, Slashing,
     SpeedCentimetresPerSecond, Subscription, SubscriptionId, TimeToLive, Urgency,
 };
 use pingers_time::{Bucket, UnixSeconds};
@@ -188,6 +189,47 @@ pub(crate) fn privacy_pass_issue_response() -> impl Strategy<Value = PrivacyPass
     vec(any::<u8>(), 1..200).prop_filter_map("fits a batch", |bytes| {
         PrivacyPassIssueResponse::new(bytes).ok()
     })
+}
+
+pub(crate) fn invite_payload() -> impl Strategy<Value = InvitePayload> {
+    (
+        text(40).prop_filter_map("https origin", |host| {
+            ServerId::new(format!("https://{host}")).ok()
+        }),
+        bytes16(),
+        bytes32(),
+        uniform::<_, 8>(any::<u8>()),
+        unix_seconds(),
+        prop_oneof![Just(InviteUses::Multiple), Just(InviteUses::Single)],
+    )
+        .prop_map(
+            |(server, mailbox, secret, fingerprint, expires, uses)| InvitePayload {
+                server,
+                invite_mailbox: MailboxId::from_bytes(mailbox),
+                invite_secret: Redacted::new(secret),
+                inviter_fingerprint: InviterFingerprint::from_bytes(fingerprint),
+                expires,
+                uses,
+            },
+        )
+}
+
+pub(crate) fn join_request() -> impl Strategy<Value = JoinRequest> {
+    (
+        opaque(),
+        text(DisplayName::MAX_BYTES)
+            .prop_filter_map("1 to 200 bytes", |name| DisplayName::new(name).ok()),
+        bytes16(),
+        subscription(),
+    )
+        .prop_map(
+            |(key_package, display_name, reply_mailbox, party_subscription)| JoinRequest {
+                key_package: KeyPackageBytes::from_bytes(key_package),
+                display_name,
+                reply_mailbox: MailboxId::from_bytes(reply_mailbox),
+                party_subscription,
+            },
+        )
 }
 
 pub(crate) fn mailbox_spec() -> impl Strategy<Value = MailboxSpec> {

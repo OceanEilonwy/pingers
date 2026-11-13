@@ -271,3 +271,17 @@ path = "fuzz_targets/privacy_pass_issue_response.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "invite_payload"
+path = "fuzz_targets/invite_payload.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "join_request"
+path = "fuzz_targets/join_request.rs"
+test = false
+doc = false
+bench = false
