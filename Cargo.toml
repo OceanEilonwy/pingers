@@ -106,6 +106,17 @@ proptest = "1.12.0"
 # Tooling
 toml = "1.2.1"
 
+# Same-layer dependencies, checked by `cargo xtask layers`. The architecture puts pingers-time
+# in L0 beside the crates that need its types, so L0 has an internal order:
+# pingers-time, then pingers-proto, then pingers-geo and pingers-crypto.
+[workspace.metadata.pingers]
+same-layer = [
+  { crate = "pingers-proto", dependency = "pingers-time", reason = "wire types carry Bucket and UnixSeconds (style guide §6 puts them in pingers-time)" },
+  { crate = "pingers-geo", dependency = "pingers-time", reason = "fixes are timestamped and the Spot state machine counts seconds" },
+  { crate = "pingers-crypto", dependency = "pingers-time", reason = "tags, seal keys and the meetup PSK are derived per Bucket" },
+  { crate = "pingers-crypto", dependency = "pingers-proto", reason = "keys are derived from proto's identifiers and seal proto's records and beacons" },
+]
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"

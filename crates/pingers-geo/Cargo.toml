@@ -1,0 +1,21 @@
+[package]
+name = "pingers-geo"
+description = "Fences, the per-Spot presence state machine, exclusion zones, distance and bearing."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 0
+
+[dependencies]
+pingers-time = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "pingers-proto"
+description = "Every type that crosses the network or the FFI boundary in serialised form."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 0
+
+[dependencies]
+pingers-time = { workspace = true }
+minicbor = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

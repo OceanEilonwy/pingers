@@ -5,7 +5,9 @@
 //!   `[package.metadata.pingers] layer = N` (0 to 5, or `"dev"`). A crate may depend only on
 //!   crates in strictly lower layers, no production crate may depend on a dev crate, and no
 //!   crate in L0 or L1 may depend on an I/O crate (`tokio`, `hyper`, `reqwest`, `rusqlite`),
-//!   directly or transitively.
+//!   directly or transitively. A same-layer dependency is allowed only if it is listed, with a
+//!   reason, under `[workspace.metadata.pingers] same-layer` in the workspace manifest; an
+//!   entry that is no longer used is itself a violation, like an unfulfilled `#[expect]`.
 //! - `cargo xtask ci`: the checks CI runs on every pull request, in order, stopping at the
 //!   first failure.
 #![forbid(unsafe_code)]
@@ -117,16 +119,34 @@ struct CrateManifest {
     dependencies: Vec<Dependency>,
 }
 
+/// A same-layer dependency the architecture relies on, written down in the workspace manifest
+/// under `[workspace.metadata.pingers] same-layer` with a reason.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SameLayerException {
+    dependent: String,
+    dependency: String,
+}
+
 fn check_layers(root: &Path) -> Result<Outcome> {
     let crates = read_crate_manifests(&root.join("crates"))?;
     let by_name: BTreeMap<&str, &CrateManifest> = crates
         .iter()
         .map(|manifest| (manifest.name.as_str(), manifest))
         .collect();
+    let exceptions = read_same_layer_exceptions(&root.join("Cargo.toml"))?;
 
     let mut violations = Vec::new();
+    let mut used = Vec::new();
     for manifest in &crates {
-        check_direct_dependencies(manifest, &by_name, &mut violations);
+        check_direct_dependencies(manifest, &by_name, &exceptions, &mut used, &mut violations);
+    }
+    for exception in &exceptions {
+        if !used.contains(&exception) {
+            violations.push(format!(
+                "same-layer exception {} -> {} is no longer needed; remove it",
+                exception.dependent, exception.dependency
+            ));
+        }
     }
     for manifest in &crates {
         if matches!(manifest.layer, Layer::Numbered(number) if number <= LAST_PURE_LAYER) {
@@ -151,9 +171,11 @@ fn check_layers(root: &Path) -> Result<Outcome> {
     }
 }
 
-fn check_direct_dependencies(
+fn check_direct_dependencies<'exceptions>(
     manifest: &CrateManifest,
     by_name: &BTreeMap<&str, &CrateManifest>,
+    exceptions: &'exceptions [SameLayerException],
+    used: &mut Vec<&'exceptions SameLayerException>,
     violations: &mut Vec<String>,
 ) {
     for dependency in &manifest.dependencies {
@@ -175,6 +197,15 @@ fn check_direct_dependencies(
         let allowed = match (manifest.layer, target.layer) {
             (Layer::Dev, _) => true,
             (Layer::Numbered(_), Layer::Dev) => false,
+            (Layer::Numbered(own), Layer::Numbered(theirs)) if theirs == own => {
+                let exception = exceptions.iter().find(|exception| {
+                    exception.dependent == manifest.name && exception.dependency == target.name
+                });
+                if let Some(exception) = exception {
+                    used.push(exception);
+                }
+                exception.is_some()
+            }
             (Layer::Numbered(own), Layer::Numbered(theirs)) => theirs < own,
         };
         if !allowed {
@@ -229,6 +260,43 @@ fn check_transitive_io(
         ));
     }
     Ok(())
+}
+
+fn read_same_layer_exceptions(workspace_manifest: &Path) -> Result<Vec<SameLayerException>> {
+    let text = fs::read_to_string(workspace_manifest)
+        .with_context(|| format!("reading {}", workspace_manifest.display()))?;
+    let table: toml::Table = toml::from_str(&text)
+        .with_context(|| format!("parsing {}", workspace_manifest.display()))?;
+    let Some(entries) = table
+        .get("workspace")
+        .and_then(|workspace| workspace.get("metadata"))
+        .and_then(|metadata| metadata.get("pingers"))
+        .and_then(|pingers| pingers.get("same-layer"))
+    else {
+        return Ok(Vec::new());
+    };
+    let entries = entries
+        .as_array()
+        .context("[workspace.metadata.pingers] same-layer must be an array")?;
+    let mut exceptions = Vec::new();
+    for entry in entries {
+        let field = |name: &str| {
+            entry
+                .get(name)
+                .and_then(toml::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned)
+                .with_context(|| format!("same-layer entry {entry} needs a non-empty `{name}`"))
+        };
+        let dependent = field("crate")?;
+        let dependency = field("dependency")?;
+        field("reason")?;
+        exceptions.push(SameLayerException {
+            dependent,
+            dependency,
+        });
+    }
+    Ok(exceptions)
 }
 
 fn read_crate_manifests(crates_dir: &Path) -> Result<Vec<CrateManifest>> {
