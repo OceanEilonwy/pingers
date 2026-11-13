@@ -464,6 +464,30 @@ mod tests {
             "{}",
             mid.longitude()
         );
+        let longitude = |points: &[(f64, f64)]| -> Result<f64, pingers_geo::GeoError> {
+            let points = points
+                .iter()
+                .map(|(lat, lon)| Coordinate::new(*lat, *lon))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(mean(&points).map_or(f64::NAN, Coordinate::longitude))
+        };
+        // Three points, so wrapping the wrong way does not happen to land on the same answer.
+        let west_first = longitude(&[(0.0, -179.0), (0.0, 177.0), (0.0, 178.0)])?;
+        assert!(
+            (west_first - (178.0 + 2.0 / 3.0)).abs() < 1e-9,
+            "{west_first}"
+        );
+        let east_first = longitude(&[(0.0, 179.0), (0.0, -177.0), (0.0, -178.0)])?;
+        assert!(
+            (east_first + (178.0 + 2.0 / 3.0)).abs() < 1e-9,
+            "{east_first}"
+        );
+        // Exactly half way round is not wrapped.
+        assert!((longitude(&[(0.0, 0.0), (0.0, 180.0)])? - 90.0).abs() < 1e-9);
+        assert!((longitude(&[(0.0, 0.0), (0.0, -180.0)])? + 90.0).abs() < 1e-9);
+        // A mean of exactly ±180 keeps its sign.
+        assert!((longitude(&[(0.0, 170.0), (0.0, -170.0)])? - 180.0).abs() < 1e-9);
+        assert!((longitude(&[(0.0, -170.0), (0.0, 170.0)])? + 180.0).abs() < 1e-9);
         let mid = midpoint(Coordinate::new(0.0, 10.0)?, Coordinate::new(2.0, 20.0)?);
         assert!((mid.longitude() - 15.0).abs() < 1e-9 && (mid.latitude() - 1.0).abs() < 1e-9);
         assert_eq!(mean(&[]), None);

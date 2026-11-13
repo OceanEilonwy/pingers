@@ -222,6 +222,8 @@ mod tests {
         assert_eq!(Hours::rounding_up(Duration::from_secs(7201)).get(), 3);
         assert_eq!(Hours::rounding_down(Duration::from_secs(7199)).get(), 1);
         assert_eq!(Minutes::new(7).get(), 7);
+        let long = Minutes::new(125);
+        assert_eq!((long.hours(), long.minutes_past_hour()), (2, 5));
     }
 
     #[test]

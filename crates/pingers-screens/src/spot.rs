@@ -71,6 +71,7 @@ pub fn spot_editor(
     let party = snapshot.party(party)?;
     let maximum = maximum_spot_radius();
     let radius = draft.radius.max(MINIMUM_SPOT_RADIUS);
+    // `>` and `>=` agree here (equal values give the same radius): a known equivalent mutant.
     let radius = if radius > maximum { maximum } else { radius };
     let shape_ready = match draft.shape {
         ShapeKind::Circle => true,

@@ -106,6 +106,7 @@ mod tests {
             return Err(FixtureError::Missing);
         };
         assert_eq!(home.name.as_str(), "Home");
+        assert_eq!((home.id.get(), work.id.get()), (1, 2));
         assert_eq!(home.shape, ZoneShape::Circle(Meters::from_whole(150)));
         assert_eq!(home.times, ZoneTimes::Always);
         assert_eq!(home.applies_to, ZoneAppliesTo::AllParties);

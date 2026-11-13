@@ -192,6 +192,17 @@ mod tests {
     #[test]
     fn expired_links_and_invites_are_left_out() -> Result<(), FixtureError> {
         let snapshot = fixtures::snapshot()?;
+        // The pending invite stops at 17:30 tomorrow, exactly.
+        let at_expiry = fixtures::at(17, 30)
+            .checked_add(Duration::from_hours(24))
+            .ok_or(FixtureError::Missing)?;
+        let view = invite(&snapshot, fixtures::climbing_crew(), at_expiry)?;
+        assert!(
+            !view
+                .invitations
+                .iter()
+                .any(|invitation| matches!(invitation, Invitation::Pending { .. }))
+        );
         let later = fixtures::at(19, 30)
             .checked_add(Duration::from_hours(24))
             .ok_or(FixtureError::Missing)?;
