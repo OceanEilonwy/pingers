@@ -14,9 +14,12 @@
 //! - `cargo xtask ci --full [--base <ref>] [--fuzz-seconds <n>]`: `ci`, then `cargo mutants`
 //!   on the crates changed since `<ref>` (default `main`) and every fuzz target for `<n>`
 //!   seconds (default 10). See [`full`].
+//! - `cargo xtask release-android [--flavour gms|foss]...`: the signed release build CI's
+//!   `release.yml` runs, from the same environment variables. See [`release_android`].
 #![forbid(unsafe_code)]
 
 mod full;
+mod release_android;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -77,7 +80,11 @@ const USAGE: &str = "usage: cargo xtask <command>\n\n\
                      ci --full [--base <ref>] [--fuzz-seconds <n>]\n          \
                      ci, then cargo mutants on crates changed since <ref> (main) and\n          \
                      every fuzz target for <n> seconds (10); survivors must be listed\n          \
-                     with a reason in mutants-allow.toml";
+                     with a reason in mutants-allow.toml\n  \
+                     release-android [--flavour gms|foss]...\n          \
+                     signed release APKs and AABs from PINGERS_KEYSTORE_PATH,\n          \
+                     PINGERS_KEYSTORE_PASSWORD and PINGERS_KEY_ALIAS, checked with\n          \
+                     apksigner (android/docs/release.md)";
 
 fn run() -> Result<Outcome> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -101,6 +108,10 @@ fn run() -> Result<Outcome> {
                 }
                 Ok(outcome)
             }
+            None => usage(),
+        },
+        Some("release-android") => match release_android::parse_options(options) {
+            Some(choice) => release_android::run(&workspace_root()?, &choice),
             None => usage(),
         },
         _ => usage(),

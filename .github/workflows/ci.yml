@@ -1,0 +1,158 @@
+# The checks every push and pull request runs. No signing key and no deploy host is used here:
+# debug builds only, so the app's hosts are the .invalid defaults (android/docs/release.md).
+#
+# Jobs:
+#   rust     `cargo xtask ci`: fmt --check, clippy -D warnings, test, the layer rule, cargo deny.
+#   android  for each flavour, the debug APK, lint and the unit tests (Robolectric). gms needs
+#            Firebase's google-services.json, from the GOOGLE_SERVICES_JSON secret; without it
+#            (a fork's pull request, or a repository that has not set it) gms is skipped and
+#            says so. The file is written to the runner's temp directory, never the checkout.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # The NDK app/build.gradle.kts asks for.
+  NDK_VERSION: 27.0.12077973
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy --no-self-update
+          rustup default stable
+          rustc --version
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/bin/cargo-deny
+            target
+          key: ci-rust-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: ci-rust-${{ runner.os }}-
+
+      - name: Install cargo-deny
+        run: command -v cargo-deny || cargo install --locked cargo-deny
+
+      - name: cargo xtask ci
+        run: cargo xtask ci
+
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavour: foss
+            task: Foss
+          - flavour: gms
+            task: Gms
+    steps:
+      - name: Is google-services.json available
+        id: firebase
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          build=true
+          if [ "${{ matrix.flavour }}" = gms ] && [ -z "$GOOGLE_SERVICES_JSON" ]; then
+            build=false
+            echo "::notice::GOOGLE_SERVICES_JSON is not set; skipping the gms flavour"
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.firebase.outputs.build == 'true'
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        if: steps.firebase.outputs.build == 'true'
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Rust toolchain, Android targets and the NDK
+        if: steps.firebase.outputs.build == 'true'
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustup target add aarch64-linux-android x86_64-linux-android
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.firebase.outputs.build == 'true'
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/bin/cargo-ndk
+            target
+          key: ci-android-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ci-android-cargo-${{ runner.os }}-
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.firebase.outputs.build == 'true'
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ci-gradle-${{ runner.os }}-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'android/gradle/libs.versions.toml', 'android/**/*.gradle.kts') }}
+          restore-keys: ci-gradle-${{ runner.os }}-
+
+      - name: Install cargo-ndk
+        if: steps.firebase.outputs.build == 'true'
+        run: command -v cargo-ndk || cargo install --locked cargo-ndk
+
+      # Only for gms: the file lives in the runner's temp directory for this job.
+      - name: Write google-services.json
+        if: steps.firebase.outputs.build == 'true' && matrix.flavour == 'gms'
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          file="$RUNNER_TEMP/google-services.json"
+          printf '%s' "$GOOGLE_SERVICES_JSON" > "$file"
+          echo "PINGERS_GOOGLE_SERVICES_JSON=$file" >> "$GITHUB_ENV"
+
+      - name: Assemble, lint and unit tests (${{ matrix.flavour }})
+        if: steps.firebase.outputs.build == 'true'
+        working-directory: android
+        run: ./gradlew --stacktrace assemble${{ matrix.task }}Debug lint${{ matrix.task }}Debug test${{ matrix.task }}DebugUnitTest
+
+      - name: Remove google-services.json
+        if: always() && matrix.flavour == 'gms'
+        run: rm -f "$RUNNER_TEMP/google-services.json"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure() && steps.firebase.outputs.build == 'true'
+        with:
+          name: android-${{ matrix.flavour }}-reports
+          path: |
+            android/app/build/reports
+            android/app/build/test-results
+          retention-days: 7
+          if-no-files-found: ignore
