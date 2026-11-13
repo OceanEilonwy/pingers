@@ -10,8 +10,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use pingers_crypto::{MailboxReadKey, RevokeKey, mailbox_id, revoke_commitment};
 use pingers_mailbox::{
-    ListedRelays, PushRelay as _, PushRequest, RelayAnswer, RelayCredential, RelayKeyId,
-    RelayTarget, RelayUnreachable,
+    ListedRelays, PushRelay as _, PushRequest, RelayAnswer, RelayCredential, RelayTarget,
+    RelayUnreachable,
 };
 use pingers_ohttp::{BinaryRequest, BinaryResponse, Header};
 use pingers_proto::{
@@ -276,7 +276,6 @@ async fn a_post_answers_at_once_and_its_wake_goes_to_the_relay() -> TestResult {
         RelayTarget {
             url: RelayUrl::new(format!("https://{}", relay_socket.local_addr()?))?,
             credential: RelayCredential::new("credential".to_owned()),
-            key_id: RelayKeyId::new(1),
         },
     )]);
     let server = start(
@@ -290,6 +289,7 @@ async fn a_post_answers_at_once_and_its_wake_goes_to_the_relay() -> TestResult {
     let key = [8_u8; 32];
     let push = |relay| SealedPush {
         relay: RelayRef::Listed(RelayId::new(relay)),
+        key_id: pingers_proto::PushRelayKeyId::new(1),
         blob: SealedPushBlob::from_bytes([3; 320]),
         urgency: Urgency::Alert,
         handle: PushHandle::from_bytes([4; 8]),
@@ -346,7 +346,7 @@ async fn a_post_answers_at_once_and_its_wake_goes_to_the_relay() -> TestResult {
 struct Received {
     authorization: Option<String>,
     content_type: Option<String>,
-    body: String,
+    body: Vec<u8>,
 }
 
 /// A push relay on loopback answering every push with `status`.
@@ -357,7 +357,7 @@ async fn fake_relay(
     let sink = Arc::clone(&received);
     let router = Router::new().route(
         "/v1/push",
-        post(move |headers: HeaderMap, body: String| {
+        post(move |headers: HeaderMap, body: axum::body::Bytes| {
             let sink = Arc::clone(&sink);
             async move {
                 let text = |name: &str| {
@@ -370,7 +370,7 @@ async fn fake_relay(
                     sink.push(Received {
                         authorization: text("authorization"),
                         content_type: text("content-type"),
-                        body,
+                        body: body.to_vec(),
                     });
                 }
                 status
@@ -387,9 +387,9 @@ async fn fake_relay(
 
 fn push_request() -> PushRequest {
     PushRequest {
-        key_id: RelayKeyId::new(3),
+        key_id: pingers_proto::PushRelayKeyId::new(3),
         blob: SealedPushBlob::from_bytes([0xab; 320]),
-        bind: pingers_crypto::PushBind::from_bytes([1; 32]),
+        bind: pingers_proto::PushBind::from_bytes([1; 32]),
         urgency: Urgency::Quiet,
         handle: PushHandle::from_bytes([0xfe; 8]),
     }
@@ -417,8 +417,8 @@ async fn the_push_client_sends_the_credential_and_body_and_maps_the_status() -> 
         let only = received.first().ok_or("nothing received")?;
         assert_eq!(received.len(), 1);
         assert_eq!(only.authorization.as_deref(), Some("Bearer secret"));
-        assert_eq!(only.content_type.as_deref(), Some("application/json"));
-        assert_eq!(only.body, push_request().to_json());
+        assert_eq!(only.content_type.as_deref(), Some("application/cbor"));
+        assert_eq!(only.body, push_request().encode()?);
     }
     Ok(())
 }
@@ -471,7 +471,6 @@ async fn push_urls_join_the_relay_and_the_push_path() -> TestResult {
         let target = RelayTarget {
             url: RelayUrl::new(url.to_owned())?,
             credential: RelayCredential::new("credential".to_owned()),
-            key_id: RelayKeyId::new(1),
         };
         assert_eq!(push_url(&target), expected);
     }
@@ -481,7 +480,6 @@ async fn push_urls_join_the_relay_and_the_push_path() -> TestResult {
     let target = RelayTarget {
         url: RelayUrl::new("https://127.0.0.1:1".to_owned())?,
         credential: RelayCredential::new("credential".to_owned()),
-        key_id: RelayKeyId::new(1),
     };
     assert_eq!(
         relay.push(&target, &push_request()).await,

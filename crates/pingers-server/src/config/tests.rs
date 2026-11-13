@@ -188,9 +188,7 @@ fn keys_built_in_code_follow_the_same_rules() -> TestResult {
 }
 
 fn relay(relay_id: u16, url: &str) -> String {
-    format!(
-        "[[push_relays]]\nrelay_id = {relay_id}\nurl = \"{url}\"\ncredential = \"c\"\nkey_id = 4\n"
-    )
+    format!("[[push_relays]]\nrelay_id = {relay_id}\nurl = \"{url}\"\ncredential = \"c\"\n")
 }
 
 #[test]
@@ -228,7 +226,6 @@ fn wiring_fields_are_read_with_defaults() -> TestResult {
         .resolve(&RelayRef::Listed(RelayId::new(7)))
         .ok_or("relay 7 not listed")?;
     assert_eq!(target.url.as_str(), "https://push.example");
-    assert_eq!(target.key_id.get(), 4);
     assert_eq!(target.credential.authorization(), "Bearer c");
     Ok(())
 }

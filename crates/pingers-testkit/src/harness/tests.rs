@@ -184,7 +184,8 @@ mod running {
             platform: PushPlatform::UnifiedPush,
             class: PushClass::Location,
             token: token.clone(),
-            not_after: UnixSeconds::new(u64::MAX / 2),
+            // Within the relay's max_ttl of 30 days.
+            not_after: UnixSeconds::new(crate::TEST_START.get().saturating_add(86_400)),
         };
         let blob = pingers_crypto::seal_push_token(
             &relay_key,
@@ -194,15 +195,17 @@ mod running {
             },
             &mut seeded_rng(2),
         )?;
-        let body = format!(
-            r#"{{"key_id":1,"blob":"{}","bind":"{}","urgency":"quiet","handle":"0102030405060708"}}"#,
-            hex::encode(blob.as_bytes()),
-            hex::encode(bind.as_bytes())
-        );
+        let body = pingers_proto::WireEncode::encode(&pingers_proto::PushRequest {
+            key_id: pingers_proto::PushRelayKeyId::new(1),
+            blob,
+            bind,
+            urgency: pingers_proto::Urgency::Quiet,
+            handle: pingers_proto::PushHandle::from_bytes([1, 2, 3, 4, 5, 6, 7, 8]),
+        })?;
         let request = Request::builder()
             .method(Method::POST)
             .uri("http://harness/v1/push")
-            .header(CONTENT_TYPE, "application/json")
+            .header(CONTENT_TYPE, "application/cbor")
             .header(
                 AUTHORIZATION,
                 format!("Bearer {}", String::from_utf8(PUSH_CREDENTIAL.to_vec())?),

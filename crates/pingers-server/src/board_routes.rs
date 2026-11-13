@@ -6,7 +6,7 @@ use std::sync::{Arc, PoisonError};
 use axum::http::StatusCode;
 use pingers_board_store::{Board, BoardError};
 use pingers_ohttp::BinaryRequest;
-use pingers_proto::{BoardCursor, BoardSyncRequest, LeaseId, Redacted};
+use pingers_proto::{BoardCursor, BoardSyncRequest, LeaseId, SecretBytes};
 use pingers_time::Clock;
 
 use crate::Shared;
@@ -68,7 +68,7 @@ pub(crate) fn revoke(shared: &Shared, request: &BinaryRequest) -> Reply {
     let (Some(lease), Some(revoke_key)) = (lease, revoke_key) else {
         return Reply::status(StatusCode::BAD_REQUEST);
     };
-    let revoke_key = Redacted::new(revoke_key);
+    let revoke_key = SecretBytes::new(revoke_key);
     match with_board(shared, |board| {
         board.revoke(&LeaseId::from_bytes(lease), &revoke_key)
     }) {

@@ -6,10 +6,13 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use pingers_crypto::{PushRelayPrivateKey, PushRelayPublicKey};
+use pingers_crypto::{KeyedHashKey, KeyedHashPurpose, PushRelayPrivateKey, keyed_hash};
 use pingers_ohttp::GatewayKey;
-use pingers_proto::{PushClass, PushPlatform, PushToken, PushTokenPlaintext, SealedPushBlob};
-use pingers_push_relay::credentials::{ServerCredential, ServerEntry, ServerRegistry};
+use pingers_proto::{
+    PushClass, PushPlatform, PushRelayKeyId, PushToken, PushTokenPlaintext, SealedPushBlob,
+    TimeToLive,
+};
+use pingers_push_relay::credentials::{ServerEntry, ServerRegistry};
 use pingers_push_relay::delivery::{DeliveryOutcome, PushMessage, PushSender};
 use pingers_push_relay::keys::{KeyLifetime, KeyRing, RelayKey};
 use pingers_push_relay::opener::{CryptoOpener, OpenError, TokenOpener};
@@ -72,8 +75,8 @@ struct NotingOpener {
 impl TokenOpener for NotingOpener {
     fn open(
         &self,
-        key: &PushRelayPrivateKey,
-        bind: &pingers_crypto::PushBind,
+        key: &RelayKey,
+        bind: &pingers_proto::PushBind,
         blob: &SealedPushBlob,
     ) -> Result<PushTokenPlaintext, OpenError> {
         let opened = CryptoOpener.open(key, bind, blob)?;
@@ -144,31 +147,60 @@ fn per_minute(count: u32) -> RateLimit {
     RateLimit::per_minute(NonZeroU32::new(count).unwrap_or(NonZeroU32::MIN))
 }
 
-fn push_relay(
+/// What the push relay is built from, all derived from the harness seed.
+struct PushRelayKeys {
     private: PushRelayPrivateKey,
-    public: PushRelayPublicKey,
+    credential_hash_key: KeyedHashKey,
+    token_hash_key: KeyedHashKey,
+}
+
+fn push_relay(
+    keys: PushRelayKeys,
     clock: &ManualClock,
     pushes: Arc<Mutex<Vec<CapturedPush>>>,
 ) -> Result<Relay<NotingOpener, CapturingSender, ManualClock>, HarnessError> {
-    let keys = KeyRing::new(vec![RelayKey::new(
+    let failed = |_| HarnessError::Keys {
+        service: Service::PushRelay,
+    };
+    let PushRelayKeys {
         private,
-        public,
+        credential_hash_key,
+        token_hash_key,
+    } = keys;
+    let relay_key = RelayKey::new(
+        PushRelayKeyId::new(1),
+        private,
         KeyLifetime {
             activated_at: UnixSeconds::EPOCH,
             retired_at: None,
         },
-    )])
+    )
     .map_err(|_| HarnessError::Keys {
         service: Service::PushRelay,
     })?;
-    let servers = ServerRegistry::new(vec![ServerEntry {
-        server_id: "harness".to_owned(),
-        credential: ServerCredential::new(Zeroizing::new(PUSH_CREDENTIAL.to_vec())),
-        limit: per_minute(10_000),
-    }])
+    let ring = KeyRing::new(vec![relay_key]).map_err(failed)?;
+    // The relay keeps only the keyed hash of the credential the server presents.
+    let credential_hash = keyed_hash(
+        &credential_hash_key,
+        KeyedHashPurpose::ServerCredential,
+        PUSH_CREDENTIAL,
+    )
     .map_err(|_| HarnessError::Keys {
         service: Service::PushRelay,
     })?;
+    let servers = ServerRegistry::new(
+        credential_hash_key,
+        vec![ServerEntry {
+            server_id: "harness".to_owned(),
+            credential_hash,
+            limit: per_minute(10_000),
+        }],
+    )
+    .map_err(failed)?;
+    let max_ttl =
+        TimeToLive::new(Duration::from_hours(30 * 24)).map_err(|_| HarnessError::Keys {
+            service: Service::PushRelay,
+        })?;
     let classes = Classes::default();
     Ok(Relay::new(RelayParts {
         opener: NotingOpener {
@@ -180,10 +212,11 @@ fn push_relay(
             clock: clock.clone(),
         },
         clock: clock.clone(),
-        keys,
+        keys: ring,
         servers,
+        token_hash_key,
         token_limit: per_minute(600),
-        max_ttl: Duration::from_hours(30 * 24),
+        max_ttl,
         operator: "pingers-testkit harness".to_owned(),
     }))
 }
@@ -208,6 +241,8 @@ pub(super) fn start(
         service: Service::PushRelay,
     })?;
     let seed = RngSeed::from_bytes(Zeroizing::new(random_array(&mut rng)));
+    let credential_hash_key = KeyedHashKey::from_bytes(Zeroizing::new(random_array(&mut rng)));
+    let token_hash_key = KeyedHashKey::from_bytes(Zeroizing::new(random_array(&mut rng)));
 
     let endpoints = Endpoints {
         server,
@@ -232,8 +267,57 @@ pub(super) fn start(
             RelayAllowList::new(vec![config.bind]).map_err(keys_error)?,
         )
     };
-    let push = push_relay(push_private, push_public, &config.clock, pushes)?;
+    let push = push_relay(
+        PushRelayKeys {
+            private: push_private,
+            credential_hash_key,
+            token_hash_key,
+        },
+        &config.clock,
+        pushes,
+    )?;
+    let outside = Outside {
+        clock: config.clock.clone(),
+        timer: config.clock.clone(),
+        seed,
+        live: DeliveryLive,
+    };
+    let running = spawn(
+        Listeners {
+            server: server_listener,
+            relay: relay_listener,
+            push: push_listener,
+        },
+        server_config,
+        outside,
+        push,
+    )?;
+    Ok(Started { endpoints, running })
+}
 
+/// The three bound listeners.
+struct Listeners {
+    server: TcpListener,
+    relay: TcpListener,
+    push: TcpListener,
+}
+
+type HarnessOutside = Outside<ManualClock, ManualClock, DeliveryLive>;
+type HarnessPushRelay = Relay<NotingOpener, CapturingSender, ManualClock>;
+
+/// Runs the three services on a runtime of their own thread.
+fn spawn(
+    listeners: Listeners,
+    server_config: ServerConfig,
+    outside: HarnessOutside,
+    push: HarnessPushRelay,
+) -> Result<Running, HarnessError> {
+    let server = address(&listeners.server, Service::Server)?;
+    let Listeners {
+        server: server_listener,
+        relay: relay_listener,
+        push: push_listener,
+    } = listeners;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .thread_name("pingers-harness")
@@ -261,12 +345,6 @@ pub(super) fn start(
             let _ = stopped.changed().await;
         }
     };
-    let outside = Outside {
-        clock: config.clock.clone(),
-        timer: config.clock.clone(),
-        seed,
-        live: DeliveryLive,
-    };
     let server_done = until_stopped();
     let relay_done = until_stopped();
     let push_done = until_stopped();
@@ -293,11 +371,8 @@ pub(super) fn start(
             });
         })
         .map_err(|source| HarnessError::Runtime { source })?;
-    Ok(Started {
-        endpoints,
-        running: Running {
-            stop,
-            thread: Some(thread),
-        },
+    Ok(Running {
+        stop,
+        thread: Some(thread),
     })
 }

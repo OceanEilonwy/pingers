@@ -25,7 +25,6 @@
 //! relay_id = 1                     # what devices name in RelayRef::Listed
 //! url = "https://push.example"
 //! credential = "<the bearer credential this relay issued to this server>"
-//! key_id = 1                       # the relay key devices seal to (SealedPush has no key id yet)
 //! ```
 //!
 //! The relay-only rule (design B.12) is an address allow-list: the relay leg runs on a private
@@ -37,7 +36,7 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use pingers_mailbox::{ListedRelays, RelayCredential, RelayKeyId, RelayTarget};
+use pingers_mailbox::{ListedRelays, RelayCredential, RelayTarget};
 use pingers_ohttp::{GatewayKey, KeyConfig, OhttpError};
 use pingers_proto::{RelayId, RelayUrl};
 use serde::Deserialize;
@@ -296,7 +295,6 @@ struct FilePushRelay {
     relay_id: u16,
     url: String,
     credential: String,
-    key_id: u8,
 }
 
 const fn default_push_timeout() -> u64 {
@@ -323,7 +321,6 @@ fn push_relays(relays: Vec<FilePushRelay>) -> Result<ListedRelays, ConfigError> 
             RelayTarget {
                 url,
                 credential: RelayCredential::new(relay.credential),
-                key_id: RelayKeyId::new(relay.key_id),
             },
         ));
     }

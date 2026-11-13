@@ -7,8 +7,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use pingers_mailbox::{
-    PUSH_PATH, PushJob, PushRelay, PushRequest, RelayAnswer, RelayTarget, RelayUnreachable, forward,
+    PUSH_CONTENT_TYPE, PUSH_PATH, PushJob, PushRelay, PushRequest, RelayAnswer, RelayTarget,
+    RelayUnreachable, forward,
 };
+use pingers_proto::WireEncode as _;
 use pingers_time::Timer;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use tokio::task::JoinSet;
@@ -16,7 +18,7 @@ use tokio::task::JoinSet;
 use crate::mailbox_routes::MailboxService;
 
 /// The push relay over HTTP: `POST {url}/v1/push` with the server's bearer credential, the
-/// JSON body, and a timeout on the injected timer.
+/// CBOR `PushRequest` body, and a timeout on the injected timer.
 pub(crate) struct HttpPushRelay {
     client: reqwest::Client,
     timer: Arc<dyn Timer>,
@@ -44,16 +46,21 @@ impl HttpPushRelay {
         authorization: String,
         request: &PushRequest,
     ) -> impl Future<Output = Result<RelayAnswer, RelayUnreachable>> + Send + use<> {
-        let sent = self
-            .client
-            .post(url)
-            .header(AUTHORIZATION, authorization)
-            .header(CONTENT_TYPE, "application/json")
-            .body(request.to_json())
-            .send();
+        let sent = request.encode().ok().map(|body| {
+            self.client
+                .post(url)
+                .header(AUTHORIZATION, authorization)
+                .header(CONTENT_TYPE, PUSH_CONTENT_TYPE)
+                .body(body)
+                .send()
+        });
         let timer = Arc::clone(&self.timer);
         let timeout = self.timeout;
         async move {
+            // A request that cannot be encoded is never sent.
+            let Some(sent) = sent else {
+                return Err(RelayUnreachable);
+            };
             tokio::select! {
                 answer = sent => answer
                     .map(|response| RelayAnswer::from_status(response.status().as_u16()))
