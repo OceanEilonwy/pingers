@@ -5,9 +5,10 @@ B.4.9, B.12, D, E.2). L3: tokio (spawn_blocking, select), no detached tasks.
 
 ## API (what pingers-wake, pingers-parties, pingers-meetup-session and pingers-client use)
 
-- `SyncEngine::new(SyncParts { transport, session, clock, timer, rng }, SyncSettings { server,
+- `SyncEngine::new(SyncParts { transport, database, clock, timer, rng }, SyncSettings { server,
   role, credentials, token_stock, commit_attempts, queue_capacity })`. `transport` is the
-  pingers-transport `Router`; `session` the store session the wake holds.
+  pingers-transport `Router`; `database` the store: each store step opens its own session on the blocking pool, so the
+  cross-process lock is held per step and the engine can live for the whole process.
 - `ApiRequest`: a typed builder per route (`Route`, 24 of them). `Route::class()` fixes the
   privacy class, `Route::credential()` the RLN scope of the anonymous credential (writes only).
 - `SyncEngine::send(request, Sending { policy, budget }) -> Outcome::{Answered(Response),
