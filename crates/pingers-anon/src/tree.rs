@@ -38,6 +38,7 @@ impl LeafPosition {
 
 /// One change from `GET /v1/rln/leaves`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LeafUpdate {
     /// A leaf appended at the next position.
     Appended(LeafValue),
