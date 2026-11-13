@@ -11,8 +11,8 @@ use std::sync::Mutex;
 
 use pingers_crypto::{MailboxReadKey, mailbox_id, push_bind_for_mailbox};
 use pingers_proto::{
-    KeyConfigHash, MailboxSpec, PushHandle, RelayId, RelayRef, RelayUrl, SealedPush,
-    SealedPushBlob, SizeClass, TimeToLive, Urgency,
+    KeyConfigHash, MailboxSpec, PushHandle, PushRelayKeyId, RelayId, RelayRef, RelayUrl,
+    SealedPush, SealedPushBlob, SizeClass, TimeToLive, Urgency,
 };
 use pingers_testkit::{ManualClock, TestRng, seeded_rng, test_clock};
 use pingers_time::UnixSeconds;
@@ -20,8 +20,7 @@ use zeroize::Zeroizing;
 
 use super::*;
 use crate::relay::{
-    ListedRelays, PushRelay, RelayAnswer, RelayCredential, RelayKeyId, RelayTarget,
-    RelayUnreachable,
+    ListedRelays, PushRelay, RelayAnswer, RelayCredential, RelayTarget, RelayUnreachable,
 };
 use crate::storage::MemoryStorage;
 use crate::wake::{Forwarded, QUIET_DELAY_MAX, forward};
@@ -123,7 +122,6 @@ fn target() -> Result<RelayTarget, pingers_proto::ProtoError> {
     Ok(RelayTarget {
         url: RelayUrl::new(String::from("https://push.example"))?,
         credential: RelayCredential::new(String::from("credential")),
-        key_id: RelayKeyId::new(4),
     })
 }
 
@@ -134,6 +132,7 @@ fn read_key(fill: u8) -> MailboxReadKey {
 fn sealed_push(urgency: Urgency) -> SealedPush {
     SealedPush {
         relay: RelayRef::Listed(RelayId::new(1)),
+        key_id: PushRelayKeyId::new(4),
         blob: SealedPushBlob::from_bytes([0x5a; 320]),
         urgency,
         handle: PushHandle::from_bytes([0x11; 8]),
@@ -425,7 +424,8 @@ fn alert_post_forwards_the_blob_as_registered_at_once() -> Result<(), TestError>
     assert_eq!(
         job.request,
         PushRequest {
-            key_id: RelayKeyId::new(4),
+            // The key id the device sealed to, not one from server configuration.
+            key_id: PushRelayKeyId::new(4),
             blob: SealedPushBlob::from_bytes([0x5a; 320]),
             bind: push_bind_for_mailbox(&spec.mailbox_id),
             urgency: Urgency::Alert,

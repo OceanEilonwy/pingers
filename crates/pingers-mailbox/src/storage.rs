@@ -216,7 +216,9 @@ impl MailboxStorage for MemoryStorage {
 pub(crate) mod contract {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
-    use pingers_proto::{PushHandle, RelayId, RelayRef, SealedPushBlob, SizeClass, Urgency};
+    use pingers_proto::{
+        PushHandle, PushRelayKeyId, RelayId, RelayRef, SealedPushBlob, SizeClass, Urgency,
+    };
 
     use super::*;
 
@@ -231,6 +233,7 @@ pub(crate) mod contract {
     pub(crate) fn sealed_push(relay: RelayRef, urgency: Urgency) -> SealedPush {
         SealedPush {
             relay,
+            key_id: PushRelayKeyId::new(3),
             blob: SealedPushBlob::from_bytes([0x5a; 320]),
             urgency,
             handle: PushHandle::from_bytes([0x11; 8]),

@@ -12,9 +12,10 @@ use rand_core::CryptoRng;
 
 use crate::MailboxError;
 use crate::limit::{Admission, PostLimit};
-use crate::relay::{PushRequest, RelayDirectory};
+use crate::relay::RelayDirectory;
 use crate::storage::{MailboxStorage, Removal, StoredMailbox};
 use crate::wake::{ForgetPush, PushJob, push_delay};
+use pingers_proto::PushRequest;
 
 /// Limits the operator can tune.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,7 +148,7 @@ impl<S: MailboxStorage, C: Clock, D: RelayDirectory, L: PostLimit> Mailboxes<S, 
             Some(PushJob {
                 mailbox: *id,
                 request: PushRequest {
-                    key_id: target.key_id,
+                    key_id: push.key_id,
                     blob: push.blob,
                     bind: push_bind_for_mailbox(id),
                     urgency: push.urgency,
