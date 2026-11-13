@@ -12,6 +12,11 @@
 //! holders: a rotation always sends exactly one grant-sized frame per other member, real or
 //! dummy, and so does a membership change for each newcomer, whether the setting is
 //! `Everyone` (real grant) or not (dummy).
+//!
+//! Grants, real or dummy, are stored in the group log (no wake), so a member whose live
+//! channel is down when one is sent still receives it when it reads the log after
+//! reconnecting. Real and dummy grants share the same delivery, so the log shows the same
+//! count of stored grant-sized messages either way.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,7 +26,7 @@ use pingers_crypto::{
 };
 use pingers_proto::{
     Delivery, Epoch, GroupId, LeafIndex, LocationGeneration, LocationPlaintext, MeetupMessage,
-    SealedLocationFrame,
+    SealedLocationFrame, Urgency,
 };
 use pingers_time::UnixSeconds;
 use rand_core::CryptoRng;
@@ -336,7 +341,7 @@ impl Sharing {
             expires_at: end.on_wire(),
         };
         let sealed = seal_location_grant(&member.grant_key, &grant, rng)?;
-        Ok(ephemeral(MeetupMessage::LocationGrant(sealed)))
+        Ok(consent(MeetupMessage::LocationGrant(sealed)))
     }
 
     /// A grant-sized frame nobody can open: a grant of a throwaway key sealed to a throwaway
@@ -358,7 +363,7 @@ impl Sharing {
             expires_at: MEETUP_END_ON_WIRE,
         };
         let sealed = seal_location_grant(&throwaway.public, &grant, rng)?;
-        Ok(ephemeral(MeetupMessage::LocationGrant(sealed)))
+        Ok(consent(MeetupMessage::LocationGrant(sealed)))
     }
 
     /// This slot's location frame: the position sealed under the current key if anyone holds
@@ -407,6 +412,22 @@ pub(crate) const fn ephemeral(message: MeetupMessage) -> OutgoingFrame {
         delivery: Delivery::Ephemeral,
         wake: None,
     }
+}
+
+/// A frame kept in the group log until the Meetup ends.
+pub(crate) const fn stored(message: MeetupMessage, wake: Option<Urgency>) -> OutgoingFrame {
+    OutgoingFrame {
+        message,
+        delivery: Delivery::Stored,
+        wake,
+    }
+}
+
+/// A grant or ask, real or dummy: stored, so a member whose live channel is down reads it
+/// from the log on reconnecting, and never pushed, so it wakes nobody (a wake would show
+/// that a real grant or ask was aimed at someone absent).
+pub(crate) const fn consent(message: MeetupMessage) -> OutgoingFrame {
+    stored(message, None)
 }
 
 #[cfg(test)]

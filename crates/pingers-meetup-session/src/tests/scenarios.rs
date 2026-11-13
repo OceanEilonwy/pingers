@@ -134,22 +134,23 @@ async fn members_exchange_frames_then_leaving_deletes_everything() -> TestResult
 async fn each_device_sets_its_own_cadence() -> TestResult {
     let world = World::new(2)?;
     let [alice, bob] = world.meetup_of_two().await?;
-    // The first tick sent one dummy grant and one location frame.
+    // The first tick sent one location frame on the channel and one dummy grant to the log.
     world
         .server
-        .until_uplinks("Alice", Delivery::Ephemeral, 2)
+        .until_uplinks("Alice", Delivery::Ephemeral, 1)
         .await?;
     let start = world.server.uplinks("Alice", Delivery::Ephemeral);
-    assert_eq!(start, 2);
+    assert_eq!(start, 1);
+    assert_eq!(world.server.uplinks("Alice", Delivery::Stored), 1);
 
     // Opening the screen makes a frame due at once, then one every 2 s.
     world.clock.advance(Duration::from_secs(2));
     alice.handle.screen(MeetupScreen::Open).await?;
     world
         .server
-        .until_uplinks("Alice", Delivery::Ephemeral, 3)
+        .until_uplinks("Alice", Delivery::Ephemeral, 2)
         .await?;
-    for expected in 4..=6 {
+    for expected in 3..=5 {
         world.clock.advance(Duration::from_secs(2));
         world
             .server
@@ -172,11 +173,11 @@ async fn each_device_sets_its_own_cadence() -> TestResult {
         .await?;
     world.clock.advance(Duration::from_secs(58));
     alice.handle.own_fix(fix(world.now())?).await?;
-    assert_eq!(world.server.uplinks("Alice", Delivery::Ephemeral), 6);
+    assert_eq!(world.server.uplinks("Alice", Delivery::Ephemeral), 5);
     world.clock.advance(Duration::from_secs(2));
     world
         .server
-        .until_uplinks("Alice", Delivery::Ephemeral, 7)
+        .until_uplinks("Alice", Delivery::Ephemeral, 6)
         .await?;
     Ok(())
 }

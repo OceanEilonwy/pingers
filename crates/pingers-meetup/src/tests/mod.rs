@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Session-level tests: several devices' sessions wired together by an in-memory group that
-//! delivers every sent frame to every other member, as the MLS group and live channel would.
+//! delivers every sent frame to every other member, as the MLS group and live channel would;
+//! a member marked offline gets only stored frames, from the log, when it reconnects.
 #![expect(
     clippy::wildcard_enum_match_arm,
     reason = "tests pick out the one variant they check"
 )]
 
+mod catch_up;
 mod compass;
 mod consent;
 mod lifecycle;
@@ -106,6 +108,14 @@ pub(crate) struct Device {
     pub(crate) sent: Vec<Sent>,
 }
 
+/// A stored frame waiting in the group log for a device whose live channel is down.
+#[derive(Clone, Debug)]
+pub(crate) struct Logged {
+    pub(crate) sender: LeafIndex,
+    pub(crate) epoch: Epoch,
+    pub(crate) message: MeetupMessage,
+}
+
 /// Every device's session, joined by a perfect in-memory group.
 pub(crate) struct Net {
     pub(crate) group: GroupId,
@@ -113,6 +123,9 @@ pub(crate) struct Net {
     pub(crate) now: UnixSeconds,
     pub(crate) rng: TestRng,
     pub(crate) devices: BTreeMap<LeafIndex, Device>,
+    /// Devices whose live channel is down, with the stored frames they have yet to read
+    /// from the group log. Ephemeral frames do not reach them.
+    pub(crate) offline: BTreeMap<LeafIndex, Vec<Logged>>,
 }
 
 impl Net {
@@ -161,6 +174,7 @@ impl Net {
             now: UnixSeconds::new(START),
             rng,
             devices,
+            offline: BTreeMap::new(),
         };
         net.tick_all()?;
         Ok(net)
@@ -243,6 +257,16 @@ impl Net {
                             if *leaf == sender || other.ended.is_some() {
                                 continue;
                             }
+                            if let Some(log) = self.offline.get_mut(leaf) {
+                                if frame.delivery == Delivery::Stored {
+                                    log.push(Logged {
+                                        sender,
+                                        epoch: self.epoch,
+                                        message: frame.message.clone(),
+                                    });
+                                }
+                                continue;
+                            }
                             let received = other.session.handle(
                                 MeetupInput::Received {
                                     sender,
@@ -260,6 +284,26 @@ impl Net {
                     MeetupOutput::End(reason) => device.ended = Some(reason),
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Closes a device's live channel: from now on it only gets stored frames, from the log.
+    pub(crate) fn go_offline(&mut self, leaf: LeafIndex) {
+        self.offline.insert(leaf, Vec::new());
+    }
+
+    /// Re-opens a device's live channel and has it read the group log it missed, in order.
+    pub(crate) fn reconnect(&mut self, leaf: LeafIndex) -> TestResult {
+        for logged in self.offline.remove(&leaf).unwrap_or_default() {
+            self.run(
+                leaf,
+                MeetupInput::Received {
+                    sender: logged.sender,
+                    epoch: logged.epoch,
+                    message: logged.message,
+                },
+            )?;
         }
         Ok(())
     }

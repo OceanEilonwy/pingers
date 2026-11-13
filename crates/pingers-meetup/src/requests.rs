@@ -2,7 +2,12 @@
 //! Location requests in both directions, each expiring after [`ASK_EXPIRY`] (design B.6.1).
 //!
 //! An unanswered or declined request simply lapses: "Not now" and an expired request leave
-//! the same (empty) state, and nothing is sent either way.
+//! the same state, and nothing is sent either way.
+//!
+//! Asks are stored in the group log, so one can arrive twice (live, then again when the log
+//! is read after a reconnect) or late. Each request id is therefore remembered until its ask
+//! has expired by its own timestamp, whatever the answer, and expiry counts from that
+//! timestamp rather than from receipt.
 
 use std::collections::BTreeMap;
 
@@ -22,17 +27,25 @@ pub(crate) struct Incoming {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Requests {
     incoming: BTreeMap<LocationRequestId, Incoming>,
+    /// Every request id received, until its ask has expired by its own timestamp; a copy
+    /// arriving later is then refused as expired.
+    seen: BTreeMap<LocationRequestId, UnixSeconds>,
     /// When this device's request to each member lapses.
     outgoing: BTreeMap<LeafIndex, UnixSeconds>,
 }
 
-/// Whether a received request is new.
+/// Whether a received ask should be acted on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Received {
-    /// Not seen before; it is now pending.
-    New,
-    /// The same request id was already pending.
+pub(crate) enum Sighting {
+    /// Live and not seen before; if it waits on an answer, it lapses at `expires`.
+    New {
+        /// When the request lapses.
+        expires: UnixSeconds,
+    },
+    /// The same request id arrived before.
     Duplicate,
+    /// Older than [`ASK_EXPIRY`] by its own timestamp.
+    Expired,
 }
 
 pub(crate) fn expiry_from(now: UnixSeconds) -> Result<UnixSeconds, MeetupError> {
@@ -40,19 +53,36 @@ pub(crate) fn expiry_from(now: UnixSeconds) -> Result<UnixSeconds, MeetupError> 
 }
 
 impl Requests {
-    /// Records a received request, pending until `ASK_EXPIRY` after `now`.
-    pub(crate) fn receive(
+    /// Checks a received ask written at `asked_at` and remembers its id. A live new ask lapses
+    /// `ASK_EXPIRY` after `asked_at`, or after `now` if the sender's clock is ahead (an ask
+    /// never waits longer than that from receipt).
+    pub(crate) fn sight(
+        &mut self,
+        request: LocationRequestId,
+        asked_at: UnixSeconds,
+        now: UnixSeconds,
+    ) -> Result<Sighting, MeetupError> {
+        let by_timestamp = expiry_from(asked_at)?;
+        if by_timestamp <= now {
+            return Ok(Sighting::Expired);
+        }
+        if self.seen.contains_key(&request) {
+            return Ok(Sighting::Duplicate);
+        }
+        self.seen.insert(request, by_timestamp);
+        Ok(Sighting::New {
+            expires: expiry_from(asked_at.min(now))?,
+        })
+    }
+
+    /// Keeps a new request from `from` pending until `expires`.
+    pub(crate) fn hold(
         &mut self,
         request: LocationRequestId,
         from: LeafIndex,
-        now: UnixSeconds,
-    ) -> Result<Received, MeetupError> {
-        if self.incoming.contains_key(&request) {
-            return Ok(Received::Duplicate);
-        }
-        let expires = expiry_from(now)?;
+        expires: UnixSeconds,
+    ) {
         self.incoming.insert(request, Incoming { from, expires });
-        Ok(Received::New)
     }
 
     /// Takes a pending request to answer it. An expired one is gone.
@@ -90,6 +120,7 @@ impl Requests {
         self.incoming
             .retain(|_request, pending| pending.expires > now);
         self.outgoing.retain(|_target, expires| *expires > now);
+        self.seen.retain(|_request, expires| *expires > now);
     }
 
     /// Forgets requests from and to a member who left.
@@ -106,7 +137,7 @@ impl Requests {
 
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.incoming.is_empty() && self.outgoing.is_empty()
+        self.incoming.is_empty() && self.outgoing.is_empty() && self.seen.is_empty()
     }
 }
 
@@ -120,13 +151,29 @@ mod tests {
         LocationRequestId::from_bytes([byte; 16])
     }
 
+    /// Sights and holds a new ask, as the session does for one that waits on an answer.
+    fn receive(
+        requests: &mut Requests,
+        id: LocationRequestId,
+        from: LeafIndex,
+        now: UnixSeconds,
+    ) -> Result<Sighting, MeetupError> {
+        let sighting = requests.sight(id, now, now)?;
+        if let Sighting::New { expires } = sighting {
+            requests.hold(id, from, expires);
+        }
+        Ok(sighting)
+    }
+
     #[test]
     fn a_request_can_be_answered_until_just_before_it_expires() -> Result<(), MeetupError> {
         let mut requests = Requests::default();
         let now = UnixSeconds::new(1_000);
         assert_eq!(
-            requests.receive(request(1), LeafIndex::new(2), now)?,
-            Received::New
+            receive(&mut requests, request(1), LeafIndex::new(2), now)?,
+            Sighting::New {
+                expires: UnixSeconds::new(1_600)
+            }
         );
         let pending = requests.take(request(1), UnixSeconds::new(1_599))?;
         assert_eq!(pending.from, LeafIndex::new(2));
@@ -137,7 +184,12 @@ mod tests {
     #[test]
     fn a_request_cannot_be_answered_once_expired() -> Result<(), MeetupError> {
         let mut requests = Requests::default();
-        let _new = requests.receive(request(1), LeafIndex::new(2), UnixSeconds::new(1_000))?;
+        let _new = receive(
+            &mut requests,
+            request(1),
+            LeafIndex::new(2),
+            UnixSeconds::new(1_000),
+        )?;
         assert!(matches!(
             requests.take(request(1), UnixSeconds::new(1_600)),
             Err(MeetupError::UnknownRequest)
@@ -146,21 +198,62 @@ mod tests {
     }
 
     #[test]
-    fn a_repeated_request_id_is_a_duplicate() -> Result<(), MeetupError> {
+    fn a_repeated_request_id_is_a_duplicate_even_after_an_answer() -> Result<(), MeetupError> {
         let mut requests = Requests::default();
         let now = UnixSeconds::new(1_000);
-        let _new = requests.receive(request(1), LeafIndex::new(2), now)?;
+        let _new = receive(&mut requests, request(1), LeafIndex::new(2), now)?;
+        let _answered = requests.take(request(1), now)?;
+        assert_eq!(requests.sight(request(1), now, now)?, Sighting::Duplicate);
+        Ok(())
+    }
+
+    #[test]
+    fn a_late_ask_expires_by_its_timestamp_not_its_receipt() -> Result<(), MeetupError> {
+        let mut requests = Requests::default();
+        let asked_at = UnixSeconds::new(1_000);
         assert_eq!(
-            requests.receive(request(1), LeafIndex::new(2), now)?,
-            Received::Duplicate
+            requests.sight(request(1), asked_at, UnixSeconds::new(1_599))?,
+            Sighting::New {
+                expires: UnixSeconds::new(1_600)
+            }
         );
+        assert_eq!(
+            requests.sight(request(2), asked_at, UnixSeconds::new(1_600))?,
+            Sighting::Expired
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_ask_dated_ahead_waits_no_longer_than_from_receipt() -> Result<(), MeetupError> {
+        let mut requests = Requests::default();
+        assert_eq!(
+            requests.sight(request(1), UnixSeconds::new(5_000), UnixSeconds::new(1_000))?,
+            Sighting::New {
+                expires: UnixSeconds::new(1_600)
+            }
+        );
+        // Its id is kept until the ask is expired by its own timestamp, so a copy read
+        // after the pending request lapsed does not prompt again.
+        requests.expire(UnixSeconds::new(1_600));
+        assert_eq!(
+            requests.sight(request(1), UnixSeconds::new(5_000), UnixSeconds::new(1_600))?,
+            Sighting::Duplicate
+        );
+        requests.expire(UnixSeconds::new(5_600));
+        assert!(requests.is_empty());
         Ok(())
     }
 
     #[test]
     fn expiry_drops_lapsed_requests_in_both_directions() -> Result<(), MeetupError> {
         let mut requests = Requests::default();
-        let _new = requests.receive(request(1), LeafIndex::new(2), UnixSeconds::new(1_000))?;
+        let _new = receive(
+            &mut requests,
+            request(1),
+            LeafIndex::new(2),
+            UnixSeconds::new(1_000),
+        )?;
         requests.sent(LeafIndex::new(3), UnixSeconds::new(1_700));
         requests.expire(UnixSeconds::new(1_600));
         assert!(matches!(
@@ -177,8 +270,8 @@ mod tests {
     fn forgetting_a_member_keeps_everyone_elses_requests() -> Result<(), MeetupError> {
         let mut requests = Requests::default();
         let now = UnixSeconds::new(1_000);
-        let _left = requests.receive(request(1), LeafIndex::new(2), now)?;
-        let _stays = requests.receive(request(2), LeafIndex::new(3), now)?;
+        let _left = receive(&mut requests, request(1), LeafIndex::new(2), now)?;
+        let _stays = receive(&mut requests, request(2), LeafIndex::new(3), now)?;
         requests.forget(LeafIndex::new(2));
         assert!(requests.take(request(1), now).is_err());
         assert_eq!(requests.take(request(2), now)?.from, LeafIndex::new(3));
