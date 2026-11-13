@@ -6,39 +6,35 @@ What happens inside a live Meetup, as a sans-IO state machine.
 
 - `MeetupSession::start(MeetupConfig, rng)`, `handle(MeetupInput, now, rng) ->
   Vec<MeetupOutput>`, `next_deadline`, `exact_location(leaf)`, `meet_point`,
-  `compass(CompassTarget, &Observer, now) -> Option<CompassReading>`.
+  `compass(CompassTarget, &Observer, now) -> Option<CompassReading>`; also `shares_with(leaf)`,
+  `pending_request(leaf, now)`, `visibility()`, `cadence()`.
 - Inputs: `MeetupInput::{Received { sender, epoch, message }, MembersChanged { epoch, members },
-  OwnFix, Tick, Action(MeetupAction)}`; `MeetupAction::{AskLocation, AnswerRequest,
-  RevokeLocation, SendChat, SetMeetPoint, SetVisibility}`; `Member { leaf, signature_key,
-  grant_key }`; `MeetupConfig`.
+  OwnFix, Cadence(CadenceMode), OwnBoardSeen(segments), Tick, Action(MeetupAction)}`;
+  `MeetupAction::{AskLocation, AnswerRequest, RevokeLocation, SendChat, SetMeetPoint,
+  SetVisibility}`; `Member { leaf, signature_key, grant_key }`; `MeetupConfig`.
 - Outputs: `MeetupOutput::{Send(OutgoingFrame), Event(MeetupEvent), RemoveSilentMember, End}`;
   `OutgoingFrame { message, delivery, wake }`; `MeetupEvent::{Chat, PeerLocation,
-  LocationRequested, LocationAccessChanged, MeetPointChanged, BoardEquivocation}`;
-  `PeerLocation`; `EndReason`.
+  LocationRequested, LocationAccessChanged, MeetPointChanged, BoardEquivocation,
+  AlwaysAllowAdded(leaf)}`; `PeerLocation`; `EndReason`.
 - Consent vocabulary: `LocationVisibility::{AskEachTime (default), Everyone, Nobody}`,
-  `AlwaysAllow`, `GrantScope`, `AskBack`, `AllowListChoice`, `LocationAnswer`,
-  `ExactLocation::{Shared { expires }, Private}`.
-- Meet point (implemented): `MeetPointRegister::{new, current, lamport, apply}`,
-  `MeetPointUpdate`, `MeetPointDraft::{Fixed, AtMe, Clear}`.
-- Compass (implemented): `compass(&Observer, &TargetPosition, now)`, `Observer`,
-  `TargetPosition`, `CompassTarget`, `CompassReading`; `coordinate_from_wire` (implemented),
-  `coordinate_to_wire`.
+  `AlwaysAllow::{new, contains, insert, members}`, `GrantScope`, `AskBack`, `AllowListChoice`,
+  `LocationAnswer`, `ExactLocation::{Shared { expires }, Private}`.
+- Cadence: `CadenceMode::{Background (default), Live}`, `BACKGROUND_FRAME_INTERVAL` (60 s),
+  `LIVE_FRAME_INTERVAL` (2 s).
+- Meet point: `MeetPointRegister::{new, current, lamport, apply}`, `MeetPointUpdate`,
+  `MeetPointDraft::{Fixed, AtMe, Clear}`.
+- Compass: `compass(&Observer, &TargetPosition, now)`, `Observer`, `TargetPosition`,
+  `CompassTarget`, `CompassReading`; `coordinate_from_wire`, `coordinate_to_wire` (rounds half
+  away from zero; vectors in `vectors/meetup/`).
 - Timers: `KEEP_ALIVE_INTERVAL` (5 min), `SILENCE_LIMIT` (10 min), `ALONE_LIMIT` (30 min),
-  `ASK_EXPIRY` (10 min), `SHORT_GRANT` (15 min), `LOCATION_FRAME_INTERVAL` (60 s).
-- `MeetupError` variants.
+  `ASK_EXPIRY` (10 min), `SHORT_GRANT` (15 min), `LOCATION_FRAME_INTERVAL` (60 s, the same as
+  `BACKGROUND_FRAME_INTERVAL`).
+- `MeetupError::{NotAMember, CannotTargetSelf, UnknownRequest, Ended, Overflow, Crypto, Proto,
+  Geo}`.
 
 ## Still to implement
 
-`MeetupSession` (it holds an uninhabited placeholder field so its methods compile; replace it
-with real state) and `coordinate_to_wire`. Property tests for the state machine: frames are
-sent at the same cadence and size whatever the grants; no `PeerLocation` or compass reading
-for a peer whose key is not held; a revoked peer cannot open frames of the new generation.
-
-## Implementer decides
-
-- Internal state layout, how grants are retried, and which member sends the late-joiner
-  `Snapshot` (the lowest online leaf, per design B.5).
-- Whether `OwnFix` updates are coalesced between cadence ticks.
+Nothing in this crate. See "Notes for pingers-meetup-session" for what the caller owns.
 
 ## Decisions
 
@@ -46,12 +42,74 @@ for a peer whose key is not held; a revoked peer cannot open frames of the new g
   decrypted frames and roster values (`Member`, with the grant key read by pingers-mls), and
   emits plaintext frames for pingers-meetup-session to encrypt. That keeps it sans-IO and
   avoids a same-layer dependency.
-- **Location frames go out at a fixed 60-second cadence**, real or dummy, with no
-  movement-triggered extra sends: design B.6.1's uniform-traffic rule wins over F.3's "send on
-  20 m movement", which would reveal movement through timing. The compass-open 2-second rate in
-  F.3 is a later, explicit mode, not part of this contract.
+- **Two fixed cadences, never movement.** `SealedLocation` frames go out one per slot, real or
+  dummy: every 60 s in `Background`, every 2 s in `Live` (the Meetup screen or compass is open
+  on this device, `MeetupInput::Cadence`). No movement-triggered sends: design B.6.1's
+  uniform-traffic rule wins over F.3's "send on 20 m movement". Going live makes a frame due at
+  once (or 2 s after the last one); going back waits a full 60 s after the last frame; a late
+  tick sends one frame, never a burst. **What the mode switch reveals:** roughly when the app
+  is in the foreground on the Meetup screen. The server already sees that from the live
+  channel; members see this device's frames speed up, not why or towards whom. `OwnFix` is
+  coalesced: the next slot carries the latest fix.
+- **Real or dummy is invisible.** A frame is sealed under the current generation when someone
+  holds the key and a fix is known; otherwise it is `dummy_location` under the *same* current
+  generation (not a fresh one per frame, which would show members the difference). Both are
+  80-byte ciphertexts in the 256 B class.
+- **Who holds the key is derived, not stored**: visibility, approvals (explicit or allow-list),
+  members revoked in this Meetup (excluded from `Everyone` and "meet at me" until approved
+  again), and whether the meet point is `AtMember(self)`. `Nobody` beats everything, including
+  "meet at me". After every change the session reconciles: anyone who lost access forces a
+  rotation (generation + 1, fresh key, grants to everyone who keeps access).
+- **Uniform grant traffic.** A rotation, a visibility change and `start` always send exactly
+  one grant-sized frame per other member (real grants, or dummies sealed to a throwaway grant
+  key so they have the real structure and length); a membership change sends one per
+  newcomer, real under `Everyone`, dummy otherwise. **Any** member leaving rotates, so a
+  rotation does not show whether the leaver held the key; a revoke always rotates, even of a
+  non-holder. Residual leaks: members see that an ask was sent (not by whom to whom; the MLS
+  sender is visible to members, not the server), and that a single grant-sized frame followed
+  or did not ("Not now" is silent, by design); generation changes show that some rotation
+  happened.
+- **"Until the Meetup ends"** is written as `expires_at = u64::MAX` in the grant plaintext and
+  read back as `ExactLocation::Shared { expires: None }`.
+- **Asks** are accepted only if the requester inside equals the MLS sender and `asked_at` is
+  less than `ASK_EXPIRY` old; duplicates (same request id) prompt once. A member who already
+  holds the key and asks again is re-sent its grant without a prompt. Expiry is counted from
+  receipt; expired requests are refused when answered (`UnknownRequest`) and purged on any tick.
+  "Not now" returns no outputs and keeps no state.
+- **Grants** are trial-opened with the grant context of the MLS sender; a grant for an older
+  generation than the one held is ignored; a frame of a newer generation than the one held
+  means this device was rotated away (`LocationAccessChanged(Private)`). A held key past its
+  end gives no compass even before the next tick.
 - **`BoardSeen`** (added to pingers-proto) carries the segment hashes each member sends first;
-  a mismatch raises `MeetupEvent::BoardEquivocation`.
-- **Meet point ties** on equal Lamport values go to the higher sender leaf.
+  a mismatch raises `MeetupEvent::BoardEquivocation`, on whichever side learns second.
+- **Meet point ties** on equal Lamport values go to the higher sender leaf. `AtMember` is
+  accepted only from that leaf, also inside a `Snapshot`; its owner re-sends it to newcomers.
+- **Late joiners**: the lowest pre-existing leaf sends `Snapshot { meet_point, lamport }`
+  (`Cleared { lamport }` is applied when there is no meet point, so the newcomer's clock
+  catches up). Thread heads are not in the proto `Snapshot`, so a reply to an unknown message
+  keeps its parent as given.
+- **Keep-alives** are subsumed by the cadence (at most 60 s between frames, well inside 5 min),
+  so the session never emits `KeepAlive`; any received frame counts as a sign of life.
+- **Silent members**: `RemoveSilentMember` once `SILENCE_LIMIT` passes without a frame, then
+  again one limit later if the member is still there (every member may ask; the group log
+  serialises the commits).
 - **Leaving** is not a session action: pingers-meetup-session proposes the MLS self-remove and
   deletes the state; the session just ends with the group.
+- **X-Wing is off** (MLS X-Wing is parked over upstream advisories), so grants and asks use the
+  classical X25519 HPKE suite, and dummy grants are sealed to throwaway X25519 keys. An X-Wing
+  grant (1,120-byte encapsulation plus 60 bytes: about 1,180 bytes) does not fit the 256 B
+  frame class: enabling X-Wing needs grants and asks (and their dummies) in the 4 KiB class,
+  and pingers-crypto then needs a way to make an X-Wing dummy grant.
+
+## Notes for pingers-meetup-session
+
+- Call `handle(Tick)` at `next_deadline()` (it changes after every input), and drain the
+  outputs of `start` with the first `handle`.
+- Pad every `Send` frame to its `SizeClass::MEETUP_FRAME` class before MLS encryption; location,
+  grant, ask and board frames are all 256 B.
+- Send `Cadence(Live)` when the Meetup screen or compass opens and `Cadence(Background)` when
+  it closes or the app backgrounds. A viewer's compass only gets 2 s updates from peers that
+  are themselves live; making peers follow a viewer would need a signal that reveals who is
+  looking, so it is not done.
+- Persist `AlwaysAllowAdded(leaf)` (map the leaf to its signature key) to `always_allow`.
+- On `End`, delete the group, keys and content; the session is unusable afterwards.

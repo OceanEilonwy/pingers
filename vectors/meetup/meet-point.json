@@ -1,0 +1,150 @@
+{
+  "name": "meetup/meet-point",
+  "description": "Meet point resolution (design B.6, B.6.1): writes applied in order; last writer wins by (lamport, sender leaf); AtMember counts only when sent by that leaf; Cleared reads as no meet point. Expected: the winner's kind, sender and lamport, or kind none with the highest lamport seen.",
+  "vectors": [
+    {
+      "name": "later-lamport-wins",
+      "inputs": {
+        "writes": [
+          {
+            "sender": 1,
+            "kind": "fixed",
+            "lamport": 1
+          },
+          {
+            "sender": 2,
+            "kind": "at_member",
+            "leaf": 2,
+            "lamport": 2
+          }
+        ]
+      },
+      "expected": {
+        "kind": "at_member",
+        "sender": 2,
+        "lamport": 2
+      }
+    },
+    {
+      "name": "earlier-lamport-loses",
+      "inputs": {
+        "writes": [
+          {
+            "sender": 1,
+            "kind": "fixed",
+            "lamport": 3
+          },
+          {
+            "sender": 2,
+            "kind": "cleared",
+            "lamport": 2
+          }
+        ]
+      },
+      "expected": {
+        "kind": "fixed",
+        "sender": 1,
+        "lamport": 3
+      }
+    },
+    {
+      "name": "tie-goes-to-higher-leaf",
+      "inputs": {
+        "writes": [
+          {
+            "sender": 3,
+            "kind": "fixed",
+            "lamport": 4
+          },
+          {
+            "sender": 1,
+            "kind": "fixed",
+            "lamport": 4
+          }
+        ]
+      },
+      "expected": {
+        "kind": "fixed",
+        "sender": 3,
+        "lamport": 4
+      }
+    },
+    {
+      "name": "tie-goes-to-higher-leaf-in-any-order",
+      "inputs": {
+        "writes": [
+          {
+            "sender": 1,
+            "kind": "fixed",
+            "lamport": 4
+          },
+          {
+            "sender": 3,
+            "kind": "fixed",
+            "lamport": 4
+          }
+        ]
+      },
+      "expected": {
+        "kind": "fixed",
+        "sender": 3,
+        "lamport": 4
+      }
+    },
+    {
+      "name": "at-member-from-someone-else-is-ignored",
+      "inputs": {
+        "writes": [
+          {
+            "sender": 1,
+            "kind": "fixed",
+            "lamport": 1
+          },
+          {
+            "sender": 2,
+            "kind": "at_member",
+            "leaf": 5,
+            "lamport": 9
+          }
+        ]
+      },
+      "expected": {
+        "kind": "fixed",
+        "sender": 1,
+        "lamport": 1
+      }
+    },
+    {
+      "name": "cleared-reads-as-none",
+      "inputs": {
+        "writes": [
+          {
+            "sender": 4,
+            "kind": "at_member",
+            "leaf": 4,
+            "lamport": 1
+          },
+          {
+            "sender": 0,
+            "kind": "cleared",
+            "lamport": 2
+          }
+        ]
+      },
+      "expected": {
+        "kind": "none",
+        "lamport": 2
+      }
+    },
+    {
+      "name": "nothing-written",
+      "inputs": {
+        "writes": []
+      },
+      "expected": {
+        "kind": "none",
+        "lamport": 0
+      }
+    }
+  ]
+}

@@ -36,6 +36,19 @@ impl AlwaysAllow {
     pub fn contains(&self, member: &AccountPublicKey) -> bool {
         self.members.contains(member)
     }
+
+    /// Adds `member` ("Always allow"); a member already on the list is not added twice.
+    pub fn insert(&mut self, member: AccountPublicKey) {
+        if !self.contains(&member) {
+            self.members.push(member);
+        }
+    }
+
+    /// The members on the list, for writing back to the `always_allow` table.
+    #[must_use]
+    pub fn members(&self) -> &[AccountPublicKey] {
+        &self.members
+    }
 }
 
 /// How long a grant lasts.
@@ -91,4 +104,19 @@ pub enum ExactLocation {
     },
     /// Not held: no pin, distance or bearing is shown or computed.
     Private,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inserting_twice_lists_the_member_once() {
+        let member = AccountPublicKey::from_bytes([3; 32]);
+        let mut list = AlwaysAllow::default();
+        list.insert(member);
+        list.insert(member);
+        assert_eq!(list.members(), &[member]);
+        assert!(list.contains(&member));
+    }
 }

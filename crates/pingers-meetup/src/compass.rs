@@ -8,7 +8,7 @@ use pingers_proto::{E7Coordinate, LeafIndex};
 use pingers_time::UnixSeconds;
 
 use crate::MeetupError;
-use crate::stub::not_implemented;
+use crate::convert::rounded;
 
 /// What the compass points at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -88,7 +88,20 @@ pub fn coordinate_from_wire(wire: E7Coordinate) -> Result<Coordinate, MeetupErro
 ///
 /// [`MeetupError::Proto`] if rounding leaves the wire range.
 pub fn coordinate_to_wire(coordinate: Coordinate) -> Result<E7Coordinate, MeetupError> {
-    not_implemented(coordinate)
+    let latitude = to_e7(coordinate.latitude())?;
+    let longitude = to_e7(coordinate.longitude())?;
+    Ok(E7Coordinate::new(latitude, longitude)?)
+}
+
+/// Degrees to 10⁻⁷ degrees, rounded half away from zero.
+fn to_e7(degrees: f64) -> Result<i32, MeetupError> {
+    let out_of_range = || {
+        MeetupError::Proto(pingers_proto::ProtoError::OutOfRange {
+            field: "coordinate",
+        })
+    };
+    let scaled = rounded(degrees * 10_000_000.0).ok_or_else(out_of_range)?;
+    i32::try_from(scaled).map_err(|_overflow| out_of_range())
 }
 
 #[cfg(test)]
@@ -115,9 +128,7 @@ mod tests {
             taken_at: UnixSeconds::new(90),
         };
         let reading = compass(&observer, &target, UnixSeconds::new(100));
-        let relative = reading
-            .relative_bearing
-            .ok_or(MeetupError::NotImplemented)?;
+        let relative = reading.relative_bearing.ok_or(MeetupError::Overflow)?;
         assert!((relative.degrees() - 45.0).abs() < 1e-6);
         assert_eq!(reading.age, Duration::from_secs(10));
         Ok(())

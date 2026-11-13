@@ -102,6 +102,10 @@ async-trait = "0.1.92"
 hyper = { version = "1.12.0", features = ["client", "server", "http2"] }
 hyper-util = { version = "0.1.21", features = ["tokio", "client-legacy", "http2"] }
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+# rustls over tokio sockets for pingers-transport's HTTP/2 connections (already in the tree via reqwest).
+tokio-rustls = { version = "0.26.6", default-features = false }
+# Mozilla's root certificates for pingers-transport's HTTPS (CDLA-Permissive-2.0).
+webpki-roots = "1.0.12"
 # SQLCipher needs a crypto library; the vendored OpenSSL keeps the Android build self-contained.
 rusqlite = { version = "0.42.0", features = ["bundled-sqlcipher-vendored-openssl"] }
 axum = { version = "0.8.9", features = ["http2"] }
@@ -115,6 +119,8 @@ anyhow = "1.0.104"
 
 # Tests
 proptest = "1.12.0"
+# Self-signed certificates for TLS tests (pingers-transport).
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
 
 # Tooling
 toml = "1.2.1"
@@ -135,6 +141,8 @@ same-layer = [
   { crate = "pingers-client", dependency = "pingers-sync", reason = "composition root" },
   { crate = "pingers-client", dependency = "pingers-wake", reason = "composition root" },
   { crate = "pingers-client", dependency = "pingers-meetup-session", reason = "composition root" },
+  # L4: as fob-words reads fob-screens, the words are written from the view models.
+  { crate = "pingers-words", dependency = "pingers-screens", reason = "words are written from the view models (architecture §3, L4)" },
 ]
 
 [workspace.lints.rust]

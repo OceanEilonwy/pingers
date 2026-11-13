@@ -14,15 +14,26 @@
 //! frames into the MLS group, sending them on the live channel, raising events, committing
 //! removals). It never computes distance or bearing to a member whose location key it does not
 //! hold (design B.6.1).
+//!
+//! Location frames go out at one of two fixed cadences ([`CadenceMode`]), real or dummy, so
+//! traffic does not depend on whether, or with whom, a member shares, nor on movement.
 #![forbid(unsafe_code)]
 
+mod board;
+mod cadence;
+mod chat;
 mod compass;
 mod consent;
+mod convert;
 mod error;
 mod meet_point;
+mod requests;
 mod session;
-mod stub;
+mod sharing;
+#[cfg(test)]
+mod tests;
 
+pub use cadence::{BACKGROUND_FRAME_INTERVAL, CadenceMode, LIVE_FRAME_INTERVAL};
 pub use compass::{
     CompassReading, CompassTarget, Observer, TargetPosition, compass, coordinate_from_wire,
     coordinate_to_wire,

@@ -1,0 +1,110 @@
+{
+  "name": "meetup/compass",
+  "description": "Compass readings (pingers-meetup compass): great-circle distance (mean Earth radius 6,371,008.8 m) and initial bearing from observer to target, bearing relative to the heading when one is given, and the age of the target's fix (zero if it is from the future). Distances compare within 0.01 m, bearings within 1e-6 degrees. Without a heading there is no relative bearing.",
+  "vectors": [
+    {
+      "name": "north-facing-east",
+      "inputs": {
+        "observer_latitude": 0.0,
+        "observer_longitude": 0.0,
+        "target_latitude": 0.001,
+        "target_longitude": 0.0,
+        "taken_at": 100,
+        "now": 130,
+        "heading_degrees": 90.0
+      },
+      "expected": {
+        "distance_meters": 111.1951,
+        "bearing_degrees": 0.0,
+        "age_seconds": 30,
+        "relative_bearing_degrees": 270.0
+      }
+    },
+    {
+      "name": "east-facing-north",
+      "inputs": {
+        "observer_latitude": 0.0,
+        "observer_longitude": 0.0,
+        "target_latitude": 0.0,
+        "target_longitude": 0.001,
+        "taken_at": 50,
+        "now": 50,
+        "heading_degrees": 0.0
+      },
+      "expected": {
+        "distance_meters": 111.1951,
+        "bearing_degrees": 90.0,
+        "age_seconds": 0,
+        "relative_bearing_degrees": 90.0
+      }
+    },
+    {
+      "name": "south-west-facing-south-east",
+      "inputs": {
+        "observer_latitude": 51.5,
+        "observer_longitude": -0.12,
+        "target_latitude": 51.499,
+        "target_longitude": -0.121,
+        "taken_at": 0,
+        "now": 2,
+        "heading_degrees": 135.0
+      },
+      "expected": {
+        "distance_meters": 130.9807,
+        "bearing_degrees": 211.903541525,
+        "age_seconds": 2,
+        "relative_bearing_degrees": 76.903541525
+      }
+    },
+    {
+      "name": "no-heading",
+      "inputs": {
+        "observer_latitude": 10.0,
+        "observer_longitude": 10.0,
+        "target_latitude": 10.0005,
+        "target_longitude": 10.0005,
+        "taken_at": 7,
+        "now": 9
+      },
+      "expected": {
+        "distance_meters": 78.0318,
+        "bearing_degrees": 44.561385962,
+        "age_seconds": 2
+      }
+    },
+    {
+      "name": "same-place",
+      "inputs": {
+        "observer_latitude": 1.0,
+        "observer_longitude": 1.0,
+        "target_latitude": 1.0,
+        "target_longitude": 1.0,
+        "taken_at": 5,
+        "now": 5,
+        "heading_degrees": 10.0
+      },
+      "expected": {
+        "distance_meters": 0.0,
+        "bearing_degrees": 0.0,
+        "age_seconds": 0,
+        "relative_bearing_degrees": 350.0
+      }
+    },
+    {
+      "name": "target-from-the-future",
+      "inputs": {
+        "observer_latitude": 0.0,
+        "observer_longitude": 0.0,
+        "target_latitude": 0.0,
+        "target_longitude": -0.001,
+        "taken_at": 200,
+        "now": 100
+      },
+      "expected": {
+        "distance_meters": 111.1951,
+        "bearing_degrees": 270.0,
+        "age_seconds": 0
+      }
+    }
+  ]
+}

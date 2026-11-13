@@ -1,0 +1,72 @@
+{
+  "name": "meetup/coordinate-wire",
+  "description": "Geo coordinates to the wire's 1e-7 degrees (design B.6 lat_e7/lon_e7), rounded half away from zero (pingers-meetup coordinate_to_wire).",
+  "vectors": [
+    {
+      "name": "london-eye",
+      "inputs": {
+        "latitude": 51.5033,
+        "longitude": -0.1196
+      },
+      "expected": {
+        "latitude_e7": 515033000,
+        "longitude_e7": -1196000
+      }
+    },
+    {
+      "name": "rounds-down-below-half",
+      "inputs": {
+        "latitude": 12.34567891,
+        "longitude": -12.34567891
+      },
+      "expected": {
+        "latitude_e7": 123456789,
+        "longitude_e7": -123456789
+      }
+    },
+    {
+      "name": "rounds-up-above-half",
+      "inputs": {
+        "latitude": 12.34567896,
+        "longitude": -12.34567896
+      },
+      "expected": {
+        "latitude_e7": 123456790,
+        "longitude_e7": -123456790
+      }
+    },
+    {
+      "name": "north-pole-date-line",
+      "inputs": {
+        "latitude": 90.0,
+        "longitude": 180.0
+      },
+      "expected": {
+        "latitude_e7": 900000000,
+        "longitude_e7": 1800000000
+      }
+    },
+    {
+      "name": "south-pole-date-line",
+      "inputs": {
+        "latitude": -90.0,
+        "longitude": -180.0
+      },
+      "expected": {
+        "latitude_e7": -900000000,
+        "longitude_e7": -1800000000
+      }
+    },
+    {
+      "name": "null-island",
+      "inputs": {
+        "latitude": 0.0,
+        "longitude": 0.0
+      },
+      "expected": {
+        "latitude_e7": 0,
+        "longitude_e7": 0
+      }
+    }
+  ]
+}
