@@ -52,8 +52,6 @@ impl WakeBudget {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
-
     use pingers_time::{ManualClock, UnixSeconds};
 
     use super::*;
@@ -78,7 +76,7 @@ mod tests {
     #[test]
     fn unlimited_never_runs_out() {
         let clock = ManualClock::new(UnixSeconds::new(1_000_000));
-        clock.advance(Duration::from_secs(86_400));
+        clock.advance(Duration::from_hours(24));
         assert!(WakeBudget::UNLIMITED.allows_request(&clock));
         assert_eq!(WakeBudget::UNLIMITED.remaining(&clock), None);
         assert_eq!(WakeBudget::UNLIMITED.deadline(), None);

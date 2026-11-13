@@ -90,7 +90,24 @@ fn only_account_routes_are_identified_and_only_the_live_channel_is_a_stream() {
             | Route::RlnLeaf
             | Route::PrivacyPassIssue => PrivacyClass::Identified,
             Route::Live => PrivacyClass::Stream,
-            _ => PrivacyClass::Anonymous,
+            Route::Params
+            | Route::RlnLeaves
+            | Route::PrivacyPassKeys
+            | Route::BoardSync
+            | Route::BoardPage
+            | Route::BoardRevokeLease
+            | Route::CreateMailbox
+            | Route::PostToMailbox
+            | Route::ReadMailbox
+            | Route::DeleteMailbox
+            | Route::CreateGroup
+            | Route::Commit
+            | Route::PutSubscription
+            | Route::DeleteSubscription
+            | Route::PostGroupMessage
+            | Route::ReadGroupMessages
+            | Route::GroupState
+            | Route::DeleteGroup => PrivacyClass::Anonymous,
         };
         assert_eq!(route.class(), expected, "{route:?}");
     }
@@ -106,7 +123,23 @@ fn writes_carry_a_credential_of_their_scope_and_capability_requests_none() {
             | Route::Commit
             | Route::PutSubscription
             | Route::PostGroupMessage => Some(RlnScope::Group),
-            _ => None,
+            Route::Params
+            | Route::CreateAccount
+            | Route::Auth
+            | Route::DeleteAccount
+            | Route::RlnLeaf
+            | Route::RlnLeaves
+            | Route::PrivacyPassIssue
+            | Route::PrivacyPassKeys
+            | Route::BoardPage
+            | Route::BoardRevokeLease
+            | Route::ReadMailbox
+            | Route::DeleteMailbox
+            | Route::DeleteSubscription
+            | Route::ReadGroupMessages
+            | Route::GroupState
+            | Route::DeleteGroup
+            | Route::Live => None,
         };
         assert_eq!(route.credential(), expected, "{route:?}");
     }
@@ -221,7 +254,7 @@ fn group_requests_are_signed_over_method_path_body_and_time() -> Result<(), Test
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or(TestError::BadHeader(GROUP_SIGNATURE_HEADER))?;
-    let signed = GroupRequest {
+    let covered = GroupRequest {
         method: "POST",
         path: request.path(),
         body: request.body(),
@@ -229,12 +262,12 @@ fn group_requests_are_signed_over_method_path_body_and_time() -> Result<(), Test
     };
     verify_group_request(
         &key.public_key(),
-        &signed,
+        &covered,
         &Signature::from_bytes(signature),
     )?;
     let later = GroupRequest {
         timestamp: UnixSeconds::new(NOW.get().saturating_add(1)),
-        ..signed
+        ..covered
     };
     assert!(
         verify_group_request(&key.public_key(), &later, &Signature::from_bytes(signature)).is_err()

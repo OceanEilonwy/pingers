@@ -34,7 +34,7 @@ pingers-testkit = { workspace = true, features = ["harness"] }
 pingers-time = { workspace = true, features = ["test-util"] }
 # Stand-ins for the group and Privacy Pass routes while pingers-server answers them 501.
 pingers-delivery = { workspace = true }
-pingers-anon = { workspace = true, features = ["prover", "issuer"] }
+pingers-anon = { workspace = true, features = ["prover", "verifier", "issuer"] }
 async-trait = { workspace = true }
 rand_chacha = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

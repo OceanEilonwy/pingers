@@ -168,10 +168,9 @@ mod tests {
     }
 
     #[test]
-    fn the_minimum_cannot_exceed_the_target() -> Result<(), SyncError> {
+    fn the_minimum_cannot_exceed_the_target() {
         assert!(stock(301, 300).is_err());
         assert!(stock(300, 300).is_ok());
-        Ok(())
     }
 
     #[test]

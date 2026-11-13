@@ -21,9 +21,9 @@ use pingers_anon::{IssuerKey, TokenCount, issue_tokens};
 use pingers_delivery::{Delivery, MemoryDeliveryStore};
 use pingers_ohttp::{BinaryRequest, BinaryResponse, Header, StatusCode};
 use pingers_proto::{
-    AnonymousCredential, AppMessage, CommitRequest, CreateGroup, GroupId, MessageAccepted,
-    PrivacyPassIssueRequest, PrivacyPassIssueResponse, SecretText, SequenceNumber, ServerId,
-    WireDecode, WireEncode,
+    AnonymousCredential, AppMessage, CommitRequest, CreateGroup, GroupId, MembershipLeaves,
+    MessageAccepted, PrivacyPassIssueRequest, PrivacyPassIssueResponse, SecretText, SequenceNumber,
+    ServerId, WireDecode, WireEncode,
 };
 use pingers_store::{Database, DatabaseKey, Session, TokenKeyId};
 use pingers_sync::{
@@ -226,6 +226,7 @@ pub(crate) struct Seen {
     pub(crate) method: String,
     pub(crate) path: String,
     pub(crate) authorization: Option<String>,
+    pub(crate) body: Vec<u8>,
 }
 
 /// A device's anonymous and stream route: the real OHTTP transport, with switches the tests
@@ -236,6 +237,7 @@ pub(crate) struct Link {
     offline: AtomicBool,
     stalled: AtomicBool,
     rivals: Mutex<VecDeque<BinaryRequest>>,
+    leaves: Mutex<VecDeque<MembershipLeaves>>,
     seen: Mutex<Vec<Seen>>,
 }
 
@@ -256,6 +258,12 @@ impl Link {
         lock(&self.rivals).push_back(rival);
     }
 
+    /// Answers the next `GET /v1/rln/leaves` (one page per call) while the server answers
+    /// `501`.
+    pub(crate) fn script_leaves(&self, page: MembershipLeaves) {
+        lock(&self.leaves).push_back(page);
+    }
+
     pub(crate) fn seen(&self) -> Vec<Seen> {
         lock(&self.seen).clone()
     }
@@ -265,10 +273,15 @@ impl Link {
             .relay
             .request(PrivacyClass::Anonymous, request.clone())
             .await?;
-        if answer.status.get() == 501
-            && let Some(stand_in) = self.groups.answer(&request)
-        {
-            return stand_in;
+        if answer.status.get() == 501 {
+            if request.path.starts_with("/v1/rln/leaves")
+                && let Some(page) = lock(&self.leaves).pop_front()
+            {
+                return encoded(200, &page);
+            }
+            if let Some(stand_in) = self.groups.answer(&request) {
+                return stand_in;
+            }
         }
         Ok(answer)
     }
@@ -293,6 +306,7 @@ impl Transport for Link {
                 .iter()
                 .find(|header| header.name == "authorization")
                 .map(|header| String::from_utf8_lossy(&header.value).into_owned()),
+            body: request.body.clone(),
         });
         if self.stalled.load(Ordering::SeqCst) {
             return std::future::pending().await;
@@ -496,6 +510,7 @@ impl World {
             offline: AtomicBool::new(false),
             stalled: AtomicBool::new(false),
             rivals: Mutex::new(VecDeque::new()),
+            leaves: Mutex::new(VecDeque::new()),
             seen: Mutex::new(Vec::new()),
         });
         let issuer = Arc::new(Issuer::new()?);

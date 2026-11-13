@@ -139,7 +139,7 @@ async fn a_mailbox_the_server_refuses_is_not_kept() -> TestResult {
     // The harness server lists no push relays, so a listed relay id is refused (422).
     let relay_key = PushRelayPrivateKey::generate(&mut seeded_rng(3)).public_key(1)?;
     let mailbox = pingers_sync::NewMailbox {
-        push: Some(seal(relay_key)?),
+        push: Some(seal(relay_key)),
         ..knock_mailbox()?
     };
     let refused = device
@@ -163,8 +163,8 @@ async fn a_mailbox_the_server_refuses_is_not_kept() -> TestResult {
     Ok(())
 }
 
-fn seal(relay_key: pingers_crypto::PushRelayPublicKey) -> Result<PushSeal, TestError> {
-    Ok(PushSeal {
+fn seal(relay_key: pingers_crypto::PushRelayPublicKey) -> PushSeal {
+    PushSeal {
         relay: RelayRef::Listed(RelayId::new(1)),
         relay_key,
         token: PushTokenPlaintext {
@@ -174,7 +174,7 @@ fn seal(relay_key: pingers_crypto::PushRelayPublicKey) -> Result<PushSeal, TestE
             not_after: pingers_time::UnixSeconds::new(2_000_000_000),
         },
         urgency: Urgency::Quiet,
-    })
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -183,10 +183,8 @@ async fn a_subscription_is_sealed_to_the_relay_and_bound_to_its_id() -> TestResu
     let device = world.device()?;
     let relay_private = PushRelayPrivateKey::generate(&mut seeded_rng(3));
     let relay_key = relay_private.public_key(7)?;
-    let lifetime = TimeToLive::new(Duration::from_secs(86_400))?;
-    let subscription = device
-        .engine
-        .new_subscription(&seal(relay_key)?, lifetime)?;
+    let lifetime = TimeToLive::new(Duration::from_hours(24))?;
+    let subscription = device.engine.new_subscription(&seal(relay_key), lifetime)?;
     assert_eq!(subscription.push.key_id.get(), 7);
     assert_eq!(subscription.push.urgency, Urgency::Quiet);
     assert_eq!(subscription.time_to_live, lifetime);
@@ -200,9 +198,7 @@ async fn a_subscription_is_sealed_to_the_relay_and_bound_to_its_id() -> TestResu
     )?;
     assert_eq!(opened.token.as_bytes(), b"https://push.example/abc");
     // Two subscriptions never share an id, handle or ciphertext.
-    let other = device
-        .engine
-        .new_subscription(&seal(relay_key)?, lifetime)?;
+    let other = device.engine.new_subscription(&seal(relay_key), lifetime)?;
     assert_ne!(other.id, subscription.id);
     assert_ne!(other.push.handle, subscription.push.handle);
     assert_ne!(other.push.blob, subscription.push.blob);

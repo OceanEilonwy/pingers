@@ -146,8 +146,6 @@ impl RequestQueue {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
-
     use super::*;
 
     fn capacity(count: usize) -> QueueCapacity {
