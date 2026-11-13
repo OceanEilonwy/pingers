@@ -75,6 +75,7 @@ impl QuietHours {
     /// Whether `now` falls in the window.
     #[must_use]
     pub fn contains(&self, now: MinuteOfDay) -> bool {
+        // `start == end` cannot be constructed, so `<` and `<=` here behave the same.
         if self.start < self.end {
             self.start <= now && now < self.end
         } else {
@@ -166,6 +167,10 @@ pub enum GateDecision {
 }
 
 /// Decides whether the device may share its presence now.
+///
+/// [`FocusState::Unknown`] does not suppress: where the platform will not report Focus, the
+/// user is told and offered the manual pause instead (design B.10, `CONTRACT.md`). It never
+/// hides another reason that applies.
 pub fn decide(inputs: &GateInputs) -> GateDecision {
     let in_quiet_hours = match inputs.quiet_hours {
         QuietHoursSetting::Off => false,
@@ -297,26 +302,121 @@ mod tests {
     }
 
     #[test]
-    fn pause_is_reported_before_focus() -> Result<(), GateError> {
-        let inputs = GateInputs {
-            pause: PauseState::Paused,
-            focus: FocusState::On,
-            ..sharing()?
-        };
-        assert_eq!(
-            decide(&inputs),
-            GateDecision::Suppress(SuppressReason::Paused)
-        );
-        Ok(())
-    }
-
-    #[test]
     fn invalid_values_are_rejected() -> Result<(), GateError> {
         assert_eq!(MinuteOfDay::new(1_440), Err(GateError::MinuteOutOfRange));
         assert_eq!(
             QuietHours::new(minute(60)?, minute(60)?),
             Err(GateError::EmptyQuietHours)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn the_last_minute_of_the_day_is_valid_and_kept() -> Result<(), GateError> {
+        assert_eq!(minute(1_439)?.get(), 1_439);
+        assert_eq!(minute(0)?.get(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn daytime_quiet_hours_end_before_their_end_minute() -> Result<(), GateError> {
+        let window = QuietHours::new(minute(9 * 60)?, minute(17 * 60)?)?;
+        assert!(window.contains(minute(17 * 60 - 1)?));
+        assert!(!window.contains(minute(17 * 60)?));
+        assert!(!window.contains(minute(9 * 60 - 1)?));
+        Ok(())
+    }
+
+    #[test]
+    fn wrapping_quiet_hours_cover_both_sides_of_midnight() -> Result<(), GateError> {
+        let window = QuietHours::new(minute(22 * 60)?, minute(7 * 60)?)?;
+        assert!(window.contains(minute(1_439)?));
+        assert!(window.contains(minute(0)?));
+        assert!(window.contains(minute(7 * 60 - 1)?));
+        assert!(!window.contains(minute(22 * 60 - 1)?));
+        assert!(!window.contains(minute(12 * 60)?));
+        Ok(())
+    }
+
+    #[test]
+    fn outside_scheduled_quiet_hours_means_share() -> Result<(), GateError> {
+        let inputs = GateInputs {
+            quiet_hours: QuietHoursSetting::Scheduled(QuietHours::new(
+                minute(22 * 60)?,
+                minute(7 * 60)?,
+            )?),
+            local_time: minute(12 * 60)?,
+            ..sharing()?
+        };
+        assert_eq!(decide(&inputs), GateDecision::Share);
+        Ok(())
+    }
+
+    #[test]
+    fn being_inside_a_zone_suppresses() -> Result<(), GateError> {
+        let inputs = GateInputs {
+            zones: ZoneStatus::InsideZone,
+            ..sharing()?
+        };
+        assert_eq!(
+            decide(&inputs),
+            GateDecision::Suppress(SuppressReason::ExclusionZone)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_focus_does_not_hide_a_later_reason() -> Result<(), GateError> {
+        let inputs = GateInputs {
+            focus: FocusState::Unknown,
+            zones: ZoneStatus::InsideZone,
+            ..sharing()?
+        };
+        assert_eq!(
+            decide(&inputs),
+            GateDecision::Suppress(SuppressReason::ExclusionZone)
+        );
+        Ok(())
+    }
+
+    /// Every input set to suppress: each reason is reported only when every earlier one is
+    /// cleared, which pins the whole priority order.
+    #[test]
+    fn reasons_are_reported_in_priority_order() -> Result<(), GateError> {
+        let mut inputs = GateInputs {
+            location_sharing: LocationSharing::Off,
+            pause: PauseState::Paused,
+            focus: FocusState::On,
+            quiet_hours: QuietHoursSetting::Scheduled(QuietHours::new(minute(0)?, minute(1_439)?)?),
+            local_time: minute(12 * 60)?,
+            zones: ZoneStatus::InsideZone,
+        };
+        assert_eq!(
+            decide(&inputs),
+            GateDecision::Suppress(SuppressReason::LocationSharingOff)
+        );
+        inputs.location_sharing = LocationSharing::On;
+        assert_eq!(
+            decide(&inputs),
+            GateDecision::Suppress(SuppressReason::Paused)
+        );
+        inputs.pause = PauseState::NotPaused;
+        assert_eq!(
+            decide(&inputs),
+            GateDecision::Suppress(SuppressReason::Focus)
+        );
+        inputs.focus = FocusState::Off;
+        assert_eq!(
+            decide(&inputs),
+            GateDecision::Suppress(SuppressReason::QuietHours)
+        );
+        inputs.quiet_hours = QuietHoursSetting::Off;
+        assert_eq!(
+            decide(&inputs),
+            GateDecision::Suppress(SuppressReason::ExclusionZone)
+        );
+        inputs.zones = ZoneStatus::Clear;
+        assert_eq!(decide(&inputs), GateDecision::Share);
         Ok(())
     }
 }

@@ -3360,8 +3360,10 @@ dependencies = [
 name = "pingers-geo"
 version = "0.1.0"
 dependencies = [
+ "pingers-testkit",
  "pingers-time",
  "proptest",
+ "serde_json",
  "thiserror",
 ]
 

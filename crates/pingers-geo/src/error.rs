@@ -26,6 +26,9 @@ pub enum GeoError {
     /// A polygon encloses no area (for example, all vertices on one line).
     #[error("polygon has no area")]
     Degenerate,
+    /// A polygon spans more than `MAXIMUM_POLYGON_EXTENT`.
+    #[error("polygon is too large")]
+    PolygonTooLarge,
     /// A bearing outside `[0, 360)` degrees or not a number.
     #[error("bearing out of range")]
     BearingOutOfRange,
@@ -33,7 +36,4 @@ pub enum GeoError {
     /// The caller drops it; state is unchanged.
     #[error("presence input is older than the last one processed")]
     StaleInput,
-    /// This part of the contract has no implementation yet.
-    #[error("not implemented")]
-    NotImplemented,
 }

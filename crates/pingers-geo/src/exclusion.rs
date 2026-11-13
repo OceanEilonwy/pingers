@@ -66,7 +66,11 @@ impl ExclusionTrail {
             .iter()
             .any(|zone| zone.intersects_disc(fix.coordinate, fix.accuracy));
         if touches {
-            self.last_in_zone = Some(fix.taken_at);
+            // A late-delivered older fix must not shorten the buffer set by a newer one.
+            let latest = self
+                .last_in_zone
+                .map_or(fix.taken_at, |last| last.max(fix.taken_at));
+            self.last_in_zone = Some(latest);
             ZoneStatus::InsideZone
         } else {
             self.status_at(fix.taken_at)
@@ -134,6 +138,98 @@ mod tests {
             trail.observe(&[home()?], &fix_at(51.51, 10)?),
             ZoneStatus::Clear
         );
+        assert_eq!(trail.last_in_zone(), None);
         Ok(())
+    }
+
+    #[test]
+    fn only_clear_lets_sharing_through() {
+        assert!(!ZoneStatus::Clear.suppresses());
+        assert!(ZoneStatus::InsideZone.suppresses());
+        assert!(
+            ZoneStatus::TrailBuffer {
+                until: UnixSeconds::new(1)
+            }
+            .suppresses()
+        );
+    }
+
+    #[test]
+    fn an_accuracy_circle_reaching_into_a_zone_counts_as_inside() -> Result<(), GeoError> {
+        // 0.0011° north is about 122 m from the centre: 22 m outside the 100 m zone, so the
+        // 20 m accuracy circle misses it and a 30 m one reaches it.
+        let mut trail = ExclusionTrail::new();
+        let mut fix = fix_at(51.5011, 10)?;
+        assert_eq!(trail.observe(&[home()?], &fix), ZoneStatus::Clear);
+        fix.accuracy = Meters::from_whole(30);
+        assert_eq!(trail.observe(&[home()?], &fix), ZoneStatus::InsideZone);
+        Ok(())
+    }
+
+    #[test]
+    fn any_one_of_several_zones_suppresses() -> Result<(), GeoError> {
+        let elsewhere = Fence::Circle(Circle::new(
+            Coordinate::new(48.85, 2.35)?,
+            Meters::from_whole(100),
+        )?);
+        let mut trail = ExclusionTrail::new();
+        assert_eq!(
+            trail.observe(&[elsewhere, home()?], &fix_at(51.5, 10)?),
+            ZoneStatus::InsideZone
+        );
+        assert_eq!(trail.last_in_zone(), Some(UnixSeconds::new(10)));
+        Ok(())
+    }
+
+    #[test]
+    fn a_polygon_zone_is_checked_against_its_edges() -> Result<(), GeoError> {
+        let square = crate::testing::polygon_around(
+            Coordinate::new(51.5, -0.1)?,
+            &[[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]],
+        )?;
+        let zones = [Fence::Polygon(square)];
+        let mut trail = ExclusionTrail::new();
+        // About 11 m south of the square's southern edge.
+        let south = fix_at(51.4999, 10)?;
+        assert_eq!(trail.observe(&zones, &south), ZoneStatus::InsideZone);
+        let farther = fix_at(51.4995, 20)?;
+        assert_eq!(
+            trail.observe(&zones, &farther),
+            ZoneStatus::TrailBuffer {
+                until: UnixSeconds::new(310)
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_buffer_runs_from_the_latest_fix_in_a_zone() -> Result<(), GeoError> {
+        let zones = [home()?];
+        let mut trail = ExclusionTrail::new();
+        let _ = trail.observe(&zones, &fix_at(51.5, 1_000)?);
+        let _ = trail.observe(&zones, &fix_at(51.5, 1_200)?);
+        // A fix from before, delivered late, does not pull the buffer back.
+        let _ = trail.observe(&zones, &fix_at(51.5, 900)?);
+        assert_eq!(trail.last_in_zone(), Some(UnixSeconds::new(1_200)));
+        assert_eq!(
+            trail.status_at(UnixSeconds::new(1_499)),
+            ZoneStatus::TrailBuffer {
+                until: UnixSeconds::new(1_500)
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_restored_trail_keeps_its_buffer() {
+        let trail = ExclusionTrail::restore(Some(UnixSeconds::new(1_000)));
+        assert_eq!(trail.last_in_zone(), Some(UnixSeconds::new(1_000)));
+        assert_eq!(
+            trail.status_at(UnixSeconds::new(1_299)),
+            ZoneStatus::TrailBuffer {
+                until: UnixSeconds::new(1_300)
+            }
+        );
+        assert_eq!(ExclusionTrail::restore(None), ExclusionTrail::new());
     }
 }

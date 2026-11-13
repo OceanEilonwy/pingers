@@ -9,7 +9,7 @@ use crate::GeoError;
 
 /// Mean Earth radius (IUGG), in metres. Spherical distances are accurate to about 0.5 %,
 /// far inside GPS accuracy at Spot scale.
-const EARTH_RADIUS_METERS: f64 = 6_371_008.8;
+pub(crate) const EARTH_RADIUS_METERS: f64 = 6_371_008.8;
 
 /// A length in metres: finite and not negative.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
@@ -306,5 +306,18 @@ mod tests {
     fn negative_lengths_are_rejected() {
         assert_eq!(Meters::new(-1.0), Err(GeoError::InvalidLength));
         assert_eq!(Meters::new(f64::INFINITY), Err(GeoError::InvalidLength));
+    }
+
+    #[test]
+    fn locations_are_redacted_in_debug_output() -> Result<(), GeoError> {
+        let coordinate = Coordinate::new(51.5, -0.1)?;
+        assert_eq!(format!("{coordinate:?}"), "Coordinate(redacted)");
+        let fix = Fix {
+            coordinate,
+            accuracy: Meters::from_whole(5),
+            taken_at: UnixSeconds::new(1),
+        };
+        assert_eq!(format!("{fix:?}"), "Fix(redacted)");
+        Ok(())
     }
 }

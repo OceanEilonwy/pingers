@@ -1,0 +1,382 @@
+{
+  "name": "geo/polygon",
+  "description": "Polygon validation, area, enclosing-circle radius, containment and distance outside (pingers-geo Polygon; edges straight in an azimuthal equidistant projection about the enclosing circle's centre). Vertices and probes are [latitude, longitude]. Areas compare within 0.01 %, lengths within 0.01 m; points on the boundary are inside.",
+  "vectors": [
+    {
+      "name": "square-100-m",
+      "inputs": {
+        "vertices": [
+          [
+            51.5,
+            -0.1
+          ],
+          [
+            51.499999991,
+            -0.098555343
+          ],
+          [
+            51.500899311,
+            -0.098555314
+          ],
+          [
+            51.50089932,
+            -0.1
+          ]
+        ],
+        "probes": [
+          [
+            51.500449658,
+            -0.099277664
+          ],
+          [
+            51.50044964,
+            -0.097832993
+          ],
+          [
+            51.501259034,
+            -0.098121894
+          ],
+          [
+            51.50044966,
+            -0.100288934
+          ],
+          [
+            51.500890325,
+            -0.099277657
+          ],
+          [
+            51.5,
+            -0.1
+          ]
+        ]
+      },
+      "expected": {
+        "area_square_meters": 9999.995,
+        "enclosing_radius_meters": 70.7107,
+        "contains": [
+          true,
+          false,
+          false,
+          false,
+          true,
+          true
+        ],
+        "distance_outside_meters": [
+          0.0,
+          50.0,
+          50.0001,
+          20.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "name": "concave-l-shape",
+      "inputs": {
+        "vertices": [
+          [
+            51.5,
+            -0.1
+          ],
+          [
+            51.499999965,
+            -0.097110685
+          ],
+          [
+            51.500899285,
+            -0.097110628
+          ],
+          [
+            51.500899311,
+            -0.098555314
+          ],
+          [
+            51.501798632,
+            -0.098555286
+          ],
+          [
+            51.501798641,
+            -0.1
+          ]
+        ],
+        "probes": [
+          [
+            51.501348978,
+            -0.09927765
+          ],
+          [
+            51.50044964,
+            -0.097832993
+          ],
+          [
+            51.501348961,
+            -0.09783295
+          ],
+          [
+            51.502248245,
+            -0.096388178
+          ],
+          [
+            51.500899311,
+            -0.098555314
+          ]
+        ]
+      },
+      "expected": {
+        "area_square_meters": 29999.995,
+        "enclosing_radius_meters": 141.4214,
+        "contains": [
+          true,
+          true,
+          false,
+          false,
+          true
+        ],
+        "distance_outside_meters": [
+          0.0,
+          0.0,
+          50.0,
+          158.1138,
+          0.0
+        ]
+      }
+    },
+    {
+      "name": "square-across-the-antimeridian",
+      "inputs": {
+        "vertices": [
+          [
+            -0.001,
+            179.999
+          ],
+          [
+            -0.001,
+            -179.999
+          ],
+          [
+            0.001,
+            -179.999
+          ],
+          [
+            0.001,
+            179.999
+          ]
+        ],
+        "probes": [
+          [
+            0.0,
+            180.0
+          ],
+          [
+            0.0,
+            -180.0
+          ],
+          [
+            0.0,
+            179.99
+          ],
+          [
+            0.0005,
+            -179.9995
+          ]
+        ]
+      },
+      "expected": {
+        "area_square_meters": 49457.383,
+        "enclosing_radius_meters": 157.2536,
+        "contains": [
+          true,
+          true,
+          false,
+          true
+        ],
+        "distance_outside_meters": [
+          0.0,
+          0.0,
+          1000.7557,
+          0.0
+        ]
+      }
+    },
+    {
+      "name": "square-around-the-north-pole",
+      "inputs": {
+        "vertices": [
+          [
+            89.999,
+            0.0
+          ],
+          [
+            89.999,
+            90.0
+          ],
+          [
+            89.999,
+            180.0
+          ],
+          [
+            89.999,
+            -90.0
+          ]
+        ],
+        "probes": [
+          [
+            90.0,
+            0.0
+          ],
+          [
+            89.9995,
+            45.0
+          ],
+          [
+            89.998,
+            0.0
+          ],
+          [
+            89.9993,
+            135.0
+          ]
+        ]
+      },
+      "expected": {
+        "area_square_meters": 24728.692,
+        "enclosing_radius_meters": 111.1951,
+        "contains": [
+          true,
+          true,
+          false,
+          true
+        ],
+        "distance_outside_meters": [
+          0.0,
+          0.0,
+          111.1951,
+          0.0
+        ]
+      }
+    },
+    {
+      "name": "two-vertices",
+      "inputs": {
+        "vertices": [
+          [
+            51.5,
+            -0.1
+          ],
+          [
+            51.499999991,
+            -0.098555343
+          ]
+        ]
+      },
+      "expected": {
+        "error": "TooFewVertices"
+      }
+    },
+    {
+      "name": "collinear",
+      "inputs": {
+        "vertices": [
+          [
+            51.5,
+            -0.1
+          ],
+          [
+            51.500449658,
+            -0.099277664
+          ],
+          [
+            51.500899311,
+            -0.098555314
+          ]
+        ]
+      },
+      "expected": {
+        "error": "Degenerate"
+      }
+    },
+    {
+      "name": "bow-tie",
+      "inputs": {
+        "vertices": [
+          [
+            51.5,
+            -0.1
+          ],
+          [
+            51.500899311,
+            -0.098555314
+          ],
+          [
+            51.499999991,
+            -0.098555343
+          ],
+          [
+            51.50089932,
+            -0.1
+          ]
+        ]
+      },
+      "expected": {
+        "error": "SelfIntersecting"
+      }
+    },
+    {
+      "name": "figure-eight-touching-at-a-vertex",
+      "inputs": {
+        "vertices": [
+          [
+            51.5,
+            -0.1
+          ],
+          [
+            51.499999991,
+            -0.098555343
+          ],
+          [
+            51.500449658,
+            -0.099277664
+          ],
+          [
+            51.500899311,
+            -0.098555314
+          ],
+          [
+            51.50089932,
+            -0.1
+          ],
+          [
+            51.500449658,
+            -0.099277664
+          ]
+        ]
+      },
+      "expected": {
+        "error": "SelfIntersecting"
+      }
+    },
+    {
+      "name": "wider-than-100-km",
+      "inputs": {
+        "vertices": [
+          [
+            51.5,
+            -0.1
+          ],
+          [
+            51.49112626,
+            1.344614335
+          ],
+          [
+            51.508993204,
+            -0.1
+          ]
+        ]
+      },
+      "expected": {
+        "error": "PolygonTooLarge"
+      }
+    }
+  ]
+}

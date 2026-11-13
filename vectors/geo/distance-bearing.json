@@ -1,0 +1,122 @@
+{
+  "name": "geo/distance-bearing",
+  "description": "Great-circle distance (haversine, mean Earth radius 6,371,008.8 m) and initial bearing (pingers-geo measure). Distances compare within 0.01 m, bearings within 1e-6 degrees. Coincident points have bearing 0; the antipodal bearing is undefined and not given.",
+  "vectors": [
+    {
+      "name": "one-degree-of-latitude",
+      "inputs": {
+        "from_latitude": 0,
+        "from_longitude": 0,
+        "to_latitude": 1,
+        "to_longitude": 0
+      },
+      "expected": {
+        "distance_meters": 111195.0802,
+        "bearing_degrees": 0.0
+      }
+    },
+    {
+      "name": "due-east-on-the-equator",
+      "inputs": {
+        "from_latitude": 0,
+        "from_longitude": 0,
+        "to_latitude": 0,
+        "to_longitude": 1
+      },
+      "expected": {
+        "distance_meters": 111195.0802,
+        "bearing_degrees": 90.0
+      }
+    },
+    {
+      "name": "due-west-wraps-to-270",
+      "inputs": {
+        "from_latitude": 0,
+        "from_longitude": 0,
+        "to_latitude": 0,
+        "to_longitude": -1
+      },
+      "expected": {
+        "distance_meters": 111195.0802,
+        "bearing_degrees": 270.0
+      }
+    },
+    {
+      "name": "london-to-paris",
+      "inputs": {
+        "from_latitude": 51.5074,
+        "from_longitude": -0.1278,
+        "to_latitude": 48.8566,
+        "to_longitude": 2.3522
+      },
+      "expected": {
+        "distance_meters": 343556.5349,
+        "bearing_degrees": 148.115616871
+      }
+    },
+    {
+      "name": "across-the-antimeridian",
+      "inputs": {
+        "from_latitude": 10.0,
+        "from_longitude": 179.9995,
+        "to_latitude": 10.0,
+        "to_longitude": -179.9995
+      },
+      "expected": {
+        "distance_meters": 109.5058,
+        "bearing_degrees": 89.999913176
+      }
+    },
+    {
+      "name": "towards-the-north-pole",
+      "inputs": {
+        "from_latitude": 89.9,
+        "from_longitude": 45.0,
+        "to_latitude": 90.0,
+        "to_longitude": 0.0
+      },
+      "expected": {
+        "distance_meters": 11119.508,
+        "bearing_degrees": 360.0
+      }
+    },
+    {
+      "name": "from-the-south-pole",
+      "inputs": {
+        "from_latitude": -90.0,
+        "from_longitude": 0.0,
+        "to_latitude": -89.999,
+        "to_longitude": 90.0
+      },
+      "expected": {
+        "distance_meters": 111.1951,
+        "bearing_degrees": 90.0
+      }
+    },
+    {
+      "name": "same-point-is-due-north",
+      "inputs": {
+        "from_latitude": -33.9,
+        "from_longitude": 151.2,
+        "to_latitude": -33.9,
+        "to_longitude": 151.2
+      },
+      "expected": {
+        "distance_meters": 0.0,
+        "bearing_degrees": 0.0
+      }
+    },
+    {
+      "name": "antipodes",
+      "inputs": {
+        "from_latitude": 0.0,
+        "from_longitude": 0.0,
+        "to_latitude": 0.0,
+        "to_longitude": 180.0
+      },
+      "expected": {
+        "distance_meters": 20015114.442
+      }
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c2554d849feaec1fe6a8f95f5a8913576e7e9cd68dd6c4f9cfbff040ae5de3c5 # shrinks to script = [(Fix { north: 199.17574632482277, accuracy: 1 }, 0), (Fix { north: 0.0, accuracy: 1 }, 30)]

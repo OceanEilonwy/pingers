@@ -18,12 +18,16 @@ mod exclusion;
 mod fence;
 mod geofence;
 mod measure;
+mod plane;
 mod presence;
-mod stub;
+#[cfg(test)]
+mod testing;
 
 pub use error::GeoError;
 pub use exclusion::{ExclusionTrail, ZoneStatus};
-pub use fence::{Circle, Fence, MINIMUM_SPOT_RADIUS, Polygon, RECOMMENDED_SPOT_RADIUS};
+pub use fence::{
+    Circle, Fence, MAXIMUM_POLYGON_EXTENT, MINIMUM_SPOT_RADIUS, Polygon, RECOMMENDED_SPOT_RADIUS,
+};
 pub use geofence::{
     GeofenceCandidate, GeofenceCapacity, GeofenceSelection, OsGeofence, select_os_geofences,
 };

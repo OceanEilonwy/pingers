@@ -148,4 +148,92 @@ mod tests {
         assert_eq!(selection.horizon, None);
         Ok(())
     }
+
+    #[test]
+    fn exactly_filling_the_capacity_needs_no_horizon() -> Result<(), GeoError> {
+        let fences = [spot_at(0.01)?, spot_at(0.02)?];
+        let candidates: Vec<_> = fences
+            .iter()
+            .enumerate()
+            .map(|(key, fence)| GeofenceCandidate { key, fence })
+            .collect();
+        let selection = select_os_geofences(
+            &candidates,
+            Coordinate::new(0.0, 0.0)?,
+            GeofenceCapacity::new(2),
+        );
+        assert_eq!(selection.regions.len(), 2);
+        assert_eq!(selection.horizon, None);
+        Ok(())
+    }
+
+    #[test]
+    fn the_horizon_is_centred_on_the_device() -> Result<(), GeoError> {
+        let fences = [spot_at(0.01)?, spot_at(0.02)?];
+        let candidates: Vec<_> = fences
+            .iter()
+            .map(|fence| GeofenceCandidate { key: (), fence })
+            .collect();
+        let position = Coordinate::new(0.0, 0.0)?;
+        let selection = select_os_geofences(&candidates, position, GeofenceCapacity::new(1));
+        let horizon = selection.horizon.ok_or(GeoError::ZeroRadius)?;
+        assert_eq!(horizon.center(), position);
+        Ok(())
+    }
+
+    #[test]
+    fn circles_are_registered_as_they_are() -> Result<(), GeoError> {
+        let fence = spot_at(0.01)?;
+        let candidates = [GeofenceCandidate {
+            key: (),
+            fence: &fence,
+        }];
+        let selection = select_os_geofences(
+            &candidates,
+            Coordinate::new(0.0, 0.0)?,
+            GeofenceCapacity::ANDROID,
+        );
+        let regions: Vec<Circle> = selection
+            .regions
+            .iter()
+            .map(|region| region.region)
+            .collect();
+        assert_eq!(regions, vec![fence.enclosing_circle()]);
+        Ok(())
+    }
+
+    #[test]
+    fn a_polygon_is_registered_as_its_enclosing_circle_plus_the_exit_buffer() -> Result<(), GeoError>
+    {
+        // A 400 m square: enclosing radius 283 m, exit buffer 71 m.
+        let square = crate::testing::polygon_around(
+            Coordinate::new(0.0, 0.0)?,
+            &[[0.0, 0.0], [400.0, 0.0], [400.0, 400.0], [0.0, 400.0]],
+        )?;
+        let enclosing = square.enclosing_circle();
+        let fence = Fence::Polygon(square);
+        let candidates = [GeofenceCandidate {
+            key: (),
+            fence: &fence,
+        }];
+        let selection = select_os_geofences(
+            &candidates,
+            Coordinate::new(0.0, 0.0)?,
+            GeofenceCapacity::ANDROID,
+        );
+        let region = selection
+            .regions
+            .first()
+            .map(|region| region.region)
+            .ok_or(GeoError::ZeroRadius)?;
+        assert_eq!(region.center(), enclosing.center());
+        assert!((region.radius().get() - enclosing.radius().get() * 1.25).abs() < 1e-9);
+        Ok(())
+    }
+
+    #[test]
+    fn android_leaves_room_for_the_horizon_and_a_spare() {
+        assert_eq!(GeofenceCapacity::ANDROID.spots(), 97);
+        assert_eq!(GeofenceCapacity::new(18).spots(), 18);
+    }
 }

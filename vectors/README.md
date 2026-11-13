@@ -10,6 +10,8 @@ One JSON file per topic, named after it: `vectors/<name>.json`, for example
 `presence-key-schedule.json`, `board-beacon-seal.json`, `knock-seal.json`, `record-encoding.json`.
 The crate that owns the derivation or format owns its file (mostly pingers-crypto and
 pingers-proto). `example.json` shows the format and is used by pingers-testkit's own tests.
+A crate with several files may group them in a subdirectory: `vectors/geo/polygon.json` is
+loaded as `load_vectors("geo/polygon")`, and its `name` is `geo/polygon`.
 
 ## Format
 
