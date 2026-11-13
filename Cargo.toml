@@ -1,0 +1,148 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+
+[workspace.package]
+edition = "2024"
+license = "AGPL-3.0-only"
+rust-version = "1.98"
+version = "0.1.0"
+publish = false
+
+# One version of each shared dependency for the whole workspace. Crates refer to
+# these with `name = { workspace = true }` and add features locally if needed.
+# Adding a dependency here needs a reason in the pull request (style guide §12).
+[workspace.dependencies]
+# Internal crates, so manifests can say `pingers-proto = { workspace = true }`.
+pingers-time = { path = "crates/pingers-time" }
+pingers-proto = { path = "crates/pingers-proto" }
+pingers-geo = { path = "crates/pingers-geo" }
+pingers-crypto = { path = "crates/pingers-crypto" }
+pingers-mls = { path = "crates/pingers-mls" }
+pingers-anon = { path = "crates/pingers-anon", default-features = false }
+pingers-ohttp = { path = "crates/pingers-ohttp" }
+pingers-presence = { path = "crates/pingers-presence", default-features = false }
+pingers-meetup = { path = "crates/pingers-meetup" }
+pingers-gate = { path = "crates/pingers-gate" }
+pingers-store = { path = "crates/pingers-store" }
+pingers-transport = { path = "crates/pingers-transport" }
+pingers-parties = { path = "crates/pingers-parties" }
+pingers-sync = { path = "crates/pingers-sync" }
+pingers-wake = { path = "crates/pingers-wake" }
+pingers-meetup-session = { path = "crates/pingers-meetup-session" }
+pingers-client = { path = "crates/pingers-client" }
+pingers-screens = { path = "crates/pingers-screens" }
+pingers-words = { path = "crates/pingers-words" }
+pingers-board-store = { path = "crates/pingers-board-store" }
+pingers-mailbox = { path = "crates/pingers-mailbox" }
+pingers-delivery = { path = "crates/pingers-delivery" }
+pingers-quota = { path = "crates/pingers-quota" }
+pingers-testkit = { path = "crates/pingers-testkit" }
+
+# Errors and secret hygiene
+thiserror = "2.0.21"
+zeroize = { version = "1.9.1", features = ["derive"] }
+subtle = "2.6.1"
+
+# Randomness: functions take `&mut impl rand_core::CryptoRng`; tests seed ChaCha.
+rand_core = "0.10.1"
+rand_chacha = "0.10.0"
+
+# Encoding
+minicbor = { version = "2.3.1", features = ["alloc", "derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+hex = "0.4.3"
+
+# Cryptographic primitives (called from pingers-crypto only, style guide §8)
+hkdf = "0.13.0"
+hmac = "0.13.0"
+sha2 = "0.11.1"
+aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "alloc", "zeroize"] }
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "zeroize"] }
+hpke-rs = { version = "0.8.0", features = ["rustcrypto"] }
+ed25519-dalek = { version = "3.0.0", features = ["zeroize"] }
+x25519-dalek = { version = "3.0.0", features = ["zeroize", "static_secrets"] }
+
+# MLS (pingers-mls only)
+openmls = { version = "0.9.2", features = ["openmls_rust_crypto"] }
+openmls_rust_crypto = "0.6.0"
+openmls_traits = "0.6.0"
+openmls_basic_credential = "0.6.0"
+openmls_memory_storage = "0.6.0"
+tls_codec = "0.5.0"
+
+# Anonymous authorisation (pingers-anon only)
+rln = { version = "3.1.0", default-features = false }
+voprf = { version = "0.6.0-pre.2", default-features = false }
+privacypass = { version = "0.2.0-pre.4", default-features = false }
+
+# Oblivious HTTP (pingers-ohttp only); AES-GCM is pinned in code, not here.
+ohttp = { version = "0.8.0", default-features = false, features = ["client", "server", "rust-hpke", "stream"] }
+bhttp = "0.8.0"
+
+# Geometry
+libm = "0.2.16"
+
+# I/O: L2 and above only (enforced by `cargo xtask layers`)
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+async-trait = "0.1.92"
+hyper = { version = "1.12.0", features = ["client", "server", "http2"] }
+hyper-util = { version = "0.1.21", features = ["tokio", "client-legacy", "http2"] }
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+rusqlite = { version = "0.42.0", features = ["bundled-sqlcipher"] }
+axum = { version = "0.8.9", features = ["http2"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2", "json"] }
+url = "2.5.8"
+bytes = "1.12.1"
+uniffi = "0.32.2"
+
+# Binaries only (style guide §4)
+anyhow = "1.0.104"
+
+# Tests
+proptest = "1.12.0"
+
+# Tooling
+toml = "1.2.1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unused_must_use = "deny"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Section 5: no panics
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+arithmetic_side_effects = "deny"
+as_conversions = "deny"
+panic_in_result_fn = "deny"
+exit = "deny"
+# Sections 1, 4, 11
+fn_params_excessive_bools = "deny"
+missing_errors_doc = "warn"
+wildcard_enum_match_arm = "warn"
+allow_attributes = "deny"          # use #[expect(.., reason = "..")]
+allow_attributes_without_reason = "deny"
+# Section 9 and hygiene
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+mem_forget = "deny"
+
+# The library as the Android app ships it, once per ABI.
+# (Release builds for this machine keep symbols: UniFFI's bindgen reads them.)
+[profile.android]
+inherits = "release"
+lto = true
+codegen-units = 1
+strip = true

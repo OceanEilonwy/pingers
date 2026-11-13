@@ -1,0 +1,16 @@
+# Style guide §6: time, randomness and the environment are injected.
+# Exceptions are granted per call site with
+# #[expect(clippy::disallowed_methods, reason = "...")].
+# `allow-invalid` keeps clippy quiet in crates that do not depend on tokio or rand; the ban
+# still applies wherever they are dependencies. rand 0.9 renamed `thread_rng` to `rng`.
+disallowed-methods = [
+  { path = "std::time::SystemTime::now", reason = "inject pingers_time::Clock" },
+  { path = "std::time::Instant::now", reason = "inject pingers_time::Timer" },
+  { path = "std::thread::sleep", reason = "inject pingers_time::Timer" },
+  { path = "tokio::time::sleep", reason = "inject pingers_time::Timer", allow-invalid = true },
+  { path = "tokio::time::Instant::now", reason = "inject pingers_time::Timer", allow-invalid = true },
+  { path = "rand::thread_rng", reason = "take &mut impl CryptoRng", allow-invalid = true },
+  { path = "rand::rng", reason = "take &mut impl CryptoRng", allow-invalid = true },
+  { path = "rand::random", reason = "take &mut impl CryptoRng", allow-invalid = true },
+  { path = "std::env::var", reason = "read config once in the binary" },
+]
