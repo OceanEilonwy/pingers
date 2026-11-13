@@ -5,7 +5,7 @@ use pingers_geo::{Coordinate, Meters, distance};
 use pingers_proto::GroupId;
 
 use crate::ScreenError;
-use crate::common::{DraftText, Me, Person, mean};
+use crate::common::{DraftText, Me, Person, mean, people};
 use crate::meetup::locate;
 use crate::snapshot::ClientSnapshot;
 
@@ -79,8 +79,7 @@ pub fn meet_point(
     draft: &MeetPointDraft,
 ) -> Result<MeetPointView, ScreenError> {
     let meetup = snapshot.meetup(id)?;
-    let members: Vec<MemberOnMap> = meetup
-        .people()
+    let members: Vec<MemberOnMap> = people(meetup)
         .into_iter()
         .filter_map(|person| {
             let at = locate(snapshot, meetup, person.leaf)?;
@@ -95,8 +94,7 @@ pub fn meet_point(
             mean(&known)
         }
     };
-    let distances = meetup
-        .people()
+    let distances = people(meetup)
         .into_iter()
         .filter(|person| person.me == Me::Other)
         .map(|person| MeetPointDistance {

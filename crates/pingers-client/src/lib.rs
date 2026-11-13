@@ -13,6 +13,8 @@
 //! split crates, Android only) and the [`Notice`] vocabulary. The async API is the owner's.
 #![forbid(unsafe_code)]
 
+pub mod snapshot;
+
 use std::time::Duration;
 
 use pingers_gate::FocusState;

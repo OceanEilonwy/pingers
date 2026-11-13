@@ -143,7 +143,7 @@ pub fn accept_invite(snapshot: &ClientSnapshot) -> Option<AcceptInvite> {
     }
     Some(AcceptInvite {
         inviter: preview.inviter.clone(),
-        party_initials: preview.party_name.initials(),
+        party_initials: Initials::of(&preview.party_name),
         party_name: preview.party_name.clone(),
         colour: preview.colour,
         preview: avatars,

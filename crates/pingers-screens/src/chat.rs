@@ -5,7 +5,7 @@ use pingers_proto::{ChatBody, ChatMessageId, GroupId, MeetPointLabel};
 
 use crate::ScreenError;
 use crate::clock::{LocalClock, LocalTime};
-use crate::common::{Name, Person};
+use crate::common::{Name, Person, people, person};
 use crate::home::meetup_names;
 use crate::snapshot::{ChatEntry, ChatMessage, ClientSnapshot, Meetup};
 
@@ -62,7 +62,7 @@ pub struct ChatView {
 fn message(meetup: &Meetup, message: &ChatMessage, clock: LocalClock) -> Option<ChatMessageView> {
     Some(ChatMessageView {
         id: message.id,
-        author: meetup.person(message.author).ok()?,
+        author: person(meetup, message.author).ok()?,
         body: message.body.clone(),
         at: clock.time_of(message.at),
         replies: message
@@ -71,7 +71,7 @@ fn message(meetup: &Meetup, message: &ChatMessage, clock: LocalClock) -> Option<
             .filter_map(|reply| {
                 Some(ChatMessageView {
                     id: reply.id,
-                    author: meetup.person(reply.author).ok()?,
+                    author: person(meetup, reply.author).ok()?,
                     body: reply.body.clone(),
                     at: clock.time_of(reply.at),
                     replies: Vec::new(),
@@ -100,12 +100,12 @@ pub fn chat(
         .iter()
         .filter_map(|entry| match entry {
             ChatEntry::Joined { leaf, at } => Some(ChatItem::Joined {
-                person: meetup.person(*leaf).ok()?,
+                person: person(meetup, *leaf).ok()?,
                 at: clock.time_of(*at),
             }),
             ChatEntry::Message(entry) => message(meetup, entry, clock).map(ChatItem::Message),
             ChatEntry::MeetPointSet { author, label } => Some(ChatItem::MeetPointSet {
-                author: meetup.person(*author).ok()?,
+                author: person(meetup, *author).ok()?,
                 label: label.clone(),
             }),
         })
@@ -116,7 +116,7 @@ pub fn chat(
             ChatItem::Message(_) | ChatItem::Joined { .. } | ChatItem::MeetPointSet { .. } => None,
         })
     });
-    let mut participants = meetup.people();
+    let mut participants = people(meetup);
     participants.rotate_left(1);
     Ok(ChatView {
         spot_name: names.spot,
