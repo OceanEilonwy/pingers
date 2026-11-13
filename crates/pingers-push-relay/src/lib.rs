@@ -151,3 +151,6 @@ pub async fn serve(
 fn write_counts(snapshot: CountsSnapshot) {
     eprintln!("pingers-push-relay counts: {snapshot}");
 }
+
+#[cfg(test)]
+mod tests;

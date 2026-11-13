@@ -65,6 +65,18 @@ fn a_minimal_file_gets_private_defaults() -> Result<(), ConfigError> {
 }
 
 #[test]
+fn counts_logging_defaults_to_hourly() -> Result<(), ConfigError> {
+    let config = RelayConfig::parse(&with("logging = \"counts\""))?;
+    assert_eq!(
+        config.logging,
+        Logging::Counts {
+            interval: Duration::from_hours(1)
+        }
+    );
+    Ok(())
+}
+
+#[test]
 fn every_setting_is_read() -> Result<(), ConfigError> {
     let text = format!(
         "logging = \"counts\"\ncounts_interval_s = 60\nupstream_timeout_ms = 1500\n\

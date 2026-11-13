@@ -33,8 +33,7 @@ pub(crate) struct MockHttp {
 }
 
 impl MockHttp {
-    /// Starts a server answering `status` with `body` to every request. With `hang`, it never
-    /// answers.
+    /// Starts a server answering `status` with `body` to every request.
     pub(crate) async fn start(status: StatusCode, body: &str) -> std::io::Result<Self> {
         Self::start_with(status, body, Behaviour::Answer).await
     }
