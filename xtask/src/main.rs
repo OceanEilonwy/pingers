@@ -8,6 +8,7 @@
 //!   directly or transitively. A same-layer dependency is allowed only if it is listed, with a
 //!   reason, under `[workspace.metadata.pingers] same-layer` in the workspace manifest; an
 //!   entry that is no longer used is itself a violation, like an unfulfilled `#[expect]`.
+//!   Library crates may not depend on `anyhow` (style guide §4).
 //! - `cargo xtask ci`: the checks CI runs on every pull request, in order, stopping at the
 //!   first failure.
 #![forbid(unsafe_code)]
@@ -116,7 +117,15 @@ struct Dependency {
 struct CrateManifest {
     name: String,
     layer: Layer,
+    target: TargetKind,
     dependencies: Vec<Dependency>,
+}
+
+/// Whether a crate is a library (has `src/lib.rs`) or only a binary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TargetKind {
+    Library,
+    Binary,
 }
 
 /// A same-layer dependency the architecture relies on, written down in the workspace manifest
@@ -197,6 +206,12 @@ fn check_direct_dependencies(
             violations.push(format!(
                 "{} ({}) depends on I/O crate {}",
                 manifest.name, manifest.layer, dependency.package
+            ));
+        }
+        if manifest.target == TargetKind::Library && dependency.package == "anyhow" {
+            violations.push(format!(
+                "{} is a library and depends on anyhow: use a thiserror enum (style guide §4)",
+                manifest.name
             ));
         }
         let Some(target) = by_name.get(dependency.package.as_str()) else {
@@ -344,9 +359,15 @@ fn read_crate_manifest(path: &Path) -> Result<CrateManifest> {
             collect_dependencies(target, &mut dependencies);
         }
     }
+    let target = if path.with_file_name("src").join("lib.rs").is_file() {
+        TargetKind::Library
+    } else {
+        TargetKind::Binary
+    };
     Ok(CrateManifest {
         name,
         layer,
+        target,
         dependencies,
     })
 }

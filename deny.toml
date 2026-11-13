@@ -7,7 +7,17 @@ all-features = true
 # Every advisory fails the check unless it is listed here with a reason.
 version = 2
 yanked = "deny"
-ignore = []
+# Each entry needs a reason and is re-examined when the crate that pulls it in is implemented.
+ignore = [
+  { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 timing issues: via p256 in hpke-rs-rust-crypto (openmls_rust_crypto); Pingers uses no P-256 MLS suite. Re-check when pingers-mls is implemented." },
+  { id = "RUSTSEC-2025-0055", reason = "tracing-subscriber 0.2: via rln (zerokit); nothing in Pingers logs through it. Re-check when pingers-anon is implemented." },
+  { id = "RUSTSEC-2026-0403", reason = "zstd-safe 4: via rln's sled; Pingers never decompresses untrusted zstd. Re-check when pingers-anon is implemented." },
+  { id = "RUSTSEC-2024-0388", reason = "derivative unmaintained: via rln (arkworks). No fix upstream." },
+  { id = "RUSTSEC-2025-0057", reason = "fxhash unmaintained: via rln's sled. No fix upstream." },
+  { id = "RUSTSEC-2024-0384", reason = "instant unmaintained: via rln's sled. No fix upstream." },
+  { id = "RUSTSEC-2024-0436", reason = "paste unmaintained: widely used build-time macro crate. No fix upstream." },
+  { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 unmaintained: build-time macro dependency. No fix upstream." },
+]
 
 [licenses]
 version = 2
@@ -18,6 +28,7 @@ allow = [
   "AGPL-3.0-or-later",
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
+  "BlueOak-1.0.0",
   "BSD-2-Clause",
   "BSD-3-Clause",
   "BSL-1.0",
@@ -35,6 +46,10 @@ allow = [
   "Zlib",
 ]
 confidence-threshold = 0.9
+# SQLite's public-domain blessing and libtomcrypt's WTFPL, inside the bundled SQLCipher.
+exceptions = [
+  { crate = "sqlcipher-src", allow = ["blessing", "WTFPL"] },
+]
 
 [licenses.private]
 # Our own crates are unpublished; they carry AGPL-3.0-only through the workspace.
@@ -46,12 +61,13 @@ ignore = true
 multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
+# "No anyhow in our library crates" (style guide §4) is checked by `cargo xtask layers`;
+# third-party crates may use it.
 deny = [
-  # Library crates report errors as typed enums (style guide §4).
-  { name = "anyhow", wrappers = ["xtask", "pingers-server", "pingers-push-relay", "pingers-ohttp-relay", "pingers-cli"] },
-  # Pulls a C TLS stack; rustls with aws-lc-rs is the TLS of record (design B.8).
+  # rustls with aws-lc-rs is the TLS of record (design B.8). OpenSSL is allowed only as
+  # SQLCipher's crypto library, vendored through rusqlite.
   { name = "openssl" },
-  { name = "openssl-sys" },
+  { name = "openssl-sys", wrappers = ["libsqlite3-sys"] },
   { name = "native-tls" },
 ]
 
