@@ -136,7 +136,7 @@ async fn a_mailbox_the_server_refuses_is_not_kept() -> TestResult {
     let world = World::start()?;
     let device = world.device()?;
     let _ = device.stock_tokens().await?;
-    // The harness server lists no push relays, so a listed relay id is refused (422).
+    // The harness server does not list relay 9, so the registration is refused (422).
     let relay_key = PushRelayPrivateKey::generate(&mut seeded_rng(3)).public_key(1)?;
     let mailbox = pingers_sync::NewMailbox {
         push: Some(seal(relay_key)),
@@ -165,7 +165,8 @@ async fn a_mailbox_the_server_refuses_is_not_kept() -> TestResult {
 
 pub(crate) fn seal(relay_key: pingers_crypto::PushRelayPublicKey) -> PushSeal {
     PushSeal {
-        relay: RelayRef::Listed(RelayId::new(1)),
+        // Not the harness push relay (id 1), so a registration carrying it is refused.
+        relay: RelayRef::Listed(RelayId::new(9)),
         relay_key,
         token: PushTokenPlaintext {
             platform: PushPlatform::UnifiedPush,
