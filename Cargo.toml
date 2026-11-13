@@ -135,8 +135,6 @@ same-layer = [
   { crate = "pingers-crypto", dependency = "pingers-time", reason = "tags, seal keys and the meetup PSK are derived per Bucket" },
   { crate = "pingers-crypto", dependency = "pingers-proto", reason = "keys are derived from proto's identifiers and seal proto's records and beacons" },
   # L3: the architecture's dependency lists put these inside L3.
-  { crate = "pingers-wake", dependency = "pingers-parties", reason = "architecture: wake reads a read-only view of Spots" },
-  { crate = "pingers-wake", dependency = "pingers-sync", reason = "architecture: wake uploads leases and syncs the board through sync" },
   { crate = "pingers-client", dependency = "pingers-parties", reason = "composition root" },
   { crate = "pingers-client", dependency = "pingers-sync", reason = "composition root" },
   { crate = "pingers-client", dependency = "pingers-wake", reason = "composition root" },

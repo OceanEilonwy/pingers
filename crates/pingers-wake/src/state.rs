@@ -330,6 +330,9 @@ impl WakeState {
     pub(crate) fn prune(&mut self, now: UnixSeconds) {
         let bucket = now.bucket();
         self.leases.retain(|lease| lease.live_at(bucket));
+        // A knock is decided after its record's lease started, so one lease after the decision
+        // that lease has expired and its mailbox is no longer read: where exactly the cut-off
+        // falls (`<` or `<=`) cannot be observed.
         self.decided_knocks
             .retain(|decided| now.saturating_duration_since(decided.at) < LEASE_DURATION);
     }
