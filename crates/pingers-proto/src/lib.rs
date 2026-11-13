@@ -25,6 +25,7 @@ mod ids;
 mod knock;
 mod meetup;
 mod padding;
+mod privacy_pass;
 mod push;
 mod redacted;
 mod relay;
@@ -59,6 +60,9 @@ pub use meetup::{
     SpeedCentimetresPerSecond,
 };
 pub use padding::{Padded, SizeClass};
+pub use privacy_pass::{
+    MAX_TOKENS_PER_ISSUANCE, PrivacyPassIssueRequest, PrivacyPassIssueResponse,
+};
 pub use push::{
     KeyConfigHash, MailboxSpec, PushBind, PushClass, PushPlatform, PushToken, PushTokenPlaintext,
     RelayRef, RelayUrl, SealedPush, SealedPushBlob, Subscription, TimeToLive, Urgency,

@@ -12,14 +12,14 @@ use pingers_proto::{
     Lease, LeaseId, LeaseReplacement, LiveFrame, LocationGeneration, LocationPlaintext, MailboxId,
     MailboxMessage, MailboxMessages, MailboxSpec, MeetPoint, MeetPointLabel, MeetupMessage,
     MembershipIndex, MembershipLeafRequest, MembershipLeafResponse, MembershipLeaves,
-    MembershipRoot, MessageAccepted, MlsMessageBytes, Padded, Params, PushBind, PushClass,
-    PushHandle, PushPlatform, PushRelayConfig, PushRelayInfo, PushRelayKeyConfig, PushRelayKeyId,
-    PushRequest, PushToken, PushTokenPlaintext, ReadBoard, Record, RecordRandomness, RecordTag,
-    Redacted, RegisterRequest, RegisterResponse, RelayId, RelayRef, RelayUrl, RevokeCommitment,
-    RlnAuth, RlnScope, RootEpoch, SealedAsk, SealedBeacon, SealedGrant, SealedLocationFrame,
-    SealedPush, SealedPushBlob, SealedSnapshot, SeenSegment, SegmentHash, SegmentInfo,
-    SequenceNumber, SizeClass, Slashing, SpeedCentimetresPerSecond, Subscription, SubscriptionId,
-    TimeToLive, Urgency,
+    MembershipRoot, MessageAccepted, MlsMessageBytes, Padded, Params, PrivacyPassIssueRequest,
+    PrivacyPassIssueResponse, PushBind, PushClass, PushHandle, PushPlatform, PushRelayConfig,
+    PushRelayInfo, PushRelayKeyConfig, PushRelayKeyId, PushRequest, PushToken, PushTokenPlaintext,
+    ReadBoard, Record, RecordRandomness, RecordTag, Redacted, RegisterRequest, RegisterResponse,
+    RelayId, RelayRef, RelayUrl, RevokeCommitment, RlnAuth, RlnScope, RootEpoch, SealedAsk,
+    SealedBeacon, SealedGrant, SealedLocationFrame, SealedPush, SealedPushBlob, SealedSnapshot,
+    SeenSegment, SegmentHash, SegmentInfo, SequenceNumber, SizeClass, Slashing,
+    SpeedCentimetresPerSecond, Subscription, SubscriptionId, TimeToLive, Urgency,
 };
 use pingers_time::{Bucket, UnixSeconds};
 use proptest::array::uniform;
@@ -176,6 +176,18 @@ pub(crate) fn push_relay_config() -> impl Strategy<Value = PushRelayConfig> {
                 operator,
             },
         )
+}
+
+pub(crate) fn privacy_pass_issue_request() -> impl Strategy<Value = PrivacyPassIssueRequest> {
+    vec(any::<u8>(), 1..200).prop_filter_map("fits a batch", |bytes| {
+        PrivacyPassIssueRequest::new(bytes).ok()
+    })
+}
+
+pub(crate) fn privacy_pass_issue_response() -> impl Strategy<Value = PrivacyPassIssueResponse> {
+    vec(any::<u8>(), 1..200).prop_filter_map("fits a batch", |bytes| {
+        PrivacyPassIssueResponse::new(bytes).ok()
+    })
 }
 
 pub(crate) fn mailbox_spec() -> impl Strategy<Value = MailboxSpec> {

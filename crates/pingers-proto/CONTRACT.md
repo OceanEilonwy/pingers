@@ -104,8 +104,7 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
   `MembershipLeafResponse`, `MembershipLeaves` (with `MembershipRoot`, `MembershipIndex`,
   `RootEpoch`), `MailboxMessages` (`MailboxMessage` carries a `Padded` body, so its length
   must be a size class), `MessageAccepted`, `GroupMessages`, `GroupState`. Privacy Pass
-  issuance and invite payloads are not added yet: their contents belong to pingers-anon and
-  pingers-parties and are opaque to this crate until those are fixed.
+  issuance and invite payloads were added later (below).
 - The unused `serde` dependency is removed.
 
 ### Push relay API (added 2026-11-13, wave 2)
@@ -124,3 +123,17 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
 - `PushPlatform`'s wire values and `TimeToLive`'s CBOR helpers became `pub(crate)` for reuse.
 - Vectors `push-request-encoding` and `push-relay-config-encoding`; fuzz targets
   `push_request` and `push_relay_config`.
+
+### Privacy Pass issuance (added 2026-11-13, wave 2)
+
+- **`PrivacyPassIssueRequest`** and **`PrivacyPassIssueResponse`** (`POST /v1/pp/issue`): each
+  `[bytes]`, the bytes being pingers-anon's RFC 9578 batched issuance message (pingers-anon
+  builds on `voprf` directly: request `token_type || truncated_key_id ||
+  blinded_elements<2-byte length>`, response `evaluated_elements<2-byte length> ||
+  proof(96)`). Opaque here, as pingers-anon's contract says ("TLS presentation inside the CBOR
+  body"); constructors refuse empty messages and anything longer than a batch of
+  `MAX_TOKENS_PER_ISSUANCE` (300) tokens (`OutOfRange`). The design's response also lists
+  `key_id`; it is left out because the client already chose the key (the request carries its
+  truncated id) and pingers-anon's `finish` takes only the response bytes.
+- Vectors `privacy-pass-issue-request-encoding` and `privacy-pass-issue-response-encoding`;
+  fuzz targets `privacy_pass_issue_request` and `privacy_pass_issue_response`.

@@ -10,12 +10,13 @@ use pingers_proto::{
     AppMessage, BoardBeacon, BoardCursor, BoardPage, ChatBody, ChatMessageId, Delivery,
     E7Coordinate, Epoch, HeadingDegrees, KeyConfigHash, KeyPackageBytes, Knock, KnockSignature,
     Lamport, LeafIndex, Lease, LocationGeneration, LocationPlaintext, MailboxId, MailboxSpec,
-    MeetPoint, MeetPointLabel, MeetupHint, MeetupMessage, MlsMessageBytes, ProtoError, PushBind,
-    PushClass, PushHandle, PushPlatform, PushRelayConfig, PushRelayKeyConfig, PushRelayKeyId,
-    PushRequest, PushToken, PushTokenPlaintext, Record, RecordRandomness, RecordTag, RelayId,
-    RelayRef, RelayUrl, RevokeCommitment, RlnAuth, RlnScope, SealedBeacon, SealedLocationFrame,
-    SealedPush, SealedPushBlob, SeenSegment, SegmentHash, SegmentInfo, Subscription,
-    SubscriptionId, TimeToLive, Urgency, WireDecode, WireEncode,
+    MeetPoint, MeetPointLabel, MeetupHint, MeetupMessage, MlsMessageBytes, PrivacyPassIssueRequest,
+    PrivacyPassIssueResponse, ProtoError, PushBind, PushClass, PushHandle, PushPlatform,
+    PushRelayConfig, PushRelayKeyConfig, PushRelayKeyId, PushRequest, PushToken,
+    PushTokenPlaintext, Record, RecordRandomness, RecordTag, RelayId, RelayRef, RelayUrl,
+    RevokeCommitment, RlnAuth, RlnScope, SealedBeacon, SealedLocationFrame, SealedPush,
+    SealedPushBlob, SeenSegment, SegmentHash, SegmentInfo, Subscription, SubscriptionId,
+    TimeToLive, Urgency, WireDecode, WireEncode,
 };
 use pingers_testkit::{Vector, VectorError, load_vectors};
 use pingers_time::{Bucket, UnixSeconds};
@@ -447,6 +448,36 @@ fn push_relay_config_vectors() -> Result<(), TestError> {
         build: push_relay_config,
         encode: PushRelayConfig::encode,
         decode: PushRelayConfig::decode,
+    })
+}
+
+#[test]
+fn privacy_pass_issue_request_vectors() -> Result<(), TestError> {
+    check(&Format {
+        file: "privacy-pass-issue-request-encoding",
+        bytes_field: "encoding",
+        build: |vector| {
+            Ok(PrivacyPassIssueRequest::new(
+                vector.input_bytes("token_request")?,
+            )?)
+        },
+        encode: PrivacyPassIssueRequest::encode,
+        decode: PrivacyPassIssueRequest::decode,
+    })
+}
+
+#[test]
+fn privacy_pass_issue_response_vectors() -> Result<(), TestError> {
+    check(&Format {
+        file: "privacy-pass-issue-response-encoding",
+        bytes_field: "encoding",
+        build: |vector| {
+            Ok(PrivacyPassIssueResponse::new(
+                vector.input_bytes("token_response")?,
+            )?)
+        },
+        encode: PrivacyPassIssueResponse::encode,
+        decode: PrivacyPassIssueResponse::decode,
     })
 }
 

@@ -3,9 +3,7 @@
 //!
 //! Besides the structs the contract fixes, this module carries the other request and response
 //! bodies of design D: account registration and auth answers, the membership tree, mailbox
-//! reads, group log reads and group state. Privacy Pass issuance and invite payloads are not
-//! here yet: their bodies are opaque to this crate until pingers-anon and pingers-parties fix
-//! them.
+//! reads, group log reads and group state. Privacy Pass issuance is in `privacy_pass`.
 
 use minicbor::Decoder;
 use pingers_time::UnixSeconds;

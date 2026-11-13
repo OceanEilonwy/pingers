@@ -257,3 +257,17 @@ path = "fuzz_targets/push_relay_config.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "privacy_pass_issue_request"
+path = "fuzz_targets/privacy_pass_issue_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "privacy_pass_issue_response"
+path = "fuzz_targets/privacy_pass_issue_response.rs"
+test = false
+doc = false
+bench = false

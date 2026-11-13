@@ -716,3 +716,72 @@ write(
         },
     ],
 )
+
+# --- Privacy Pass issuance ---
+PP_TOKEN_TYPE = b"\x00\x01"
+
+
+def pp_request(truncated_key_id, count):
+    elements = b"".join(ramp(0x02 + k, 49) for k in range(count))
+    return PP_TOKEN_TYPE + bytes([truncated_key_id]) + struct.pack(">H", len(elements)) + elements
+
+
+def pp_response(count):
+    elements = b"".join(ramp(0x30 + k, 49) for k in range(count))
+    return struct.pack(">H", len(elements)) + elements + ramp(0x90, 96)
+
+
+PP_MAX_REQUEST = 2 + 1 + 2 + 300 * 49
+PP_MAX_RESPONSE = 2 + 300 * 49 + 96
+write(
+    "privacy-pass-issue-request-encoding",
+    "POST /v1/pp/issue body as canonical CBOR: [token request], the token request being pingers-anon's RFC 9578 batched request (token_type || truncated_key_id || blinded_elements<2-byte length>), opaque here and at most 5 + 300 * 49 bytes (design B.4.8, D)",
+    [
+        {
+            "name": "two-tokens",
+            "inputs": {"token_request": h(pp_request(0x7F, 2))},
+            "expected": {"encoding": h(versioned(a(b(pp_request(0x7F, 2)))))},
+        },
+        {
+            "name": "full-batch",
+            "inputs": {"token_request": h(fill(0x01, PP_MAX_REQUEST))},
+            "expected": {"encoding": h(versioned(a(b(fill(0x01, PP_MAX_REQUEST)))))},
+        },
+        {
+            "name": "over-a-batch",
+            "inputs": {"encoding": h(versioned(a(b(fill(0x01, PP_MAX_REQUEST + 1)))))},
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "empty",
+            "inputs": {"encoding": h(versioned(a(b(b""))))},
+            "expected": {"error": "OutOfRange"},
+        },
+    ],
+)
+write(
+    "privacy-pass-issue-response-encoding",
+    "POST /v1/pp/issue answer as canonical CBOR: [token response], the token response being pingers-anon's RFC 9578 batched response (evaluated_elements<2-byte length> || proof(96)), opaque here and at most 2 + 300 * 49 + 96 bytes (design B.4.8, D)",
+    [
+        {
+            "name": "two-tokens",
+            "inputs": {"token_response": h(pp_response(2))},
+            "expected": {"encoding": h(versioned(a(b(pp_response(2)))))},
+        },
+        {
+            "name": "full-batch",
+            "inputs": {"token_response": h(fill(0x02, PP_MAX_RESPONSE))},
+            "expected": {"encoding": h(versioned(a(b(fill(0x02, PP_MAX_RESPONSE)))))},
+        },
+        {
+            "name": "over-a-batch",
+            "inputs": {"encoding": h(versioned(a(b(fill(0x02, PP_MAX_RESPONSE + 1)))))},
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "text-instead-of-bytes",
+            "inputs": {"encoding": h(versioned(a(t("token"))))},
+            "expected": {"error": "Cbor"},
+        },
+    ],
+)
