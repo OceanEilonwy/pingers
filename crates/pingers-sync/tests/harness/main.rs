@@ -9,6 +9,7 @@ mod group_extras;
 mod lifecycle;
 mod mailbox;
 mod queue;
+mod restart;
 mod rln;
 mod support;
 mod tokens;

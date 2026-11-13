@@ -10,9 +10,15 @@
 //! own thread (so the harness works from sync and async tests alike, and its runtime is never
 //! dropped inside another). The server allows the OHTTP relay as its only relay; the relay
 //! forwards to the server's gateway; the push relay opens sealed tokens with its real key and
-//! captures each push ([`InProcessHarness::pushes`]) instead of sending it. All three read
+//! captures each push ([`InProcessHarness::pushes`]) instead of sending it, or answers 410 for
+//! tokens marked gone ([`InProcessHarness::mark_token_gone`]). All three read
 //! [`HarnessConfig::clock`]. [`InProcessHarness::shutdown`] (or dropping the harness) stops
 //! them and waits for the thread.
+//!
+//! The push relay serves HTTPS (pingers-proto's `RelayUrl` takes nothing else) with a
+//! certificate from a test CA made at start; the server is configured with the relay as
+//! relay id [`HARNESS_PUSH_RELAY_ID`] and trusts that CA ([`Endpoints::push_relay_ca`]), so
+//! mailbox and group wakes reach it.
 //!
 //! Without the feature `start` returns [`HarnessError::NotWired`], so crates that only need
 //! the fake platform do not compile the server.
@@ -25,23 +31,24 @@
 //!   it exists.
 //! - **The relay-only rule cannot bite on loopback**: relay and test clients connect from the
 //!   same address. pingers-server's own tests check the rule with two loopback addresses.
-//! - **The server does not forward pushes yet**: the wake rule belongs to pingers-mailbox and
-//!   pingers-delivery, which have no API on main. Once they do, the server is configured with
-//!   [`Endpoints::push_relay`] and the harness's credential.
-//! - **Most routes answer 501** until the four server crates are wired (pingers-server docs).
 
 #[cfg(feature = "harness")]
 mod relay;
+#[cfg(feature = "harness")]
+mod tls;
 #[cfg(feature = "harness")]
 mod wiring;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use pingers_proto::{PushClass, PushPlatform, PushToken};
+use pingers_proto::{PushClass, PushPlatform, PushToken, RelayId};
 use pingers_time::{ManualClock, UnixSeconds};
 
 use crate::time::test_clock;
+
+/// The relay id devices name (`RelayRef::Listed`) for the harness push relay.
+pub const HARNESS_PUSH_RELAY_ID: RelayId = RelayId::new(1);
 
 /// How to start the harness.
 #[derive(Clone, Debug)]
@@ -78,8 +85,14 @@ pub struct Endpoints {
     /// The OHTTP relay clients send anonymous requests to (`POST /ohttp`, and
     /// `GET /v1/ohttp/config` for the key config).
     pub ohttp_relay: SocketAddr,
-    /// The push relay the server forwards sealed pushes to.
+    /// The push relay the server forwards sealed pushes to (HTTPS).
     pub push_relay: SocketAddr,
+    /// The test CA that issued the push relay's certificate, in PEM: trust it to call the
+    /// relay directly.
+    pub push_relay_ca: String,
+    /// The server's origin (`https://<server address>`), which RLN proofs and account
+    /// registrations are bound to.
+    pub server_id: String,
     /// The server's OHTTP key configuration (RFC 9458 `application/ohttp-keys`, one config).
     pub ohttp_key_config: Vec<u8>,
     /// The push relay's X25519 HPKE public key (key id 1), which clients seal push tokens to.
@@ -145,6 +158,9 @@ pub enum HarnessError {
         #[source]
         source: std::io::Error,
     },
+    /// A direct request to the server could not be made or answered.
+    #[error("direct request to the harness server failed")]
+    Direct,
 }
 
 /// The running server and relays. Dropping it shuts them down.
@@ -152,6 +168,8 @@ pub enum HarnessError {
 pub struct InProcessHarness {
     endpoints: Endpoints,
     pushes: Arc<Mutex<Vec<CapturedPush>>>,
+    gone: Arc<Mutex<Vec<PushToken>>>,
+    gone_pushes: Arc<Mutex<Vec<CapturedPush>>>,
     #[cfg(feature = "harness")]
     running: wiring::Running,
 }
@@ -167,10 +185,21 @@ impl InProcessHarness {
     #[cfg(feature = "harness")]
     pub fn start(config: &HarnessConfig) -> Result<Self, HarnessError> {
         let pushes = Arc::new(Mutex::new(Vec::new()));
-        let started = wiring::start(config, Arc::clone(&pushes))?;
+        let gone = Arc::new(Mutex::new(Vec::new()));
+        let gone_pushes = Arc::new(Mutex::new(Vec::new()));
+        let started = wiring::start(
+            config,
+            wiring::Capture {
+                pushes: Arc::clone(&pushes),
+                gone: Arc::clone(&gone),
+                gone_pushes: Arc::clone(&gone_pushes),
+            },
+        )?;
         Ok(Self {
             endpoints: started.endpoints,
             pushes,
+            gone,
+            gone_pushes,
             running: started.running,
         })
     }
@@ -204,6 +233,24 @@ impl InProcessHarness {
             .clone()
     }
 
+    /// The pushes the relay answered `410 Gone` for (tokens marked gone), oldest first.
+    #[must_use]
+    pub fn gone_pushes(&self) -> Vec<CapturedPush> {
+        self.gone_pushes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// From now on the push relay answers `410 Gone` for `token`, as FCM does for an
+    /// unregistered device, instead of capturing the push.
+    pub fn mark_token_gone(&self, token: PushToken) {
+        self.gone
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(token);
+    }
+
     /// Stops all three services and waits for them to finish.
     pub fn shutdown(self) {
         drop(self);
@@ -227,6 +274,72 @@ pub async fn run_ohttp_relay(
     shutdown: impl Future<Output = ()>,
 ) {
     relay::serve(listener, gateway, shutdown).await;
+}
+
+/// Sends `request` straight to the harness server at `server` over plain HTTP/2, as an
+/// identified (direct) request: for tests whose client transport would need `https://`
+/// (accounts, `POST /v1/auth`, Privacy Pass issuance). Header names are sent as given.
+///
+/// # Errors
+///
+/// [`HarnessError::Direct`] if the connection, request or answer fails.
+#[cfg(feature = "harness")]
+pub async fn send_direct(
+    server: SocketAddr,
+    request: &pingers_ohttp::BinaryRequest,
+) -> Result<pingers_ohttp::BinaryResponse, HarnessError> {
+    use axum::body::{Body, HttpBody as _};
+    use hyper_util::rt::{TokioExecutor, TokioIo};
+
+    let failed = |_| HarnessError::Direct;
+    let stream = tokio::net::TcpStream::connect(server)
+        .await
+        .map_err(failed)?;
+    let (mut sender, connection) =
+        hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(stream))
+            .await
+            .map_err(|_| HarnessError::Direct)?;
+    let connection = tokio::spawn(connection);
+    let mut builder = hyper::Request::builder()
+        .method(request.method.as_str())
+        .uri(format!("http://{server}{}", request.path));
+    for header in &request.headers {
+        builder = builder.header(header.name.as_str(), header.value.as_slice());
+    }
+    let outgoing = builder
+        .body(Body::from(request.body.clone()))
+        .map_err(|_| HarnessError::Direct)?;
+    let response = sender
+        .send_request(outgoing)
+        .await
+        .map_err(|_| HarnessError::Direct)?;
+    let status = pingers_ohttp::StatusCode::new(response.status().as_u16())
+        .map_err(|_| HarnessError::Direct)?;
+    let content_type = response
+        .headers()
+        .get(hyper::header::CONTENT_TYPE)
+        .map(|value| value.as_bytes().to_vec());
+    let mut body = response.into_body();
+    let mut bytes = Vec::new();
+    while let Some(frame) =
+        std::future::poll_fn(|context| std::pin::Pin::new(&mut body).poll_frame(context)).await
+    {
+        if let Ok(data) = frame.map_err(|_| HarnessError::Direct)?.into_data() {
+            bytes.extend_from_slice(&data);
+        }
+    }
+    connection.abort();
+    Ok(pingers_ohttp::BinaryResponse {
+        status,
+        headers: content_type
+            .into_iter()
+            .map(|value| pingers_ohttp::Header {
+                name: "content-type".to_owned(),
+                value,
+            })
+            .collect(),
+        body: bytes,
+    })
 }
 
 #[cfg(test)]

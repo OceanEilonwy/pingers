@@ -641,5 +641,7 @@ impl ApiRequest {
     }
 }
 
+mod queued;
+
 #[cfg(test)]
 mod tests;

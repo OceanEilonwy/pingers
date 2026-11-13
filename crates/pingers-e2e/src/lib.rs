@@ -20,18 +20,20 @@
 //!
 //! # Known gaps
 //!
-//! - **Group routes are not wired in pingers-server** (`/v1/groups/*` answers 501 on main), so
-//!   Meetup group logs go to a pingers-delivery instance the stack owns ([`Stack::delivery`]),
-//!   with its store in an SQLite file the tests inspect. Once the routes are wired, the
-//!   [`Device`] group calls move to the relay; the scenarios do not change.
-//! - **Pushes are not delivered**: the server forwards wakes only to `https://` relays, and the
-//!   harness push relay is plain HTTP. Mailboxes carry real sealed pushes (so the
-//!   "no plaintext push tokens" check bites); devices read their mailboxes as they would when
-//!   woken.
-//! - **No anonymous credential is checked** (pingers-quota is not wired into the server).
+//! - **Group logs still go to a pingers-delivery instance the stack owns** ([`Stack::delivery`]),
+//!   with its store in an SQLite file the tests inspect. pingers-server's group routes are
+//!   wired now (`?lifetime=meetup&epoch=n`, Grp signatures and sessions, see its
+//!   `groups.rs`); moving the [`Device`] group calls to the relay is the next step, and the
+//!   scenarios do not change.
+//! - **Pushes are not delivered** in this stack: its listed push relay does not resolve. The
+//!   testkit harness serves its push relay over HTTPS with a test CA the server trusts, so a
+//!   stack built on it would see wakes. Devices read their mailboxes as they would when woken.
+//! - **Anonymous requests carry Privacy Pass tokens** from a [`TokenPool`]; RLN proofs are
+//!   exercised by pingers-server's own end-to-end test.
 //! - G.1 (Party creation and invite) runs over MLS directly: it needs the group routes.
 #![forbid(unsafe_code)]
 
+mod credentials;
 mod device;
 mod error;
 pub mod inspect;
@@ -41,6 +43,7 @@ mod stack;
 mod tap;
 mod wire;
 
+pub use credentials::TokenPool;
 pub use device::{Answer, Device, KnockOutcome, Place, SyncReport, form_party};
 pub use error::E2eError;
 pub use recorder::{Exchange, Recorder};

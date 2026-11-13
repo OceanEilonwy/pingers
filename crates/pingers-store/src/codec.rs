@@ -115,6 +115,21 @@ pub(crate) fn read_secret<const N: usize>(
     }
 }
 
+/// A variable-length secret BLOB column (an encoded request holding capabilities), copied
+/// straight from SQLite's buffer into memory that is zeroed on drop.
+pub(crate) fn read_secret_blob(
+    row: &Row<'_>,
+    index: usize,
+    field: &'static str,
+) -> Result<Zeroizing<Vec<u8>>, StoreError> {
+    match row.get_ref(index)? {
+        ValueRef::Blob(bytes) => Ok(Zeroizing::new(bytes.to_vec())),
+        ValueRef::Null | ValueRef::Integer(_) | ValueRef::Real(_) | ValueRef::Text(_) => {
+            Err(StoreError::Corrupt { field })
+        }
+    }
+}
+
 /// Fence encoding version. Bump and keep decoding the old one if the layout ever changes.
 const FENCE_VERSION: u8 = 1;
 const FENCE_CIRCLE: u8 = 0;

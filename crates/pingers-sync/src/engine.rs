@@ -2,25 +2,21 @@
 //! The engine: sends one request with the right privacy class and credential, inside the wake
 //! budget, and queues or drops what could not be sent.
 
-use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use pingers_ohttp::{BinaryResponse, OhttpError};
-use pingers_proto::{
-    CommitResponse, GroupId, MessageAccepted, SequenceNumber, ServerId, WireDecode,
-};
-use pingers_store::Session;
+use pingers_proto::{CommitResponse, MessageAccepted, ServerId, WireDecode};
+use pingers_store::{NewQueuedRequest, Pushed, Session};
 use pingers_time::{Clock, Timer, UnixSeconds};
 use pingers_transport::{DuplexStream, PrivacyClass, Transport, TransportError};
 
-use crate::board::HeldLease;
 use crate::clock::{ClockOffset, ClockStatus};
 use crate::credential::{
     Attached, CredentialChoice, CredentialPolicy, ProcessRole, ProofInput, choose_credential,
     proof_header, prove_request, readiness, token_header,
 };
 use crate::pool::WakePush;
-use crate::queue::{Pushed, QueueCapacity, Queued, RequestQueue};
+use crate::queue::QueueCapacity;
 use crate::{
     ApiRequest, CommitAttempts, QueuePolicy, Route, Sending, SyncError, TokenStock, WakeBudget,
 };
@@ -216,11 +212,8 @@ pub struct SyncEngine {
     pub(crate) timer: Arc<dyn Timer>,
     pub(crate) rng: Arc<Mutex<SyncRng>>,
     pub(crate) settings: Mutex<SyncSettings>,
-    queue: Mutex<RequestQueue>,
     clock_status: Mutex<ClockStatus>,
     pub(crate) wake_push: Mutex<Option<WakePush>>,
-    pub(crate) previous_lease: Mutex<Option<HeldLease>>,
-    pub(crate) own_entries: Mutex<HashSet<(GroupId, SequenceNumber)>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -248,11 +241,8 @@ impl SyncEngine {
             clock: parts.clock,
             timer: parts.timer,
             rng: Arc::new(Mutex::new(parts.rng)),
-            queue: Mutex::new(RequestQueue::new(settings.queue_capacity)),
             clock_status: Mutex::new(ClockStatus::Unchecked),
             wake_push: Mutex::new(None),
-            previous_lease: Mutex::new(None),
-            own_entries: Mutex::new(HashSet::new()),
             settings: Mutex::new(settings),
         }
     }
@@ -298,10 +288,17 @@ impl SyncEngine {
         use_rng(&mut lock(&self.rng))
     }
 
-    /// How many requests wait for a later wake.
-    #[must_use]
-    pub fn queued(&self) -> usize {
-        lock(&self.queue).len()
+    /// How many requests wait for a later wake (from this or an earlier run, or another
+    /// process sharing the store).
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Store`].
+    pub async fn queued(&self) -> Result<usize, SyncError> {
+        blocking(&self.session, |session| {
+            Ok(session.request_queue().count()?)
+        })
+        .await
     }
 
     /// The credential the next anonymous request would carry, for "What your server sees"
@@ -402,7 +399,7 @@ impl SyncEngine {
     }
 
     /// Queues or drops an anonymous request that was not sent; other classes fail.
-    fn hold(
+    async fn hold(
         &self,
         request: ApiRequest,
         policy: QueuePolicy,
@@ -414,9 +411,23 @@ impl SyncEngine {
         }
         match policy {
             QueuePolicy::KeepUntil(until) if until >= self.now() => {
-                // A full queue drops its oldest entry: newer requests are more likely to
-                // still matter.
-                let _: Pushed = lock(&self.queue).push(request, until);
+                let bytes = request.to_queued()?;
+                let group = request.group();
+                let capacity = self.settings().queue_capacity;
+                blocking(&self.session, move |session| {
+                    // A full queue drops its oldest entry: newer requests are more likely to
+                    // still matter.
+                    let _: Pushed = session.request_queue().push(
+                        &NewQueuedRequest {
+                            group,
+                            keep_until: until,
+                            request: &bytes,
+                        },
+                        capacity,
+                    )?;
+                    Ok(())
+                })
+                .await?;
                 Ok(Outcome::Queued(reason))
             }
             QueuePolicy::KeepUntil(_) | QueuePolicy::Drop => Ok(Outcome::Dropped(reason)),
@@ -443,7 +454,7 @@ impl SyncEngine {
             None => Err(SyncError::BudgetExhausted { route }),
             Some(Ok(response)) => {
                 let response = Response::new(route, response);
-                self.note_own_entry(&request, &response);
+                self.note_own_entry(&request, &response).await?;
                 Ok(Attempt::Answered(response))
             }
             Some(Err(TransportError::NoRelay)) => {
@@ -460,13 +471,18 @@ impl SyncEngine {
     }
 
     /// Remembers the log position of a group entry this engine stored (a commit accepted or
-    /// a stored message), so pulls pass over it, including posts sent from the queue.
-    fn note_own_entry(&self, request: &ApiRequest, response: &Response) {
+    /// a stored message), so pulls pass over it, including posts sent from the queue and
+    /// pulls after a restart.
+    async fn note_own_entry(
+        &self,
+        request: &ApiRequest,
+        response: &Response,
+    ) -> Result<(), SyncError> {
         let Some(group) = request.group() else {
-            return;
+            return Ok(());
         };
         if !response.is_success() {
-            return;
+            return Ok(());
         }
         // Only commits and group messages name their group.
         let sequence = if request.route() == Route::Commit {
@@ -480,9 +496,13 @@ impl SyncEngine {
                 .ok()
                 .map(|accepted| accepted.sequence)
         };
-        if let Some(sequence) = sequence {
-            lock(&self.own_entries).insert((group, sequence));
-        }
+        let Some(sequence) = sequence else {
+            return Ok(());
+        };
+        blocking(&self.session, move |session| {
+            Ok(session.own_group_entries().remember(&group, sequence)?)
+        })
+        .await
     }
 
     /// Sends `request` in its route's privacy class with the credential it needs, inside the
@@ -501,7 +521,7 @@ impl SyncEngine {
     pub async fn send(&self, request: ApiRequest, sending: Sending) -> Result<Outcome, SyncError> {
         match self.attempt(request, sending.budget).await? {
             Attempt::Answered(response) => Ok(Outcome::Answered(response)),
-            Attempt::NotSent(request, reason) => self.hold(request, sending.policy, reason),
+            Attempt::NotSent(request, reason) => self.hold(request, sending.policy, reason).await,
         }
     }
 
@@ -522,34 +542,40 @@ impl SyncEngine {
     ///
     /// # Errors
     ///
-    /// As [`SyncEngine::send`]; on an error the failed request is dropped and the rest stay
-    /// queued.
+    /// As [`SyncEngine::send`]; [`SyncError::QueuedRequest`] for an entry that does not
+    /// decode. On an error the failed request is dropped and the rest stay queued.
     pub async fn flush_queue(&self, budget: WakeBudget) -> Result<FlushReport, SyncError> {
+        let now = self.now();
         let mut report = FlushReport {
-            expired: lock(&self.queue).drop_expired(self.now()),
+            expired: blocking(&self.session, move |session| {
+                Ok(session.request_queue().drop_expired(now)?)
+            })
+            .await?,
             ..FlushReport::default()
         };
         loop {
-            let Some(queued) = lock(&self.queue).pop() else {
+            // Taken off the queue before sending: a crash mid-send loses the request rather
+            // than sending it twice.
+            let Some(queued) = blocking(&self.session, |session| {
+                Ok(session.request_queue().take_oldest()?)
+            })
+            .await?
+            else {
                 break;
             };
-            let keep_until = queued.keep_until;
-            match self.attempt(queued.request.clone(), budget).await {
-                Ok(Attempt::Answered(response)) => report.sent.push(response),
-                Ok(Attempt::NotSent(request, _)) => {
-                    lock(&self.queue).push_front(Queued {
-                        request,
-                        keep_until,
-                    });
+            let request = ApiRequest::from_queued(queued.group, &queued.request)?;
+            match self.attempt(request, budget).await? {
+                Attempt::Answered(response) => report.sent.push(response),
+                Attempt::NotSent(..) => {
+                    blocking(&self.session, move |session| {
+                        Ok(session.request_queue().put_back(&queued)?)
+                    })
+                    .await?;
                     break;
-                }
-                Err(error) => {
-                    report.remaining = self.queued();
-                    return Err(error);
                 }
             }
         }
-        report.remaining = self.queued();
+        report.remaining = self.queued().await?;
         Ok(report)
     }
 

@@ -186,7 +186,8 @@ async fn pull(device: &Device, member: &mut Member) -> Result<pingers_sync::Pull
 }
 
 /// Another member's commit for `epoch`, as it would arrive at the server.
-fn rival(name: u8, epoch: Epoch, world: &World) -> Result<BinaryRequest, TestError> {
+/// Another member's commit for `epoch`, with its own credential (group writes carry one).
+async fn rival(name: u8, epoch: Epoch, world: &World) -> Result<BinaryRequest, TestError> {
     let key = key_for(epoch);
     let request = ApiRequest::commit(
         &GROUP,
@@ -196,10 +197,12 @@ fn rival(name: u8, epoch: Epoch, world: &World) -> Result<BinaryRequest, TestErr
             now: pingers_time::Clock::now(&world.clock),
         },
     )?;
+    let mut headers = request.headers().to_vec();
+    headers.push(world.spare_token().await?);
     Ok(BinaryRequest {
         method: request.method().to_owned(),
         path: request.path().to_owned(),
-        headers: request.headers().to_vec(),
+        headers,
         body: request.body().to_vec(),
     })
 }
@@ -250,7 +253,7 @@ async fn a_group_log_round_trip_with_a_commit_conflict() -> TestResult {
 
     // Alice's commit for epoch 0 reaches the server just before Bob's.
     bob.link
-        .race_next_commit(rival(b'A', Epoch::new(0), &world)?);
+        .race_next_commit(rival(b'A', Epoch::new(0), &world).await?);
     let committed = bob
         .engine
         .commit(&GROUP, &mut bob_state, WakeBudget::UNLIMITED)
@@ -319,7 +322,7 @@ async fn a_commit_that_keeps_losing_gives_up_after_its_attempts() -> TestResult 
     let mut bob_state = Member::new(b'B');
     for epoch in 0..3 {
         bob.link
-            .race_next_commit(rival(b'A', Epoch::new(epoch), &world)?);
+            .race_next_commit(rival(b'A', Epoch::new(epoch), &world).await?);
     }
     let outcome = bob
         .engine
