@@ -11,7 +11,9 @@ use pingers_mls::CipherSuitePolicy;
 use pingers_proto::{ChatBody, Delivery, LeafIndex, MeetPoint};
 
 use super::{GROUP, Leftovers, TestError, TestResult, World, fix};
-use crate::{AddMember, ChannelState, Ended, MeetupScreen, knock_key_package};
+use crate::{
+    AddMember, ChannelState, Ended, MeetupScreen, NETWORK_TIMEOUT, SessionError, knock_key_package,
+};
 
 const ALICE: LeafIndex = LeafIndex::new(0);
 const BOB: LeafIndex = LeafIndex::new(1);
@@ -288,5 +290,25 @@ async fn a_late_joiner_gets_the_snapshot_but_no_history() -> TestResult {
             .any(|event| matches!(event, MeetupEvent::Chat { .. }))
     );
     assert_eq!(world.device(2)?.chat_rows(&GROUP)?, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_network_call_that_hangs_times_out() -> TestResult {
+    let world = World::new(2)?;
+    let [alice, _bob] = world.meetup_of_two().await?;
+    world.server.hang_posts(true);
+    let chat_sent = alice.handle.act(chat("Anyone?")?);
+    let time_passes = async {
+        world.server.until_hung(1).await?;
+        world.clock.advance(NETWORK_TIMEOUT);
+        Ok::<(), TestError>(())
+    };
+    let (outcome, passed) = tokio::join!(chat_sent, time_passes);
+    passed?;
+    assert!(matches!(outcome, Err(SessionError::Timeout)));
+    // The Meetup carries on.
+    world.server.hang_posts(false);
+    alice.handle.act(chat("Now?")?).await?;
     Ok(())
 }

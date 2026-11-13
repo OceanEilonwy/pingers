@@ -45,6 +45,8 @@ struct State {
     opened: Vec<&'static str>,
     refused: Vec<&'static str>,
     refuse_streams: bool,
+    hang_posts: bool,
+    hung: usize,
     uplinks: Vec<Uplink>,
     deleted: Vec<GroupId>,
 }
@@ -171,6 +173,16 @@ impl FakeServer {
         .await
     }
 
+    /// Makes every message post hang until it is let go.
+    pub(crate) fn hang_posts(&self, hang: bool) {
+        self.lock().hang_posts = hang;
+    }
+
+    pub(crate) async fn until_hung(&self, count: usize) -> Result<(), TestError> {
+        self.until("a hanging post", |state| state.hung >= count)
+            .await
+    }
+
     pub(crate) fn refuse_streams(&self, refuse: bool) {
         self.lock().refuse_streams = refuse;
     }
@@ -294,6 +306,17 @@ impl GroupNetwork for FakeNetwork {
         _auth: &LogAuthKeyPair,
         message: AppMessage,
     ) -> Result<(), NetworkError> {
+        let hang = {
+            let mut state = self.server.lock();
+            if state.hang_posts {
+                state.hung = state.hung.saturating_add(1);
+            }
+            state.hang_posts
+        };
+        if hang {
+            self.server.touch();
+            return core::future::pending().await;
+        }
         let mut state = self.server.lock();
         let frame = LiveFrame {
             epoch: message.epoch,

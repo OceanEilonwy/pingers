@@ -44,7 +44,7 @@ mod tests;
 pub use error::SessionError;
 pub use live::{
     CreateMeetup, Created, Ended, JoinMeetup, Joined, KnockKeyPackage, MAX_RECONNECT_DELAY,
-    MeetupHandle, MeetupScreen, Runtime, SessionRng, create, discard_stale, join,
+    MeetupHandle, MeetupScreen, NETWORK_TIMEOUT, Runtime, SessionRng, create, discard_stale, join,
     knock_key_package,
 };
 pub use network::{GroupNetwork, NetworkError};

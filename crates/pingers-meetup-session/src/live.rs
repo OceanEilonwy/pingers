@@ -36,6 +36,9 @@ pub type SessionRng = Box<dyn rand_core::CryptoRng + Send>;
 /// The longest wait between attempts to re-open the live channel.
 pub const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(60);
 
+/// How long any one network call may take before it counts as failed (style guide §10).
+pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Commands queued for the task before senders wait.
 const COMMAND_BUFFER: usize = 16;
 
@@ -223,7 +226,7 @@ pub async fn create(
         })
     })
     .await?;
-    let welcome = match register(&*runtime.network, group, &prepared, subscriptions).await {
+    let welcome = match register(runtime, group, &prepared, subscriptions).await {
         Ok(welcome) => welcome,
         Err(error) => {
             let _cleanup = run_blocking(&runtime.database, move |local| {
@@ -270,21 +273,25 @@ struct Prepared {
 
 /// Registers a new group on the server and posts its first commit; returns the Welcome.
 async fn register(
-    network: &dyn GroupNetwork,
+    runtime: &Runtime,
     group: GroupId,
     prepared: &Prepared,
     subscriptions: Vec<Subscription>,
 ) -> Result<WelcomeBytes, SessionError> {
-    network
-        .create_group(CreateGroup {
+    let timer = &*runtime.timer;
+    within(
+        timer,
+        runtime.network.create_group(CreateGroup {
             group_id: group,
             auth_key: prepared.auth.public_key(),
             subscriptions,
             state: None,
-        })
-        .await?;
-    let response = network
-        .post_commit(
+        }),
+    )
+    .await?;
+    let response = within(
+        timer,
+        runtime.network.post_commit(
             &group,
             &prepared.auth,
             CommitRequest {
@@ -296,8 +303,9 @@ async fn register(
                 subscriptions_removed: Vec::new(),
                 wake: Urgency::Alert,
             },
-        )
-        .await?;
+        ),
+    )
+    .await?;
     match response {
         CommitResponse::Accepted { .. } => prepared
             .commit
@@ -855,7 +863,8 @@ impl Driver {
         if outgoing.wake.is_none()
             && let Some(channel) = self.channel.as_mut()
         {
-            if channel.send(outgoing.live_bytes()?).await.is_ok() {
+            let sent = within(&*self.runtime.timer, channel.send(outgoing.live_bytes()?)).await;
+            if sent.is_ok() {
                 return Ok(());
             }
             self.dropped();
@@ -864,9 +873,9 @@ impl Driver {
             return Ok(());
         }
         let auth = self.auth()?;
-        self.runtime
-            .network
-            .post_message(
+        within(
+            &*self.runtime.timer,
+            self.runtime.network.post_message(
                 &self.group,
                 &auth,
                 AppMessage {
@@ -875,9 +884,9 @@ impl Driver {
                     delivery: outgoing.frame.delivery,
                     wake: outgoing.wake,
                 },
-            )
-            .await?;
-        Ok(())
+            ),
+        )
+        .await
     }
 
     /// Makes, posts and merges (or discards) one commit.
@@ -893,11 +902,13 @@ impl Driver {
             })
             .await?;
         let auth = self.auth()?;
-        let response = self
-            .runtime
-            .network
-            .post_commit(&self.group, &auth, request)
-            .await;
+        let response = within(
+            &*self.runtime.timer,
+            self.runtime
+                .network
+                .post_commit(&self.group, &auth, request),
+        )
+        .await;
         match response {
             Ok(CommitResponse::Accepted { .. }) => {
                 let now = self.runtime.clock.now();
@@ -913,7 +924,7 @@ impl Driver {
             }
             Err(error) => {
                 self.step(|core, local| core.commit_rejected(local)).await?;
-                Err(error.into())
+                Err(error)
             }
         }
     }
@@ -922,11 +933,13 @@ impl Driver {
     /// and the meet point snapshot for a newcomer. Entries of earlier epochs do not open.
     async fn read_log(&mut self) -> Result<Option<Ended>, SessionError> {
         let auth = self.auth()?;
-        let Ok(entries) = self
-            .runtime
-            .network
-            .fetch_log(&self.group, &auth, self.last_sequence)
-            .await
+        let Ok(entries) = within(
+            &*self.runtime.timer,
+            self.runtime
+                .network
+                .fetch_log(&self.group, &auth, self.last_sequence),
+        )
+        .await
         else {
             // Tried again when the channel next opens.
             return Ok(None);
@@ -947,7 +960,9 @@ impl Driver {
             .network
             .live_head(&self.group, &auth, self.subscription)
         {
-            Ok(head) => self.runtime.transport.stream(head).await.ok(),
+            Ok(head) => within(&*self.runtime.timer, self.runtime.transport.stream(head))
+                .await
+                .ok(),
             Err(_) => None,
         };
         match opened {
@@ -1004,14 +1019,18 @@ impl Driver {
     async fn delete_on_server(&mut self) {
         if let Ok(auth) = self.auth() {
             // Best effort: the server expires idle groups after two hours anyway.
-            let _deleted = self.runtime.network.delete_group(&self.group, &auth).await;
+            let _deleted = within(
+                &*self.runtime.timer,
+                self.runtime.network.delete_group(&self.group, &auth),
+            )
+            .await;
         }
     }
 
     /// Closes the channel and deletes the Meetup's rows, chat, keys and MLS state.
     async fn delete_locally(&mut self) -> Result<(), SessionError> {
         if let Some(mut channel) = self.channel.take() {
-            let _closed = channel.close().await;
+            let _closed = within(&*self.runtime.timer, channel.close()).await;
         }
         let database = Arc::clone(&self.runtime.database);
         let group = self.group;
@@ -1066,6 +1085,17 @@ async fn receive(
     match channel {
         Some(channel) => channel.receive().await,
         None => core::future::pending().await,
+    }
+}
+
+/// `call`, or [`SessionError::Timeout`] after [`NETWORK_TIMEOUT`].
+async fn within<T, E: Into<SessionError>>(
+    timer: &dyn Timer,
+    call: impl Future<Output = Result<T, E>>,
+) -> Result<T, SessionError> {
+    tokio::select! {
+        result = call => result.map_err(Into::into),
+        () = timer.sleep(NETWORK_TIMEOUT) => Err(SessionError::Timeout),
     }
 }
 

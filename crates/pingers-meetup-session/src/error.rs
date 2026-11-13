@@ -42,6 +42,9 @@ pub enum SessionError {
     /// still needed (for an add: the newcomer may already be in).
     #[error("another commit won the epoch")]
     CommitConflict,
+    /// A network call took longer than [`crate::NETWORK_TIMEOUT`].
+    #[error("network call timed out")]
+    Timeout,
     /// The Meetup is over; the handle can no longer be used.
     #[error("the meetup has ended")]
     Ended,
