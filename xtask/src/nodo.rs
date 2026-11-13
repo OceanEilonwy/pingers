@@ -239,7 +239,7 @@ fn vendor_crates(tree: &Path) -> Result<()> {
     let vendor = tree.join("cargo-vendor");
     let printed = run(Command::new("cargo")
         .current_dir(tree)
-        .args(["vendor", "--locked", "--versioned-dirs", "--quiet"])
+        .args(["vendor", "--locked", "--versioned-dirs"])
         .arg("--manifest-path")
         .arg(tree.join("Cargo.toml"))
         .arg(&vendor))?;
