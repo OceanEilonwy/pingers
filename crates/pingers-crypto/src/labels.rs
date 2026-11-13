@@ -72,6 +72,8 @@ pub(crate) const INVITE_JOIN: &[u8] = b"join";
 pub(crate) const GROUP_REQUEST: &[u8] = b"pingers/v1/grp-request";
 /// Signature prefix for account registration. Decision: the design gives none.
 pub(crate) const REGISTRATION: &[u8] = b"pingers/v1/register";
+/// Decision: the account challenge signed for `POST /v1/auth`.
+pub(crate) const AUTH_CHALLENGE: &[u8] = b"pingers/v1/auth";
 
 /// Every private label, so tests can check they are distinct and vectors can name them.
 #[cfg(test)]
