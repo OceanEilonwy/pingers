@@ -31,7 +31,7 @@ use zeroize::Zeroizing;
 
 use crate::live::next_data;
 use crate::{
-    AddressList, CountsReport, DeliveryLive, LiveChannel, LiveFrame, LiveRefused, Logging, Metrics,
+    AddressList, CountsReport, DeliveryLive, LiveChannel, LiveFrame, LiveRefused, Metrics,
     OhttpKeys, Outside, RelayAllowList, RngSeed, ServerConfig, serve_with,
 };
 
@@ -67,7 +67,7 @@ struct Running {
     config: KeyConfig,
     clock: ManualClock,
     stop: Option<oneshot::Sender<()>>,
-    task: JoinHandle<()>,
+    task: JoinHandle<Result<(), crate::ServerError>>,
 }
 
 impl Running {
@@ -75,7 +75,7 @@ impl Running {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
-        tokio::time::timeout(STEP, &mut self.task).await??;
+        tokio::time::timeout(STEP, &mut self.task).await???;
         Ok(())
     }
 }
@@ -83,6 +83,7 @@ impl Running {
 struct Setup {
     relay: IpAddr,
     metrics: Vec<IpAddr>,
+    push_relays: pingers_mailbox::ListedRelays,
 }
 
 impl Default for Setup {
@@ -90,6 +91,7 @@ impl Default for Setup {
         Self {
             relay: LOOPBACK,
             metrics: Vec::new(),
+            push_relays: pingers_mailbox::ListedRelays::default(),
         }
     }
 }
@@ -98,12 +100,13 @@ async fn start(setup: Setup, live: impl LiveChannel) -> Result<Running, TestErro
     let key = GatewayKey::generate(1, &mut rng(1))?;
     let config = key.config();
     let server_config = ServerConfig {
-        listen: SocketAddr::new(LOOPBACK, 0),
-        logging: Logging::Off,
-        request_timeout: REQUEST_TIMEOUT,
-        ohttp_keys: OhttpKeys::new(vec![key])?,
-        relays: RelayAllowList::new(vec![setup.relay])?,
         metrics: AddressList::new(setup.metrics),
+        push_relays: setup.push_relays,
+        ..ServerConfig::new(
+            SocketAddr::new(LOOPBACK, 0),
+            OhttpKeys::new(vec![key])?,
+            RelayAllowList::new(vec![setup.relay])?,
+        )
     };
     let listener = tokio::net::TcpListener::bind(server_config.listen).await?;
     let address = listener.local_addr()?;
@@ -253,6 +256,7 @@ async fn direct_post_to_the_gateway_from_a_non_relay_is_refused() -> TestResult 
         Setup {
             relay: OTHER_LOOPBACK,
             metrics: vec![OTHER_LOOPBACK],
+            ..Setup::default()
         },
         Echo,
     )
@@ -389,14 +393,11 @@ async fn empty_frames_are_dropped_in_both_directions() -> TestResult {
 async fn serve_runs_with_the_production_parts_until_shutdown() -> TestResult {
     let key = GatewayKey::generate(1, &mut rng(7))?;
     let config = key.config();
-    let server_config = ServerConfig {
-        listen: SocketAddr::new(LOOPBACK, 0),
-        logging: Logging::Off,
-        request_timeout: REQUEST_TIMEOUT,
-        ohttp_keys: OhttpKeys::new(vec![key])?,
-        relays: RelayAllowList::new(vec![LOOPBACK])?,
-        metrics: AddressList::default(),
-    };
+    let server_config = ServerConfig::new(
+        SocketAddr::new(LOOPBACK, 0),
+        OhttpKeys::new(vec![key])?,
+        RelayAllowList::new(vec![LOOPBACK])?,
+    );
     let listener = tokio::net::TcpListener::bind(server_config.listen).await?;
     let address = listener.local_addr()?;
     let (stop, stopped) = oneshot::channel::<()>();
@@ -458,8 +459,8 @@ async fn inner_requests_are_routed_by_their_privacy_class() -> TestResult {
     let server = start(Setup::default(), Echo).await?;
     let mut relay = connect(server.address, LOOPBACK).await?;
     let cases = [
-        // Anonymous: belongs here, its crate is not wired yet.
-        (inner("POST", "/v1/board/sync"), 501),
+        // Anonymous: belongs here, pingers-delivery is not wired yet.
+        (inner("POST", "/v1/groups"), 501),
         // Identified: names the account, so it goes direct.
         (inner("POST", "/v1/accounts"), 421),
         // The live channel only runs chunked.
@@ -841,12 +842,7 @@ async fn metrics_count_outcomes_for_allowed_addresses_only() -> TestResult {
         request(Method::POST, "/v1/board/sync", None, Body::empty())?,
     )
     .await?;
-    oblivious(
-        &mut client,
-        &server.config,
-        &inner("POST", "/v1/board/sync"),
-    )
-    .await?;
+    oblivious(&mut client, &server.config, &inner("POST", "/v1/groups")).await?;
     let (_sender, live_client, body) = open_live(&server, "/v1/groups/g1/live").await?;
     ends_with_nothing_but_the_final_chunk(&live_client, body).await?;
     let (_sender, live_client, body) = open_live(&server, "/v1/board/sync").await?;
@@ -956,3 +952,5 @@ fn live_frames_print_only_their_length() {
         "LiveFrame { length: 5 }"
     );
 }
+
+mod wired;

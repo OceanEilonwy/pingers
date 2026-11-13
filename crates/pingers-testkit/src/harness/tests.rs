@@ -106,7 +106,7 @@ mod running {
         let key_config = KeyConfig::decode(&endpoints.ohttp_key_config)?;
         let inner = BinaryRequest {
             method: "POST".to_owned(),
-            path: "/v1/board/sync".to_owned(),
+            path: "/v1/groups".to_owned(),
             headers: Vec::new(),
             body: Vec::new(),
         };
@@ -122,7 +122,7 @@ mod running {
         assert_eq!(
             opened.status.get(),
             501,
-            "pingers-board-store is not wired yet"
+            "pingers-delivery is not wired yet"
         );
 
         // The push relay publishes its key.

@@ -16,8 +16,8 @@ use hyper::{Method, Request, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use pingers_ohttp::{BinaryRequest, ChunkPosition, ChunkedClient, GatewayKey, OpenedChunk};
 use pingers_server::{
-    AddressList, LiveChannel, LiveFrame, LiveRefused, Logging, OhttpKeys, Outside, RelayAllowList,
-    RngSeed, ServerConfig, serve_with,
+    LiveChannel, LiveFrame, LiveRefused, OhttpKeys, Outside, RelayAllowList, RngSeed, ServerConfig,
+    serve_with,
 };
 use pingers_testkit::{HarnessConfig, InProcessHarness, seeded_rng, test_clock};
 use tokio::sync::{mpsc, watch};
@@ -82,7 +82,7 @@ struct Stack {
     relay: SocketAddr,
     key_config: pingers_ohttp::KeyConfig,
     stop: watch::Sender<()>,
-    server_task: tokio::task::JoinHandle<()>,
+    server_task: tokio::task::JoinHandle<Result<(), pingers_server::ServerError>>,
     relay_task: tokio::task::JoinHandle<()>,
 }
 
@@ -93,14 +93,11 @@ async fn start_behind_relay() -> Result<Stack, TestError> {
     let server = server_listener.local_addr()?;
     let relay_listener = tokio::net::TcpListener::bind(SocketAddr::new(LOOPBACK, 0)).await?;
     let relay = relay_listener.local_addr()?;
-    let config = ServerConfig {
-        listen: server,
-        logging: Logging::Off,
-        request_timeout: Duration::from_secs(30),
-        ohttp_keys: OhttpKeys::new(vec![key])?,
-        relays: RelayAllowList::new(vec![LOOPBACK])?,
-        metrics: AddressList::default(),
-    };
+    let config = ServerConfig::new(
+        server,
+        OhttpKeys::new(vec![key])?,
+        RelayAllowList::new(vec![LOOPBACK])?,
+    );
     let clock = test_clock();
     let outside = Outside {
         clock: clock.clone(),
@@ -207,7 +204,7 @@ async fn a_live_channel_echoes_through_the_relay_frame_by_frame() -> TestResult 
 
     drop(client);
     stop.send(())?;
-    tokio::time::timeout(STEP, server_task).await??;
+    tokio::time::timeout(STEP, server_task).await???;
     tokio::time::timeout(STEP, relay_task).await??;
     connection.abort();
     Ok(())

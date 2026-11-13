@@ -17,17 +17,27 @@
 //! - **Metrics** at `GET /metrics` for configured addresses: totals per channel and outcome,
 //!   no identifiers. **Logging** is off by default; when on, it writes those totals only.
 //!
-//! Routes whose crate has no API yet answer `501 Not Implemented` (see `dispatch.rs`).
+//! - **Board and mailboxes** are wired to pingers-board-store and pingers-mailbox (bodies and
+//!   textual encodings in `wire.rs`); mailbox wakes are forwarded to the configured push relays
+//!   by owned background tasks, and expired segments and mailboxes are swept on a timer.
+//!
+//! Routes whose crate has no API yet (pingers-delivery, pingers-quota) answer
+//! `501 Not Implemented` (see `dispatch.rs`); until pingers-quota lands, anonymous routes are
+//! served without checking a credential.
 #![forbid(unsafe_code)]
 
+mod board_routes;
 mod config;
 mod dispatch;
 mod error;
 mod gateway;
 mod http;
 mod live;
+mod mailbox_routes;
 mod metrics;
 mod route;
+mod tasks;
+mod wire;
 
 use std::future::Future;
 use std::io::Read as _;
@@ -36,6 +46,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use pingers_board_store::{Board, CursorKey, PageSize};
+use pingers_mailbox::{MailboxParts, MailboxRules, Mailboxes, PostsPerBucket, SqliteStorage};
 use pingers_ohttp::{Gateway, KeyConfig};
 use pingers_time::{Clock, Timer};
 use pingers_transport::TokioTimer;
@@ -44,12 +56,15 @@ use rand_core::SeedableRng as _;
 use zeroize::Zeroizing;
 
 pub use crate::config::{
-    AddressList, ConfigError, Logging, OhttpKeys, RelayAllowList, ServerConfig,
+    AddressList, ConfigError, Logging, MailboxStore, OhttpKeys, RelayAllowList, ServerConfig,
 };
 pub use crate::error::ServerError;
 pub use crate::live::{DeliveryLive, LIVE_BUFFER, LiveChannel, LiveFrame, LiveRefused};
 
+use crate::board_routes::BoardService;
+use crate::mailbox_routes::MailboxService;
 use crate::metrics::Metrics;
+use crate::tasks::{HttpPushRelay, Tasks};
 
 /// The peer address of a connection, for the relay and metrics checks only.
 #[derive(Clone, Copy, Debug)]
@@ -90,6 +105,9 @@ pub(crate) struct Shared {
     pub(crate) request_timeout: Duration,
     pub(crate) timer: Arc<dyn Timer>,
     pub(crate) live: Arc<dyn LiveChannel>,
+    pub(crate) board: Mutex<BoardService>,
+    pub(crate) mailboxes: Arc<Mutex<MailboxService>>,
+    pub(crate) tasks: Tasks,
     rng: Mutex<ChaCha20Rng>,
 }
 
@@ -141,18 +159,23 @@ pub async fn serve(
         seed: os_seed()?,
         live: DeliveryLive,
     };
-    serve_with(config, outside, listener, shutdown).await;
-    Ok(())
+    serve_with(config, outside, listener, shutdown).await
 }
 
 /// As [`serve`], with time, randomness and the live channel injected: for tests and the
-/// in-process harness. Returns once `shutdown` completes and every connection is closed.
+/// in-process harness. Returns once `shutdown` completes, every connection is closed and every
+/// background task (push jobs, the expiry sweep, the counts report) is cancelled.
+///
+/// # Errors
+///
+/// [`ServerError::MailboxStore`] if the mailbox database cannot be opened;
+/// [`ServerError::HttpClient`] if the push relay client cannot be built.
 pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
     config: ServerConfig,
     outside: Outside<C, T, L>,
     listener: tokio::net::TcpListener,
     shutdown: impl Future<Output = ()> + Send + 'static,
-) {
+) -> Result<(), ServerError> {
     let Outside {
         clock,
         timer,
@@ -161,6 +184,27 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
     } = outside;
     let served_config = config.ohttp_keys.served().clone();
     let timer: Arc<dyn Timer> = Arc::new(timer);
+    let clock: Arc<dyn Clock> = Arc::new(clock);
+    let mut rng = ChaCha20Rng::from_seed(*seed.bytes);
+    let board = Board::new(
+        Arc::clone(&clock),
+        CursorKey::generate(&mut rng),
+        PageSize::MAX,
+    );
+    let storage = match &config.mailbox_store {
+        MailboxStore::Memory => SqliteStorage::open_in_memory(),
+        MailboxStore::File(path) => SqliteStorage::open(path),
+    }
+    .map_err(ServerError::MailboxStore)?;
+    let mailboxes = Arc::new(Mutex::new(Mailboxes::new(MailboxParts {
+        storage,
+        clock: Arc::clone(&clock),
+        directory: config.push_relays,
+        limit: PostsPerBucket::new(config.mailbox_posts_per_bucket),
+        rules: MailboxRules::DEFAULT,
+    })));
+    let relay = HttpPushRelay::new(Arc::clone(&timer), config.push_timeout)
+        .map_err(ServerError::HttpClient)?;
     let shared = Arc::new(Shared {
         gateway: Gateway::new(config.ohttp_keys.into_keys()),
         served_config,
@@ -170,8 +214,23 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
         request_timeout: config.request_timeout,
         timer: Arc::clone(&timer),
         live: Arc::new(live),
-        rng: Mutex::new(ChaCha20Rng::from_seed(*seed.bytes)),
+        board: Mutex::new(board),
+        tasks: Tasks::new(relay, Arc::clone(&timer), Arc::clone(&mailboxes)),
+        mailboxes,
+        rng: Mutex::new(rng),
     });
+    {
+        let shared_for_sweep = Arc::downgrade(&shared);
+        shared.tasks.every(config.expire_interval, move || {
+            let shared = shared_for_sweep.upgrade();
+            async move {
+                if let Some(shared) = shared {
+                    board_routes::expire(&shared);
+                    mailbox_routes::expire(&shared.mailboxes).await;
+                }
+            }
+        });
+    }
     let reporter = match config.logging {
         Logging::Off => None,
         Logging::Counts { interval } => {
@@ -187,10 +246,12 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
             }))
         }
     };
-    http::accept_loop(listener, http::router(shared), shutdown).await;
+    http::accept_loop(listener, http::router(Arc::clone(&shared)), shutdown).await;
+    shared.tasks.abort_all();
     if let Some(reporter) = reporter {
         reporter.abort();
     }
+    Ok(())
 }
 
 /// What the counts report needs.

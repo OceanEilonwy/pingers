@@ -128,7 +128,7 @@ async fn one_shot(shared: &Shared, mut body: Body) -> Response {
     let Ok(decapsulated) = shared.gateway.decapsulate(&message) else {
         return status(shared, Channel::Oblivious, StatusCode::BAD_REQUEST);
     };
-    let reply = answer(shared, Channel::Oblivious, &decapsulated.request);
+    let reply = answer(shared, Channel::Oblivious, &decapsulated.request).await;
     let inner_status = reply.status;
     let sealed = reply
         .into_binary()

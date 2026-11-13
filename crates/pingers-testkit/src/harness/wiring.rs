@@ -16,7 +16,7 @@ use pingers_push_relay::opener::{CryptoOpener, OpenError, TokenOpener};
 use pingers_push_relay::rate::RateLimit;
 use pingers_push_relay::service::{Relay, RelayParts};
 use pingers_server::{
-    AddressList, DeliveryLive, Logging, OhttpKeys, Outside, RelayAllowList, RngSeed, ServerConfig,
+    AddressList, DeliveryLive, OhttpKeys, Outside, RelayAllowList, RngSeed, ServerConfig,
 };
 use pingers_time::{Clock as _, ManualClock, UnixSeconds};
 use tokio::sync::watch;
@@ -219,15 +219,18 @@ pub(super) fn start(
     let keys_error = |_| HarnessError::Keys {
         service: Service::Server,
     };
+    // On loopback the relay's connections come from the bind address, which is also where
+    // test clients come from: the relay-only rule cannot tell them apart here. No push relay
+    // is listed: pingers-proto's RelayUrl requires https://, and the harness relay is plain
+    // HTTP on loopback.
     let server_config = ServerConfig {
-        listen: server,
-        logging: Logging::Off,
         request_timeout: REQUEST_TIMEOUT,
-        ohttp_keys: OhttpKeys::new(vec![gateway_key]).map_err(keys_error)?,
-        // On loopback the relay's connections come from the bind address, which is also where
-        // test clients come from: the relay-only rule cannot tell them apart here.
-        relays: RelayAllowList::new(vec![config.bind]).map_err(keys_error)?,
         metrics: AddressList::new(vec![config.bind]),
+        ..ServerConfig::new(
+            server,
+            OhttpKeys::new(vec![gateway_key]).map_err(keys_error)?,
+            RelayAllowList::new(vec![config.bind]).map_err(keys_error)?,
+        )
     };
     let push = push_relay(push_private, push_public, &config.clock, pushes)?;
 
@@ -285,7 +288,8 @@ pub(super) fn start(
                         .with_graceful_shutdown(push_done)
                         .await;
                 };
-                tokio::join!(server_task, relay, push);
+                // A server that fails to start has already failed the test that used it.
+                let (_served, (), ()) = tokio::join!(server_task, relay, push);
             });
         })
         .map_err(|source| HarnessError::Runtime { source })?;

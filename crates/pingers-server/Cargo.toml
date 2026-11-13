@@ -13,10 +13,17 @@ layer = 5
 [dependencies]
 pingers-board-store = { workspace = true }
 pingers-delivery = { workspace = true }
-pingers-mailbox = { workspace = true }
+# Mailboxes persist in SQLite (in memory when no file is configured).
+pingers-mailbox = { workspace = true, features = ["sqlite"] }
 pingers-ohttp = { workspace = true }
 pingers-quota = { workspace = true }
 pingers-time = { workspace = true }
+# Mailbox read keys (the Cap credential) are pingers-crypto types.
+pingers-crypto = { workspace = true }
+# Request and response bodies of the wired routes.
+pingers-proto = { workspace = true }
+# The push relay client: POST {relay}/v1/push.
+reqwest = { workspace = true }
 # The production Timer (TokioTimer) for request timeouts and the counts report.
 pingers-transport = { workspace = true }
 axum = { workspace = true }

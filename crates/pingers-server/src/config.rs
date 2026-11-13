@@ -6,6 +6,10 @@
 //! logging = "off"                  # or "counts": request totals every counts_interval_s
 //! counts_interval_s = 3600
 //! request_timeout_s = 30           # how long a client may take to send a request body
+//! mailbox_db = "/var/lib/pingers/mailboxes.sqlite"   # optional: without it, in memory
+//! mailbox_posts_per_bucket = 60
+//! push_timeout_s = 10              # how long a push relay has to answer
+//! expire_interval_s = 60           # how often expired board segments and mailboxes go
 //!
 //! [ohttp]
 //! relays = ["10.0.0.5", "fd00::5"] # the only addresses POST /ohttp is accepted from
@@ -16,6 +20,12 @@
 //!
 //! [metrics]
 //! allow = ["127.0.0.1"]            # who may GET /metrics; without it there is no such route
+//!
+//! [[push_relays]]                  # the relays mailbox wakes are forwarded to
+//! relay_id = 1                     # what devices name in RelayRef::Listed
+//! url = "https://push.example"
+//! credential = "<the bearer credential this relay issued to this server>"
+//! key_id = 1                       # the relay key devices seal to (SealedPush has no key id yet)
 //! ```
 //!
 //! The relay-only rule (design B.12) is an address allow-list: the relay leg runs on a private
@@ -23,9 +33,13 @@
 //! private keys: keep it readable by the server only.
 
 use std::net::{IpAddr, SocketAddr};
+use std::num::NonZeroU32;
+use std::path::PathBuf;
 use std::time::Duration;
 
+use pingers_mailbox::{ListedRelays, RelayCredential, RelayKeyId, RelayTarget};
 use pingers_ohttp::{GatewayKey, KeyConfig, OhttpError};
+use pingers_proto::{RelayId, RelayUrl};
 use serde::Deserialize;
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -58,7 +72,16 @@ pub enum ConfigError {
     /// is mandatory).
     #[error("configuration: ohttp.relays must list at least one relay address")]
     NoRelays,
-    /// A duration is zero.
+    /// Two push relays share an id.
+    #[error("configuration: push relay id {relay_id} is used twice")]
+    DuplicateRelayId {
+        /// The repeated id.
+        relay_id: u16,
+    },
+    /// A push relay URL is not `https://`.
+    #[error("configuration: push_relays.url must start with https://")]
+    RelayUrl,
+    /// A duration or count is zero.
     #[error("configuration: {field} must be positive")]
     OutOfRange {
         /// The field.
@@ -196,7 +219,53 @@ pub struct ServerConfig {
     pub relays: RelayAllowList,
     /// Who may `GET /metrics`; empty means the route does not exist.
     pub metrics: AddressList,
+    /// Where mailboxes are kept.
+    pub mailbox_store: MailboxStore,
+    /// Posts one mailbox accepts per bucket (pingers-mailbox's `PostsPerBucket`).
+    pub mailbox_posts_per_bucket: NonZeroU32,
+    /// The push relays mailbox wakes are forwarded to.
+    pub push_relays: ListedRelays,
+    /// How long a push relay has to answer, on the injected timer.
+    pub push_timeout: Duration,
+    /// How often expired board segments and mailboxes are swept.
+    pub expire_interval: Duration,
 }
+
+/// Where mailboxes are kept.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MailboxStore {
+    /// In memory: lost on restart.
+    Memory,
+    /// An SQLite file.
+    File(PathBuf),
+}
+
+impl ServerConfig {
+    /// A configuration with the given keys and relays, logging off, no metrics, mailboxes in
+    /// memory, no push relays, and the file defaults for everything else.
+    #[must_use]
+    pub fn new(listen: SocketAddr, ohttp_keys: OhttpKeys, relays: RelayAllowList) -> Self {
+        Self {
+            listen,
+            logging: Logging::Off,
+            request_timeout: Duration::from_secs(default_request_timeout()),
+            ohttp_keys,
+            relays,
+            metrics: AddressList::default(),
+            mailbox_store: MailboxStore::Memory,
+            mailbox_posts_per_bucket: DEFAULT_POSTS_PER_BUCKET,
+            push_relays: ListedRelays::default(),
+            push_timeout: Duration::from_secs(default_push_timeout()),
+            expire_interval: Duration::from_secs(default_expire_interval()),
+        }
+    }
+}
+
+/// Posts per mailbox per bucket unless configured: well above the few knocks a lease draws.
+const DEFAULT_POSTS_PER_BUCKET: NonZeroU32 = match NonZeroU32::new(60) {
+    Some(count) => count,
+    None => NonZeroU32::MIN,
+};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -211,6 +280,54 @@ struct File {
     ohttp: FileOhttp,
     #[serde(default)]
     metrics: FileMetrics,
+    mailbox_db: Option<PathBuf>,
+    mailbox_posts_per_bucket: Option<u32>,
+    #[serde(default = "default_push_timeout")]
+    push_timeout_s: u64,
+    #[serde(default = "default_expire_interval")]
+    expire_interval_s: u64,
+    #[serde(default)]
+    push_relays: Vec<FilePushRelay>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FilePushRelay {
+    relay_id: u16,
+    url: String,
+    credential: String,
+    key_id: u8,
+}
+
+const fn default_push_timeout() -> u64 {
+    10
+}
+
+const fn default_expire_interval() -> u64 {
+    60
+}
+
+fn push_relays(relays: Vec<FilePushRelay>) -> Result<ListedRelays, ConfigError> {
+    let mut seen = Vec::with_capacity(relays.len());
+    let mut listed = Vec::with_capacity(relays.len());
+    for relay in relays {
+        if seen.contains(&relay.relay_id) {
+            return Err(ConfigError::DuplicateRelayId {
+                relay_id: relay.relay_id,
+            });
+        }
+        seen.push(relay.relay_id);
+        let url = RelayUrl::new(relay.url).map_err(|_| ConfigError::RelayUrl)?;
+        listed.push((
+            RelayId::new(relay.relay_id),
+            RelayTarget {
+                url,
+                credential: RelayCredential::new(relay.credential),
+                key_id: RelayKeyId::new(relay.key_id),
+            },
+        ));
+    }
+    Ok(ListedRelays::new(listed))
 }
 
 #[derive(Default, Deserialize)]
@@ -281,6 +398,18 @@ impl ServerConfig {
             ohttp_keys: OhttpKeys::new(keys)?,
             relays: RelayAllowList::new(file.ohttp.relays)?,
             metrics: AddressList::new(file.metrics.allow),
+            mailbox_store: file
+                .mailbox_db
+                .map_or(MailboxStore::Memory, MailboxStore::File),
+            mailbox_posts_per_bucket: match file.mailbox_posts_per_bucket {
+                None => DEFAULT_POSTS_PER_BUCKET,
+                Some(count) => NonZeroU32::new(count).ok_or(ConfigError::OutOfRange {
+                    field: "mailbox_posts_per_bucket",
+                })?,
+            },
+            push_relays: push_relays(file.push_relays)?,
+            push_timeout: positive_seconds("push_timeout_s", file.push_timeout_s)?,
+            expire_interval: positive_seconds("expire_interval_s", file.expire_interval_s)?,
         })
     }
 }

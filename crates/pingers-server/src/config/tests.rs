@@ -186,3 +186,101 @@ fn keys_built_in_code_follow_the_same_rules() -> TestResult {
     ));
     Ok(())
 }
+
+fn relay(relay_id: u16, url: &str) -> String {
+    format!(
+        "[[push_relays]]\nrelay_id = {relay_id}\nurl = \"{url}\"\ncredential = \"c\"\nkey_id = 4\n"
+    )
+}
+
+#[test]
+fn wiring_fields_are_read_with_defaults() -> TestResult {
+    use pingers_mailbox::RelayDirectory as _;
+    use pingers_proto::{RelayId, RelayRef};
+
+    let defaults = ServerConfig::parse(&minimal(&key(1, SECRET_A)))?;
+    assert_eq!(defaults.mailbox_store, super::MailboxStore::Memory);
+    assert_eq!(defaults.mailbox_posts_per_bucket.get(), 60);
+    assert_eq!(defaults.push_timeout, Duration::from_secs(10));
+    assert_eq!(defaults.expire_interval, Duration::from_secs(60));
+    assert_eq!(
+        defaults
+            .push_relays
+            .resolve(&RelayRef::Listed(RelayId::new(1))),
+        None
+    );
+
+    let config = ServerConfig::parse(&format!(
+        "mailbox_db = \"/tmp/m.sqlite\"\nmailbox_posts_per_bucket = 5\npush_timeout_s = 3\n\
+         expire_interval_s = 9\n{}{}",
+        minimal(&key(1, SECRET_A)),
+        relay(7, "https://push.example")
+    ))?;
+    assert_eq!(
+        config.mailbox_store,
+        super::MailboxStore::File("/tmp/m.sqlite".into())
+    );
+    assert_eq!(config.mailbox_posts_per_bucket.get(), 5);
+    assert_eq!(config.push_timeout, Duration::from_secs(3));
+    assert_eq!(config.expire_interval, Duration::from_secs(9));
+    let target = config
+        .push_relays
+        .resolve(&RelayRef::Listed(RelayId::new(7)))
+        .ok_or("relay 7 not listed")?;
+    assert_eq!(target.url.as_str(), "https://push.example");
+    assert_eq!(target.key_id.get(), 4);
+    assert_eq!(target.credential.authorization(), "Bearer c");
+    Ok(())
+}
+
+#[test]
+fn bad_wiring_fields_are_refused() {
+    let with_key = minimal(&key(1, SECRET_A));
+    let cases: [(String, Expected); 5] = [
+        (
+            format!(
+                "{with_key}{}{}",
+                relay(1, "https://a"),
+                relay(1, "https://b")
+            ),
+            |error| matches!(error, ConfigError::DuplicateRelayId { relay_id: 1 }),
+        ),
+        (format!("{with_key}{}", relay(1, "http://a")), |error| {
+            matches!(error, ConfigError::RelayUrl)
+        }),
+        (
+            format!("mailbox_posts_per_bucket = 0\n{with_key}"),
+            |error| {
+                matches!(
+                    error,
+                    ConfigError::OutOfRange {
+                        field: "mailbox_posts_per_bucket"
+                    }
+                )
+            },
+        ),
+        (format!("push_timeout_s = 0\n{with_key}"), |error| {
+            matches!(
+                error,
+                ConfigError::OutOfRange {
+                    field: "push_timeout_s"
+                }
+            )
+        }),
+        (format!("expire_interval_s = 0\n{with_key}"), |error| {
+            matches!(
+                error,
+                ConfigError::OutOfRange {
+                    field: "expire_interval_s"
+                }
+            )
+        }),
+    ];
+    for (text, expected) in cases {
+        let refused = ServerConfig::parse(&text).err();
+        assert!(
+            refused.as_ref().is_some_and(expected),
+            "{text}\n{refused:?}"
+        );
+    }
+}

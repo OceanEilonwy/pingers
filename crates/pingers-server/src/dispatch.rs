@@ -7,6 +7,8 @@ use pingers_ohttp::{BinaryRequest, BinaryResponse, Header, OhttpError};
 
 use crate::Shared;
 use crate::route::{Channel, Resolved, Route, resolve};
+use crate::wire::either;
+use crate::{board_routes, mailbox_routes};
 
 /// RFC 9458 key config media type.
 pub(crate) const OHTTP_KEYS: &str = "application/ohttp-keys";
@@ -48,7 +50,7 @@ impl Reply {
 
 /// Answers a request that arrived on `channel` (direct or one-shot OHTTP; the live channel
 /// has its own path through the gateway).
-pub(crate) fn answer(shared: &Shared, channel: Channel, request: &BinaryRequest) -> Reply {
+pub(crate) async fn answer(shared: &Shared, channel: Channel, request: &BinaryRequest) -> Reply {
     match resolve(&request.method, &request.path) {
         Resolved::NotFound => Reply::status(StatusCode::NOT_FOUND),
         Resolved::MethodNotAllowed => Reply::status(StatusCode::METHOD_NOT_ALLOWED),
@@ -57,30 +59,31 @@ pub(crate) fn answer(shared: &Shared, channel: Channel, request: &BinaryRequest)
         Resolved::Found(route) if !route.class().allowed_on(channel) => {
             Reply::status(StatusCode::MISDIRECTED_REQUEST)
         }
-        Resolved::Found(route) => dispatch(shared, route, request),
+        Resolved::Found(route) => dispatch(shared, route, request).await,
     }
 }
 
 /// One call per route, to the crate that owns it.
-fn dispatch(shared: &Shared, route: Route, _request: &BinaryRequest) -> Reply {
+///
+/// Anonymous routes are served without checking the RLN proof or Privacy Pass token yet:
+/// that check is pingers-quota's, which has no API on main.
+async fn dispatch(shared: &Shared, route: Route, request: &BinaryRequest) -> Reply {
     match route {
         Route::OhttpConfig => Reply {
             status: StatusCode::OK,
             content_type: Some(OHTTP_KEYS),
             body: shared.served_config.encoded().to_vec(),
         },
-        // Waiting on pingers-board-store.
-        Route::BoardSync
-        | Route::BoardPage
-        | Route::BoardRevokeLease
-        // Waiting on pingers-mailbox (mailboxes and the wake rule).
-        | Route::CreateMailbox
-        | Route::PostToMailbox
-        | Route::ReadMailbox
-        | Route::DeleteMailbox
+        Route::BoardSync => board_routes::sync(shared, request),
+        Route::BoardPage => board_routes::page(shared, request),
+        Route::BoardRevokeLease => board_routes::revoke(shared, request),
+        Route::CreateMailbox => either(mailbox_routes::register(shared, request).await),
+        Route::PostToMailbox => either(mailbox_routes::post(shared, request).await),
+        Route::ReadMailbox => either(mailbox_routes::read(shared, request).await),
+        Route::DeleteMailbox => either(mailbox_routes::delete(shared, request).await),
         // Waiting on pingers-delivery (group logs, subscriptions; the live channel is
         // `LiveChannel`).
-        | Route::CreateGroup
+        Route::CreateGroup
         | Route::Commit
         | Route::PutSubscription
         | Route::DeleteSubscription
@@ -98,7 +101,7 @@ fn dispatch(shared: &Shared, route: Route, _request: &BinaryRequest) -> Reply {
         | Route::RlnLeaves
         | Route::PrivacyPassIssue
         | Route::PrivacyPassKeys
-        // Waiting on pingers-quota and pingers-board-store, whose policies it publishes.
+        // Waiting on pingers-quota, whose credential policy it publishes.
         | Route::Params => Reply::status(StatusCode::NOT_IMPLEMENTED),
     }
 }

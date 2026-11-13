@@ -19,6 +19,12 @@ pub enum ServerError {
     /// The operating system's random number generator cannot be read.
     #[error("cannot read the operating system's random number generator")]
     Entropy(#[source] std::io::Error),
+    /// The mailbox database cannot be opened.
+    #[error("cannot open the mailbox store")]
+    MailboxStore(#[source] pingers_mailbox::StorageError),
+    /// The push relay client cannot be built.
+    #[error("cannot build the push relay client")]
+    HttpClient(#[source] reqwest::Error),
     /// The async runtime cannot be started.
     #[error("cannot start the runtime")]
     Runtime(#[source] std::io::Error),

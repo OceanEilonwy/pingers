@@ -68,7 +68,7 @@ async fn direct(State(shared): State<Arc<Shared>>, request: Request) -> Response
             .collect(),
         body,
     };
-    let reply = answer(&shared, Channel::Direct, &request);
+    let reply = answer(&shared, Channel::Direct, &request).await;
     shared.metrics.record(Channel::Direct, reply.status);
     direct_response(reply)
 }
