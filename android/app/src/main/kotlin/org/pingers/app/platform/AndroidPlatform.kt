@@ -6,9 +6,9 @@ import android.content.Context
 import android.content.Intent
 
 /**
- * The Android shell's [Platform] (architecture section 4). One per process: [get]. The app
- * hands it to the core when it builds the core, and sets [PlatformHost.sinkProvider] so the
- * receivers, services and workers below reach that core.
+ * The Android shell's [Platform] (architecture section 4). One per process: [get]. The core
+ * reaches it through data/FfiPlatform.kt, and `PingersApp` sets [PlatformHost.sinkProvider] so
+ * the receivers, services and workers below reach that core (data/CoreHost.kt).
  */
 class AndroidPlatform private constructor(context: Context) : Platform {
     private val app = context.applicationContext

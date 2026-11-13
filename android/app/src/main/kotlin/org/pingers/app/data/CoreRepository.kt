@@ -16,13 +16,12 @@ import uniffi.pingers.AreaEditor
 import uniffi.pingers.Core
 import uniffi.pingers.CoreException
 import uniffi.pingers.Events
-import uniffi.pingers.Platform
 import uniffi.pingers.SettingChange
 import uniffi.pingers.Snapshot
 
 /**
- * The repository over the Rust core (pingers-ffi). It opens [Core] with the shell's
- * [Platform] and an [Events] sink, maps each pingers-screens view model to its UiState (see
+ * The repository over the Rust core (pingers-ffi). It takes the process's [Core] from
+ * [CoreHost] and listens to its [Events], maps each pingers-screens view model to its UiState (see
  * CoreMapping.kt), and turns each action into one Core call. Drafts the user is typing (New
  * party, the Spot editor, the meet point, an answer) stay here and go to Rust with each read,
  * so pingers-screens decides what they allow.
@@ -34,8 +33,6 @@ import uniffi.pingers.Snapshot
 class CoreRepository(
     private val res: Resources,
     private val scope: CoroutineScope,
-    dbPath: String,
-    platform: Platform,
 ) : PingersRepository {
 
     /** What the core raised that the UI should act on (a route, a notification). */
@@ -158,13 +155,10 @@ class CoreRepository(
 
     init {
         scope.launch {
-            core = try {
-                Core.open(dbPath, platform, sink)
-            } catch (e: CoreException) {
-                Log.w(TAG, "the core did not open: ${e.message}")
-                openError = e.message
-                null
-            }
+            // The process's one core, which receivers and workers share (CoreHost).
+            CoreHost.listen(sink)
+            core = CoreHost.core()
+            openError = CoreHost.openError
             refresh()
         }
     }

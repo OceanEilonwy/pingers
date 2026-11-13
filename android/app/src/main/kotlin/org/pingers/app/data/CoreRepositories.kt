@@ -4,11 +4,10 @@ import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import java.io.File
 
 /**
- * The process's one [CoreRepository]: the Rust core is opened once per process, on one
- * database, and outlives activities (a rotation must not open it again).
+ * The process's one [CoreRepository]. It outlives activities (a rotation must not build it
+ * again); the core under it is [CoreHost]'s, shared with receivers, services and workers.
  */
 object CoreRepositories {
     @Volatile
@@ -18,10 +17,6 @@ object CoreRepositories {
         instance ?: CoreRepository(
             res = context.resources,
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
-            // InterimPlatform's key lives in memory, so last run's database can't be opened:
-            // start a new one. Goes with InterimPlatform.
-            dbPath = File(context.noBackupFilesDir, "pingers.db").also { it.delete() }.absolutePath,
-            platform = InterimPlatform(),
         ).also { instance = it }
     }
 }
