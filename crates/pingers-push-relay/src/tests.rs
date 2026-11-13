@@ -138,3 +138,28 @@ async fn serve_publishes_the_key_config_until_shutdown() -> TestResult {
     assert!(result.is_ok());
     Ok(())
 }
+
+#[tokio::test]
+async fn the_http_client_does_not_follow_redirects() -> TestResult {
+    let router = axum::Router::new().fallback(|| async {
+        (
+            axum::http::StatusCode::TEMPORARY_REDIRECT,
+            [(axum::http::header::LOCATION, "http://169.254.169.254/")],
+        )
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        drop(axum::serve(listener, router).await);
+    });
+    let response = http_client()?
+        .post(format!("http://{address}/up"))
+        .send()
+        .await;
+    server.abort();
+    assert_eq!(
+        response?.status(),
+        axum::http::StatusCode::TEMPORARY_REDIRECT
+    );
+    Ok(())
+}

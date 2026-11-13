@@ -431,6 +431,15 @@ fn a_dispatcher_supports_only_its_enabled_platforms() -> TestResult {
 }
 
 #[tokio::test]
+async fn an_fcm_dispatcher_supports_fcm_only() -> TestResult {
+    let mock = MockHttp::start(MockStatus::OK, "{}").await?;
+    let dispatcher = fcm_dispatcher(&mock)?;
+    assert!(dispatcher.supports(PushPlatform::Fcm));
+    assert!(!dispatcher.supports(PushPlatform::UnifiedPush));
+    Ok(())
+}
+
+#[tokio::test]
 async fn sending_on_a_disabled_platform_fails_without_a_request() -> TestResult {
     let mock = MockHttp::start(MockStatus::OK, "").await?;
     let dispatcher = unifiedpush_dispatcher(Duration::from_secs(1))?;
