@@ -7,7 +7,7 @@ use core::time::Duration;
 use pingers_geo::{Meters, PresenceState};
 use pingers_presence::{
     Admission, EpochState, EpochTransition, KnockDecision, LEASE_DURATION, MIN_UPLOAD_SPACING,
-    UploadTrigger,
+    MeetupKeyId, UploadTrigger,
 };
 use pingers_proto::{Epoch, ReadBoard};
 
@@ -121,9 +121,21 @@ async fn second_arrival_knocks_and_the_poster_admits_after_a_liveness_check()
     );
     let admitted = alice.meetups.admitted();
     let admission = admitted.first().ok_or(TestError::Missing("admission"))?;
-    assert_eq!(admission.spot, anchor);
-    assert_eq!(admission.epoch, EPOCH);
-    assert_eq!(admission.bucket, alice.now().bucket());
+    // PSK_meet is bound to the Spot, the record's epoch and the start bucket of Alice's record.
+    let alice_start = alice
+        .state
+        .snapshot()
+        .leases
+        .last()
+        .map(|lease| lease.start);
+    assert_eq!(
+        Some(admission.key),
+        alice_start.map(|bucket| MeetupKeyId {
+            spot: anchor,
+            epoch: EPOCH,
+            bucket,
+        })
+    );
     assert_eq!(admission.knock.knocker, town.party.member("bob")?.leaf);
     // Bob's knock names his own record, for the tie-break.
     let bob_record = bob.state.snapshot().leases.last().and_then(|lease| {
@@ -159,8 +171,11 @@ async fn second_arrival_knocks_and_the_poster_admits_after_a_liveness_check()
     let joined = bob.wake(WakeTrigger::Push(PushReason::Mailbox)).await?;
     assert_eq!(joined.welcomes, 1);
     let welcomes = bob.meetups.welcomes();
-    assert_eq!(welcomes.first().map(|welcome| welcome.spot), Some(anchor));
-    assert_eq!(welcomes.first().map(|welcome| welcome.epoch), Some(EPOCH));
+    let welcome = welcomes.first().ok_or(TestError::Missing("welcome"))?;
+    // Bob derived the same PSK, under the same id, from the record he knocked on.
+    assert_eq!(welcome.key, admission.key);
+    assert_eq!(welcome.psk, admission.psk);
+    assert_eq!(welcome.post, b"welcome".to_vec());
     let status = bob
         .state
         .snapshot()
@@ -723,5 +738,133 @@ async fn mutual_knocks_are_broken_by_record_randomness() -> Result<(), TestError
     );
     // The seeds are chosen so this run takes the waiting branch.
     assert_eq!(expected, KnockDecision::WaitForPeer);
+    Ok(())
+}
+
+/// `b` in `PSK_meet(b)` is the start bucket of the record the knock answered, not the bucket a
+/// device happens to act in: Alice answers and Bob reads the Welcome a bucket later, and both
+/// still hand pingers-meetup-session the same key (design B.5).
+#[tokio::test]
+async fn poster_and_knocker_derive_psk_meet_for_the_record_start_in_later_buckets()
+-> Result<(), TestError> {
+    let town = Town::new()?;
+    let mut alice = town.phone(0)?;
+    let mut bob = town.phone(1)?;
+    let anchor = town.spot_ref("anchor")?;
+    let spot = town.spot("anchor")?;
+    alice.enter(spot, anchor).await?;
+    bob.enter(spot, anchor).await?;
+    let alice_start = alice
+        .state
+        .snapshot()
+        .leases
+        .last()
+        .map(|lease| lease.start)
+        .ok_or(TestError::Missing("Alice's lease"))?;
+
+    town.advance(pingers_time::Bucket::LENGTH);
+    assert_ne!(alice.now().bucket(), alice_start);
+    // Her last fix is old: a routine fix, then the liveness fix.
+    alice
+        .platform
+        .script_fixes([spot.fix_inside(alice.now()), spot.fix_inside(alice.now())]);
+    alice.wake(WakeTrigger::Push(PushReason::Mailbox)).await?;
+    let admitted = alice.meetups.admitted();
+    let admission = admitted.first().ok_or(TestError::Missing("admission"))?;
+    assert_eq!(admission.key.bucket, alice_start);
+
+    town.world
+        .lock()
+        .map_err(|_poisoned| TestError::Missing("world"))?
+        .post(admission.knock.knock.reply_mailbox, b"welcome".to_vec());
+    town.advance(pingers_time::Bucket::LENGTH);
+    bob.platform
+        .script_fixes([spot.fix_inside(bob.now()), spot.fix_inside(bob.now())]);
+    let joined = bob.wake(WakeTrigger::Push(PushReason::Mailbox)).await?;
+    assert_eq!(joined.welcomes, 1);
+    let welcomes = bob.meetups.welcomes();
+    let welcome = welcomes.first().ok_or(TestError::Missing("welcome"))?;
+    assert_eq!(welcome.key, admission.key);
+    assert_eq!(welcome.psk, admission.psk);
+    Ok(())
+}
+
+/// A knocker who has left the Spot has no Spot keys, so no `PSK_meet`: it still reads its
+/// reply mailbox like any other device, but joins nothing, and the knock stays unanswered.
+#[tokio::test]
+async fn knocker_who_left_the_spot_reads_the_welcome_but_does_not_join() -> Result<(), TestError> {
+    let town = Town::new()?;
+    let mut alice = town.phone(0)?;
+    let mut bob = town.phone(1)?;
+    let anchor = town.spot_ref("anchor")?;
+    let spot = town.spot("anchor")?;
+    alice.enter(spot, anchor).await?;
+    bob.enter(spot, anchor).await?;
+    alice.platform.script_fix(spot.fix_inside(alice.now()));
+    alice.wake(WakeTrigger::Push(PushReason::Mailbox)).await?;
+    let admitted = alice.meetups.admitted();
+    let admission = admitted.first().ok_or(TestError::Missing("admission"))?;
+    let reply_mailbox = admission.knock.knock.reply_mailbox;
+    town.world
+        .lock()
+        .map_err(|_poisoned| TestError::Missing("world"))?
+        .post(reply_mailbox, b"welcome".to_vec());
+
+    town.advance(Duration::from_mins(2));
+    bob.platform.script_fix(spot.fix_outside(bob.now())?);
+    bob.wake(WakeTrigger::Geofence(crate::GeofenceEvent {
+        region: crate::ports::RegionId::Spot(anchor),
+        transition: crate::GeofenceTransition::Exit,
+        at: bob.now(),
+    }))
+    .await?;
+    let woken = bob.wake(WakeTrigger::Push(PushReason::Mailbox)).await?;
+    assert!(
+        bob.server
+            .calls()
+            .contains(&Call::ReadMailbox(reply_mailbox))
+    );
+    assert_eq!(woken.welcomes, 0);
+    assert!(bob.meetups.welcomes().is_empty());
+    let status = bob
+        .state
+        .snapshot()
+        .sent_knocks
+        .first()
+        .map(|sent| sent.status);
+    assert_eq!(status, Some(KnockStatus::Waiting));
+    Ok(())
+}
+
+/// A confirmed exit leaves the Meetup at that Spot (design B.5, "Leaving"), so the Meetup ends
+/// once everyone has left; staying Inside leaves nothing, and the exit is not taken for
+/// suppression (no `leave_all`).
+#[tokio::test]
+async fn a_confirmed_exit_leaves_the_meetup_at_that_spot() -> Result<(), TestError> {
+    let town = Town::new()?;
+    let mut alice = town.phone(0)?;
+    let anchor = town.spot_ref("anchor")?;
+    let spot = town.spot("anchor")?;
+    alice.enter(spot, anchor).await?;
+    alice
+        .meetups
+        .join(anchor, pingers_proto::GroupId::from_bytes([7; 32]));
+
+    town.advance(Duration::from_mins(2));
+    alice.platform.script_fix(spot.fix_inside(alice.now()));
+    alice.wake(WakeTrigger::Scheduled).await?;
+    assert!(alice.meetups.left().is_empty());
+
+    town.advance(Duration::from_mins(2));
+    alice.platform.script_fix(spot.fix_outside(alice.now())?);
+    alice
+        .wake(WakeTrigger::Geofence(crate::GeofenceEvent {
+            region: crate::ports::RegionId::Spot(anchor),
+            transition: crate::GeofenceTransition::Exit,
+            at: alice.now(),
+        }))
+        .await?;
+    assert_eq!(alice.meetups.left(), vec![anchor]);
+    assert_eq!(alice.meetups.leave_calls(), 0);
     Ok(())
 }

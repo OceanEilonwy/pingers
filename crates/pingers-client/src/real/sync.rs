@@ -116,10 +116,6 @@ impl ServerPort for Server {
 }
 
 /// pingers-meetup-session's `GroupNetwork`.
-#[expect(
-    dead_code,
-    reason = "goes into the meetup Runtime with pingers-sync's transport; nothing builds one yet"
-)]
 pub(crate) struct GroupLogs;
 
 #[async_trait]

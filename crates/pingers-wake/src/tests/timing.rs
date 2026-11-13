@@ -688,6 +688,7 @@ async fn restore_keeps_every_stored_field() -> Result<(), TestError> {
             epoch: Epoch::new(3),
             knock_mailbox: mailbox,
             matched: record,
+            matched_start: town.now().bucket(),
             reply_mailbox: mailbox,
             sent_at: town.now(),
             status: crate::KnockStatus::Waiting,

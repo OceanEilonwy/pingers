@@ -52,6 +52,8 @@ struct State {
     refused_commits: usize,
     uplinks: Vec<Uplink>,
     deleted: Vec<GroupId>,
+    /// Every byte string a device sent the server, as it arrived: requests, paths and frames.
+    seen: Vec<Vec<u8>>,
 }
 
 /// The server every device talks to.
@@ -235,6 +237,15 @@ impl FakeServer {
         self.lock().deleted.clone()
     }
 
+    /// Everything devices sent the server, so a test can check what it never learns.
+    pub(crate) fn seen(&self) -> Vec<Vec<u8>> {
+        self.lock().seen.clone()
+    }
+
+    fn saw(&self, bytes: Vec<u8>) {
+        self.lock().seen.push(bytes);
+    }
+
     /// Appends to the group's log.
     fn append(state: &mut State, group: &GroupId, frame: &LiveFrame, content_type: ContentType) {
         if let Some(log) = state.groups.get_mut(group) {
@@ -261,6 +272,7 @@ impl FakeServer {
 
     fn uplink(&self, id: u64, bytes: &[u8]) -> Result<(), TransportError> {
         let mut state = self.lock();
+        state.seen.push(bytes.to_vec());
         let Some(channel) = state.channels.iter().find(|channel| channel.id == id) else {
             return Err(TransportError::StreamClosed);
         };
@@ -301,6 +313,8 @@ impl FakeNetwork {
 impl GroupNetwork for FakeNetwork {
     async fn create_group(&self, request: CreateGroup) -> Result<(), NetworkError> {
         self.server
+            .saw(request.encode().map_err(|_| NetworkError::Rejected)?);
+        self.server
             .lock()
             .groups
             .insert(request.group_id, GroupLog::default());
@@ -313,6 +327,8 @@ impl GroupNetwork for FakeNetwork {
         _auth: &LogAuthKeyPair,
         request: CommitRequest,
     ) -> Result<CommitResponse, NetworkError> {
+        self.server
+            .saw(request.encode().map_err(|_| NetworkError::Rejected)?);
         let mut state = self.server.lock();
         if state.refuse_commits_from.contains(&self.member) {
             state.refused_commits = state.refused_commits.saturating_add(1);
@@ -346,6 +362,8 @@ impl GroupNetwork for FakeNetwork {
         _auth: &LogAuthKeyPair,
         message: AppMessage,
     ) -> Result<(), NetworkError> {
+        self.server
+            .saw(message.encode().map_err(|_| NetworkError::Rejected)?);
         let hang = {
             let mut state = self.server.lock();
             if state.hang_posts {
@@ -409,6 +427,7 @@ impl GroupNetwork for FakeNetwork {
         _auth: &LogAuthKeyPair,
         _subscription: Option<SubscriptionId>,
     ) -> Result<BinaryRequest, NetworkError> {
+        self.server.saw(hex_id(group).into_bytes());
         Ok(BinaryRequest {
             method: "POST".into(),
             path: format!("/v1/groups/{}/live", hex_id(group)),

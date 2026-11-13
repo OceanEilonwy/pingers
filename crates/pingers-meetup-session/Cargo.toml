@@ -16,6 +16,7 @@ pingers-geo = { workspace = true }
 pingers-meetup = { workspace = true }
 pingers-mls = { workspace = true }
 pingers-ohttp = { workspace = true }
+pingers-presence = { workspace = true }
 pingers-proto = { workspace = true }
 pingers-store = { workspace = true }
 pingers-time = { workspace = true }

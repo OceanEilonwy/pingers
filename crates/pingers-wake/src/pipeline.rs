@@ -15,10 +15,10 @@ use pingers_geo::{
 use pingers_presence::{
     ActiveSpot, BoardMatch, DataMode, EpochChange, FreshFix, KnockContext, KnockDecision,
     KnockFilter, KnockInputs, KnockSituation, LeaseInputs, LivenessEvidence, MailboxPurpose,
-    PresenceError, ReadPolicy, RealSlot, RosterLookup, Sharing, SlotCandidate, SlotContent,
-    SpotRef, SpotStatus, TrialMatcher, UploadPlan, UploadTrigger, VerifiedKnock, build_knock,
-    build_lease, choose_slots, decide_knock, knock_targets, knock_unanswered, matching_epochs,
-    open_knock, plan_upload, read_board, verify_knock,
+    MeetupKey, PresenceError, ReadPolicy, RealSlot, RosterLookup, Sharing, SlotCandidate,
+    SlotContent, SpotRef, SpotStatus, TrialMatcher, UploadPlan, UploadTrigger, VerifiedKnock,
+    build_knock, build_lease, choose_slots, decide_knock, knock_targets, knock_unanswered,
+    matching_epochs, open_knock, plan_upload, read_board, verify_knock,
 };
 use pingers_proto::{
     BoardPage, CoverReadRatio, Epoch, GroupId, LeafIndex, MailboxId, MeetupHint, PartyId,
@@ -161,7 +161,7 @@ pub struct WakeInput {
 pub enum WakeStep {
     /// The routine fix.
     Fix,
-    /// Leaving Meetups because sharing is suppressed.
+    /// Leaving Meetups because sharing is suppressed, or because the device left their Spot.
     LeaveMeetups,
     /// Pulling the group logs.
     GroupLogs,
@@ -314,6 +314,8 @@ struct ReceivedKnock {
     real: RealRecord,
     own_record: RecordRandomness,
     knock: VerifiedKnock,
+    /// `PSK_meet(b)` for the record it answers, `b` being the record's start bucket.
+    key: MeetupKey,
 }
 
 struct Run<'run, 'env, D, P, S, M, T: Timer, R> {
@@ -360,6 +362,8 @@ where
         if decision != GateDecision::Share && self.any_meetup(state) {
             let meetups = self.env.meetups;
             self.port(WakeStep::LeaveMeetups, meetups.leave_all()).await;
+        } else {
+            self.leave_meetups_left_behind(state).await;
         }
 
         let Synced {
@@ -396,7 +400,7 @@ where
 
         if reads_due {
             self.answer_knocks(state, &keys, &held_at_start).await;
-            self.read_replies(state).await;
+            self.read_replies(state, &keys).await;
         }
         if network_needed {
             let server = self.env.server;
@@ -650,6 +654,22 @@ where
             horizon: selection.horizon,
             spots,
         });
+    }
+
+    /// Leaves the Meetup at every Spot the device has confirmed it left (design B.5,
+    /// "Leaving": exit confirmed). The last member to leave ends the Meetup.
+    async fn leave_meetups_left_behind(&mut self, state: &WakeState) {
+        let left: Vec<SpotRef> = state
+            .spots
+            .iter()
+            .filter(|tracked| tracked.presence.state() == PresenceState::Outside)
+            .map(|tracked| tracked.spot)
+            .filter(|spot| self.env.meetups.current_meetup(*spot).is_some())
+            .collect();
+        for spot in left {
+            let meetups = self.env.meetups;
+            self.port(WakeStep::LeaveMeetups, meetups.leave(spot)).await;
+        }
     }
 
     fn any_meetup(&self, state: &WakeState) -> bool {
@@ -974,6 +994,7 @@ where
                 epoch: target.epoch,
                 knock_mailbox: knock.mailbox,
                 matched: target.record.randomness,
+                matched_start: target.start,
                 reply_mailbox,
                 sent_at: self.now,
                 status: KnockStatus::Waiting,
@@ -1065,13 +1086,18 @@ where
                     .decided_knocks
                     .iter()
                     .any(|decided| decided.reply_mailbox == knock.knock.reply_mailbox);
-                if !decided {
-                    received.push(ReceivedKnock {
-                        real,
-                        own_record,
-                        knock,
-                    });
+                if decided {
+                    continue;
                 }
+                let Ok(key) = keys.meetup_key(start) else {
+                    continue;
+                };
+                received.push(ReceivedKnock {
+                    real,
+                    own_record,
+                    knock,
+                    key,
+                });
             }
         }
         received
@@ -1126,9 +1152,7 @@ where
                 state.saw_peer(spot, self.now);
                 let meetups = self.env.meetups;
                 let admission = MeetupAdmission {
-                    spot,
-                    epoch: received.real.epoch,
-                    bucket: self.now.bucket(),
+                    key: received.key,
                     admission,
                     knock: received.knock,
                 };
@@ -1164,8 +1188,10 @@ where
         (fix, sharing)
     }
 
-    /// Reads the reply mailbox of every knock still waiting and hands Welcomes on.
-    async fn read_replies(&mut self, state: &mut WakeState) {
+    /// Reads the reply mailbox of every knock still waiting and hands Welcomes on, with the
+    /// `PSK_meet` of the record the knock answered. A device no longer Inside the Spot has no
+    /// keys for it: it still reads the mailbox, like any other, but joins nothing.
+    async fn read_replies(&mut self, state: &mut WakeState, keys: &Keys<'_>) {
         let waiting: Vec<SentKnock> = state
             .sent_knocks
             .iter()
@@ -1180,14 +1206,20 @@ where
             else {
                 break;
             };
+            let spot_keys = keys
+                .active
+                .iter()
+                .find(|active| active.spot() == sent.spot && active.epoch() == sent.epoch);
+            let Some(spot_keys) = spot_keys else {
+                continue;
+            };
             let mut handed = false;
             for post in posts {
-                let meetups = self.env.meetups;
-                let reply = ReplyPost {
-                    spot: sent.spot,
-                    epoch: sent.epoch,
-                    post,
+                let Ok(key) = spot_keys.meetup_key(sent.matched_start) else {
+                    continue;
                 };
+                let meetups = self.env.meetups;
+                let reply = ReplyPost { key, post };
                 if self
                     .port(WakeStep::Handoff, meetups.welcome(reply))
                     .await

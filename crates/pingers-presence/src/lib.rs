@@ -6,7 +6,8 @@
 //!
 //! Client half:
 //! - [`ActiveSpot`]: a Spot's keys, derivable only while the device is `Inside` it
-//!   (design B.4.3, "match only where you are");
+//!   (design B.4.3, "match only where you are"), and the [`MeetupKey`] (`PSK_meet` with its
+//!   id) that binds a Meetup to that Spot (design B.5);
 //! - [`build_lease`]: real slots plus random dummies, shuffled, always four;
 //! - [`TrialMatcher`]: trial-match board pages against active Spots, and open their beacons;
 //! - [`matching_epochs`]: which epochs to match with after a Commit (design B.4.7);
@@ -77,4 +78,4 @@ pub use server::{
     check_lease, check_mailbox_live, check_mailbox_post, check_mailbox_spec, closed_segment_hash,
     live_segments, segment_closed, segment_expired,
 };
-pub use spot::{ActiveSpot, SpotRef, SpotStatus};
+pub use spot::{ActiveSpot, MeetupKey, MeetupKeyId, SpotRef, SpotStatus};

@@ -90,16 +90,64 @@ impl ActiveSpot {
         &self.tag_key
     }
 
-    /// `PSK_meet(b) = HKDF-Expand(K_spot, "psk" || be64(b), 32)`, the external PSK that binds
-    /// a Meetup group created in bucket `bucket` to this Party and Spot (design B.5). This is
-    /// how pingers-meetup-session gets the PSK without ever holding `K_spot`; the result is a
-    /// zeroising secret type.
+    /// The external PSK of a Meetup formed on a record of this Spot that starts in bucket
+    /// `start`: `PSK_meet(b) = HKDF-Expand(K_spot, "psk" || be64(b), 32)` with id
+    /// `(party_id, epoch, spot_id, b)` (design B.5).
+    ///
+    /// `b` is the start bucket of the record the knock answered. The poster (who creates the
+    /// group) and the knocker (who joins it) both know it from that record, so they derive the
+    /// same PSK in different wakes without agreeing on a clock. This is how
+    /// pingers-meetup-session gets the PSK without ever holding `K_spot`, and because only an
+    /// `ActiveSpot` makes one, only a device `Inside` the Spot can create or join its Meetup.
     ///
     /// # Errors
     ///
     /// [`PresenceError::Crypto`] if derivation fails.
-    pub fn meetup_psk(&self, bucket: Bucket) -> Result<MeetupPsk, PresenceError> {
-        Ok(derive_meetup_psk(&self.spot_key, bucket)?)
+    pub fn meetup_key(&self, start: Bucket) -> Result<MeetupKey, PresenceError> {
+        Ok(MeetupKey {
+            id: MeetupKeyId {
+                spot: self.spot,
+                epoch: self.epoch,
+                bucket: start,
+            },
+            psk: derive_meetup_psk(&self.spot_key, start)?,
+        })
+    }
+}
+
+/// The id of a Meetup's external PSK: `(party_id, epoch, spot_id, b)` (design B.5). It goes
+/// into the MLS PSK proposal and the Welcome's group secrets, both encrypted, so the server
+/// never sees which Party or Spot a Meetup group belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MeetupKeyId {
+    /// The Party and Spot.
+    pub spot: SpotRef,
+    /// The Party epoch of the Spot keys.
+    pub epoch: Epoch,
+    /// The start bucket of the record the knock answered.
+    pub bucket: Bucket,
+}
+
+/// `PSK_meet(b)` with its id: what pingers-meetup-session needs to create or join a Meetup
+/// group (design B.5). Made only by [`ActiveSpot::meetup_key`], so the value and the id it is
+/// bound under cannot drift apart. Not `Clone` or `Debug`: it holds key material, zeroed on
+/// drop (style guide §8).
+pub struct MeetupKey {
+    id: MeetupKeyId,
+    psk: MeetupPsk,
+}
+
+impl MeetupKey {
+    /// The PSK id.
+    #[must_use]
+    pub const fn id(&self) -> MeetupKeyId {
+        self.id
+    }
+
+    /// `PSK_meet(b)`, for pingers-mls to hand to `OpenMLS`.
+    #[must_use]
+    pub const fn psk(&self) -> &MeetupPsk {
+        &self.psk
     }
 }
 
@@ -130,16 +178,26 @@ mod tests {
             };
             let active = ActiveSpot::derive(&root, &status)?;
             let bucket = Bucket::from_index(vector.input_u64("bucket")?)?;
+            let key = active.meetup_key(bucket)?;
             assert_eq!(
-                active.meetup_psk(bucket)?.expose_bytes().as_slice(),
+                key.psk().expose_bytes().as_slice(),
                 vector.expected_bytes("meetup_psk")?,
                 "{}",
                 vector.name
             );
+            assert_eq!(
+                key.id(),
+                MeetupKeyId {
+                    spot: status.spot,
+                    epoch: status.epoch,
+                    bucket,
+                },
+                "the id names the Party, epoch, Spot and bucket the PSK was derived for"
+            );
             let next = bucket.next().ok_or(TestError::Malformed("bucket"))?;
             assert_ne!(
-                active.meetup_psk(next)?.expose_bytes(),
-                active.meetup_psk(bucket)?.expose_bytes(),
+                active.meetup_key(next)?.psk().expose_bytes(),
+                key.psk().expose_bytes(),
                 "each bucket has its own PSK"
             );
         }

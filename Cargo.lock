@@ -3654,6 +3654,7 @@ dependencies = [
  "pingers-meetup",
  "pingers-mls",
  "pingers-ohttp",
+ "pingers-presence",
  "pingers-proto",
  "pingers-store",
  "pingers-testkit",

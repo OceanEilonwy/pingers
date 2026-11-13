@@ -190,6 +190,7 @@ async fn a_full_wake_snapshot_round_trips_through_the_store() -> TestResult {
         epoch: Epoch::new(u64::from(seed)),
         knock_mailbox: MailboxId::from_bytes([seed; 16]),
         matched: RecordRandomness::from_bytes([seed.wrapping_add(1); 16]),
+        matched_start: Bucket::containing(UnixSeconds::new(u64::from(seed).saturating_mul(900))),
         reply_mailbox: MailboxId::from_bytes([seed.wrapping_add(2); 16]),
         sent_at: UnixSeconds::new(u64::from(seed)),
         status,

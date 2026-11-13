@@ -4,10 +4,14 @@
 //! The live Meetups are the handles this process holds; pingers-meetup-session cannot resume
 //! a Meetup, so `discard_stale` runs once, on the first call (the first snapshot at launch).
 //!
-//! WAITING: no Meetup can go live yet. Creating one (`admit`) or joining one (`welcome`)
-//! needs `PSK_meet`, which pingers-presence does not hand out yet ([`Unavailable::MeetupPsk`]),
-//! and a `Runtime` whose transport and [`GroupLogs`](super::sync::GroupLogs) come from
-//! pingers-sync. Everything that acts on a live Meetup is wired and finds none until then.
+//! `admit` creates a Meetup (or adds to the live one) under the `PSK_meet` pingers-wake
+//! derived from the Spot keys of the record the knock answered (design B.5), and `welcome`
+//! carries the same key for joining.
+//!
+//! WAITING: no Meetup can go live yet. The `Runtime` needs the instance's transport and a
+//! group log, whose [`GroupLogs`](super::sync::GroupLogs) stub answers `Unavailable` until
+//! pingers-sync is wired; the Welcome is posted through pingers-sync too; and joining needs the
+//! grant secret of the knock's KeyPackage, which `Lens::key_package` cannot keep yet.
 
 use core::future::{Future, ready};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -17,10 +21,15 @@ use pingers_geo::Fix;
 use pingers_meetup::{
     ASK_EXPIRY, ExactLocation, LocationAnswer, MeetPointDraft, MeetupAction, TargetPosition,
 };
-use pingers_meetup_session::{MeetupHandle, MeetupScreen, MeetupView, discard_stale};
-use pingers_parties::PartyLifecycle;
-use pingers_presence::SpotRef;
-use pingers_proto::{ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId};
+use pingers_meetup_session::{
+    AddMember, CreateMeetup, MeetupHandle, MeetupScreen, MeetupView, Runtime, create, discard_stale,
+};
+use pingers_mls::CipherSuitePolicy;
+use pingers_parties::{PartyLifecycle, PostQuantum};
+use pingers_presence::{Admission, MeetupKey, SpotRef};
+use pingers_proto::{
+    ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, WelcomeBytes,
+};
 use pingers_store::{LocationRequestState, RequestDirection, Session};
 use pingers_time::{Clock, UnixSeconds};
 use pingers_wake::PortError;
@@ -29,6 +38,7 @@ use tokio::sync::OnceCell;
 
 use super::Backend;
 use super::records::corrupt;
+use super::sync::GroupLogs;
 use crate::ports::{MeetupsPort, MeetupsSection};
 use crate::snapshot::{
     ChatEntry, ChatMessage, ChatReply, LocationRequest, Meetup, MeetupPeer, MeetupSelf, Name,
@@ -101,6 +111,61 @@ impl Meetups {
             handle.screen(screen).await?;
         }
         Ok(())
+    }
+
+    /// What every Meetup shares. `None` without a configured instance.
+    fn runtime(&self) -> Option<Runtime> {
+        Some(Runtime {
+            database: Arc::clone(&self.backend.database),
+            transport: Arc::clone(self.backend.transport.as_ref()?),
+            network: Arc::new(GroupLogs),
+            clock: Arc::clone(&self.backend.outside.clock),
+            timer: Arc::clone(&self.backend.outside.timer),
+        })
+    }
+
+    /// Creates a Meetup at the key's Spot with the knocker and keeps it live; returns the
+    /// Welcome for the knocker.
+    async fn create(&self, key: MeetupKey, knocker: AddMember) -> Result<WelcomeBytes, PortError> {
+        let runtime = self.runtime().ok_or(PortError::Unavailable)?;
+        let spot = key.id().spot;
+        let (group, suite) = self
+            .backend
+            .store(move |session, clock, rng| {
+                let suite = match PartyLifecycle::new(session, clock)
+                    .settings(&spot.party)?
+                    .post_quantum
+                {
+                    PostQuantum::Classical => CipherSuitePolicy::Classical,
+                    PostQuantum::QuantumResistant => CipherSuitePolicy::QuantumResistant,
+                };
+                let mut group = [0_u8; GroupId::LENGTH];
+                rng.fill_bytes(&mut group);
+                Ok((GroupId::from_bytes(group), suite))
+            })
+            .await
+            .map_err(|_failed| PortError::Unavailable)?;
+        let created = create(
+            &runtime,
+            CreateMeetup {
+                key,
+                group,
+                knocker: knocker.key_package,
+                subscriptions: knocker.subscription.into_iter().collect(),
+                own_subscription: None,
+                suite,
+            },
+            (self.backend.outside.rng)(),
+        )
+        .await
+        .map_err(|_failed| PortError::Unavailable)?;
+        // WAITING(client events): Meetup events are not forwarded to the shell yet.
+        drop(created.events);
+        self.live().push(Live {
+            handle: Arc::new(created.handle),
+            spot,
+        });
+        Ok(created.welcome)
     }
 
     /// A new fix of this device, for every live Meetup.
@@ -347,15 +412,48 @@ impl MeetupPort for Meetups {
             .map(|live| live.handle.group())
     }
 
-    fn admit(
-        &self,
-        _admission: MeetupAdmission,
-    ) -> impl Future<Output = Result<(), PortError>> + Send {
+    /// Creates the Meetup with the knocker, or adds the knocker to the live one, under the
+    /// `PSK_meet` pingers-wake derived from the Spot keys, then posts the Welcome.
+    async fn admit(&self, admission: MeetupAdmission) -> Result<(), PortError> {
+        let MeetupAdmission {
+            key,
+            admission,
+            knock,
+        } = admission;
+        let reply_mailbox = knock.knock.reply_mailbox;
+        let newcomer = AddMember {
+            key_package: knock.knock.key_package,
+            subscription: knock.knock.meetup_subscription,
+        };
+        let welcome = match admission {
+            Admission::CreateMeetup => self.create(key, newcomer).await?,
+            Admission::AddToMeetup(group) => self
+                .handle(group)
+                .map_err(|_none| PortError::Unavailable)?
+                .add_member(newcomer)
+                .await
+                .map_err(|_failed| PortError::Unavailable)?,
+        };
+        post_welcome(reply_mailbox, &welcome)
+    }
+
+    /// WAITING(contracts): joining needs the grant secret of the KeyPackage this device
+    /// knocked with, which `Lens::key_package` cannot keep yet. The reply already carries the
+    /// `PSK_meet` that `JoinMeetup` takes.
+    fn welcome(&self, _reply: ReplyPost) -> impl Future<Output = Result<(), PortError>> + Send {
         ready(Err(PortError::Unavailable))
     }
 
-    fn welcome(&self, _reply: ReplyPost) -> impl Future<Output = Result<(), PortError>> + Send {
-        ready(Err(PortError::Unavailable))
+    async fn leave(&self, spot: SpotRef) -> Result<(), PortError> {
+        let Some(group) = self.current_meetup(spot) else {
+            return Ok(());
+        };
+        let Some(handle) = self.take(group) else {
+            return Ok(());
+        };
+        leave(handle)
+            .await
+            .map_err(|_failed| PortError::Unavailable)
     }
 
     async fn leave_all(&self) -> Result<(), PortError> {
@@ -367,4 +465,12 @@ impl MeetupPort for Meetups {
         }
         Ok(())
     }
+}
+
+/// Posts a Welcome to the knocker's reply mailbox. If it never arrives, a Meetup this device
+/// just created ends by itself after 30 minutes alone (design B.5).
+///
+/// WAITING(pingers-sync): `post_to_mailbox` is not wired into the client yet.
+fn post_welcome(_mailbox: MailboxId, _welcome: &WelcomeBytes) -> Result<(), PortError> {
+    Err(PortError::Unavailable)
 }

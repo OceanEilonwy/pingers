@@ -107,12 +107,8 @@ impl Crates {
 pub(crate) struct Backend {
     database: Arc<Database>,
     outside: Outside,
-    /// The router over the configured instance, for pingers-sync's engine.
-    #[expect(
-        dead_code,
-        reason = "WAITING(pingers-sync): its engine holds one store Session for its lifetime, \
-                  locking out every other store step; it is built once it holds the Database"
-    )]
+    /// The router over the configured instance, for pingers-sync's engine and the live
+    /// channels of Meetups.
     transport: Option<Arc<dyn pingers_transport::Transport>>,
 }
 

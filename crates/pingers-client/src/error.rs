@@ -57,10 +57,6 @@ pub enum Unavailable {
     /// subscriptions, Welcomes and every `Outbound` value wait on it.
     #[error("waits on pingers-sync")]
     Sync,
-    /// pingers-presence does not hand `PSK_meet` to pingers-meetup-session yet (pingers-wake
-    /// CONTRACT.md, "Needs"), so this device cannot create or join a Meetup.
-    #[error("waits on pingers-presence handing out PSK_meet")]
-    MeetupPsk,
     /// No Meetup with this id is live on this device.
     #[error("no such live meetup")]
     NoMeetup,
