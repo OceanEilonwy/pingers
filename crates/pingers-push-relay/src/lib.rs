@@ -11,6 +11,10 @@
 //! What it never holds: mailbox or group ids (only the bind hash), accounts, device IP
 //! addresses, message content. What it learns, as design A.2 says: that token T was woken at
 //! time t, with what class, on behalf of which server.
+//!
+//! Operators: the configuration file and the FCM service-account setup (a dedicated account
+//! with only "Firebase Cloud Messaging API Admin", its JSON key at mode 600) are documented in
+//! [`config`]. Access tokens are minted and renewed by [`fcm_auth`].
 #![forbid(unsafe_code)]
 
 pub mod address;
