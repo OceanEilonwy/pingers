@@ -86,3 +86,8 @@ Implemented in full.
 - **Wave 3 (2026-11-13), additive:** `Meters::constant` is public (`const`, for slider limits
   and the like). It saturates instead of failing: negative or NaN gives zero, infinity the
   largest finite length.
+- **Wave 3 (2026-11-13):** `PresenceSnapshot::confirmed_at` (wave 1 review, restarts). While
+  Inside it is the last confirmation, and `restore` runs the 60-minute Inside timeout from it,
+  so a fix beyond the fence just before a restart no longer extends Inside. `None` outside
+  Inside and in snapshots saved before the field; those restore as before. Additive apart from
+  struct literals needing the new field; pingers-store schema v2 adds the column.
