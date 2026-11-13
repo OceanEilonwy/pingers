@@ -1,0 +1,39 @@
+{
+  "name": "snapshot-and-join-request",
+  "description": "State snapshot: nonce (24) || XChaCha20-Poly1305(state key, nonce, aad = empty, snapshot) (design B.2). Join request: join_key = HKDF-Expand(invite_secret, \"join\", 32), then nonce (24) || XChaCha20-Poly1305(join_key, nonce, aad = empty, request) (design D). `nonce` is the randomness consumed. Vectors with an `error` open `sealed` and must fail.",
+  "vectors": [
+    {
+      "name": "state-snapshot",
+      "inputs": {
+        "state_key": "e0946ff1df77d180dcab9093b880288f7ce48373fd122034c6296e7fd8d67275",
+        "nonce": "0db23730ca29f4b35589fdab835a2bf64fa3f1ad015d07f4",
+        "snapshot": "e462a577a5d4812adc4a29ba9c83720c09ed254d435de21cb6691087689ce9106fc1fd5eb2e8026fdd4886ab0c58a0f3e798068916f7fa6a72c174effeafb0aa0e50a2a6ed447502b3a55d10875f15cc3d41f9f8af77b1c8acdccf553eda569f8049861c7414184239210e40f02d234b90461f2cdea156a3bc249d2aeb06fa5c1df2d9a6bd1d3907a1e45142f4a4c55ca0559d98d1e793fda44e0e0a3a16a0ea115b7e3f6e4c88b3e6f01d72e0db860085bc01dfd7fcc3a2fa3919518f93ad9f5a87e0808e4b4bfc"
+      },
+      "expected": {
+        "sealed": "0db23730ca29f4b35589fdab835a2bf64fa3f1ad015d07f40e029ffdb217b8bef4a50ba5e571f82e3012d71fbe7db41c2d7e3b49650752679867caec674b812c4c4faf1790d45ea4a79e5321fe4da303fa6f2c58c179ee4b60e4fafb30281325b83756fe7aea2ce170570ced5967eb2c3d19dbfc7a3cd7842e74a2bb16bf36408c400663b5b7edcfdc23a73229fdf11a1183b26f2a098d025bf1182890b3c004fc0525cc8a9ec2da04dae17e56275d56743bfd6d0a3b6ff185b6ddfaf129f1f648ddc71e2dd6c81c25c07a3bf9489751ef82f635a3defbfbf71d610f174cf8161d534310f7a824aeca076908deb193be"
+      }
+    },
+    {
+      "name": "join-request",
+      "inputs": {
+        "invite_secret": "1cb61adcb3cf60d763142dd52019ec09e27cb824f03b188287f3aa2ff285935c",
+        "nonce": "2ce0f112389f3cf6e8bc91d548522de9b034a1a78e5c9c88",
+        "request": "65a3ff8aeb6764b31daa830d9b1f64a68edd9dca24b08bd59a33fb9abd27816fb4dda60ff0585267580fc08e0a8ea0125c8c5b25bccc1d7236f531b38b7421e01d576462cf0d212b812ce1419753827ef8a1a12aeca0d393c4ce830ebccb43a706a6b904fe4b5fc28110e1299510f80d7d63335febf41904"
+      },
+      "expected": {
+        "join_key": "c7d0bae84090bcfca425830314bcb627a1f82217d12aa8882b9c0b420ac45481",
+        "sealed": "2ce0f112389f3cf6e8bc91d548522de9b034a1a78e5c9c885ba0220ae3289530b1f4b247497afaf96341a445614cd3874748f61c41aa3fabe7470c91ea849d0e3dc8c853de3cf53c5233b47485bca3de8b000e164d048fef2001c5b08f888c7e9953c837b5ad8ee506676ffa30d12175f8142a4f0b72e58231d9db44ac926b2198233869ff455c4062f4ab3f27f4712b3640a48f67329d004c0a5a0429e34706"
+      }
+    },
+    {
+      "name": "truncated-join-request-does-not-open",
+      "inputs": {
+        "invite_secret": "1cb61adcb3cf60d763142dd52019ec09e27cb824f03b188287f3aa2ff285935c",
+        "sealed": "2ce0f112389f3cf6e8bc91d548522de9b034a1a78e5c9c"
+      },
+      "expected": {
+        "error": "OpenFailed"
+      }
+    }
+  ]
+}

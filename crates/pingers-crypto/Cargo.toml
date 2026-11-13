@@ -12,7 +12,7 @@ layer = 0
 
 [features]
 # Post-quantum grant keys (X-Wing HPKE) for Parties that opt in (design B.8).
-x-wing = []
+x-wing = ["dep:x-wing"]
 
 [dependencies]
 pingers-proto = { workspace = true }
@@ -22,14 +22,18 @@ chacha20poly1305 = { workspace = true }
 ed25519-dalek = { workspace = true }
 hkdf = { workspace = true }
 hmac = { workspace = true }
-hpke-rs = { workspace = true }
+# `hazmat` exposes derived private-key bytes, which GrantSecretKey stores.
+hpke-rs = { workspace = true, features = ["hazmat"] }
+hpke-rs-crypto = { workspace = true }
 rand_core = { workspace = true }
 sha2 = { workspace = true }
 subtle = { workspace = true }
 thiserror = { workspace = true }
+x-wing = { workspace = true, optional = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+pingers-testkit = { workspace = true }
 proptest = { workspace = true }
 
 [lints]

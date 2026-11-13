@@ -1,0 +1,44 @@
+{
+  "name": "knock-signature",
+  "description": "Ed25519 over \"pingers/v1/knock\" || party_id || be64(epoch) || spot_id || be64(b0) || matched_r || SHA-256(key_package) || reply_mailbox || subscription_hash, where subscription_hash is SHA-256 of the subscription's canonical encoding or 32 zero bytes without one (design B.4.2; CONTRACT.md 'Knock signature input')",
+  "vectors": [
+    {
+      "name": "no-subscription",
+      "inputs": {
+        "signing_key": "f7d67b5df14320a8bb9a2961de1abfe4a43800f8170e834a3f779ef6d67b151d",
+        "party_id": "a7c466948710f4ed0932a1e8d01235e1",
+        "epoch": 408,
+        "spot_id": "22d7919f689cd8ae4d25d64689c579e6",
+        "bucket": 1966401,
+        "matched_randomness": "f2ecd44d8c307eae0a18b2016c5d37b7",
+        "key_package": "6a1a619ae874f2c946555c6ceb430437b89450bb3b7ebb650c63740e7d979bf49baa489479e87c38138653c98a85c9722df8e120c84ddc4496f939312f0ca4ef1d1bea93925527ee95d62d8d976ce4279cc075e064d82d9073ce68125a60c5ddfb2a0429c260b786d9204ecfc751bf89b458869dfa27012e235afdebba5146356e47ee496afbd3b69f56276ecae675d090ace6da5b9aa54bc064022992e11e98a96e80cc0a8ea739bc5aea9d81145091c05d46057d975b3c60552360165ebd06b39f56df13f1ff113d2469c6acf8ce1536e9ff0856030bd964ab20227f83901cb944605d4feb06d82667aedcd42674c256d5f35b26792f7b4668872cd3b1f130135116cd9e505383c4b2bfdb5987ef66d89165f4834da2aae8ac7349b2a9b11b1366060738bb76c0f45541e2",
+        "reply_mailbox": "f6950afd320780b1701d32441b365ea0",
+        "subscription_hash": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "public_key": "f7fa2a557e1dcb6204b6e0ec449b3bf8c2a2fe312d66641876295f9bf977086e",
+        "message": "70696e676572732f76312f6b6e6f636ba7c466948710f4ed0932a1e8d01235e1000000000000019822d7919f689cd8ae4d25d64689c579e600000000001e0141f2ecd44d8c307eae0a18b2016c5d37b79250d461988dd5b60dd35f35ea700fe05b5b39a52c15a520e731ad4078f41dfef6950afd320780b1701d32441b365ea00000000000000000000000000000000000000000000000000000000000000000",
+        "signature": "b23f3fd3ab6c6c80d27392d589e7c3ad06e30b97ee3c29d2115a0ddaaf7288bd410ffa4024242010b1d96f5916d9cae8061ffa27ebafaf82138ed53d3ad85f0d"
+      }
+    },
+    {
+      "name": "with-subscription",
+      "inputs": {
+        "signing_key": "a0eeb91f9a52db6d1212725dff2bbfc924b6359de414022967cad4155337b82e",
+        "party_id": "743ecca14d0910ebeed1ebda9ea9737a",
+        "epoch": 409,
+        "spot_id": "d55cebb5eb2918b56b2af5e3b0909a30",
+        "bucket": 1966402,
+        "matched_randomness": "b9063212a1369d7e9f4dc2e2d4d0e56d",
+        "key_package": "3a6a84aa19e75ee7a71d309c55df5fcb98f4edb1c1eb2db81ee2e15bc6ce161ad85e465d4d54f4d6a94e94bd8fdd7761a348f909b9f974a65f66bdac104e9d4c0c6b6e83740d87c2ffd2676b146d78c6e450269442e5e527b3bc3a976553f975cfd9ed14374f64f2d57e044a286e96f83b444e17fc8d1d65b6bd3dd33dc64e8740c6af43ad495e1cab0814aa45a74400ef0cf58627e97c59d074f8b1d76fc9f98500d53aabbfa4ef37b96234fe5c2f8abcde2f4478296861b622d21dcb0fa2682defb61aae0d092b6e8ab8ee261a9e33305bd9e63f329aeb4a42b22ef98cb3d4179cc6e148be21bc1cd0d89205c0a388e91b34be2ff6404d44d85e4f26a42c0424bc2b13d11adfe967ac2200c7cf03c27e7e5074d2bac31c1b7a7c438823dfdffa9b8c21aee26c3340cd8791",
+        "reply_mailbox": "9163a5a98ce45f56ec9b488d68f84b52",
+        "subscription_hash": "05cf583b4ccbf305f1a7649b3a1f5bbce369c9c1663c3d9baaf3a6b7c2b02c7f"
+      },
+      "expected": {
+        "public_key": "56c80b183c82a2e59d57d731a3bf1753090d1c26503fac6fc4288adf7dac18f8",
+        "message": "70696e676572732f76312f6b6e6f636b743ecca14d0910ebeed1ebda9ea9737a0000000000000199d55cebb5eb2918b56b2af5e3b0909a3000000000001e0142b9063212a1369d7e9f4dc2e2d4d0e56d5a21efd55f43f8a69953e512749de44a1b16edc70c97cc3d8faba104a26e40f39163a5a98ce45f56ec9b488d68f84b5205cf583b4ccbf305f1a7649b3a1f5bbce369c9c1663c3d9baaf3a6b7c2b02c7f",
+        "signature": "1c4b89720dc03800b76ff0d503a9ca9c49d0f250e2d6efb39da4e1032cc75fe48cf5203d8cd83c4fa76f087ab020c90ad627530635c09857f6dc35c314d1ad05"
+      }
+    }
+  ]
+}

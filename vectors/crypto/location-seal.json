@@ -1,0 +1,70 @@
+{
+  "name": "location-seal",
+  "description": "ciphertext = AES-256-GCM(LK, nonce, aad = group_id || be64(epoch) || be32(sender_leaf) || be32(lk_gen), padded), padded = be16(len) || encoded LocationPlaintext || zeros to 64 bytes, so the ciphertext is always 80 bytes (design B.6.1; CONTRACT.md 'Sealed location length'). `nonce` is the randomness consumed. Vectors with an `error` open `ciphertext` and must fail.",
+  "vectors": [
+    {
+      "name": "short-encoding",
+      "inputs": {
+        "location_key": "7501490aa5978056a64f54c6e693dd47fa2747fd10d5540909887c93ba7888df",
+        "group_id": "e1c39a5985e24c602fcc4f5df917757cadf183aa61c069b806766ada60e2b512",
+        "epoch": 1041,
+        "sender_leaf": 3,
+        "generation": 2,
+        "encoded": "1bd7709c3746528f0e3fbf9b32ae82d803b94900",
+        "nonce": "8aef46fba8c8b7348d697fb9"
+      },
+      "expected": {
+        "aad": "e1c39a5985e24c602fcc4f5df917757cadf183aa61c069b806766ada60e2b51200000000000004110000000300000002",
+        "padded": "00141bd7709c3746528f0e3fbf9b32ae82d803b94900000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "ciphertext": "7093adbc515ab045eabf78c64943f048bd74a671d72ffee8691b92e213e4d0b8b0de3f261d9322cc5b929609e2c37a173a37650d871f72a9bfb7fe445dfde6d1eebb702902216473f6ae20a6bb24c820"
+      }
+    },
+    {
+      "name": "longest-encoding",
+      "inputs": {
+        "location_key": "9f78432ddfc8b63ad18e72a463df99f84215001ba6aa8f551ba98747568824fa",
+        "group_id": "abfc81fc91823264e3d5296dc2537d26b89da8786e91d853ca1eb1cbf7ce431b",
+        "epoch": 1042,
+        "sender_leaf": 3,
+        "generation": 2,
+        "encoded": "817c6c50f886a7e38b4db94ed009b81a83a47248234b5f06b078633c69b4eacaefbb96f800a9b2a02cc629c3ea99d36db79bae968931ab79f94a836abc34",
+        "nonce": "2bdc99019f5c7cdd98dcd907"
+      },
+      "expected": {
+        "aad": "abfc81fc91823264e3d5296dc2537d26b89da8786e91d853ca1eb1cbf7ce431b00000000000004120000000300000002",
+        "padded": "003e817c6c50f886a7e38b4db94ed009b81a83a47248234b5f06b078633c69b4eacaefbb96f800a9b2a02cc629c3ea99d36db79bae968931ab79f94a836abc34",
+        "ciphertext": "7a0ed6471477b04390d1e82bd5e01f2284ada4f4296239c44db433e4bb73d351e210f8ef461fc2dbe68834d786f99cae0273aac6b47db3705bac6184999668e2bfa83ae29b93ea4c5fc0c740cca9fc74"
+      }
+    },
+    {
+      "name": "other-generation-does-not-open",
+      "inputs": {
+        "location_key": "7501490aa5978056a64f54c6e693dd47fa2747fd10d5540909887c93ba7888df",
+        "group_id": "e1c39a5985e24c602fcc4f5df917757cadf183aa61c069b806766ada60e2b512",
+        "epoch": 1041,
+        "sender_leaf": 3,
+        "generation": 3,
+        "nonce": "8aef46fba8c8b7348d697fb9",
+        "ciphertext": "7093adbc515ab045eabf78c64943f048bd74a671d72ffee8691b92e213e4d0b8b0de3f261d9322cc5b929609e2c37a173a37650d871f72a9bfb7fe445dfde6d1eebb702902216473f6ae20a6bb24c820"
+      },
+      "expected": {
+        "error": "OpenFailed"
+      }
+    },
+    {
+      "name": "other-sender-does-not-open",
+      "inputs": {
+        "location_key": "7501490aa5978056a64f54c6e693dd47fa2747fd10d5540909887c93ba7888df",
+        "group_id": "e1c39a5985e24c602fcc4f5df917757cadf183aa61c069b806766ada60e2b512",
+        "epoch": 1041,
+        "sender_leaf": 4,
+        "generation": 2,
+        "nonce": "8aef46fba8c8b7348d697fb9",
+        "ciphertext": "7093adbc515ab045eabf78c64943f048bd74a671d72ffee8691b92e213e4d0b8b0de3f261d9322cc5b929609e2c37a173a37650d871f72a9bfb7fe445dfde6d1eebb702902216473f6ae20a6bb24c820"
+      },
+      "expected": {
+        "error": "OpenFailed"
+      }
+    }
+  ]
+}

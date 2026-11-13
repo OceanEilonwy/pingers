@@ -3,9 +3,12 @@
 
 use rand_core::CryptoRng;
 
-use crate::CryptoError;
+use zeroize::Zeroizing;
+
+use crate::group::{open_with_nonce, seal_with_nonce};
+use crate::primitives::{self, XNONCE_LENGTH};
 use crate::secret::{random_secret, secret_key};
-use crate::stub::not_implemented;
+use crate::{CryptoError, labels};
 
 secret_key!(
     /// The 32-byte secret in an invite link's fragment. Possession authenticates a join
@@ -28,7 +31,15 @@ pub fn seal_join_request(
     encoded_request: &[u8],
     rng: &mut impl CryptoRng,
 ) -> Result<Vec<u8>, CryptoError> {
-    not_implemented((secret, encoded_request, rng))
+    let mut nonce = [0; XNONCE_LENGTH];
+    rng.fill_bytes(&mut nonce);
+    seal_with_nonce(&*join_key(secret)?, &nonce, encoded_request)
+}
+
+/// `HKDF-Expand(invite_secret, "join", 32)`: the invite secret is already uniformly random,
+/// so it serves as the PRK, as the Spot keys do.
+pub(crate) fn join_key(secret: &InviteSecret) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+    primitives::hkdf_expand_32(secret.expose_bytes(), &[labels::INVITE_JOIN])
 }
 
 /// Opens a join request posted to the invite mailbox.
@@ -40,5 +51,5 @@ pub fn open_join_request(
     secret: &InviteSecret,
     sealed: &[u8],
 ) -> Result<zeroize::Zeroizing<Vec<u8>>, CryptoError> {
-    not_implemented((secret, sealed))
+    open_with_nonce(&*join_key(secret)?, sealed)
 }

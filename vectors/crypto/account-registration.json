@@ -1,0 +1,32 @@
+{
+  "name": "account-registration",
+  "description": "account_id = SHA-256(pk)[..16] (design B.1); registration proof = Ed25519 over \"pingers/v1/register\" || pk || server origin in UTF-8 (design D; CONTRACT.md 'Labels not in the design')",
+  "vectors": [
+    {
+      "name": "https-origin",
+      "inputs": {
+        "signing_key": "961fa74dcf30df6e6363d0cff7f167142c7a2c65b43912987a5be17f24c9675b",
+        "server": "https://pingers.example"
+      },
+      "expected": {
+        "public_key": "93c389e14bd15b20d0de37839fd0f9996b1cd9b781c23cb5e77c4836d276a789",
+        "account_id": "d1c04b66215958d3074727a6e98b5513",
+        "message": "70696e676572732f76312f726567697374657293c389e14bd15b20d0de37839fd0f9996b1cd9b781c23cb5e77c4836d276a78968747470733a2f2f70696e676572732e6578616d706c65",
+        "signature": "222a8dc588a472dc887b828ee56b8ab0a6d53f4521b7846a41e0f79dc5cee59d8888ef31b748dd5a263813df3bb207ad4a8f877f5a1b38b361c9bfffbb4ec30e"
+      }
+    },
+    {
+      "name": "origin-with-port",
+      "inputs": {
+        "signing_key": "0e38bb3f5722ec646193f9b19758baf46e64b5b4594920b89f55789a860c98ff",
+        "server": "https://pingers.example:8443"
+      },
+      "expected": {
+        "public_key": "22a061c670c1b4850185e4556cc42a19ddc8a2a3bf283791a86cccad8637b023",
+        "account_id": "7267923be732732ede3bb72ec8f8e927",
+        "message": "70696e676572732f76312f726567697374657222a061c670c1b4850185e4556cc42a19ddc8a2a3bf283791a86cccad8637b02368747470733a2f2f70696e676572732e6578616d706c653a38343433",
+        "signature": "6411a284e83a94bbccfb06dfe47bc2edd73f0405c817dea381b6576ed4ee7095bda80a746b0ce7d28fc980a87a6851071b3f7d75ca02b7f4741c2b42b6f0aa08"
+      }
+    }
+  ]
+}

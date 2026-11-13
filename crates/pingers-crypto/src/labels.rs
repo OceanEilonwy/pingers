@@ -3,14 +3,6 @@
 //!
 //! Labels the design states are used verbatim. Labels marked "decision" are not in the design
 //! and are listed under Decisions in `CONTRACT.md`.
-// Unused until the stubs are implemented; the expectation then fails and must be removed.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "labels are used once the stub bodies are implemented"
-    )
-)]
 
 /// MLS exporter labels. pingers-mls passes these to the exporter, so they are public; every
 /// other label in this module is private to the crate.
@@ -93,6 +85,15 @@ pub(crate) const ALL: [&[u8]; 15] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exporter_labels_are_the_design_strings() {
+        // Every member's MLS exporter must be asked for exactly these (design B.2, B.4.1).
+        assert_eq!(ExporterLabel::Presence.label(), "pingers/v1/presence");
+        assert_eq!(ExporterLabel::State.label(), "pingers/v1/state");
+        assert_eq!(ExporterLabel::LogAuth.label(), "pingers/v1/log-auth");
+        assert_eq!(ExporterLabel::Presence.output_length(), 32);
+    }
 
     #[test]
     fn labels_are_distinct() {

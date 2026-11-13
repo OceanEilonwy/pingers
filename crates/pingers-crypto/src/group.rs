@@ -6,9 +6,9 @@ use pingers_proto::{GroupAuthKey, SealedSnapshot};
 use pingers_time::UnixSeconds;
 use rand_core::CryptoRng;
 
+use crate::primitives::{self, XNONCE_LENGTH};
 use crate::secret::secret_key;
-use crate::stub::not_implemented;
-use crate::{CryptoError, Signature};
+use crate::{CryptoError, Signature, labels};
 
 secret_key!(
     /// `MLS-Exporter("pingers/v1/state", epoch, 32)`: seals the state snapshot uploaded with
@@ -63,7 +63,50 @@ pub fn sign_group_request(
     key_pair: &LogAuthKeyPair,
     request: &GroupRequest<'_>,
 ) -> Result<Signature, CryptoError> {
-    not_implemented((key_pair, request))
+    let message = group_request_message(request)?;
+    Ok(Signature::from_bytes(primitives::ed25519_sign(
+        key_pair.expose_bytes(),
+        &message,
+    )))
+}
+
+/// Verifies a group log request signature against the epoch's registered key (server side).
+///
+/// # Errors
+///
+/// [`CryptoError::BadSignature`] if it does not verify;
+/// [`CryptoError::WrongLength`] if the method or path is longer than 2³² − 1 bytes.
+pub fn verify_group_request(
+    public_key: &GroupAuthKey,
+    request: &GroupRequest<'_>,
+    signature: &Signature,
+) -> Result<(), CryptoError> {
+    let message = group_request_message(request)?;
+    primitives::ed25519_verify(public_key.as_bytes(), &message, signature.as_bytes())
+}
+
+/// `"pingers/v1/grp-request" || be32(len(method)) || method || be32(len(path)) || path ||
+/// SHA-256(body) || be64(timestamp)`.
+pub(crate) fn group_request_message(request: &GroupRequest<'_>) -> Result<Vec<u8>, CryptoError> {
+    Ok([
+        labels::GROUP_REQUEST,
+        &length_prefix(request.method.as_bytes())?,
+        request.method.as_bytes(),
+        &length_prefix(request.path.as_bytes())?,
+        request.path.as_bytes(),
+        &primitives::sha256(&[request.body]),
+        &request.timestamp.get().to_be_bytes(),
+    ]
+    .concat())
+}
+
+fn length_prefix(field: &[u8]) -> Result<[u8; 4], CryptoError> {
+    u32::try_from(field.len())
+        .map(u32::to_be_bytes)
+        .map_err(|_overflow| CryptoError::WrongLength {
+            expected: usize::try_from(u32::MAX).unwrap_or(usize::MAX),
+            actual: field.len(),
+        })
 }
 
 /// Seals a state snapshot: `nonce (24, random) || XChaCha20-Poly1305(state key, snapshot)`.
@@ -76,7 +119,31 @@ pub fn seal_state_snapshot(
     snapshot: &[u8],
     rng: &mut impl CryptoRng,
 ) -> Result<SealedSnapshot, CryptoError> {
-    not_implemented((key, snapshot, rng))
+    let mut nonce = [0; XNONCE_LENGTH];
+    rng.fill_bytes(&mut nonce);
+    seal_with_nonce(key.expose_bytes(), &nonce, snapshot).map(SealedSnapshot::from_bytes)
+}
+
+/// `nonce || XChaCha20-Poly1305(key, nonce, aad = "", plaintext)`, shared by snapshots and
+/// join requests.
+pub(crate) fn seal_with_nonce(
+    key: &[u8; 32],
+    nonce: &[u8; XNONCE_LENGTH],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    let ciphertext = primitives::xchacha_seal(key, nonce, &[], plaintext)?;
+    Ok([nonce.as_slice(), &ciphertext].concat())
+}
+
+/// Opens [`seal_with_nonce`]'s format.
+pub(crate) fn open_with_nonce(
+    key: &[u8; 32],
+    sealed: &[u8],
+) -> Result<zeroize::Zeroizing<Vec<u8>>, CryptoError> {
+    let (nonce, ciphertext) = sealed
+        .split_first_chunk::<XNONCE_LENGTH>()
+        .ok_or(CryptoError::OpenFailed)?;
+    primitives::xchacha_open(key, nonce, &[], ciphertext)
 }
 
 /// Opens a state snapshot.
@@ -88,5 +155,5 @@ pub fn open_state_snapshot(
     key: &StateKey,
     sealed: &SealedSnapshot,
 ) -> Result<zeroize::Zeroizing<Vec<u8>>, CryptoError> {
-    not_implemented((key, sealed))
+    open_with_nonce(key.expose_bytes(), sealed.as_bytes())
 }

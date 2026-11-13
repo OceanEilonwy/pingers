@@ -1,0 +1,68 @@
+{
+  "name": "location-grant",
+  "description": "Recipient key pair = DeriveKeyPair(recipient_ikm) for DHKEM(X25519, HKDF-SHA256); sealed = enc || ct = HPKE base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305 (RFC 9180), info = \"pingers/v1/lk-grant\" || group_id || be32(sender_leaf), aad = empty, plaintext = be32(lk_gen) || LK || be64(expires_at); `randomness` is ikmE (design B.6.1). Vectors with an `error` open `sealed` and must fail.",
+  "vectors": [
+    {
+      "name": "grant-for-meetup",
+      "inputs": {
+        "recipient_ikm": "382477ae32007fb574b0201980e4d3e04452394f3d506aefe023d7aa5b764ffc",
+        "group_id": "e85e639562a2aac710c37936ad488119c4062eac507667982095cfbff7c2b735",
+        "sender_leaf": 2,
+        "generation": 4,
+        "location_key": "26d978b94b89ccdb759f403b688fbdae422f28aa820661b34a0b5f6b470b11cc",
+        "expires_at": 1763002001,
+        "randomness": "a9967d505e1aad935b08e309c1ddcf270a901c05b0297c1f144eb11bee6397c1"
+      },
+      "expected": {
+        "recipient_secret_key": "e9bd867cb72ada9de9e06479e4440179fbf6c53d8b70711c6562bbdc6d1b38b9",
+        "recipient_public_key": "b689c1178bd362ee8bb8ac949cac6267ac3a6032f9cb8af4b4d5e9df49a2b368",
+        "info": "70696e676572732f76312f6c6b2d6772616e74e85e639562a2aac710c37936ad488119c4062eac507667982095cfbff7c2b73500000002",
+        "plaintext": "0000000426d978b94b89ccdb759f403b688fbdae422f28aa820661b34a0b5f6b470b11cc0000000069154691",
+        "sealed": "df8b5ba89086ad6531ce620eb53a825609eda431e3f6879c191b0d868b46710deb15280971a41c122d0a81433c928fbf244bd64502e3cb90236b952cd83046cf344be1cb29edd72bf2881fcb6087b919a6b3995d60cd514edca78fa3"
+      }
+    },
+    {
+      "name": "grant-for-fifteen-minutes",
+      "inputs": {
+        "recipient_ikm": "1b6eb7aa013d65a94dc763c467e02335585ec25c51d637e14acfad66e6d0f123",
+        "group_id": "8037bc14fccc06b6b3e3db6b00589c370fb4452460edc41057430bb437f50604",
+        "sender_leaf": 3,
+        "generation": 4,
+        "location_key": "ff0f7828b4e9181a1a77a6631f8b5c1a0e02ef0461d66a59f5c4caa8d502bd50",
+        "expires_at": 1763002002,
+        "randomness": "ec65a8383c1ce69d9cabe1a50cbd93cb2f214c279969cf0020005ee6c74ab9ce"
+      },
+      "expected": {
+        "recipient_secret_key": "8ab3ad987fac8ff2e536fb5d42a11ba7df4590e00db71796affc306ae02f7170",
+        "recipient_public_key": "70b44316ee5cb022179830da7bae4d856dee61370c59e2c7e3a4cf6011fbbc69",
+        "info": "70696e676572732f76312f6c6b2d6772616e748037bc14fccc06b6b3e3db6b00589c370fb4452460edc41057430bb437f5060400000003",
+        "plaintext": "00000004ff0f7828b4e9181a1a77a6631f8b5c1a0e02ef0461d66a59f5c4caa8d502bd500000000069154692",
+        "sealed": "249dc237094e9aa78863a6e902cfc2cb9e93bfa42955dfeb145b9303c283543f7c2cb339f1163674a4fa431c42dfb4e70a9c6d182f86ed5ab304818e1b1a5f21c5627ec1a6b09f20f2de652cfdfe3c3b56e7732fb4060e3bcb7ac9d4"
+      }
+    },
+    {
+      "name": "other-sender-does-not-open",
+      "inputs": {
+        "recipient_secret_key": "e9bd867cb72ada9de9e06479e4440179fbf6c53d8b70711c6562bbdc6d1b38b9",
+        "group_id": "e85e639562a2aac710c37936ad488119c4062eac507667982095cfbff7c2b735",
+        "sender_leaf": 3,
+        "sealed": "df8b5ba89086ad6531ce620eb53a825609eda431e3f6879c191b0d868b46710deb15280971a41c122d0a81433c928fbf244bd64502e3cb90236b952cd83046cf344be1cb29edd72bf2881fcb6087b919a6b3995d60cd514edca78fa3"
+      },
+      "expected": {
+        "error": "OpenFailed"
+      }
+    },
+    {
+      "name": "truncated-grant-does-not-open",
+      "inputs": {
+        "recipient_secret_key": "e9bd867cb72ada9de9e06479e4440179fbf6c53d8b70711c6562bbdc6d1b38b9",
+        "group_id": "e85e639562a2aac710c37936ad488119c4062eac507667982095cfbff7c2b735",
+        "sender_leaf": 2,
+        "sealed": "df8b5ba89086ad6531ce620eb53a825609eda431e3f6879c191b0d868b46710deb15280971a41c122d0a81433c928fbf244bd64502e3cb90236b952cd83046cf344be1cb29edd72bf2881fcb6087b919a6b3995d60cd514edca78f"
+      },
+      "expected": {
+        "error": "OpenFailed"
+      }
+    }
+  ]
+}

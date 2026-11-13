@@ -1,0 +1,53 @@
+{
+  "name": "location-ask",
+  "description": "Target key pair = DeriveKeyPair(target_ikm) for DHKEM(X25519, HKDF-SHA256); sealed = enc || ct = HPKE base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305, info = \"pingers/v1/lk-ask\" || group_id, aad = empty, plaintext = be32(requester_leaf) || req_id || be64(asked_at); `randomness` is ikmE (design B.6.1; CONTRACT.md). Vectors with an `error` open `sealed` and must fail.",
+  "vectors": [
+    {
+      "name": "ask-one",
+      "inputs": {
+        "target_ikm": "660359bf44bbc740bd6af8898bfcb3a4238683f3f4eb8575a5b5c9e726e8d851",
+        "group_id": "6c0488859d24e4ff3b2491dee7827a8904dcbc149c521d55efae04eb79308988",
+        "requester_leaf": 3,
+        "request_id": "bc90d717cd4f681bab34bebdee55dc6b",
+        "asked_at": 1763001301,
+        "randomness": "388a9a91604391bf0cec8fa1b812e8c198bea1c4a5867801a19953f06dd62c37"
+      },
+      "expected": {
+        "target_secret_key": "31e2b53ca327456fa720dd74634ea628098a61842b2ab140f8c9d193ba255f52",
+        "target_public_key": "ef0d2e0bc216c42f72ef670cc0f9dc02a0c715af269244ac836f21dbdb93c03e",
+        "info": "70696e676572732f76312f6c6b2d61736b6c0488859d24e4ff3b2491dee7827a8904dcbc149c521d55efae04eb79308988",
+        "plaintext": "00000003bc90d717cd4f681bab34bebdee55dc6b00000000691543d5",
+        "sealed": "7d30fe6be2e00732f8b841012489f480b72630ea0e23987163e4810985fd245459144960d5a30dac3c90a5c2d8e95d1d750b2a58f716b0f0e20c2e5767158b46f714850749034183752ac038"
+      }
+    },
+    {
+      "name": "ask-two",
+      "inputs": {
+        "target_ikm": "b9d90762cfa18d55fefb94a11f56b08b9366507cfb6ede9a46a92f99c48dcf4d",
+        "group_id": "f64d0069845c4e15d84a7e28ec4d6567921bd646e8594b3481600ce3025ad4b1",
+        "requester_leaf": 4,
+        "request_id": "b08d8208372ff8f02153d6a414ea9600",
+        "asked_at": 1763001302,
+        "randomness": "beb8164fb8afb89345b3e876c443f3a94db9e742a47217508af286009bb91a3e"
+      },
+      "expected": {
+        "target_secret_key": "6d4cc0ea401190615e0a4a09cc7b530459841437a8c8613a6b7d82ecd5670468",
+        "target_public_key": "ed410ad5a56c2233ab073e3be3ac35140a06470c24cf4834a8d3892fbf3fa124",
+        "info": "70696e676572732f76312f6c6b2d61736bf64d0069845c4e15d84a7e28ec4d6567921bd646e8594b3481600ce3025ad4b1",
+        "plaintext": "00000004b08d8208372ff8f02153d6a414ea960000000000691543d6",
+        "sealed": "b457fbce2d4978e349e624ad3388b649d6517367df0034d40822c303b1f4660f0e1e316e9d5d9750f9e08f3fd86eb3b11465017766bd2fddd078abc4920d1a88631f4fc1251b18b8751f40f3"
+      }
+    },
+    {
+      "name": "other-group-does-not-open",
+      "inputs": {
+        "target_secret_key": "31e2b53ca327456fa720dd74634ea628098a61842b2ab140f8c9d193ba255f52",
+        "group_id": "6d0488859d24e4ff3b2491dee7827a8904dcbc149c521d55efae04eb79308988",
+        "sealed": "7d30fe6be2e00732f8b841012489f480b72630ea0e23987163e4810985fd245459144960d5a30dac3c90a5c2d8e95d1d750b2a58f716b0f0e20c2e5767158b46f714850749034183752ac038"
+      },
+      "expected": {
+        "error": "OpenFailed"
+      }
+    }
+  ]
+}
