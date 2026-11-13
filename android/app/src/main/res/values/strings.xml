@@ -1,0 +1,337 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Every string the shell shows, in the design canvas's words (docs/design-canvas).
+     pingers-words will own user-facing text once the core is wired in. -->
+<resources>
+    <string name="app_name">Pingers</string>
+
+    <!-- Shared -->
+    <string name="done">Done</string>
+    <string name="metres">%1$d m</string>
+    <string name="list_and">%1$s and %2$s</string>
+    <string name="you_lower">you</string>
+    <string name="privacy_full">Full privacy</string>
+    <string name="privacy_reduced">Reduced privacy</string>
+    <string name="server_and_privacy">%1$s · %2$s</string>
+    <plurals name="members">
+        <item quantity="one">%1$d member</item>
+        <item quantity="other">%1$d members</item>
+    </plurals>
+    <plurals name="spots">
+        <item quantity="one">%1$d spot</item>
+        <item quantity="other">%1$d spots</item>
+    </plurals>
+    <string name="shape_circle">%1$d m circle</string>
+    <string name="shape_area">Drawn area · %1$s ha</string>
+    <string name="tag_live">Live</string>
+    <string name="dir_n">north</string>
+    <string name="dir_ne">north-east</string>
+    <string name="dir_e">east</string>
+    <string name="dir_se">south-east</string>
+    <string name="dir_s">south</string>
+    <string name="dir_sw">south-west</string>
+    <string name="dir_w">west</string>
+    <string name="dir_nw">north-west</string>
+
+    <!-- Content descriptions -->
+    <string name="cd_back">Back</string>
+    <string name="cd_back_to">Back to %1$s</string>
+    <string name="cd_back_new_party">Back to New party</string>
+    <string name="cd_back_spot_editor">Back to Spot editor</string>
+    <string name="cd_back_meetup">Back to meetup</string>
+    <string name="cd_close">Close</string>
+    <string name="cd_close_compass">Close compass</string>
+    <string name="cd_settings">Settings</string>
+    <string name="cd_invite_people">Invite people</string>
+    <string name="cd_invite_qr">Invite QR code</string>
+    <string name="cd_cancel_invite">Cancel this invite</string>
+    <string name="cd_navigate_to">Navigate to %1$s</string>
+    <string name="cd_ask_location">Ask to see %1$s\'s exact location</string>
+    <string name="cd_send">Send</string>
+    <string name="cd_leave_thread">Stop replying in thread</string>
+    <string name="cd_point">Point %1$d</string>
+    <string name="cd_point_close">Point 1, tap to close the shape</string>
+    <string name="cd_add_point_between">Add a point between %1$d and %2$d</string>
+    <string name="cd_radius_handle">Radius %1$d m, drag to resize</string>
+    <string name="cd_compass_arrow">Arrow pointing %1$s, %2$d degrees, toward %3$s</string>
+    <string name="cd_target_locked">%1$s: location private, ask to see</string>
+
+    <!-- Home -->
+    <plurals name="home_sharing_on">
+        <item quantity="one">Sharing on · %1$d party</item>
+        <item quantity="other">Sharing on · %1$d parties</item>
+    </plurals>
+    <string name="home_sharing_off">Sharing off</string>
+    <string name="home_pauses_in_focus">Pauses in Focus</string>
+    <plurals name="home_zones">
+        <item quantity="one">%1$d exclusion zone</item>
+        <item quantity="other">%1$d exclusion zones</item>
+    </plurals>
+    <string name="home_live_meetup">Live meetup · %1$s</string>
+    <string name="home_open">Open</string>
+    <string name="home_parties">Your parties</string>
+    <string name="home_new_party">New party</string>
+    <string name="tab_parties">Parties</string>
+    <string name="tab_meetups">Meetups</string>
+    <string name="tab_privacy">Privacy</string>
+    <string name="menu_privacy">Privacy settings</string>
+    <string name="menu_preview">Preview events (fake data)</string>
+    <string name="menu_invite_link">Open an invite link</string>
+    <string name="menu_alert">Co-presence alert</string>
+    <string name="menu_location_request">Exact location request</string>
+    <string name="menu_meetup_ended">Meetup ended</string>
+
+    <!-- New party, Advanced -->
+    <string name="new_party_title">New party</string>
+    <string name="new_party_name">Party name</string>
+    <string name="new_party_colour">Colour</string>
+    <string name="new_party_later">You\'ll invite people and add Spots once the party is created.</string>
+    <string name="new_party_create">Create party</string>
+    <string name="colour_blue">Blue</string>
+    <string name="colour_orange">Orange</string>
+    <string name="colour_ink">Ink</string>
+    <string name="colour_teal">Teal</string>
+    <string name="colour_plum">Plum</string>
+    <string name="advanced_title">Advanced</string>
+    <string name="advanced_full_detail">Server, privacy relay and push relay are run by three different operators.</string>
+    <string name="advanced_server">Server</string>
+    <string name="advanced_server_help">The server that hosts this party. Everyone who joins uses it, and it can\'t be changed later.</string>
+    <string name="advanced_relay">Privacy relay</string>
+    <string name="advanced_relay_help">Hides your IP address from the server. Suggested by the server; each member can choose their own.</string>
+    <string name="advanced_push">Push relay</string>
+    <string name="advanced_push_official">Pingers (official app)</string>
+    <string name="advanced_push_custom">Custom URL (UnifiedPush or own build)</string>
+    <string name="advanced_push_help">Sees when a phone is woken, never why or by whom.</string>
+    <string name="advanced_pq">Post-quantum encryption</string>
+    <string name="advanced_pq_help">Protects against future quantum computers. Larger messages; every member needs a recent app.</string>
+    <string name="server_reachable">Server reachable</string>
+    <string name="server_checking">Checking server</string>
+    <string name="relay_reachable">Privacy relay reachable</string>
+    <string name="relay_checking">Checking privacy relay</string>
+
+    <!-- Invite people, Accept invite -->
+    <string name="invite_title">Invite people</string>
+    <string name="invite_scan">Scan in person, or share the link.\nEach invite works once · expires in %1$d h</string>
+    <string name="invite_share">Share invite link</string>
+    <string name="invite_share_title">Invite to %1$s</string>
+    <string name="invite_invitations">Invitations</string>
+    <string name="invite_opened">Opened the link · compare code %1$s</string>
+    <string name="invite_verify">Verify</string>
+    <string name="invite_link_shared">Link shared %1$d h ago</string>
+    <string name="invite_not_opened">Not opened yet · expires in %1$d h</string>
+    <string name="invite_joined">Joined · code verified</string>
+    <string name="accept_invited_by">%1$s invited you to</string>
+    <string name="accept_what_joining">What joining means</string>
+    <string name="word_spot">Spot</string>
+    <string name="accept_point_spot">Members find out you\'re nearby only when you\'re in the same %1$s at the same time.</string>
+    <string name="accept_point_e2e">Your location is end-to-end encrypted. The server can\'t see where you are or which Spot you\'re in.</string>
+    <string name="accept_point_focus">Nothing is sent while you\'re in Focus or inside your exclusion zones.</string>
+    <string name="accept_check_code">Check this code matches %1$s\'s screen</string>
+    <string name="accept_join">Codes match · Join</string>
+    <string name="accept_decline">Decline</string>
+
+    <!-- Party -->
+    <string name="party_spots_private">Spots visible only to members</string>
+    <string name="party_spots">Spots</string>
+    <string name="party_add_spot">Add spot</string>
+    <string name="party_in_meetup">You\'re in a meetup</string>
+    <string name="party_meetups_note">You only see meetups you were part of. Members who weren\'t there won\'t know one happened.</string>
+    <string name="party_server_subtitle">What this party\'s server can see</string>
+
+    <!-- Spot editor, Draw area -->
+    <string name="spot_search">Search a place</string>
+    <string name="spot_name">Spot name</string>
+    <string name="spot_unnamed">New spot</string>
+    <string name="spot_circle">Circle</string>
+    <string name="spot_draw_area">Draw area</string>
+    <string name="spot_radius">Radius</string>
+    <string name="spot_drawn_area">Drawn area</string>
+    <string name="spot_edit_area">Edit area</string>
+    <string name="spot_encrypted">Encrypted for %1$s. The server stores this Spot as unreadable data and never learns where it is.</string>
+    <string name="spot_save">Save spot</string>
+    <string name="draw_title">Draw area · %1$s</string>
+    <plurals name="draw_points">
+        <item quantity="one">%1$d point</item>
+        <item quantity="other">%1$d points</item>
+    </plurals>
+    <string name="draw_open">Shape open</string>
+    <string name="draw_area_ha">≈ %1$s ha</string>
+    <string name="draw_area_m2">≈ %1$d m²</string>
+    <string name="draw_hint_first">Tap the map to drop the first point.</string>
+    <string name="draw_hint_keep">Keep tapping to add points. You need at least 3.</string>
+    <string name="draw_hint_close">Tap the orange first point to close the shape.</string>
+    <string name="draw_hint_selected">Point %1$d selected. Drag to move it, or delete it.</string>
+    <string name="draw_hint_adjust">Drag a point to adjust it. Tap + on an edge to add a point. Tap a point to select it.</string>
+    <string name="draw_undo">Undo</string>
+    <string name="draw_delete">Delete point</string>
+    <string name="draw_clear">Clear</string>
+    <string name="draw_use">Use this area</string>
+    <string name="draw_close_first">Close the shape to continue</string>
+
+    <!-- Exclusion zones -->
+    <string name="zones_title">Exclusion zones</string>
+    <string name="zones_intro">Inside these areas Pingers never sends your location, to any party. Zones are stored only on this phone.</string>
+    <string name="zone_circle">%1$d m circle</string>
+    <string name="zone_area">Drawn area</string>
+    <string name="zone_all_parties">all parties</string>
+    <string name="zones_add">Add exclusion zone</string>
+    <string name="zones_hide_trail">Hide trail near zones</string>
+    <string name="zones_hide_trail_help">Stay hidden for 5 min after leaving, so nobody can trace you back</string>
+    <string name="zones_edit_soon">Editing zones arrives with the real map.</string>
+
+    <!-- Sharing + Focus -->
+    <string name="privacy_title">Privacy</string>
+    <string name="privacy_paused">Paused · %1$s</string>
+    <string name="privacy_paused_detail">Nobody can tell you\'ve paused. Resumes when Focus ends.</string>
+    <string name="privacy_when">When to share</string>
+    <string name="privacy_sharing">Location sharing</string>
+    <string name="privacy_pause_focus">Pause during Focus</string>
+    <string name="privacy_pause_focus_help">Do Not Disturb, Sleep, any Focus</string>
+    <string name="privacy_quiet">Quiet hours</string>
+    <string name="privacy_who">Who sees my exact spot in meetups</string>
+    <string name="vis_ask">Ask me each time</string>
+    <string name="vis_ask_help">Others see you\'re here, not where</string>
+    <string name="vis_everyone">Everyone in the meetup</string>
+    <string name="vis_nobody">Nobody</string>
+    <string name="privacy_delivery">Delivery</string>
+    <string name="privacy_no_wake">No wake-up pushes</string>
+    <string name="privacy_no_wake_help">Nobody, not even Apple or Google, sees when you\'re woken. Meetups can take up to an hour to start.</string>
+
+    <!-- What your server sees -->
+    <string name="server_title">What your server sees</string>
+    <string name="server_self_hosted">Self-hosted</string>
+    <string name="server_can_see">It can see</string>
+    <string name="server_never_sees">It never sees</string>
+    <string-array name="fake_server_can_see">
+        <item>Anonymous check-ins every few minutes, without knowing whose phone or which Spot</item>
+        <item>That a meetup is starting somewhere, and how many people are in it, but not who, or which Party or Spot</item>
+    </string-array>
+    <string-array name="fake_server_never_sees">
+        <item>Where you are, or where any Spot is</item>
+        <item>Who met whom, or which phone it woke</item>
+        <item>Party names, or who\'s in them</item>
+        <item>What\'s inside your chats, meet points and shared locations</item>
+        <item>Whether you\'re paused, in Focus, or in an exclusion zone</item>
+    </string-array>
+
+    <!-- How Pingers keeps you private -->
+    <string name="security_title">How Pingers keeps you private</string>
+    <string name="sec_intro">Pingers is built so that the people running it can\'t see where you are, who you meet, or what you say. Here\'s how, and where the limits are.</string>
+    <string name="sec_party_title">Your Party is locked to its members</string>
+    <string name="sec_party_body">Party names, members and Spots are encrypted on your phone. Only members\' phones hold the keys. The safety code you compare when joining proves nobody slipped in between you.</string>
+    <string name="sec_finding_title">Finding friends without telling the server</string>
+    <string name="sec_finding_body">Your phone posts anonymous check-ins that only your Party can recognise, and they look different every time. Your phone, not the server, spots a friend in the same Spot, and only for the Spot you\'re in.</string>
+    <string name="sec_waking_title">Waking a friend\'s phone</string>
+    <string name="sec_waking_body">The alert goes through a separate push relay. The server knows an alert was sent but not to which phone. The relay knows a phone was woken but not why or by whom. Turn on \"No wake-up pushes\" and nobody sees it at all.</string>
+    <string name="sec_address_title">Hiding your internet address</string>
+    <string name="sec_address_body">Everything anonymous, including live locations in a meetup, travels through a privacy relay run by someone else. The relay sees your address but not what you send; the server sees what arrives but not from where.</string>
+    <string name="sec_meetups_title">Meetups are just for who was there</string>
+    <string name="sec_meetups_body">Each meetup gets brand-new keys shared only by the people in it. Party members who weren\'t there can\'t read it, people who join later don\'t see earlier messages, and when everyone leaves, every phone deletes the chat and keys.</string>
+    <string name="sec_exact_title">Your exact spot is yours to share</string>
+    <string name="sec_exact_body">In a meetup, others see you\'re there, not where. Your position is locked with your own key, which you hand only to people you approve. Others can\'t even tell whether you\'ve shared with anyone.</string>
+    <string name="sec_pauses_title">Pauses that look like nothing</string>
+    <string name="sec_pauses_body">Focus, Do Not Disturb and your exclusion zones are checked on your phone and never leave it. While paused, your phone keeps sending blank check-ins, so being paused looks exactly like being somewhere else.</string>
+    <string name="sec_account_title">No phone number, no tracking ID</string>
+    <string name="sec_account_body">Your account is a key made on your phone. To stop spam without knowing who you are, your phone proves \"I\'m a real member\" mathematically, without saying which member. Nothing is kept as a location history.</string>
+    <string name="sec_limits">What Pingers can\'t protect</string>
+    <!-- Bold lead | rest of the sentence -->
+    <string-array name="sec_limits_items">
+        <item>Party members you trust.|Any member could claim to be at a Spot, or use a modified app to count how many people are at one. Only invite people you\'d meet anyway.</item>
+        <item>People you share with.|Someone you approve can screenshot where you were. Stopping sharing locks them out from then on.</item>
+        <item>Operators working together.|If the server and the push relay pooled their logs, they could work out who met whom, but still not where.</item>
+        <item>Apple and Google.|They see that a notification arrived, not what it says. \"No wake-up pushes\" stops this.</item>
+        <item>An unlocked, stolen phone.|It reveals your Parties, Spots and exclusion zones. Ask a member to remove the lost phone.</item>
+    </string-array>
+    <string name="sec_hood">Under the hood</string>
+    <!-- What | how -->
+    <string-array name="sec_hood_items">
+        <item>Party and meetup encryption|MLS · RFC 9420</item>
+        <item>Privacy relay|Oblivious HTTP · RFC 9458, chunked</item>
+        <item>Sealed push tokens, location keys|HPKE · RFC 9180</item>
+        <item>Anonymous membership proofs|RLN zero-knowledge proofs</item>
+        <item>Fallback rate limiting|Privacy Pass · RFC 9578</item>
+        <item>Post-quantum option|X-Wing hybrid</item>
+    </string-array>
+    <string name="sec_read_doc">Read the design document</string>
+    <string name="sec_doc_soon">The design document link arrives with the first release.</string>
+
+    <!-- Co-presence alert -->
+    <string name="channel_meetups">Meetups</string>
+    <string name="channel_meetups_description">When friends are at the same Spot as you</string>
+    <string name="alert_body">%1$s are at %2$s too. Say hi?</string>
+    <string name="alert_now">now</string>
+    <string name="alert_open">Open meetup</string>
+    <string name="alert_hide">Hide me here</string>
+    <string name="alert_empty_push">Push arrived empty. Your phone decrypted the names and place itself.</string>
+
+    <!-- Meetup -->
+    <string name="meetup_here">%1$s · %2$d here</string>
+    <string name="meetup_set_by">Set by %1$s · %2$d m away</string>
+    <string name="meetup_go">Go</string>
+    <string name="meetup_sharing_with_you">%1$d m %2$s · sharing with you</string>
+    <string name="meetup_private">Here · exact spot private</string>
+    <string name="meetup_asked">Here · asked to see exact spot</string>
+    <string name="meetup_chat">Chat · %1$d</string>
+    <string name="meetup_meet_point">Meet point</string>
+    <string name="meetup_compass">Compass</string>
+    <plurals name="meetup_only_here">
+        <item quantity="one">Only the %1$d person here can see this meetup.</item>
+        <item quantity="other">Only the %1$d people here can see this meetup.</item>
+    </plurals>
+    <string name="meetup_shared_with">Your exact spot: shared with %1$s</string>
+    <string name="meetup_shared_nobody">Your exact spot: private</string>
+    <string name="meetup_manage">Manage</string>
+    <string name="meet_at">Meet at %1$s</string>
+    <string name="meet_point_default">the pin</string>
+
+    <!-- Chat -->
+    <string name="chat_subtitle">%1$s · deleted when meetup ends</string>
+    <string name="chat_joined">%1$s joined · %2$s</string>
+    <plurals name="chat_replies">
+        <item quantity="one">%1$d reply</item>
+        <item quantity="other">%1$d replies</item>
+    </plurals>
+    <string name="chat_meet_point_set">Set the meet point: %1$s</string>
+    <string name="chat_replying">Replying in thread · %1$s</string>
+    <string name="chat_message">Message</string>
+
+    <!-- Meet point -->
+    <string name="mp_title">Meet point</string>
+    <string name="mp_drag">Drag map to move pin</string>
+    <string name="mp_pin">Pin on map</string>
+    <string name="mp_person">At a person</string>
+    <string name="mp_midpoint">Midpoint</string>
+    <string name="mp_label">Label (optional)</string>
+    <string name="mp_distance">%1$s %2$d m</string>
+    <string name="mp_private">%1$s: private</string>
+    <string name="mp_share">Share meet point</string>
+
+    <!-- Compass -->
+    <string name="compass_gps">GPS ±%1$d m</string>
+    <string name="compass_n">N</string>
+    <string name="compass_walk">About %1$d min walk · %2$s</string>
+    <string name="compass_taps">Phone taps when you face the right way.</string>
+    <string name="compass_watchers">%1$s see you\'re heading over.</string>
+
+    <!-- Location request -->
+    <string name="lr_title">%1$s wants to see exactly where you are</string>
+    <string name="lr_already">%1$s can already see you\'re in %2$s.</string>
+    <string name="lr_share_for">Share for</string>
+    <string name="lr_this_meetup">This meetup</string>
+    <string name="lr_15_min">15 minutes</string>
+    <string name="lr_ask_back">Ask to see %1$s too</string>
+    <string name="lr_always">Always allow %1$s in %2$s</string>
+    <string name="lr_note">Only %1$s gets the key. Others in the meetup and the server can\'t tell who you share with.</string>
+    <string name="lr_not_now">Not now</string>
+    <string name="lr_allow">Allow</string>
+    <string name="lr_silent">\"Not now\" is silent. %1$s only sees the request expire.</string>
+
+    <!-- Meetup ended -->
+    <string name="ended_title">Meetup ended</string>
+    <string name="ended_everyone_left">Everyone left %1$s</string>
+    <string name="ended_duration">%1$d h %2$02d</string>
+    <string name="ended_range">%1$s–%2$s</string>
+    <string name="ended_people">people met</string>
+    <string name="ended_messages">messages</string>
+    <string name="ended_erased">Chat and locations erased</string>
+    <string name="ended_erased_detail">Every phone deleted the meetup keys, so nothing can be read again, including by the server.</string>
+</resources>
