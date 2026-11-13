@@ -12,10 +12,32 @@ layer = 3
 
 [dependencies]
 pingers-anon = { workspace = true, features = ["prover"] }
+# Mailbox ids, push binds, sealed push tokens and group request signatures.
+pingers-crypto = { workspace = true }
+# `BinaryRequest` and `BinaryResponse`, the shape `Transport` carries.
+pingers-ohttp = { workspace = true }
 pingers-proto = { workspace = true }
 pingers-store = { workspace = true }
+pingers-time = { workspace = true }
 pingers-transport = { workspace = true }
+# Identifiers in paths and the read-key header are hex (pingers-server `wire.rs`).
+hex = { workspace = true }
+rand_core = { workspace = true }
 thiserror = { workspace = true }
+# spawn_blocking for SQLCipher and proving; select! for the wake budget.
+tokio = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+# The real server, relay and push relay in one process.
+pingers-testkit = { workspace = true, features = ["harness"] }
+pingers-time = { workspace = true, features = ["test-util"] }
+# Stand-ins for the group and Privacy Pass routes while pingers-server answers them 501.
+pingers-delivery = { workspace = true }
+pingers-anon = { workspace = true, features = ["prover", "issuer"] }
+async-trait = { workspace = true }
+rand_chacha = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true
