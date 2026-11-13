@@ -3458,8 +3458,12 @@ dependencies = [
 name = "pingers-store"
 version = "0.1.0"
 dependencies = [
+ "pingers-anon",
+ "pingers-crypto",
+ "pingers-geo",
  "pingers-mls",
  "pingers-proto",
+ "pingers-time",
  "rusqlite",
  "thiserror",
  "zeroize",
