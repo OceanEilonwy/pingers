@@ -3387,6 +3387,7 @@ dependencies = [
  "pingers-gate",
  "pingers-geo",
  "pingers-proto",
+ "pingers-store",
  "pingers-testkit",
  "pingers-time",
  "serde",

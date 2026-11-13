@@ -15,6 +15,7 @@ pingers-client = { workspace = true }
 pingers-gate = { workspace = true }
 pingers-geo = { workspace = true }
 pingers-proto = { workspace = true }
+pingers-store = { workspace = true }
 pingers-testkit = { workspace = true, features = ["client"] }
 pingers-time = { workspace = true, features = ["test-util"] }
 anyhow = { workspace = true }
