@@ -26,6 +26,8 @@ pub(crate) enum Key<'id> {
     Zones,
     /// pingers-wake's state between wakes.
     WakeSnapshot,
+    /// How far a Party group's log has been applied.
+    AppliedThrough(&'id pingers_proto::GroupId),
 }
 
 impl Key<'_> {
@@ -39,6 +41,10 @@ impl Key<'_> {
             Self::DeviceSettings => key.extend_from_slice(b"device-settings"),
             Self::Zones => key.extend_from_slice(b"zones"),
             Self::WakeSnapshot => key.extend_from_slice(b"wake-snapshot"),
+            Self::AppliedThrough(group) => {
+                key.extend_from_slice(b"applied-through/");
+                key.extend_from_slice(group.as_bytes());
+            }
         }
         key
     }

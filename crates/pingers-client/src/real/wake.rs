@@ -29,7 +29,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use super::Backend;
 use super::meetups::Meetups;
 use super::records::{self, Key, Reader, Writer, corrupt};
-use super::sync::Server;
+use super::sync::Net;
 use super::wake_codec;
 use super::wake_ports::{Device, Lens, Time, region_id};
 use crate::ports::{
@@ -51,6 +51,7 @@ pub(crate) struct Wake {
     backend: Arc<Backend>,
     platform: Arc<dyn Platform>,
     meetups: Arc<Meetups>,
+    net: Arc<Net>,
     /// `None` until the first wake loads the stored snapshot.
     state: AsyncMutex<Option<WakeState>>,
     /// The gate's answer in the last wake, and the last fix: in memory only.
@@ -62,11 +63,13 @@ impl Wake {
         backend: Arc<Backend>,
         platform: Arc<dyn Platform>,
         meetups: Arc<Meetups>,
+        net: Arc<Net>,
     ) -> Self {
         Self {
             backend,
             platform,
             meetups,
+            net,
             state: AsyncMutex::new(None),
             last: Mutex::new((None, None)),
         }
@@ -104,7 +107,7 @@ impl Wake {
         let env = WakeEnv {
             device: &device,
             parties: &lens,
-            server: &Server,
+            server: self.net.as_ref(),
             meetups: self.meetups.as_ref(),
             time: &time,
         };
@@ -114,7 +117,7 @@ impl Wake {
             budget: WAKE_BUDGET,
         };
         let mut rng = (self.backend.outside.rng)();
-        let report = wake_state.run(&env, input, &mut rng).await?;
+        let report = Box::pin(wake_state.run(&env, input, &mut rng)).await?;
         let snapshot = wake_state.snapshot();
         self.backend
             .store(move |session, _clock, _rng| wake_codec::save(session, &snapshot))
@@ -134,6 +137,7 @@ impl Wake {
                     None
                 }
             })
+            .chain(self.net.take_notices().into_iter().map(ClientEvent::Notice))
             .collect();
         Ok((report, outcome))
     }
@@ -184,7 +188,7 @@ impl WakePort for Wake {
                 return Ok(WakeOutcome::default());
             }
         };
-        Ok(self.pipeline(trigger).await?.1)
+        Ok(Box::pin(self.pipeline(trigger)).await?.1)
     }
 
     async fn change_setting(&self, change: SettingChange) -> Result<(), ClientError> {

@@ -35,9 +35,10 @@ impl From<ClientError> for CoreError {
             | ClientError::MalformedDatabaseKey
             | ClientError::Store(_)
             | ClientError::Records(_) => Self::Storage { reason },
-            ClientError::Parties(_) | ClientError::Wake(_) | ClientError::MeetupSession(_) => {
-                Self::Network { reason }
-            }
+            ClientError::Parties(_)
+            | ClientError::Sync(_)
+            | ClientError::Wake(_)
+            | ClientError::MeetupSession(_) => Self::Network { reason },
             _ => Self::Unavailable { reason },
         }
     }

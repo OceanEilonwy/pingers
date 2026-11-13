@@ -32,7 +32,7 @@ use zeroize::Zeroizing;
 
 use super::meetups::Meetups;
 use super::parties::Parties;
-use super::sync::Outbox;
+use super::sync::Net;
 use super::wake::Wake;
 use super::wake_ports::{Lens, region_id, region_text};
 use super::{Backend, Outside, wake_codec};
@@ -97,7 +97,6 @@ fn store() -> Result<Store, Box<dyn std::error::Error>> {
                 ))
             }),
         },
-        transport: None,
     });
     Ok(Store {
         path,
@@ -121,7 +120,13 @@ fn wake(store: &Store) -> Wake {
         Arc::clone(&store.backend),
         Arc::new(Quiet),
         Arc::new(Meetups::new(Arc::clone(&store.backend))),
+        offline(store),
     )
+}
+
+/// pingers-sync with no instance: every network call is unavailable.
+fn offline(store: &Store) -> Arc<Net> {
+    Arc::new(Net::new(Arc::clone(&store.backend), None))
 }
 
 /// A platform with Focus on that ignores every request.
@@ -362,7 +367,7 @@ async fn settings_and_zones_round_trip_through_the_store() -> TestResult {
 #[tokio::test]
 async fn a_wake_confirmed_inside_a_spot_ends_at_the_sync_stub() -> TestResult {
     let store = store()?;
-    let parties = Parties::new(Arc::clone(&store.backend), Arc::new(Outbox::default()));
+    let parties = Parties::new(Arc::clone(&store.backend), offline(&store));
     let party = parties
         .create_party(PartyDraft {
             name: Name::new("Crew")?,
@@ -456,7 +461,7 @@ async fn a_wake_confirmed_inside_a_spot_ends_at_the_sync_stub() -> TestResult {
 #[tokio::test]
 async fn party_commands_reach_pingers_parties_and_the_store() -> TestResult {
     let store = store()?;
-    let parties = Parties::new(Arc::clone(&store.backend), Arc::new(Outbox::default()));
+    let parties = Parties::new(Arc::clone(&store.backend), offline(&store));
     let mut ids = Vec::new();
     for colour in PartyColour::ALL {
         let draft = PartyDraft {
@@ -545,6 +550,7 @@ async fn party_commands_reach_pingers_parties_and_the_store() -> TestResult {
 /// every adapter and sync step opens its own. Run with `--ignored --nocapture`.
 #[test]
 #[ignore = "a measurement, not a check"]
+#[expect(clippy::disallowed_methods, reason = "measures real elapsed time")]
 fn measure_a_session_open() -> TestResult {
     use std::io::Write as _;
     let store = store()?;

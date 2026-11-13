@@ -239,9 +239,14 @@ async fn a_party_its_spot_and_an_invite_show_in_the_snapshot() -> Result<(), Tes
     // Nothing reaches the server yet.
     assert_eq!(snapshot.relay, RelayStatus::Unreachable);
     assert!(matches!(
-        rig.client.set_wake_pushes(WakePushes::NoWakePushes).await,
+        rig.client.set_wake_pushes(WakePushes::On).await,
         Err(ClientError::Unavailable(Unavailable::Sync))
     ));
+    rig.client.set_wake_pushes(WakePushes::NoWakePushes).await?;
+    assert_eq!(
+        rig.client.snapshot().settings.wake_pushes,
+        WakePushes::NoWakePushes
+    );
     Ok(())
 }
 

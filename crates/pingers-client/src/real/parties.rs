@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! [`PartiesPort`] over pingers-parties' `PartyLifecycle`, one store session per call.
 //!
-//! Every `Outbound` value goes to the [`Outbox`] for pingers-sync. Joining (`open_invite`,
+//! Every `Outbound` value goes to pingers-sync through the [`Net`] outbox, flushed at once. Joining (`open_invite`,
 //! `accept_invite`) and admitting (`decide_join`) need a subscription, a reply mailbox or a
 //! join request that only pingers-sync can provide, so they answer [`Unavailable::Sync`].
 
@@ -21,7 +21,7 @@ use pingers_time::{Clock, UnixSeconds};
 
 use super::Backend;
 use super::records::{self, Key, corrupt};
-use super::sync::Outbox;
+use super::sync::Net;
 use crate::ports::{
     AllowListChange, JoinDecision, PartiesPort, PartiesSection, PartyDraft, SpotDraft,
 };
@@ -34,19 +34,25 @@ use crate::{ClientError, Unavailable};
 /// The client's [`PartiesPort`].
 pub(crate) struct Parties {
     backend: Arc<Backend>,
-    outbox: Arc<Outbox>,
+    net: Arc<Net>,
     /// The last invite link made per Party, for the snapshot's share sheet. In memory only:
     /// the link holds the invite secret, and pingers-parties does not hand it out again.
     links: Mutex<HashMap<PartyId, InviteLink>>,
 }
 
 impl Parties {
-    pub(crate) fn new(backend: Arc<Backend>, outbox: Arc<Outbox>) -> Self {
+    pub(crate) fn new(backend: Arc<Backend>, net: Arc<Net>) -> Self {
         Self {
             backend,
-            outbox,
+            net,
             links: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Hands `outbound` to pingers-sync and sends what it can now.
+    async fn send(&self, outbound: impl IntoIterator<Item = Outbound>) -> Result<(), ClientError> {
+        self.net.push(outbound);
+        self.net.flush().await.map(drop)
     }
 
     fn links(&self) -> std::sync::MutexGuard<'_, HashMap<PartyId, InviteLink>> {
@@ -82,7 +88,7 @@ impl PartiesPort for Parties {
                 Ok(created)
             })
             .await?;
-        self.outbox.push([created.outbound]);
+        self.send([created.outbound]).await?;
         Ok(created.party)
     }
 
@@ -129,7 +135,7 @@ impl PartiesPort for Parties {
                 Ok(PartyLifecycle::new(session, clock).remove_member(&party, member, rng)?)
             })
             .await?;
-        self.outbox.push([Outbound::Commit(commit)]);
+        self.send([Outbound::Commit(commit)]).await?;
         Ok(())
     }
 
@@ -143,7 +149,7 @@ impl PartiesPort for Parties {
             })
             .await?;
         self.links().remove(&party);
-        self.outbox.push(outbound);
+        self.send(outbound).await?;
         Ok(())
     }
 
@@ -167,7 +173,7 @@ impl PartiesPort for Parties {
                 })
             })
             .await?;
-        self.outbox.push([change.outbound]);
+        self.send([change.outbound]).await?;
         Ok(change.spot)
     }
 
@@ -178,7 +184,7 @@ impl PartiesPort for Parties {
                 Ok(PartyLifecycle::new(session, clock).delete_spot(&party, &spot, rng)?)
             })
             .await?;
-        self.outbox.push([change.outbound]);
+        self.send([change.outbound]).await?;
         Ok(())
     }
 

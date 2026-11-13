@@ -38,6 +38,9 @@ pub enum ClientError {
     /// pingers-parties failed.
     #[error("parties")]
     Parties(#[from] PartiesError),
+    /// pingers-sync failed.
+    #[error("sync")]
+    Sync(#[from] pingers_sync::SyncError),
     /// pingers-wake failed.
     #[error("wake")]
     Wake(#[from] WakeError),

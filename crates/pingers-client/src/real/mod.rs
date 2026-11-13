@@ -11,14 +11,16 @@
 //!   (pingers-parties), and `wake_codec` storing its `WakeSnapshot`.
 //! - `meetups`: [`MeetupsPort`](crate::ports::MeetupsPort) and pingers-wake's `MeetupPort`
 //!   over pingers-meetup-session's handles.
-//! - `sync`: pingers-sync has not merged. [`SyncPort`](crate::ports::SyncPort), pingers-wake's
-//!   `ServerPort` and pingers-meetup-session's `GroupNetwork` are explicit `Unavailable`
-//!   stubs, and the `Outbound` values pingers-parties returns wait in memory for it.
+//! - `sync`: [`SyncPort`](crate::ports::SyncPort), pingers-wake's `ServerPort` and
+//!   pingers-meetup-session's `GroupNetwork` over pingers-sync's engine, and the outbox that
+//!   sends pingers-parties' `Outbound` values; `party_log` is a Party's log for the engine.
+//! - `network`: the instance settings, and the router and engine built from them.
 //! - `records`: the client's own records in the store's key-value table.
 
 mod meetups;
 mod network;
 mod parties;
+mod party_log;
 mod records;
 mod sync;
 mod wake;
@@ -68,8 +70,9 @@ impl Outside {
 }
 
 impl Crates {
-    /// The four ports over the real crates, on the opened `database`. pingers-sync's parts
-    /// answer [`Unavailable::Sync`](crate::Unavailable::Sync) until it merges.
+    /// The four ports over the real crates, on the opened `database`, talking to `instance`
+    /// through pingers-sync. Without an instance the client stays offline: network calls
+    /// answer [`Unavailable::Sync`](crate::Unavailable::Sync).
     ///
     /// # Errors
     ///
@@ -80,23 +83,26 @@ impl Crates {
         outside: Outside,
         instance: Option<&Instance>,
     ) -> Result<Self, ClientError> {
-        let transport = instance
-            .map(|instance| network::router(instance, Arc::clone(&outside.timer), &outside))
-            .transpose()?;
         let backend = Arc::new(Backend {
             database: Arc::new(database),
             outside,
-            transport,
         });
-        let outbox = Arc::new(sync::Outbox::default());
+        let engine = instance
+            .map(|instance| network::engine(instance, &backend.database, &backend.outside))
+            .transpose()?;
+        let net = Arc::new(sync::Net::new(Arc::clone(&backend), engine));
         let meetups = Arc::new(meetups::Meetups::new(Arc::clone(&backend)));
         Ok(Self {
-            parties: Arc::new(parties::Parties::new(Arc::clone(&backend), outbox)),
-            sync: Arc::new(sync::Sync),
+            parties: Arc::new(parties::Parties::new(
+                Arc::clone(&backend),
+                Arc::clone(&net),
+            )),
+            sync: Arc::new(sync::Sync(Arc::clone(&net))),
             wake: Arc::new(wake::Wake::new(
                 Arc::clone(&backend),
                 platform,
                 Arc::clone(&meetups),
+                net,
             )),
             meetups,
         })
@@ -107,13 +113,6 @@ impl Crates {
 pub(crate) struct Backend {
     database: Arc<Database>,
     outside: Outside,
-    /// The router over the configured instance, for pingers-sync's engine.
-    #[expect(
-        dead_code,
-        reason = "WAITING(pingers-sync): its engine holds one store Session for its lifetime, \
-                  locking out every other store step; it is built once it holds the Database"
-    )]
-    transport: Option<Arc<dyn pingers_transport::Transport>>,
 }
 
 impl Backend {

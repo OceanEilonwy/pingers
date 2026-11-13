@@ -13,6 +13,13 @@ use pingers_transport::{
     TlsRoots, Transport,
 };
 
+use pingers_proto::AnonymousCredential;
+use pingers_store::Database;
+use pingers_sync::{
+    CommitAttempts, CredentialPolicy, ProcessRole, ProverStatus, QueueCapacity, SyncEngine,
+    SyncParts, SyncSettings, TokenStock,
+};
+
 use super::Outside;
 use crate::ClientError;
 
@@ -62,4 +69,36 @@ pub(crate) fn router(
         identified: Arc::new(direct),
         stream: ohttp,
     })?))
+}
+
+/// pingers-sync's engine over the instance, for the whole process.
+///
+/// Credentials start as Privacy Pass only with the prover off: the server's `/v1/config` says
+/// what it accepts, and RLN proofs need a live leaf first.
+pub(crate) fn engine(
+    instance: &Instance,
+    database: &Arc<Database>,
+    outside: &Outside,
+) -> Result<Arc<SyncEngine>, ClientError> {
+    let transport = router(instance, Arc::clone(&outside.timer), outside)?;
+    Ok(Arc::new(SyncEngine::new(
+        SyncParts {
+            transport,
+            database: Arc::clone(database),
+            clock: Arc::clone(&outside.clock),
+            timer: Arc::clone(&outside.timer),
+            rng: (outside.rng)(),
+        },
+        SyncSettings {
+            server: instance.server.clone(),
+            role: ProcessRole::MainApp,
+            credentials: CredentialPolicy {
+                accepted: vec![AnonymousCredential::PrivacyPass],
+                prover: ProverStatus::Disabled,
+            },
+            token_stock: TokenStock::design_default()?,
+            commit_attempts: CommitAttempts::default(),
+            queue_capacity: QueueCapacity::default(),
+        },
+    )))
 }
