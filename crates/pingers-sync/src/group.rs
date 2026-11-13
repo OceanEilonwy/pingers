@@ -323,7 +323,7 @@ impl SyncEngine {
             response.success()?;
         }
         let group = *call.group;
-        crate::engine::blocking(&self.session, move |session| {
+        crate::engine::blocking(&self.database, move |session| {
             Ok(session.subscriptions().delete(&group)?)
         })
         .await

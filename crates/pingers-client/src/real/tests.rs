@@ -540,3 +540,23 @@ async fn party_commands_reach_pingers_parties_and_the_store() -> TestResult {
     assert_eq!(colour_kept, None, "leaving deletes the colour record");
     Ok(())
 }
+
+/// What one store session costs (a SQLCipher connection with a raw key, and the lock), since
+/// every adapter and sync step opens its own. Run with `--ignored --nocapture`.
+#[test]
+#[ignore = "a measurement, not a check"]
+fn measure_a_session_open() -> TestResult {
+    use std::io::Write as _;
+    let store = store()?;
+    let rounds: u32 = 500;
+    let started = std::time::Instant::now();
+    for _ in 0..rounds {
+        drop(store.backend.database.session()?.parties().list()?);
+    }
+    let each = started.elapsed() / rounds;
+    writeln!(
+        std::io::stderr(),
+        "one session open and a small read: {each:?}"
+    )?;
+    Ok(())
+}

@@ -55,7 +55,7 @@ async fn join_tree(world: &World, device: &Device) -> Result<LeafValue, TestErro
         leaf: TreePosition::new(1),
         live_from: pingers_store::RootEpoch::new(live_from),
     };
-    device.session.rln_identity().save(&identity)?;
+    device.session()?.rln_identity().save(&identity)?;
     let other = RlnSecret::generate(&mut seeded_rng(22))?
         .id_commitment()?
         .leaf()?;
@@ -115,7 +115,7 @@ async fn the_main_app_proves_and_the_proof_verifies() -> TestResult {
     assert_eq!(auth.bucket, world.clock.now().bucket());
 
     // The server's check: the local tree's root, this server, this exact request.
-    let tree_leaves = device.session.rln_tree().leaves()?;
+    let tree_leaves = device.session()?.rln_tree().leaves()?;
     assert_eq!(
         tree_leaves.first().map(|leaf| *leaf.value.as_bytes()),
         Some([0; 32]),
@@ -142,7 +142,7 @@ async fn the_main_app_proves_and_the_proof_verifies() -> TestResult {
     // The message id was spent before sending: the bucket has seven left.
     let mut left = 0;
     while device
-        .session
+        .session()?
         .rln_counters()
         .reserve(RlnScope::Mailbox, world.clock.now().bucket())?
         .is_some()
@@ -161,7 +161,7 @@ async fn a_spent_bucket_falls_back_to_a_token() -> TestResult {
     let _ = join_tree(&world, &device).await?;
     let bucket = world.clock.now().bucket();
     while device
-        .session
+        .session()?
         .rln_counters()
         .reserve(RlnScope::Mailbox, bucket)?
         .is_some()

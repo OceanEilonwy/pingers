@@ -142,7 +142,8 @@ impl SyncEngine {
         until: UnixSeconds,
     ) -> Result<Option<MailboxId>, SyncError> {
         Ok(self
-            .session
+            .database
+            .session()?
             .mailboxes()
             .take_pooled(purpose, until)?
             .map(|mailbox| mailbox.id()))

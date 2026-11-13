@@ -97,7 +97,7 @@ impl SyncEngine {
     ///
     /// [`SyncError::Store`].
     pub async fn token_count(&self) -> Result<u32, SyncError> {
-        blocking(&self.session, |session| {
+        blocking(&self.database, |session| {
             Ok(session.privacy_pass_tokens().count()?)
         })
         .await
@@ -137,7 +137,7 @@ impl SyncEngine {
             .collect();
         let added = u16::try_from(tokens.len()).map_err(|_| SyncError::OutOfRange("tokens"))?;
         let key_id = issuer.key_id;
-        let held = blocking(&self.session, move |session| {
+        let held = blocking(&self.database, move |session| {
             let repository = session.privacy_pass_tokens();
             repository.add(&tokens, &key_id)?;
             Ok(repository.count()?)

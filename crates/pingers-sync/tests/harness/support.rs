@@ -458,10 +458,9 @@ pub(crate) struct World {
 /// One device: an engine over its own store and link.
 pub(crate) struct Device {
     pub(crate) engine: SyncEngine,
-    pub(crate) session: Arc<Session>,
+    pub(crate) database: Arc<Database>,
     pub(crate) link: Arc<Link>,
     pub(crate) issuer: Arc<Issuer>,
-    _database: Database,
 }
 
 pub(crate) fn bearer() -> SecretText {
@@ -538,7 +537,7 @@ impl World {
                 [u8::try_from(number % 200).unwrap_or(1); 32],
             )),
         )?;
-        let session = Arc::new(database.session()?);
+        let database = Arc::new(database);
         let link = Arc::new(Link {
             relay: self.relay(address)?,
             groups: Arc::clone(&self.groups),
@@ -558,7 +557,7 @@ impl World {
         let engine = SyncEngine::new(
             SyncParts {
                 transport: Arc::new(router),
-                session: Arc::clone(&session),
+                database: Arc::clone(&database),
                 clock: Arc::new(self.clock.clone()),
                 timer: Arc::new(self.clock.clone()),
                 rng: Box::new(seeded_rng(number.saturating_add(1000))),
@@ -574,15 +573,19 @@ impl World {
         );
         Ok(Device {
             engine,
-            session,
+            database,
             link,
             issuer,
-            _database: database,
         })
     }
 }
 
 impl Device {
+    /// A store session of the test's own, for a check between engine steps.
+    pub(crate) fn session(&self) -> Result<Session, TestError> {
+        Ok(self.database.session()?)
+    }
+
     /// Fills the token stock.
     pub(crate) async fn stock_tokens(&self) -> Result<pingers_sync::Refill, TestError> {
         Ok(self

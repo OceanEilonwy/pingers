@@ -179,7 +179,7 @@ impl SyncEngine {
             zeroed: 0,
         };
         loop {
-            let held = blocking(&self.session, |session| {
+            let held = blocking(&self.database, |session| {
                 Ok(session.rln_tree().leaves()?.len())
             })
             .await?;
@@ -193,7 +193,7 @@ impl SyncEngine {
                 .decode()?;
             let added = page.leaves.len();
             refresh.zeroed = page.zeroed.len();
-            blocking(&self.session, move |session| {
+            blocking(&self.database, move |session| {
                 session.transaction(|session| {
                     let tree = session.rln_tree();
                     for (value, position) in page.leaves.iter().zip(after.get()..) {

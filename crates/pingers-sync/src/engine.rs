@@ -9,7 +9,7 @@ use pingers_ohttp::{BinaryResponse, OhttpError};
 use pingers_proto::{
     CommitResponse, GroupId, MessageAccepted, SequenceNumber, ServerId, WireDecode,
 };
-use pingers_store::Session;
+use pingers_store::{Database, Session};
 use pingers_time::{Clock, Timer, UnixSeconds};
 use pingers_transport::{DuplexStream, PrivacyClass, Transport, TransportError};
 
@@ -33,8 +33,9 @@ pub type SyncRng = Box<dyn rand_core::CryptoRng + Send>;
 pub struct SyncParts {
     /// The router: anonymous and stream classes over OHTTP, identified direct.
     pub transport: Arc<dyn Transport>,
-    /// The store session this wake (or app run) holds.
-    pub session: Arc<Session>,
+    /// The store. Each store step opens its own session (and so holds the cross-process
+    /// lock only for that step), so the engine can live for the whole process.
+    pub database: Arc<Database>,
     /// Wall time, for buckets, expiries and group request signatures.
     pub clock: Arc<dyn Clock>,
     /// Monotonic time, for the wake budget.
@@ -211,7 +212,7 @@ pub struct FlushReport {
 /// Talks to the server for everyone else: see the crate docs.
 pub struct SyncEngine {
     pub(crate) transport: Arc<dyn Transport>,
-    pub(crate) session: Arc<Session>,
+    pub(crate) database: Arc<Database>,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) timer: Arc<dyn Timer>,
     pub(crate) rng: Arc<Mutex<SyncRng>>,
@@ -227,13 +228,15 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Runs `work` against the store on the blocking pool (SQLCipher blocks).
+/// Runs `work` against the store on the blocking pool (SQLCipher blocks), in a session of its
+/// own: the cross-process lock is held for this step only. A step that must be atomic runs
+/// its writes in `session.transaction`.
 pub(crate) async fn blocking<T: Send + 'static>(
-    session: &Arc<Session>,
+    database: &Arc<Database>,
     work: impl FnOnce(&Session) -> Result<T, SyncError> + Send + 'static,
 ) -> Result<T, SyncError> {
-    let session = Arc::clone(session);
-    tokio::task::spawn_blocking(move || work(&session))
+    let database = Arc::clone(database);
+    tokio::task::spawn_blocking(move || work(&database.session()?))
         .await
         .map_err(|_| SyncError::Internal)?
 }
@@ -244,7 +247,7 @@ impl SyncEngine {
     pub fn new(parts: SyncParts, settings: SyncSettings) -> Self {
         Self {
             transport: parts.transport,
-            session: parts.session,
+            database: parts.database,
             clock: parts.clock,
             timer: parts.timer,
             rng: Arc::new(Mutex::new(parts.rng)),
@@ -313,7 +316,7 @@ impl SyncEngine {
     pub async fn credential_choice(&self) -> Result<CredentialChoice, SyncError> {
         let settings = self.settings();
         let now = self.now();
-        let readiness = blocking(&self.session, move |session| {
+        let readiness = blocking(&self.database, move |session| {
             Ok(readiness(session.rln_identity().load()?.as_ref(), now))
         })
         .await?;
@@ -330,7 +333,7 @@ impl SyncEngine {
             let rng = Arc::clone(&self.rng);
             let request = request.clone();
             let bucket = self.now().bucket();
-            let proof = blocking(&self.session, move |session| {
+            let proof = blocking(&self.database, move |session| {
                 prove_request(
                     session,
                     &mut lock(&rng),
@@ -360,7 +363,7 @@ impl SyncEngine {
                 return Err(SyncError::NoCredential);
             }
         }
-        let token = blocking(&self.session, |session| {
+        let token = blocking(&self.database, |session| {
             Ok(session.privacy_pass_tokens().take()?)
         })
         .await?
@@ -374,7 +377,7 @@ impl SyncEngine {
     /// Returns an unspent token to the store: the request carrying it never left the device.
     async fn restore(&self, attached: Attached) -> Result<(), SyncError> {
         if let Attached::Token { token, .. } = attached {
-            blocking(&self.session, move |session| {
+            blocking(&self.database, move |session| {
                 Ok(session
                     .privacy_pass_tokens()
                     .add(&[token.token], &token.key_id)?)

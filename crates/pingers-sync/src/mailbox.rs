@@ -147,7 +147,7 @@ impl SyncEngine {
             push: handle,
             expires_at: expiry(self.now(), mailbox.lifetime)?,
         };
-        blocking(&self.session, move |session| {
+        blocking(&self.database, move |session| {
             Ok(session.mailboxes().insert(&stored)?)
         })
         .await?;
@@ -161,7 +161,7 @@ impl SyncEngine {
     /// [`SyncError::Store`].
     pub async fn pooled_mailboxes(&self, purpose: MailboxPurpose) -> Result<u32, SyncError> {
         let now = self.now();
-        blocking(&self.session, move |session| {
+        blocking(&self.database, move |session| {
             Ok(session.mailboxes().pooled_count(purpose, now)?)
         })
         .await
@@ -178,7 +178,7 @@ impl SyncEngine {
         purpose: MailboxPurpose,
     ) -> Result<Option<MailboxId>, SyncError> {
         let now = self.now();
-        blocking(&self.session, move |session| {
+        blocking(&self.database, move |session| {
             Ok(session
                 .mailboxes()
                 .take_pooled(purpose, now)?
@@ -194,7 +194,7 @@ impl SyncEngine {
         build: impl FnOnce(&MailboxId, &MailboxReadKey) -> ApiRequest + Send + 'static,
     ) -> Result<ApiRequest, SyncError> {
         let id = *mailbox;
-        blocking(&self.session, move |session| {
+        blocking(&self.database, move |session| {
             let stored = session
                 .mailboxes()
                 .get(&id)?
@@ -264,7 +264,7 @@ impl SyncEngine {
             response.success()?;
         }
         let id = *mailbox;
-        blocking(&self.session, move |session| {
+        blocking(&self.database, move |session| {
             Ok(session.mailboxes().delete(&id)?)
         })
         .await
@@ -278,7 +278,7 @@ impl SyncEngine {
     /// [`SyncError::Store`].
     pub async fn forget_expired(&self) -> Result<usize, SyncError> {
         let now = self.now();
-        blocking(&self.session, move |session| {
+        blocking(&self.database, move |session| {
             let mailboxes = session.mailboxes().delete_expired(now)?;
             let subscriptions = session.subscriptions().delete_expired(now)?;
             Ok(mailboxes.saturating_add(subscriptions))
@@ -328,7 +328,7 @@ impl SyncEngine {
             handle: subscription.push.handle,
             expires_at: expiry(self.now(), subscription.time_to_live)?,
         };
-        blocking(&self.session, move |session| {
+        blocking(&self.database, move |session| {
             Ok(session.subscriptions().put(&stored)?)
         })
         .await

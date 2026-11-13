@@ -51,7 +51,7 @@ async fn subscriptions_state_and_deletion() -> TestResult {
         .engine
         .put_subscription(call, &subscription, budget)
         .await?;
-    let stored = alice.session.subscriptions().get(&GROUP)?;
+    let stored = alice.session()?.subscriptions().get(&GROUP)?;
     assert_eq!(
         stored.as_ref().map(|stored| stored.id),
         Some(subscription.id)
@@ -65,7 +65,7 @@ async fn subscriptions_state_and_deletion() -> TestResult {
         .engine
         .delete_subscription(call, &subscription.id, budget)
         .await?;
-    assert!(alice.session.subscriptions().get(&GROUP)?.is_none());
+    assert!(alice.session()?.subscriptions().get(&GROUP)?.is_none());
     let ephemeral = alice
         .engine
         .post_group_message(
