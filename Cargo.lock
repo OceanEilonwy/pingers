@@ -6305,7 +6305,13 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "hex",
+ "pingers-crypto",
+ "pingers-ohttp",
+ "pingers-proto",
+ "pingers-push-relay",
  "toml",
+ "zeroize",
 ]
 
 [[package]]
