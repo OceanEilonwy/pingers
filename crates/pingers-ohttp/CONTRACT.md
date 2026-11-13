@@ -79,4 +79,11 @@ gateway. HPKE suite fixed: X25519 / HKDF-SHA256 / AES-128-GCM.
   Appendix A and draft-08 Appendix A byte for byte (`tests/rfc_examples.rs`,
   `src/chunked/tests.rs`); their client sides give an ephemeral secret key, while HPKE here
   derives it from 32 random bytes, so they cannot be replayed.
-- **Fuzz targets** live in `fuzz/` (own workspace, nightly `cargo fuzz`).
+- **Fuzz targets** live in `fuzz/` (own workspace, nightly `cargo fuzz`): `key_config`,
+  `binary_message`, `gateway_decapsulate`, `chunked_request_stream`,
+  `chunked_response_stream`, and `chunk_round_trip` (real exchanges with fuzzer-chosen
+  chunks, splits and corruption; checks nothing unsent ever opens).
+- **Surviving mutants (cargo mutants), all equivalent:** `|` to `^` in `framing.rs`
+  (`write_varint` twice, `read_varint` once). In each, the two operands share no set bits
+  (a length below 2^14 or 2^30 with the form bits, or a value shifted left by 8 with one
+  byte), so OR and XOR give the same result for every input.
