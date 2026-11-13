@@ -135,6 +135,8 @@ same-layer = [
   { crate = "pingers-client", dependency = "pingers-sync", reason = "composition root" },
   { crate = "pingers-client", dependency = "pingers-wake", reason = "composition root" },
   { crate = "pingers-client", dependency = "pingers-meetup-session", reason = "composition root" },
+  # L4: as fob-words reads fob-screens, the words are written from the view models.
+  { crate = "pingers-words", dependency = "pingers-screens", reason = "words are written from the view models (architecture §3, L4)" },
 ]
 
 [workspace.lints.rust]

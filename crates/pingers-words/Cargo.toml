@@ -12,6 +12,14 @@ layer = 4
 
 [dependencies]
 pingers-client = { workspace = true }
+pingers-gate = { workspace = true }
+pingers-geo = { workspace = true }
+pingers-meetup = { workspace = true }
+pingers-proto = { workspace = true }
+pingers-screens = { workspace = true }
+
+[dev-dependencies]
+pingers-screens = { workspace = true, features = ["fixtures"] }
 
 [lints]
 workspace = true

@@ -3538,7 +3538,12 @@ name = "pingers-screens"
 version = "0.1.0"
 dependencies = [
  "pingers-client",
+ "pingers-gate",
+ "pingers-geo",
+ "pingers-meetup",
+ "pingers-proto",
  "pingers-time",
+ "thiserror",
 ]
 
 [[package]]
@@ -3640,6 +3645,11 @@ name = "pingers-words"
 version = "0.1.0"
 dependencies = [
  "pingers-client",
+ "pingers-gate",
+ "pingers-geo",
+ "pingers-meetup",
+ "pingers-proto",
+ "pingers-screens",
 ]
 
 [[package]]

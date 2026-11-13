@@ -10,9 +10,18 @@ publish.workspace = true
 [package.metadata.pingers]
 layer = 4
 
+[features]
+# Fixture snapshots, for the tests here and in pingers-words.
+fixtures = []
+
 [dependencies]
 pingers-client = { workspace = true }
+pingers-gate = { workspace = true }
+pingers-geo = { workspace = true }
+pingers-meetup = { workspace = true }
+pingers-proto = { workspace = true }
 pingers-time = { workspace = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true
