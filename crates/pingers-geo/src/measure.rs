@@ -307,4 +307,17 @@ mod tests {
         assert_eq!(Meters::new(-1.0), Err(GeoError::InvalidLength));
         assert_eq!(Meters::new(f64::INFINITY), Err(GeoError::InvalidLength));
     }
+
+    #[test]
+    fn locations_are_redacted_in_debug_output() -> Result<(), GeoError> {
+        let coordinate = Coordinate::new(51.5, -0.1)?;
+        assert_eq!(format!("{coordinate:?}"), "Coordinate(redacted)");
+        let fix = Fix {
+            coordinate,
+            accuracy: Meters::from_whole(5),
+            taken_at: UnixSeconds::new(1),
+        };
+        assert_eq!(format!("{fix:?}"), "Fix(redacted)");
+        Ok(())
+    }
 }

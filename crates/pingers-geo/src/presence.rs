@@ -852,6 +852,54 @@ mod tests {
     }
 
     #[test]
+    fn a_fix_exactly_at_the_buffer_is_not_beyond_it() -> Result<(), GeoError> {
+        // Size the fence to the fix rather than the other way round: with the fix about 249 m
+        // out, `d - 50` and `d - r` are both exact in floating point (Sterbenz), so the fix
+        // is exactly 50 m beyond a fence of radius `d - 50` (about 199 m, buffer 50 m).
+        let coordinate = offset(center()?, 0.0, 249.0)?;
+        let reach = crate::distance(center()?, coordinate).get();
+        let fence = Fence::Circle(Circle::new(center()?, Meters::new(reach - 50.0)?)?);
+        let buffer = Meters::from_whole(50);
+        assert_eq!(fence.distance_outside(coordinate), buffer);
+        assert_eq!(exit_buffer(fence.characteristic_radius()), buffer);
+        let mut presence = SpotPresence::new(fence, time(0));
+        let _ = presence.handle(PresenceInput::OsDwell { at: time(30) })?;
+        let _ = presence.handle(PresenceInput::OsExit { at: time(100) })?;
+        let at_buffer = PresenceInput::Fix(Fix {
+            coordinate,
+            accuracy: Meters::from_whole(10),
+            taken_at: time(110),
+        });
+        assert_eq!(presence.handle(at_buffer)?, PresenceChange::Unchanged);
+        Ok(())
+    }
+
+    #[test]
+    fn os_dwell_neither_confirms_nor_clears_evidence_for_a_polygon() -> Result<(), GeoError> {
+        // A 400 m square centred on the Spot centre: r = 283 m, exit buffer 71 m.
+        let square = polygon_around(
+            center()?,
+            &[
+                [-200.0, -200.0],
+                [200.0, -200.0],
+                [200.0, 200.0],
+                [-200.0, 200.0],
+            ],
+        )?;
+        let mut presence = SpotPresence::new(Fence::Polygon(square), time(0));
+        let _ = presence.handle(good_fix_inside(0)?)?;
+        let _ = presence.handle(good_fix_inside(30)?)?;
+        assert_eq!(presence.state(), PresenceState::Inside);
+        let _ = presence.handle(fix(300.0, 10, 100)?)?;
+        let _ = presence.handle(PresenceInput::OsDwell { at: time(110) })?;
+        assert_eq!(
+            presence.handle(fix(300.0, 10, 120)?)?,
+            changed(PresenceState::Inside, PresenceState::Outside, 120)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn os_dwell_keeps_a_circle_inside_alive() -> Result<(), GeoError> {
         let mut presence = inside_at(30)?;
         let hour = SpotPresence::INSIDE_TIMEOUT.as_secs();
