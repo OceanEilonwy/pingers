@@ -17,6 +17,7 @@
 mod api;
 mod auth;
 mod board;
+mod cbor;
 mod codec;
 mod error;
 mod group;
@@ -26,12 +27,13 @@ mod meetup;
 mod padding;
 mod push;
 mod redacted;
-mod stub;
 
 pub use api::{
-    AnonymousCredential, AuthRequest, BoardSyncRequest, BoardSyncResponse, CoverReadRatio,
-    CustomPushRelays, LeaseReplacement, Params, PushRelayInfo, ReadBoard, RegisterRequest,
-    Slashing,
+    AnonymousCredential, AuthRequest, AuthResponse, BoardSyncRequest, BoardSyncResponse,
+    CoverReadRatio, CustomPushRelays, GroupMessages, GroupState, LeaseReplacement, MailboxMessage,
+    MailboxMessages, MembershipIndex, MembershipLeafRequest, MembershipLeafResponse,
+    MembershipLeaves, MembershipRoot, MessageAccepted, Params, PushRelayInfo, ReadBoard,
+    RegisterRequest, RegisterResponse, RootEpoch, Slashing,
 };
 pub use auth::{RlnAuth, RlnScope, ServerId};
 pub use board::{

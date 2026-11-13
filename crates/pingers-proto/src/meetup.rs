@@ -4,13 +4,12 @@
 
 use core::fmt;
 
+use minicbor::Decoder;
 use pingers_time::{Bucket, UnixSeconds};
 
-use crate::stub::not_implemented;
-use crate::{
-    ChatMessageId, Lamport, LeafIndex, LocationGeneration, ProtoError, SegmentHash, WireDecode,
-    WireEncode,
-};
+use crate::board::decode_bucket;
+use crate::cbor::{self, CborBody, Writer, versioned_cbor};
+use crate::{ChatMessageId, Lamport, LeafIndex, LocationGeneration, ProtoError, SegmentHash};
 
 /// Latitude and longitude in units of 10⁻⁷ degrees, the wire form of a position.
 ///
@@ -344,29 +343,279 @@ pub enum MeetupMessage {
     KeepAlive,
 }
 
-impl WireEncode for MeetupMessage {
-    fn encode(&self) -> Result<Vec<u8>, ProtoError> {
-        not_implemented(self)
+/// Variant numbers of [`MeetupMessage`] on the wire.
+mod message_kind {
+    pub(super) const SEALED_LOCATION: u8 = 0;
+    pub(super) const LOCATION_GRANT: u8 = 1;
+    pub(super) const LOCATION_ASK: u8 = 2;
+    pub(super) const CHAT: u8 = 3;
+    pub(super) const MEET_POINT: u8 = 4;
+    pub(super) const SNAPSHOT: u8 = 5;
+    pub(super) const BOARD_SEEN: u8 = 6;
+    pub(super) const KEEP_ALIVE: u8 = 7;
+}
+
+/// Variant numbers of [`MeetPoint`] on the wire.
+mod meet_point_kind {
+    pub(super) const FIXED: u8 = 0;
+    pub(super) const AT_MEMBER: u8 = 1;
+    pub(super) const CLEARED: u8 = 2;
+}
+
+impl E7Coordinate {
+    /// Writes latitude then longitude, as two integers in the enclosing array.
+    fn encode_fields(self, writer: &mut Writer) {
+        writer.signed(self.latitude);
+        writer.signed(self.longitude);
+    }
+
+    /// Reads and checks latitude then longitude.
+    fn decode_fields(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        let latitude = decoder.i32()?;
+        let longitude = decoder.i32()?;
+        Self::new(latitude, longitude)
     }
 }
 
-impl WireDecode for MeetupMessage {
-    fn decode(bytes: &[u8]) -> Result<Self, ProtoError> {
-        not_implemented(bytes)
+/// Layout: `[0, latitude, longitude, label or null, lamport]`, `[1, leaf, lamport]` or
+/// `[2, lamport]`.
+impl CborBody for MeetPoint {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        match self {
+            Self::Fixed {
+                position,
+                label,
+                lamport,
+            } => {
+                writer.array(5)?;
+                writer.unsigned(meet_point_kind::FIXED);
+                position.encode_fields(writer);
+                writer.option(label.as_ref(), |writer, label| writer.text(label.as_str()))?;
+                writer.unsigned(lamport.get());
+            }
+            Self::AtMember { leaf, lamport } => {
+                writer.array(3)?;
+                writer.unsigned(meet_point_kind::AT_MEMBER);
+                writer.unsigned(leaf.get());
+                writer.unsigned(lamport.get());
+            }
+            Self::Cleared { lamport } => {
+                writer.array(2)?;
+                writer.unsigned(meet_point_kind::CLEARED);
+                writer.unsigned(lamport.get());
+            }
+        }
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        let length = cbor::array(decoder)?;
+        match decoder.u8()? {
+            meet_point_kind::FIXED => {
+                cbor::expect_length(length, 5)?;
+                Ok(Self::Fixed {
+                    position: E7Coordinate::decode_fields(decoder)?,
+                    label: cbor::option(decoder, |decoder| {
+                        MeetPointLabel::new(decoder.str()?.to_owned())
+                    })?,
+                    lamport: Lamport::new(decoder.u64()?),
+                })
+            }
+            meet_point_kind::AT_MEMBER => {
+                cbor::expect_length(length, 3)?;
+                Ok(Self::AtMember {
+                    leaf: LeafIndex::new(decoder.u32()?),
+                    lamport: Lamport::new(decoder.u64()?),
+                })
+            }
+            meet_point_kind::CLEARED => {
+                cbor::expect_length(length, 2)?;
+                Ok(Self::Cleared {
+                    lamport: Lamport::new(decoder.u64()?),
+                })
+            }
+            _ => Err(ProtoError::OutOfRange {
+                field: "meet point kind",
+            }),
+        }
     }
 }
 
-impl WireEncode for LocationPlaintext {
-    fn encode(&self) -> Result<Vec<u8>, ProtoError> {
-        not_implemented(self)
+/// Layout: `[start bucket, hash]`.
+impl CborBody for SeenSegment {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(2)?;
+        writer.unsigned(self.start.index());
+        writer.bytes(self.hash.as_bytes())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 2)?;
+        Ok(Self {
+            start: decode_bucket(decoder)?,
+            hash: SegmentHash::from_bytes(cbor::fixed_bytes(decoder)?),
+        })
     }
 }
 
-impl WireDecode for LocationPlaintext {
-    fn decode(bytes: &[u8]) -> Result<Self, ProtoError> {
-        not_implemented(bytes)
+/// Layout: `[kind, fields...]` with kinds 0 to 7 in declaration order:
+///
+/// - `[0, generation, nonce (12 bytes), ciphertext]`
+/// - `[1, sealed grant]`, `[2, sealed ask]`
+/// - `[3, id, parent or null, body text, written at]`
+/// - `[4, meet point]`
+/// - `[5, meet point or null, lamport]`
+/// - `[6, [[start bucket, hash], ...]]`
+/// - `[7]`
+impl CborBody for MeetupMessage {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        match self {
+            Self::SealedLocation(frame) => {
+                writer.array(4)?;
+                writer.unsigned(message_kind::SEALED_LOCATION);
+                writer.unsigned(frame.generation.get());
+                writer.bytes(&frame.nonce)?;
+                writer.bytes(&frame.ciphertext)?;
+            }
+            Self::LocationGrant(grant) => {
+                writer.array(2)?;
+                writer.unsigned(message_kind::LOCATION_GRANT);
+                writer.bytes(grant.as_bytes())?;
+            }
+            Self::LocationAsk(ask) => {
+                writer.array(2)?;
+                writer.unsigned(message_kind::LOCATION_ASK);
+                writer.bytes(ask.as_bytes())?;
+            }
+            Self::Chat {
+                id,
+                parent,
+                body,
+                written_at,
+            } => {
+                writer.array(5)?;
+                writer.unsigned(message_kind::CHAT);
+                writer.bytes(id.as_bytes())?;
+                writer.option(parent.as_ref(), |writer, parent| {
+                    writer.bytes(parent.as_bytes())
+                })?;
+                writer.text(body.as_str())?;
+                writer.unsigned(written_at.get());
+            }
+            Self::MeetPoint(meet_point) => {
+                writer.array(2)?;
+                writer.unsigned(message_kind::MEET_POINT);
+                meet_point.encode_body(writer)?;
+            }
+            Self::Snapshot {
+                meet_point,
+                lamport,
+            } => {
+                writer.array(3)?;
+                writer.unsigned(message_kind::SNAPSHOT);
+                writer.option(meet_point.as_ref(), |writer, meet_point| {
+                    meet_point.encode_body(writer)
+                })?;
+                writer.unsigned(lamport.get());
+            }
+            Self::BoardSeen { segments } => {
+                writer.array(2)?;
+                writer.unsigned(message_kind::BOARD_SEEN);
+                writer.list(segments)?;
+            }
+            Self::KeepAlive => {
+                writer.array(1)?;
+                writer.unsigned(message_kind::KEEP_ALIVE);
+            }
+        }
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        let length = cbor::array(decoder)?;
+        let kind = decoder.u8()?;
+        let expected_length = match kind {
+            message_kind::KEEP_ALIVE => 1,
+            message_kind::LOCATION_GRANT
+            | message_kind::LOCATION_ASK
+            | message_kind::MEET_POINT
+            | message_kind::BOARD_SEEN => 2,
+            message_kind::SNAPSHOT => 3,
+            message_kind::SEALED_LOCATION => 4,
+            message_kind::CHAT => 5,
+            _ => {
+                return Err(ProtoError::OutOfRange {
+                    field: "meetup message kind",
+                });
+            }
+        };
+        cbor::expect_length(length, expected_length)?;
+        Ok(match kind {
+            message_kind::SEALED_LOCATION => Self::SealedLocation(SealedLocationFrame {
+                generation: LocationGeneration::new(decoder.u32()?),
+                nonce: cbor::fixed_bytes(decoder)?,
+                ciphertext: decoder.bytes()?.to_vec(),
+            }),
+            message_kind::LOCATION_GRANT => {
+                Self::LocationGrant(SealedGrant::from_bytes(decoder.bytes()?.to_vec()))
+            }
+            message_kind::LOCATION_ASK => {
+                Self::LocationAsk(SealedAsk::from_bytes(decoder.bytes()?.to_vec()))
+            }
+            message_kind::CHAT => Self::Chat {
+                id: ChatMessageId::from_bytes(cbor::fixed_bytes(decoder)?),
+                parent: cbor::option(decoder, |decoder| {
+                    cbor::fixed_bytes(decoder).map(ChatMessageId::from_bytes)
+                })?,
+                body: ChatBody::new(decoder.str()?.to_owned())?,
+                written_at: UnixSeconds::new(decoder.u64()?),
+            },
+            message_kind::MEET_POINT => Self::MeetPoint(MeetPoint::decode_body(decoder)?),
+            message_kind::SNAPSHOT => Self::Snapshot {
+                meet_point: cbor::option(decoder, MeetPoint::decode_body)?,
+                lamport: Lamport::new(decoder.u64()?),
+            },
+            message_kind::BOARD_SEEN => Self::BoardSeen {
+                segments: cbor::list(decoder)?,
+            },
+            _ => Self::KeepAlive,
+        })
     }
 }
+
+/// Layout: `[latitude, longitude, accuracy, heading or null, speed or null, taken at]`.
+impl CborBody for LocationPlaintext {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(6)?;
+        self.position.encode_fields(writer);
+        writer.unsigned(self.accuracy.get());
+        writer.option(self.heading.as_ref(), |writer, heading| {
+            writer.unsigned(heading.get());
+            Ok(())
+        })?;
+        writer.option(self.speed.as_ref(), |writer, speed| {
+            writer.unsigned(speed.get());
+            Ok(())
+        })?;
+        writer.unsigned(self.taken_at.get());
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 6)?;
+        Ok(Self {
+            position: E7Coordinate::decode_fields(decoder)?,
+            accuracy: AccuracyMeters::new(decoder.u16()?),
+            heading: cbor::option(decoder, |decoder| HeadingDegrees::new(decoder.u16()?))?,
+            speed: cbor::option(decoder, |decoder| {
+                Ok(SpeedCentimetresPerSecond::new(decoder.u16()?))
+            })?,
+            taken_at: UnixSeconds::new(decoder.u64()?),
+        })
+    }
+}
+
+versioned_cbor!(MeetupMessage, LocationPlaintext);
 
 #[cfg(test)]
 mod tests {

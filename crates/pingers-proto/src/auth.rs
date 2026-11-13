@@ -3,7 +3,6 @@
 
 use pingers_time::Bucket;
 
-use crate::stub::not_implemented;
 use crate::{ProtoError, WireDecode, WireEncode};
 
 /// Which per-bucket limit a request spends (design B.4.8): 8 of each per device per bucket.
@@ -104,14 +103,143 @@ impl core::fmt::Debug for RlnAuth {
     }
 }
 
+/// The fixed 265-byte layout: `root (32) || scope (1) || be64(bucket) || x (32) || y (32) ||
+/// nullifier (32) || proof (128)`.
 impl WireEncode for RlnAuth {
     fn encode(&self) -> Result<Vec<u8>, ProtoError> {
-        not_implemented(self)
+        let mut bytes = Vec::with_capacity(Self::SIZE);
+        bytes.extend_from_slice(&self.root);
+        bytes.push(self.scope.to_wire());
+        bytes.extend_from_slice(&self.bucket.to_be_bytes());
+        bytes.extend_from_slice(&self.x);
+        bytes.extend_from_slice(&self.y);
+        bytes.extend_from_slice(&self.nullifier);
+        bytes.extend_from_slice(&self.proof);
+        Ok(bytes)
     }
+}
+
+/// Splits the next `LENGTH` bytes off `bytes`.
+fn take<'bytes, const LENGTH: usize>(
+    bytes: &mut &'bytes [u8],
+) -> Result<&'bytes [u8; LENGTH], ProtoError> {
+    let (head, rest) = bytes
+        .split_first_chunk::<LENGTH>()
+        .ok_or(ProtoError::WrongLength {
+            expected: RlnAuth::SIZE,
+            actual: bytes.len(),
+        })?;
+    *bytes = rest;
+    Ok(head)
 }
 
 impl WireDecode for RlnAuth {
     fn decode(bytes: &[u8]) -> Result<Self, ProtoError> {
-        not_implemented(bytes)
+        if bytes.len() != Self::SIZE {
+            return Err(ProtoError::WrongLength {
+                expected: Self::SIZE,
+                actual: bytes.len(),
+            });
+        }
+        let mut rest = bytes;
+        let root = *take::<32>(&mut rest)?;
+        let [scope] = *take::<1>(&mut rest)?;
+        let bucket = u64::from_be_bytes(*take::<8>(&mut rest)?);
+        Ok(Self {
+            root,
+            scope: RlnScope::from_wire(scope)?,
+            bucket: Bucket::from_index(bucket).map_err(ProtoError::Bucket)?,
+            x: *take::<32>(&mut rest)?,
+            y: *take::<32>(&mut rest)?,
+            nullifier: *take::<32>(&mut rest)?,
+            proof: *take::<128>(&mut rest)?,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use super::*;
+
+    fn sample() -> Result<RlnAuth, ProtoError> {
+        Ok(RlnAuth {
+            root: [1; 32],
+            scope: RlnScope::Group,
+            bucket: Bucket::from_index(0x0102_0304).map_err(ProtoError::Bucket)?,
+            x: [3; 32],
+            y: [4; 32],
+            nullifier: [5; 32],
+            proof: [6; 128],
+        })
+    }
+
+    #[test]
+    fn rln_auth_fields_sit_at_their_offsets() -> Result<(), ProtoError> {
+        let bytes = sample()?.encode()?;
+        assert_eq!(bytes.len(), RlnAuth::SIZE);
+        assert_eq!(bytes.get(31..33), Some(&[1, 2][..]));
+        assert_eq!(bytes.get(33..41), Some(&[0, 0, 0, 0, 1, 2, 3, 4][..]));
+        assert_eq!(bytes.get(41), Some(&3));
+        assert_eq!(bytes.get(73), Some(&4));
+        assert_eq!(bytes.get(105), Some(&5));
+        assert_eq!(bytes.get(137), Some(&6));
+        assert_eq!(bytes.last(), Some(&6));
+        Ok(())
+    }
+
+    #[test]
+    fn rln_scope_wire_values_round_trip() -> Result<(), ProtoError> {
+        for scope in [RlnScope::Board, RlnScope::Mailbox, RlnScope::Group] {
+            assert_eq!(RlnScope::from_wire(scope.to_wire())?, scope);
+        }
+        assert_eq!(RlnScope::Mailbox.to_wire(), 1);
+        assert!(RlnScope::from_wire(3).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn rln_auth_with_unknown_scope_is_rejected() -> Result<(), ProtoError> {
+        let mut bytes = sample()?.encode()?;
+        if let Some(scope) = bytes.get_mut(32) {
+            *scope = 3;
+        }
+        assert!(matches!(
+            RlnAuth::decode(&bytes),
+            Err(ProtoError::OutOfRange { field: "rln scope" })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn rln_auth_with_bucket_beyond_range_is_rejected() -> Result<(), ProtoError> {
+        let mut bytes = sample()?.encode()?;
+        bytes.splice(33..41, u64::MAX.to_be_bytes());
+        assert!(matches!(
+            RlnAuth::decode(&bytes),
+            Err(ProtoError::Bucket(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn rln_auth_of_wrong_length_is_rejected() -> Result<(), ProtoError> {
+        let mut bytes = sample()?.encode()?;
+        bytes.push(0);
+        assert!(matches!(
+            RlnAuth::decode(&bytes),
+            Err(ProtoError::WrongLength {
+                expected: 265,
+                actual: 266
+            })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn server_id_must_be_https() {
+        assert!(ServerId::new(String::from("http://pingers.example")).is_err());
+        assert!(ServerId::new(String::from("https://pingers.example")).is_ok());
     }
 }

@@ -56,7 +56,11 @@ pub enum ProtoError {
     /// A bucket index from the wire is out of range.
     #[error("bucket out of range")]
     Bucket(#[source] pingers_time::TimeError),
-    /// This part of the contract has no implementation yet.
-    #[error("not implemented")]
-    NotImplemented,
+    /// CBOR input parsed, but is not the one canonical encoding of the value it holds (for
+    /// example a long-form integer or an indefinite-length array).
+    #[error("CBOR is not in canonical form")]
+    NonCanonical,
+    /// A complete value was followed by more bytes.
+    #[error("trailing bytes after the value")]
+    TrailingBytes,
 }

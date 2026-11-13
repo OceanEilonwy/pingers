@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Server API requests and responses not covered by a more specific module (design D).
 //!
-//! The implementer adds the remaining API structs (Privacy Pass issuance, membership tree
-//! leaves, mailbox reads, group state) here, following the same pattern.
+//! Besides the structs the contract fixes, this module carries the other request and response
+//! bodies of design D: account registration and auth answers, the membership tree, mailbox
+//! reads, group log reads and group state. Privacy Pass issuance and invite payloads are not
+//! here yet: their bodies are opaque to this crate until pingers-anon and pingers-parties fix
+//! them.
 
+use minicbor::Decoder;
 use pingers_time::UnixSeconds;
 
-use crate::stub::not_implemented;
+use crate::cbor::{self, CborBody, Writer, versioned_cbor};
 use crate::{
-    AccountId, BoardPage, KeyConfigHash, Lease, LeaseId, ProtoError, Redacted, RelayId, RelayUrl,
-    WireDecode, WireEncode,
+    AccountId, BoardPage, Epoch, GroupLogEntry, KeyConfigHash, Lease, LeaseId, Padded, ProtoError,
+    Redacted, RelayId, RelayUrl, SealedSnapshot, SequenceNumber,
 };
 
 /// A push relay the server advertises (design D, `PushRelayInfo`).
@@ -166,29 +170,584 @@ pub struct BoardSyncResponse {
     pub page: Option<BoardPage>,
 }
 
-/// Implements the CBOR codec contract with stub bodies for each listed type.
-macro_rules! cbor_stub {
-    ($($name:ty),* $(,)?) => {
-        $(
-            impl WireEncode for $name {
-                fn encode(&self) -> Result<Vec<u8>, ProtoError> {
-                    not_implemented(self)
-                }
-            }
-
-            impl WireDecode for $name {
-                fn decode(bytes: &[u8]) -> Result<Self, ProtoError> {
-                    not_implemented(bytes)
-                }
-            }
-        )*
-    };
+/// The answer to `POST /v1/accounts` (design D).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegisterResponse {
+    /// The new account.
+    pub account_id: AccountId,
 }
 
-cbor_stub!(
+/// The answer to `POST /v1/auth` (design D).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthResponse {
+    /// The bearer token for `Authorization: Bearer`, valid for one hour.
+    pub bearer: Redacted<String>,
+    /// The server's clock.
+    pub server_time: UnixSeconds,
+}
+
+/// `POST /v1/rln/leaf` (design D): adds the account's identity commitment to the membership
+/// tree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MembershipLeafRequest {
+    /// `Poseidon(sk)`, a BN254 scalar field element.
+    pub id_commitment: Redacted<[u8; 32]>,
+}
+
+/// The answer to `POST /v1/rln/leaf` (design D).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MembershipLeafResponse {
+    /// The leaf's position in the tree.
+    pub index: MembershipIndex,
+    /// The first hourly root that contains the leaf.
+    pub live_from: RootEpoch,
+}
+
+/// One hourly root of the membership tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MembershipRoot {
+    /// Which hour.
+    pub epoch: RootEpoch,
+    /// The root.
+    pub root: [u8; 32],
+}
+
+/// The answer to `GET /v1/rln/leaves?after=n` (design D).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MembershipLeaves {
+    /// Leaves after the requested index, in order.
+    pub leaves: Vec<[u8; 32]>,
+    /// Leaves that have been zeroed (banned or deleted accounts).
+    pub zeroed: Vec<MembershipIndex>,
+    /// The recent hourly roots.
+    pub roots: Vec<MembershipRoot>,
+    /// Where the next request starts.
+    pub next: MembershipIndex,
+}
+
+/// One message of a mailbox read (design D).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MailboxMessage {
+    /// Its position in the mailbox.
+    pub sequence: SequenceNumber,
+    /// The padded post, as the poster sent it (one of [`crate::SizeClass::MAILBOX_POST`]).
+    pub body: Padded,
+}
+
+/// The answer to `GET /v1/mailboxes/{id}/msgs?after=seq` (design D).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MailboxMessages {
+    /// The messages, oldest first.
+    pub messages: Vec<MailboxMessage>,
+}
+
+/// The answer to `POST /v1/groups/{id}/msgs` (design D).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MessageAccepted {
+    /// The stored message's log position.
+    pub sequence: SequenceNumber,
+}
+
+/// The answer to `GET /v1/groups/{id}/msgs?after=seq` (design D).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupMessages {
+    /// The log entries, oldest first.
+    pub messages: Vec<GroupLogEntry>,
+    /// The log's current epoch.
+    pub head_epoch: Epoch,
+}
+
+/// The answer to `GET /v1/groups/{id}/state` (design D).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupState {
+    /// The epoch the snapshot belongs to.
+    pub epoch: Epoch,
+    /// The sealed snapshot.
+    pub state: SealedSnapshot,
+}
+
+/// A position in the RLN membership tree (design B.4.8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MembershipIndex(u32);
+
+impl MembershipIndex {
+    /// Wraps an index.
+    #[must_use]
+    pub const fn new(index: u32) -> Self {
+        Self(index)
+    }
+
+    /// The index.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// An hour of membership tree roots (design B.4.8, `root_epoch`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RootEpoch(u32);
+
+impl RootEpoch {
+    /// Wraps an epoch.
+    #[must_use]
+    pub const fn new(epoch: u32) -> Self {
+        Self(epoch)
+    }
+
+    /// The epoch.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Reads a server timestamp.
+fn read_time(decoder: &mut Decoder<'_>) -> Result<UnixSeconds, ProtoError> {
+    Ok(UnixSeconds::new(decoder.u64()?))
+}
+
+impl AnonymousCredential {
+    const fn to_wire(self) -> u8 {
+        match self {
+            Self::MembershipProof => 0,
+            Self::PrivacyPass => 1,
+        }
+    }
+}
+
+impl CborBody for AnonymousCredential {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.unsigned(self.to_wire());
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        match decoder.u8()? {
+            0 => Ok(Self::MembershipProof),
+            1 => Ok(Self::PrivacyPass),
+            _ => Err(ProtoError::OutOfRange {
+                field: "anonymous credential",
+            }),
+        }
+    }
+}
+
+impl CborBody for RelayUrl {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        self.encode_cbor(writer)
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        Self::decode_cbor(decoder)
+    }
+}
+
+/// Layout: `[relay id, url, key config hash, operator]`.
+impl CborBody for PushRelayInfo {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(4)?;
+        writer.unsigned(self.relay_id.get());
+        self.url.encode_cbor(writer)?;
+        writer.bytes(self.key_config_hash.as_bytes())?;
+        writer.text(&self.operator)
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 4)?;
+        Ok(Self {
+            relay_id: RelayId::new(decoder.u16()?),
+            url: RelayUrl::decode_cbor(decoder)?,
+            key_config_hash: KeyConfigHash::from_bytes(cbor::fixed_bytes(decoder)?),
+            operator: decoder.str()?.to_owned(),
+        })
+    }
+}
+
+/// Layout: `[credentials, slashing (0 off, 1 on), cover read ratio (f32), board page records,
+/// OHTTP relays, push relays, custom push relays (0 not allowed, 1 allowed), operator,
+/// server time]`.
+impl CborBody for Params {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(9)?;
+        writer.list(&self.anonymous_credentials)?;
+        writer.unsigned(match self.rln_slashing {
+            Slashing::Off => 0_u8,
+            Slashing::On => 1,
+        });
+        // The constructor admits -0.0; writing its magnitude keeps one encoding per value.
+        writer.float(self.cover_read_ratio.get().abs());
+        writer.unsigned(self.board_page_records);
+        writer.list(&self.ohttp_relays)?;
+        writer.list(&self.push_relays)?;
+        writer.unsigned(match self.custom_push_relays {
+            CustomPushRelays::NotAllowed => 0_u8,
+            CustomPushRelays::Allowed => 1,
+        });
+        writer.text(&self.server_operator)?;
+        writer.unsigned(self.server_time.get());
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 9)?;
+        Ok(Self {
+            anonymous_credentials: cbor::list(decoder)?,
+            rln_slashing: match decoder.u8()? {
+                0 => Slashing::Off,
+                1 => Slashing::On,
+                _ => return Err(ProtoError::OutOfRange { field: "slashing" }),
+            },
+            cover_read_ratio: CoverReadRatio::new(decoder.f32()?)?,
+            board_page_records: decoder.u32()?,
+            ohttp_relays: cbor::list(decoder)?,
+            push_relays: cbor::list(decoder)?,
+            custom_push_relays: match decoder.u8()? {
+                0 => CustomPushRelays::NotAllowed,
+                1 => CustomPushRelays::Allowed,
+                _ => {
+                    return Err(ProtoError::OutOfRange {
+                        field: "custom push relays",
+                    });
+                }
+            },
+            server_operator: decoder.str()?.to_owned(),
+            server_time: read_time(decoder)?,
+        })
+    }
+}
+
+/// Layout: `[signature key, proof, registration code or null]`.
+impl CborBody for RegisterRequest {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(3)?;
+        writer.bytes(&self.signature_key)?;
+        writer.bytes(&self.proof)?;
+        writer.option(self.registration_code.as_ref(), |writer, code| {
+            writer.text(code.get())
+        })
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 3)?;
+        Ok(Self {
+            signature_key: cbor::fixed_bytes(decoder)?,
+            proof: cbor::fixed_bytes(decoder)?,
+            registration_code: cbor::option(decoder, |decoder| {
+                Ok(Redacted::new(decoder.str()?.to_owned()))
+            })?,
+        })
+    }
+}
+
+/// Layout: `[account id, nonce signature]`.
+impl CborBody for AuthRequest {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(2)?;
+        writer.bytes(self.account_id.as_bytes())?;
+        writer.bytes(&self.nonce_signature)
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 2)?;
+        Ok(Self {
+            account_id: AccountId::from_bytes(cbor::fixed_bytes(decoder)?),
+            nonce_signature: cbor::fixed_bytes(decoder)?,
+        })
+    }
+}
+
+/// Layout: `[lease id, revoke key]`.
+impl CborBody for LeaseReplacement {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(2)?;
+        writer.bytes(self.lease_id.as_bytes())?;
+        writer.bytes(self.revoke_key.get())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 2)?;
+        Ok(Self {
+            lease_id: LeaseId::from_bytes(cbor::fixed_bytes(decoder)?),
+            revoke_key: Redacted::new(cbor::fixed_bytes(decoder)?),
+        })
+    }
+}
+
+/// Layout: `[lease (424 bytes, fixed layout), replacement or null, read (0 skip, 1 read)]`.
+impl CborBody for BoardSyncRequest {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(3)?;
+        writer.bytes(&self.lease.to_bytes())?;
+        writer.option(self.replaces.as_ref(), |writer, replaces| {
+            replaces.encode_body(writer)
+        })?;
+        writer.unsigned(match self.read {
+            ReadBoard::Skip => 0_u8,
+            ReadBoard::Read => 1,
+        });
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 3)?;
+        Ok(Self {
+            lease: Lease::from_bytes(decoder.bytes()?)?,
+            replaces: cbor::option(decoder, LeaseReplacement::decode_body)?,
+            read: match decoder.u8()? {
+                0 => ReadBoard::Skip,
+                1 => ReadBoard::Read,
+                _ => {
+                    return Err(ProtoError::OutOfRange {
+                        field: "read board",
+                    });
+                }
+            },
+        })
+    }
+}
+
+/// Layout: `[lease id, server time, page or null]`.
+impl CborBody for BoardSyncResponse {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(3)?;
+        writer.bytes(self.lease_id.as_bytes())?;
+        writer.unsigned(self.server_time.get());
+        writer.option(self.page.as_ref(), |writer, page| page.encode_body(writer))
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 3)?;
+        Ok(Self {
+            lease_id: LeaseId::from_bytes(cbor::fixed_bytes(decoder)?),
+            server_time: read_time(decoder)?,
+            page: cbor::option(decoder, BoardPage::decode_body)?,
+        })
+    }
+}
+
+/// Layout: `[account id]`.
+impl CborBody for RegisterResponse {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(1)?;
+        writer.bytes(self.account_id.as_bytes())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 1)?;
+        Ok(Self {
+            account_id: AccountId::from_bytes(cbor::fixed_bytes(decoder)?),
+        })
+    }
+}
+
+/// Layout: `[bearer, server time]`.
+impl CborBody for AuthResponse {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(2)?;
+        writer.text(self.bearer.get())?;
+        writer.unsigned(self.server_time.get());
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 2)?;
+        Ok(Self {
+            bearer: Redacted::new(decoder.str()?.to_owned()),
+            server_time: read_time(decoder)?,
+        })
+    }
+}
+
+/// Layout: `[id commitment]`.
+impl CborBody for MembershipLeafRequest {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(1)?;
+        writer.bytes(self.id_commitment.get())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 1)?;
+        Ok(Self {
+            id_commitment: Redacted::new(cbor::fixed_bytes(decoder)?),
+        })
+    }
+}
+
+/// Layout: `[index, live from root epoch]`.
+impl CborBody for MembershipLeafResponse {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(2)?;
+        writer.unsigned(self.index.get());
+        writer.unsigned(self.live_from.get());
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 2)?;
+        Ok(Self {
+            index: MembershipIndex::new(decoder.u32()?),
+            live_from: RootEpoch::new(decoder.u32()?),
+        })
+    }
+}
+
+impl CborBody for [u8; 32] {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.bytes(self)
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::fixed_bytes(decoder)
+    }
+}
+
+impl CborBody for MembershipIndex {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.unsigned(self.get());
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        Ok(Self::new(decoder.u32()?))
+    }
+}
+
+/// Layout: `[root epoch, root]`.
+impl CborBody for MembershipRoot {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(2)?;
+        writer.unsigned(self.epoch.get());
+        writer.bytes(&self.root)
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 2)?;
+        Ok(Self {
+            epoch: RootEpoch::new(decoder.u32()?),
+            root: cbor::fixed_bytes(decoder)?,
+        })
+    }
+}
+
+/// Layout: `[leaves, zeroed indexes, roots, next]`.
+impl CborBody for MembershipLeaves {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(4)?;
+        writer.list(&self.leaves)?;
+        writer.list(&self.zeroed)?;
+        writer.list(&self.roots)?;
+        writer.unsigned(self.next.get());
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 4)?;
+        Ok(Self {
+            leaves: cbor::list(decoder)?,
+            zeroed: cbor::list(decoder)?,
+            roots: cbor::list(decoder)?,
+            next: MembershipIndex::new(decoder.u32()?),
+        })
+    }
+}
+
+/// Layout: `[sequence, padded body]`; the body's length must be a size class.
+impl CborBody for MailboxMessage {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(2)?;
+        writer.unsigned(self.sequence.get());
+        writer.bytes(self.body.as_bytes())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 2)?;
+        Ok(Self {
+            sequence: SequenceNumber::new(decoder.u64()?),
+            body: Padded::from_wire(decoder.bytes()?.to_vec())?,
+        })
+    }
+}
+
+/// Layout: `[messages]`.
+impl CborBody for MailboxMessages {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(1)?;
+        writer.list(&self.messages)
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 1)?;
+        Ok(Self {
+            messages: cbor::list(decoder)?,
+        })
+    }
+}
+
+/// Layout: `[sequence]`.
+impl CborBody for MessageAccepted {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(1)?;
+        writer.unsigned(self.sequence.get());
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 1)?;
+        Ok(Self {
+            sequence: SequenceNumber::new(decoder.u64()?),
+        })
+    }
+}
+
+/// Layout: `[entries, head epoch]`.
+impl CborBody for GroupMessages {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(2)?;
+        writer.list(&self.messages)?;
+        writer.unsigned(self.head_epoch.get());
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 2)?;
+        Ok(Self {
+            messages: cbor::list(decoder)?,
+            head_epoch: Epoch::new(decoder.u64()?),
+        })
+    }
+}
+
+/// Layout: `[epoch, snapshot]`.
+impl CborBody for GroupState {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(2)?;
+        writer.unsigned(self.epoch.get());
+        writer.bytes(self.state.as_bytes())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 2)?;
+        Ok(Self {
+            epoch: Epoch::new(decoder.u64()?),
+            state: SealedSnapshot::from_bytes(decoder.bytes()?.to_vec()),
+        })
+    }
+}
+
+versioned_cbor!(
     Params,
     RegisterRequest,
+    RegisterResponse,
     AuthRequest,
+    AuthResponse,
+    MembershipLeafRequest,
+    MembershipLeafResponse,
+    MembershipLeaves,
     BoardSyncRequest,
-    BoardSyncResponse
+    BoardSyncResponse,
+    MailboxMessages,
+    MessageAccepted,
+    GroupMessages,
+    GroupState,
 );
