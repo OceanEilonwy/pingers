@@ -33,6 +33,9 @@ toml = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+# The in-process harness and its OHTTP relay (integration tests only: the testkit depends on
+# this crate's library, so unit tests would see a second copy of its types).
+pingers-testkit = { workspace = true, features = ["harness"] }
 pingers-time = { workspace = true, features = ["test-util"] }
 
 [lints]

@@ -16,15 +16,37 @@ layer = "dev"
 # pingers-screens, pingers-cli, pingers-client's own integration tests). The crate docs
 # ("Dependencies and layers") say why it is not on by default.
 client = ["dep:pingers-client", "dep:pingers-meetup"]
+# `InProcessHarness::start` runs pingers-server, an OHTTP relay and pingers-push-relay on
+# ephemeral ports. Off by default so crates that only need the fake platform do not compile
+# the server (harness module docs).
+harness = [
+  "dep:pingers-server",
+  "dep:pingers-push-relay",
+  "dep:pingers-ohttp",
+  "dep:pingers-crypto",
+  "dep:axum",
+  "dep:hyper",
+  "dep:hyper-util",
+  "dep:tokio",
+]
 
 [dependencies]
-# Without the feature the testkit depends only on L0 and L1 crates (crate docs).
+# Without the features the testkit depends only on L0 and L1 crates (crate docs).
 pingers-time = { workspace = true, features = ["test-util"] }
 pingers-proto = { workspace = true }
 pingers-geo = { workspace = true }
 pingers-gate = { workspace = true }
 pingers-client = { workspace = true, optional = true }
 pingers-meetup = { workspace = true, optional = true }
+pingers-crypto = { workspace = true, optional = true }
+pingers-ohttp = { workspace = true, optional = true }
+# The binaries' library targets have no workspace entry (nothing else depends on them).
+pingers-push-relay = { path = "../pingers-push-relay", optional = true }
+pingers-server = { path = "../pingers-server", optional = true }
+axum = { workspace = true, optional = true }
+hyper = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["net"], optional = true }
 hex = { workspace = true }
 rand_chacha = { workspace = true }
 rand_core = { workspace = true }
