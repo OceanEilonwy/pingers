@@ -40,6 +40,10 @@ impl LiveChannel for Echo {
     ) -> Result<mpsc::Receiver<LiveFrame>, LiveRefused> {
         Ok(inbound)
     }
+
+    fn send(&self, _request: &BinaryRequest, _frame: LiveFrame) -> Result<(), LiveRefused> {
+        Err(LiveRefused::NoChannel)
+    }
 }
 
 struct ChannelBody(mpsc::UnboundedReceiver<Bytes>);

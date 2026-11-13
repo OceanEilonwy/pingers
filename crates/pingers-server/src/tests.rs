@@ -60,6 +60,10 @@ impl LiveChannel for Echo {
     ) -> Result<mpsc::Receiver<LiveFrame>, LiveRefused> {
         Ok(inbound)
     }
+
+    fn send(&self, _request: &BinaryRequest, _frame: LiveFrame) -> Result<(), LiveRefused> {
+        Err(LiveRefused::NoChannel)
+    }
 }
 
 struct Running {
@@ -324,6 +328,10 @@ impl LiveChannel for Scripted {
         }
         Ok(receiver)
     }
+
+    fn send(&self, _request: &BinaryRequest, _frame: LiveFrame) -> Result<(), LiveRefused> {
+        Err(LiveRefused::NoChannel)
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -463,8 +471,8 @@ async fn inner_requests_are_routed_by_their_privacy_class() -> TestResult {
         (inner("POST", "/v1/groups"), 501),
         // Identified: names the account, so it goes direct.
         (inner("POST", "/v1/accounts"), 421),
-        // The live channel only runs chunked.
-        (inner("POST", "/v1/groups/g1/live"), 421),
+        // A split channel's uplink frame with no downlink open (and no body).
+        (inner("POST", "/v1/groups/g1/live"), 400),
         (inner("GET", "/v1/nothing"), 404),
         (inner("PUT", "/v1/board/sync"), 405),
     ];
@@ -953,4 +961,5 @@ fn live_frames_print_only_their_length() {
     );
 }
 
+mod live;
 mod wired;

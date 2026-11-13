@@ -171,7 +171,7 @@ fn each_class_arrives_only_on_its_channels() {
         (Class::Public, [true, true, false]),
         (Class::Identified, [true, false, false]),
         (Class::Anonymous, [false, true, false]),
-        (Class::Stream, [false, false, true]),
+        (Class::Stream, [false, true, true]),
     ];
     for (class, allowed) in expected {
         for (channel, allowed) in channels.into_iter().zip(allowed) {

@@ -17,7 +17,7 @@ use pingers_time::Timer as _;
 use tokio::sync::mpsc;
 
 use crate::dispatch::{Reply, answer};
-use crate::live::{LIVE_BUFFER, LiveBody, next_data};
+use crate::live::{LIVE_BUFFER, LiveBody, OpenChannel, next_data};
 use crate::route::{Channel, Resolved, Route, resolve};
 use crate::{Peer, Shared};
 
@@ -193,7 +193,15 @@ async fn chunked(shared: &Shared, mut body: Body) -> Response {
             shared
                 .metrics
                 .record(Channel::ObliviousStream, StatusCode::OK);
-            LiveBody::open(gateway, body, inbound, outbound)
+            LiveBody::open(
+                gateway,
+                body,
+                OpenChannel {
+                    inbound,
+                    outbound,
+                    timer: Arc::clone(&shared.timer),
+                },
+            )
         } else {
             shared
                 .metrics

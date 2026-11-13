@@ -81,6 +81,8 @@ async fn dispatch(shared: &Shared, route: Route, request: &BinaryRequest) -> Rep
         Route::PostToMailbox => either(mailbox_routes::post(shared, request).await),
         Route::ReadMailbox => either(mailbox_routes::read(shared, request).await),
         Route::DeleteMailbox => either(mailbox_routes::delete(shared, request).await),
+        // A split channel's uplink frame; the chunked exchange goes through the gateway.
+        Route::Live => live_uplink(shared, request),
         // Waiting on pingers-delivery (group logs, subscriptions; the live channel is
         // `LiveChannel`).
         Route::CreateGroup
@@ -91,7 +93,6 @@ async fn dispatch(shared: &Shared, route: Route, request: &BinaryRequest) -> Rep
         | Route::ReadGroupMessages
         | Route::GroupState
         | Route::DeleteGroup
-        | Route::Live
         // Waiting on pingers-quota (accounts gate leaf registration and token issuance; the
         // membership tree; Privacy Pass).
         | Route::CreateAccount
@@ -103,5 +104,18 @@ async fn dispatch(shared: &Shared, route: Route, request: &BinaryRequest) -> Rep
         | Route::PrivacyPassKeys
         // Waiting on pingers-quota, whose credential policy it publishes.
         | Route::Params => Reply::status(StatusCode::NOT_IMPLEMENTED),
+    }
+}
+
+/// `POST /v1/groups/{id}/live` as a one-shot request: one uplink frame of a split channel.
+fn live_uplink(shared: &Shared, request: &BinaryRequest) -> Reply {
+    if request.body.is_empty() {
+        return Reply::status(StatusCode::BAD_REQUEST);
+    }
+    let frame = crate::LiveFrame::new(request.body.clone());
+    match shared.live.send(request, frame) {
+        Ok(()) => Reply::status(StatusCode::ACCEPTED),
+        Err(crate::LiveRefused::NoChannel) => Reply::status(StatusCode::NOT_FOUND),
+        Err(crate::LiveRefused::NotWired) => Reply::status(StatusCode::NOT_IMPLEMENTED),
     }
 }

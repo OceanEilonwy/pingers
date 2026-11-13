@@ -59,7 +59,10 @@ pub use crate::config::{
     AddressList, ConfigError, Logging, MailboxStore, OhttpKeys, RelayAllowList, ServerConfig,
 };
 pub use crate::error::ServerError;
-pub use crate::live::{DeliveryLive, LIVE_BUFFER, LiveChannel, LiveFrame, LiveRefused};
+pub use crate::live::{
+    DeliveryLive, KEEP_ALIVE_CHUNK, KEEP_ALIVE_INTERVAL, LIVE_BUFFER, LiveChannel, LiveFrame,
+    LiveRefused,
+};
 
 use crate::board_routes::BoardService;
 use crate::mailbox_routes::MailboxService;

@@ -67,7 +67,8 @@ pub(crate) enum Class {
     Identified,
     /// Must not reveal the caller's address: one-shot OHTTP only.
     Anonymous,
-    /// The live channel: chunked OHTTP only.
+    /// The live channel: chunked OHTTP, or one-shot OHTTP for a split channel's uplink
+    /// frames (pingers-transport's contract). Never direct.
     Stream,
 }
 
@@ -90,7 +91,7 @@ impl Class {
             (Self::Public, Channel::Direct | Channel::Oblivious)
                 | (Self::Identified, Channel::Direct)
                 | (Self::Anonymous, Channel::Oblivious)
-                | (Self::Stream, Channel::ObliviousStream)
+                | (Self::Stream, Channel::Oblivious | Channel::ObliviousStream)
         )
     }
 }

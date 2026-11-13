@@ -6,14 +6,18 @@
 //! [`LiveChannel`]; whatever frames the channel returns are sealed as response chunks. When the
 //! returned stream ends, the gateway sends the final chunk.
 
+use std::future::Future;
 use std::pin::Pin;
-use std::task::{Context, Poll, ready};
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::Duration;
 
 use axum::body::{Body, Bytes, HttpBody};
 use hyper::body::Frame;
 use pingers_ohttp::{
     BinaryRequest, ChunkPosition, ChunkedGateway, OhttpError, RequestChunkDecoder,
 };
+use pingers_time::Timer;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -57,6 +61,8 @@ impl core::fmt::Debug for LiveFrame {
 pub enum LiveRefused {
     /// pingers-delivery's fan-out registry is not wired in yet.
     NotWired,
+    /// An uplink frame names a channel with no open downlink.
+    NoChannel,
 }
 
 /// Joins a member's live exchange to its group.
@@ -74,6 +80,15 @@ pub trait LiveChannel: Send + Sync + 'static {
         request: &BinaryRequest,
         inbound: mpsc::Receiver<LiveFrame>,
     ) -> Result<mpsc::Receiver<LiveFrame>, LiveRefused>;
+
+    /// Delivers one uplink frame of a split channel (pingers-transport's contract): a one-shot
+    /// OHTTP request with the live head's method, path and headers, for a member whose relay
+    /// buffers request bodies and so holds only a downlink exchange.
+    ///
+    /// # Errors
+    ///
+    /// [`LiveRefused`] if the frame cannot be delivered.
+    fn send(&self, request: &BinaryRequest, frame: LiveFrame) -> Result<(), LiveRefused>;
 }
 
 /// The production live channel: pingers-delivery's fan-out registry once it has one; until
@@ -91,6 +106,24 @@ impl LiveChannel for DeliveryLive {
         // and returns the merged stream of the other members' frames.
         Err(LiveRefused::NotWired)
     }
+
+    fn send(&self, _request: &BinaryRequest, _frame: LiveFrame) -> Result<(), LiveRefused> {
+        // Waiting on pingers-delivery, as `open`.
+        Err(LiveRefused::NotWired)
+    }
+}
+
+/// pingers-transport's keep-alive chunk: sent after [`KEEP_ALIVE_INTERVAL`] without other
+/// chunks, and discarded on receipt. The client drops an exchange after 65 s of silence.
+pub const KEEP_ALIVE_CHUNK: [u8; 1] = [0x00];
+/// How long the gateway's half of a live exchange may be silent before a keep-alive.
+pub const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(20);
+
+type Idle = Pin<Box<dyn Future<Output = ()> + Send>>;
+
+fn idle(timer: &Arc<dyn Timer>) -> Idle {
+    let timer = Arc::clone(timer);
+    Box::pin(async move { timer.sleep(KEEP_ALIVE_INTERVAL).await })
 }
 
 /// Aborts the task when dropped, so a pump never outlives its exchange.
@@ -109,6 +142,9 @@ pub(crate) struct LiveBody {
     preamble: Option<Vec<u8>>,
     /// `None` when the channel was refused: only the final chunk follows.
     outbound: Option<mpsc::Receiver<LiveFrame>>,
+    /// Sends keep-alives while the channel is quiet (open exchanges only).
+    timer: Option<Arc<dyn Timer>>,
+    idle: Option<Idle>,
     finished: bool,
     /// Reads the request stream; aborted when this body is dropped.
     _pump: Option<AbortOnDrop>,
@@ -122,6 +158,8 @@ impl LiveBody {
             gateway,
             preamble,
             outbound: None,
+            timer: None,
+            idle: None,
             finished: false,
             _pump: None,
         }
@@ -129,12 +167,12 @@ impl LiveBody {
 
     /// An exchange carrying `outbound`, while a task feeds the member's frames from
     /// `request_body` to the channel's `inbound` sender.
-    pub(crate) fn open(
-        gateway: ChunkedGateway,
-        request_body: Body,
-        inbound: mpsc::Sender<LiveFrame>,
-        outbound: mpsc::Receiver<LiveFrame>,
-    ) -> Self {
+    pub(crate) fn open(gateway: ChunkedGateway, request_body: Body, channel: OpenChannel) -> Self {
+        let OpenChannel {
+            inbound,
+            outbound,
+            timer,
+        } = channel;
         let decoder = gateway.request_decoder();
         let preamble = Some(gateway.response_preamble());
         let pump = tokio::spawn(pump(request_body, decoder, inbound));
@@ -142,6 +180,8 @@ impl LiveBody {
             gateway,
             preamble,
             outbound: Some(outbound),
+            idle: Some(idle(&timer)),
+            timer: Some(timer),
             finished: false,
             _pump: Some(AbortOnDrop(pump)),
         }
@@ -155,6 +195,10 @@ impl LiveBody {
         let sealed = self.gateway.seal_chunk(payload, position);
         if sealed.is_err() || position == ChunkPosition::Final {
             self.finished = true;
+        }
+        // Any chunk restarts the silence count.
+        if let Some(timer) = &self.timer {
+            self.idle = Some(idle(timer));
         }
         sealed.map(|bytes| Frame::data(Bytes::from(bytes)))
     }
@@ -176,18 +220,31 @@ impl HttpBody for LiveBody {
             return Poll::Ready(Some(Ok(Frame::data(Bytes::from(preamble)))));
         }
         loop {
-            let next = match this.outbound.as_mut() {
-                Some(outbound) => ready!(outbound.poll_recv(context)),
-                None => None,
+            let Some(outbound) = this.outbound.as_mut() else {
+                return Poll::Ready(Some(this.seal(&[], ChunkPosition::Final)));
             };
-            match next {
+            match outbound.poll_recv(context) {
                 // A non-final chunk may not be empty (draft-08 §6), and an empty frame says
                 // nothing: skip it.
-                Some(frame) if frame.as_bytes().is_empty() => {}
-                Some(frame) => {
+                Poll::Ready(Some(frame)) if frame.as_bytes().is_empty() => {}
+                Poll::Ready(Some(frame)) => {
                     return Poll::Ready(Some(this.seal(frame.as_bytes(), ChunkPosition::NonFinal)));
                 }
-                None => return Poll::Ready(Some(this.seal(&[], ChunkPosition::Final))),
+                Poll::Ready(None) => {
+                    return Poll::Ready(Some(this.seal(&[], ChunkPosition::Final)));
+                }
+                Poll::Pending => {
+                    let quiet_too_long = this
+                        .idle
+                        .as_mut()
+                        .is_some_and(|idle| idle.as_mut().poll(context).is_ready());
+                    if quiet_too_long {
+                        return Poll::Ready(Some(
+                            this.seal(&KEEP_ALIVE_CHUNK, ChunkPosition::NonFinal),
+                        ));
+                    }
+                    return Poll::Pending;
+                }
             }
         }
     }
@@ -219,7 +276,8 @@ async fn forward(
     inbound: &mpsc::Sender<LiveFrame>,
 ) -> bool {
     for chunk in chunks {
-        if chunk.payload.is_empty() {
+        // Keep-alives only keep the exchange open; empty chunks carry nothing.
+        if chunk.payload.is_empty() || chunk.payload == KEEP_ALIVE_CHUNK {
             continue;
         }
         if inbound.send(LiveFrame::new(chunk.payload)).await.is_err() {
@@ -233,11 +291,16 @@ async fn forward(
 /// broken connection, a chunk that does not open, a missing final chunk) ends the inbound
 /// stream, which ends the exchange. Live bodies last as long as a Meetup, so there is no read
 /// timeout here: noticing a silent member is the delivery service's job.
+///
+/// A request stream that ends right after its head (nothing but an empty final chunk) is a
+/// split channel's downlink: the member's frames come as one-shot requests instead, so the
+/// inbound stream is kept open until the exchange is dropped.
 async fn pump(mut body: Body, mut decoder: RequestChunkDecoder, inbound: mpsc::Sender<LiveFrame>) {
     // Chunks that arrived with the head come out of the first feed.
     let Ok(first) = decoder.feed(&[]) else {
         return;
     };
+    let mut chunks_seen = !first.is_empty();
     if !forward(first, &inbound).await {
         return;
     }
@@ -251,11 +314,27 @@ async fn pump(mut body: Body, mut decoder: RequestChunkDecoder, inbound: mpsc::S
         let Ok(chunks) = decoder.feed(&bytes) else {
             return;
         };
+        chunks_seen |= !chunks.is_empty();
         if !forward(chunks, &inbound).await {
             return;
         }
     }
-    if let Ok(Some(last)) = decoder.finish() {
-        forward(vec![last], &inbound).await;
+    let Ok(Some(last)) = decoder.finish() else {
+        return;
+    };
+    if !chunks_seen && last.payload.is_empty() {
+        // Downlink only: hold the inbound stream open; this task is aborted with the exchange.
+        std::future::pending::<()>().await;
     }
+    forward(vec![last], &inbound).await;
+}
+
+/// What an open exchange is made of.
+pub(crate) struct OpenChannel {
+    /// Where the member's frames go.
+    pub(crate) inbound: mpsc::Sender<LiveFrame>,
+    /// The frames to send back.
+    pub(crate) outbound: mpsc::Receiver<LiveFrame>,
+    /// For keep-alives.
+    pub(crate) timer: Arc<dyn Timer>,
 }
