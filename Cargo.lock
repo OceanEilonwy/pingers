@@ -3402,9 +3402,10 @@ name = "pingers-proto"
 version = "0.1.0"
 dependencies = [
  "minicbor",
+ "pingers-testkit",
  "pingers-time",
  "proptest",
- "serde",
+ "serde_json",
  "thiserror",
 ]
 

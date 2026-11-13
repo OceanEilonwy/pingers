@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The MLS delivery service's envelopes: group logs, commits and live frames (design D).
 
-use crate::stub::not_implemented;
-use crate::{
-    Epoch, GroupId, ProtoError, SequenceNumber, Subscription, SubscriptionId, Urgency, WireDecode,
-    WireEncode,
-};
+use minicbor::Decoder;
+
+use crate::cbor::{self, CborBody, Writer, versioned_cbor};
+use crate::{Epoch, GroupId, ProtoError, SequenceNumber, Subscription, SubscriptionId, Urgency};
 
 /// Defines an opaque, variable-length byte string whose `Debug` prints only its length.
 macro_rules! opaque_vec {
@@ -183,26 +182,221 @@ pub struct LiveFrame {
     pub delivery: Delivery,
 }
 
-/// Implements the CBOR codec contract with stub bodies for each listed type.
-macro_rules! cbor_stub {
-    ($($name:ty),* $(,)?) => {
-        $(
-            impl WireEncode for $name {
-                fn encode(&self) -> Result<Vec<u8>, ProtoError> {
-                    not_implemented(self)
-                }
-            }
+impl ContentType {
+    /// Writes the MLS wire value: 1 application, 2 proposal, 3 commit (RFC 9420).
+    fn encode_cbor(self, writer: &mut Writer) {
+        writer.unsigned(match self {
+            Self::Application => 1_u8,
+            Self::Proposal => 2,
+            Self::Commit => 3,
+        });
+    }
 
-            impl WireDecode for $name {
-                fn decode(bytes: &[u8]) -> Result<Self, ProtoError> {
-                    not_implemented(bytes)
-                }
-            }
-        )*
-    };
+    fn decode_cbor(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        match decoder.u8()? {
+            1 => Ok(Self::Application),
+            2 => Ok(Self::Proposal),
+            3 => Ok(Self::Commit),
+            _ => Err(ProtoError::OutOfRange {
+                field: "content type",
+            }),
+        }
+    }
 }
 
-cbor_stub!(
+impl Delivery {
+    /// Writes the wire value: 0 stored, 1 ephemeral.
+    fn encode_cbor(self, writer: &mut Writer) {
+        writer.unsigned(match self {
+            Self::Stored => 0_u8,
+            Self::Ephemeral => 1,
+        });
+    }
+
+    fn decode_cbor(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        match decoder.u8()? {
+            0 => Ok(Self::Stored),
+            1 => Ok(Self::Ephemeral),
+            _ => Err(ProtoError::OutOfRange { field: "delivery" }),
+        }
+    }
+}
+
+/// Reads an MLS message.
+fn read_message(decoder: &mut Decoder<'_>) -> Result<MlsMessageBytes, ProtoError> {
+    Ok(MlsMessageBytes::from_bytes(decoder.bytes()?.to_vec()))
+}
+
+/// Reads an optional snapshot.
+fn read_snapshot(decoder: &mut Decoder<'_>) -> Result<Option<SealedSnapshot>, ProtoError> {
+    cbor::option(decoder, |decoder| {
+        Ok(SealedSnapshot::from_bytes(decoder.bytes()?.to_vec()))
+    })
+}
+
+impl CborBody for SubscriptionId {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.bytes(self.as_bytes())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::fixed_bytes(decoder).map(Self::from_bytes)
+    }
+}
+
+/// Layout: `[group id, auth key, subscriptions, state or null]`.
+impl CborBody for CreateGroup {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(4)?;
+        writer.bytes(self.group_id.as_bytes())?;
+        writer.bytes(self.auth_key.as_bytes())?;
+        writer.list(&self.subscriptions)?;
+        writer.option(self.state.as_ref(), |writer, state| {
+            writer.bytes(state.as_bytes())
+        })
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 4)?;
+        Ok(Self {
+            group_id: GroupId::from_bytes(cbor::fixed_bytes(decoder)?),
+            auth_key: GroupAuthKey::from_bytes(cbor::fixed_bytes(decoder)?),
+            subscriptions: cbor::list(decoder)?,
+            state: read_snapshot(decoder)?,
+        })
+    }
+}
+
+/// Layout: `[epoch, commit, next auth key, state or null, subscriptions added, subscription ids
+/// removed, wake urgency]`.
+impl CborBody for CommitRequest {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(7)?;
+        writer.unsigned(self.epoch.get());
+        writer.bytes(self.commit.as_bytes())?;
+        writer.bytes(self.next_auth_key.as_bytes())?;
+        writer.option(self.state.as_ref(), |writer, state| {
+            writer.bytes(state.as_bytes())
+        })?;
+        writer.list(&self.subscriptions_added)?;
+        writer.list(&self.subscriptions_removed)?;
+        self.wake.encode_cbor(writer);
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 7)?;
+        Ok(Self {
+            epoch: Epoch::new(decoder.u64()?),
+            commit: read_message(decoder)?,
+            next_auth_key: GroupAuthKey::from_bytes(cbor::fixed_bytes(decoder)?),
+            state: read_snapshot(decoder)?,
+            subscriptions_added: cbor::list(decoder)?,
+            subscriptions_removed: cbor::list(decoder)?,
+            wake: Urgency::decode_cbor(decoder)?,
+        })
+    }
+}
+
+/// Layout: `[0, sequence]` for Accepted, `[1, head epoch]` for Conflict.
+impl CborBody for CommitResponse {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(2)?;
+        match self {
+            Self::Accepted { sequence } => {
+                writer.unsigned(0_u8);
+                writer.unsigned(sequence.get());
+            }
+            Self::Conflict { head_epoch } => {
+                writer.unsigned(1_u8);
+                writer.unsigned(head_epoch.get());
+            }
+        }
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 2)?;
+        match decoder.u8()? {
+            0 => Ok(Self::Accepted {
+                sequence: SequenceNumber::new(decoder.u64()?),
+            }),
+            1 => Ok(Self::Conflict {
+                head_epoch: Epoch::new(decoder.u64()?),
+            }),
+            _ => Err(ProtoError::OutOfRange {
+                field: "commit response",
+            }),
+        }
+    }
+}
+
+/// Layout: `[epoch, body, delivery, wake urgency or null]`.
+impl CborBody for AppMessage {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(4)?;
+        writer.unsigned(self.epoch.get());
+        writer.bytes(self.body.as_bytes())?;
+        self.delivery.encode_cbor(writer);
+        writer.option(self.wake.as_ref(), |writer, wake| {
+            wake.encode_cbor(writer);
+            Ok(())
+        })
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 4)?;
+        Ok(Self {
+            epoch: Epoch::new(decoder.u64()?),
+            body: read_message(decoder)?,
+            delivery: Delivery::decode_cbor(decoder)?,
+            wake: cbor::option(decoder, Urgency::decode_cbor)?,
+        })
+    }
+}
+
+/// Layout: `[sequence, epoch, content type, body]`.
+impl CborBody for GroupLogEntry {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(4)?;
+        writer.unsigned(self.sequence.get());
+        writer.unsigned(self.epoch.get());
+        self.content_type.encode_cbor(writer);
+        writer.bytes(self.body.as_bytes())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 4)?;
+        Ok(Self {
+            sequence: SequenceNumber::new(decoder.u64()?),
+            epoch: Epoch::new(decoder.u64()?),
+            content_type: ContentType::decode_cbor(decoder)?,
+            body: read_message(decoder)?,
+        })
+    }
+}
+
+/// Layout: `[epoch, body, delivery]`.
+impl CborBody for LiveFrame {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(3)?;
+        writer.unsigned(self.epoch.get());
+        writer.bytes(self.body.as_bytes())?;
+        self.delivery.encode_cbor(writer);
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 3)?;
+        Ok(Self {
+            epoch: Epoch::new(decoder.u64()?),
+            body: read_message(decoder)?,
+            delivery: Delivery::decode_cbor(decoder)?,
+        })
+    }
+}
+
+versioned_cbor!(
     CreateGroup,
     CommitRequest,
     CommitResponse,

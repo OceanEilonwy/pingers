@@ -1,0 +1,29 @@
+{
+  "name": "location-plaintext-encoding",
+  "description": "Inner plaintext of SealedLocation as canonical CBOR (design B.6)",
+  "vectors": [
+    {
+      "name": "with-heading-no-speed",
+      "inputs": {
+        "latitude": 515007000,
+        "longitude": -1246000,
+        "accuracy": 8,
+        "heading": 270,
+        "speed": "",
+        "taken_at": 1790000000
+      },
+      "expected": {
+        "encoding": "8201861a1eb262183a0013032f0819010ef61a6ab13b80"
+      }
+    },
+    {
+      "name": "heading-360",
+      "inputs": {
+        "encoding": "820186000008190168f600"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    }
+  ]
+}

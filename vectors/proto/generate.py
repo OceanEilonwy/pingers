@@ -1,0 +1,570 @@
+#!/usr/bin/env python3
+"""Generates vectors/proto/*.json with a CBOR encoder written independently of pingers-proto.
+
+Usage: python3 vectors/proto/generate.py vectors/proto
+
+In inputs, an optional field that is absent is written as "" (empty string).
+"""
+import json
+import struct
+import sys
+from pathlib import Path
+
+OUT = Path(sys.argv[1])
+
+
+def head(major, value):
+    m = major << 5
+    if value < 24:
+        return bytes([m | value])
+    if value < 0x100:
+        return bytes([m | 24, value])
+    if value < 0x10000:
+        return bytes([m | 25]) + struct.pack(">H", value)
+    if value < 0x100000000:
+        return bytes([m | 26]) + struct.pack(">I", value)
+    return bytes([m | 27]) + struct.pack(">Q", value)
+
+
+def u(value):
+    return head(0, value)
+
+
+def i(value):
+    return head(0, value) if value >= 0 else head(1, -1 - value)
+
+
+def b(data):
+    return head(2, len(data)) + data
+
+
+def t(text):
+    data = text.encode()
+    return head(3, len(data)) + data
+
+
+def a(*items):
+    return head(4, len(items)) + b"".join(items)
+
+
+NULL = b"\xf6"
+
+
+def opt(value, enc):
+    return NULL if value is None else enc(value)
+
+
+def versioned(body):
+    return a(u(1), body)
+
+
+def h(data):
+    return data.hex()
+
+
+def fill(byte, n):
+    return bytes([byte]) * n
+
+
+def ramp(start, n):
+    return bytes((start + k) % 256 for k in range(n))
+
+
+def write(name, description, vectors):
+    doc = {"name": name, "description": description, "vectors": vectors}
+    path = OUT / f"{name}.json"
+    path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+
+
+# --- record ---
+r, tag, sealed = ramp(0, 16), ramp(0x10, 16), ramp(0x20, 64)
+write(
+    "record-encoding",
+    "Board record: r || tag || sealed, 96 bytes (design B.4.2)",
+    [
+        {
+            "name": "ramp",
+            "inputs": {"randomness": h(r), "tag": h(tag), "sealed": h(sealed)},
+            "expected": {"record": h(r + tag + sealed)},
+        }
+    ],
+)
+
+# --- lease ---
+records = [ramp(k * 96, 96) for k in range(4)]
+commit = fill(0xcc, 32)
+lease = struct.pack(">Q", 1_957_000) + b"".join(records) + commit
+bad_bucket = struct.pack(">Q", 2**64 - 1) + b"".join(records) + commit
+write(
+    "lease-encoding",
+    "Lease: be64(b0) || 4 records || revoke commitment, 424 bytes (design B.4.2)",
+    [
+        {
+            "name": "four-records",
+            "inputs": {
+                "start_bucket": 1_957_000,
+                "records": h(b"".join(records)),
+                "revoke_commitment": h(commit),
+            },
+            "expected": {"lease": h(lease)},
+        },
+        {
+            "name": "one-byte-short",
+            "inputs": {"lease": h(lease[:-1])},
+            "expected": {"error": "WrongLength"},
+        },
+        {
+            "name": "bucket-beyond-range",
+            "inputs": {"lease": h(bad_bucket)},
+            "expected": {"error": "Bucket"},
+        },
+    ],
+)
+
+# --- board beacon ---
+mailbox, hint = ramp(0x40, 16), ramp(0x80, 16)
+write(
+    "board-beacon-encoding",
+    "Board beacon plaintext: knock mailbox || 16 zero bytes || meetup hint, 48 bytes (design B.4.2)",
+    [
+        {
+            "name": "with-meetup-hint",
+            "inputs": {"knock_mailbox": h(mailbox), "meetup_hint": h(hint)},
+            "expected": {"beacon": h(mailbox + bytes(16) + hint)},
+        },
+        {
+            "name": "no-meetup",
+            "inputs": {"knock_mailbox": h(mailbox), "meetup_hint": ""},
+            "expected": {"beacon": h(mailbox + bytes(32))},
+        },
+        {
+            "name": "reserved-byte-set",
+            "inputs": {"beacon": h(mailbox + b"\x01" + bytes(31))},
+            "expected": {"error": "ReservedNotZero"},
+        },
+    ],
+)
+
+# --- rln auth ---
+root, x, y, nul, proof = fill(1, 32), fill(3, 32), fill(4, 32), fill(5, 32), ramp(0, 128)
+rln = root + bytes([1]) + struct.pack(">Q", 1_957_001) + x + y + nul + proof
+write(
+    "rln-auth-encoding",
+    "RlnAuth: root || scope || be64(bucket) || x || y || nullifier || proof, 265 bytes (design D)",
+    [
+        {
+            "name": "mailbox-scope",
+            "inputs": {
+                "root": h(root),
+                "scope": 1,
+                "bucket": 1_957_001,
+                "x": h(x),
+                "y": h(y),
+                "nullifier": h(nul),
+                "proof": h(proof),
+            },
+            "expected": {"encoding": h(rln)},
+        },
+        {
+            "name": "unknown-scope",
+            "inputs": {"encoding": h(root + bytes([3]) + rln[33:])},
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "one-byte-long",
+            "inputs": {"encoding": h(rln + b"\x00")},
+            "expected": {"error": "WrongLength"},
+        },
+    ],
+)
+
+# --- push token plaintext ---
+def push_plain(platform, klass, token, not_after):
+    body = bytes([1, platform, klass]) + struct.pack(">QH", not_after, len(token)) + token
+    return body + bytes(272 - len(body))
+
+
+fcm_token = b"fcm-token:" + ramp(0x30, 20)
+up_token = b"https://up.example/push/abc"
+write(
+    "push-token-plaintext",
+    "Sealed push plaintext: version || platform || class || be64(not_after) || be16(len) || token, zero-padded to 272 bytes (design B.4.9)",
+    [
+        {
+            "name": "fcm-standard",
+            "inputs": {
+                "platform": "fcm",
+                "class": "standard",
+                "token": h(fcm_token),
+                "not_after": 1_790_000_000,
+            },
+            "expected": {"padded": h(push_plain(1, 0, fcm_token, 1_790_000_000))},
+        },
+        {
+            "name": "unified-push-location",
+            "inputs": {
+                "platform": "unified_push",
+                "class": "location",
+                "token": h(up_token),
+                "not_after": 1_790_000_900,
+            },
+            "expected": {"padded": h(push_plain(2, 1, up_token, 1_790_000_900))},
+        },
+        {
+            "name": "nonzero-padding",
+            "inputs": {"padded": h(push_plain(1, 0, b"t", 0)[:-1] + b"\x01")},
+            "expected": {"error": "BadPadding"},
+        },
+        {
+            "name": "unknown-platform",
+            "inputs": {"padded": h(bytes([1, 9]) + push_plain(1, 0, b"t", 0)[2:])},
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "unknown-version",
+            "inputs": {"padded": h(bytes([2]) + push_plain(1, 0, b"t", 0)[1:])},
+            "expected": {"error": "UnsupportedVersion"},
+        },
+    ],
+)
+
+# --- meetup message ---
+chat_id, parent = ramp(0xa0, 16), ramp(0xb0, 16)
+seg_hash = fill(0x5e, 32)
+meetup = [
+    {
+        "name": "keep-alive",
+        "inputs": {"kind": "keep_alive"},
+        "expected": {"encoding": h(versioned(a(u(7))))},
+    },
+    {
+        "name": "chat-reply",
+        "inputs": {
+            "kind": "chat",
+            "id": h(chat_id),
+            "parent": h(parent),
+            "body": "On my way ☕",
+            "written_at": 1_790_000_000,
+        },
+        "expected": {
+            "encoding": h(
+                versioned(a(u(3), b(chat_id), b(parent), t("On my way ☕"), u(1_790_000_000)))
+            )
+        },
+    },
+    {
+        "name": "chat-root",
+        "inputs": {
+            "kind": "chat",
+            "id": h(chat_id),
+            "parent": "",
+            "body": "hi",
+            "written_at": 0,
+        },
+        "expected": {"encoding": h(versioned(a(u(3), b(chat_id), NULL, t("hi"), u(0))))},
+    },
+    {
+        "name": "sealed-location",
+        "inputs": {
+            "kind": "sealed_location",
+            "generation": 3,
+            "nonce": h(ramp(0, 12)),
+            "ciphertext": h(ramp(0x60, 40)),
+        },
+        "expected": {
+            "encoding": h(versioned(a(u(0), u(3), b(ramp(0, 12)), b(ramp(0x60, 40)))))
+        },
+    },
+    {
+        "name": "meet-point-fixed-southern-hemisphere",
+        "inputs": {
+            "kind": "meet_point_fixed",
+            "latitude": -338_688_000,
+            "longitude": 1_512_093_000,
+            "label": "Opera House steps",
+            "lamport": 42,
+        },
+        "expected": {
+            "encoding": h(
+                versioned(
+                    a(
+                        u(4),
+                        a(u(0), i(-338_688_000), i(1_512_093_000), t("Opera House steps"), u(42)),
+                    )
+                )
+            )
+        },
+    },
+    {
+        "name": "meet-point-at-member",
+        "inputs": {"kind": "meet_point_at_member", "leaf": 2, "lamport": 300},
+        "expected": {"encoding": h(versioned(a(u(4), a(u(1), u(2), u(300)))))},
+    },
+    {
+        "name": "board-seen",
+        "inputs": {"kind": "board_seen", "start_bucket": 1_957_000, "hash": h(seg_hash)},
+        "expected": {"encoding": h(versioned(a(u(6), a(a(u(1_957_000), b(seg_hash))))))},
+    },
+    {
+        "name": "long-form-kind",
+        "inputs": {"encoding": h(bytes([0x82, 0x01, 0x81, 0x18, 0x07]))},
+        "expected": {"error": "NonCanonical"},
+    },
+    {
+        "name": "indefinite-array",
+        "inputs": {"encoding": h(bytes([0x82, 0x01, 0x9f, 0x07, 0xff]))},
+        "expected": {"error": "NonCanonical"},
+    },
+    {
+        "name": "trailing-byte",
+        "inputs": {"encoding": h(versioned(a(u(7))) + b"\x00")},
+        "expected": {"error": "TrailingBytes"},
+    },
+    {
+        "name": "version-two",
+        "inputs": {"encoding": h(a(u(2), a(u(7))))},
+        "expected": {"error": "UnsupportedVersion"},
+    },
+    {
+        "name": "unknown-kind",
+        "inputs": {"encoding": h(versioned(a(u(8))))},
+        "expected": {"error": "OutOfRange"},
+    },
+    {
+        "name": "empty-chat-body",
+        "inputs": {"encoding": h(versioned(a(u(3), b(chat_id), NULL, t(""), u(0))))},
+        "expected": {"error": "OutOfRange"},
+    },
+    {
+        "name": "short-chat-id",
+        "inputs": {"encoding": h(versioned(a(u(3), b(chat_id[:15]), NULL, t("hi"), u(0))))},
+        "expected": {"error": "WrongLength"},
+    },
+]
+write(
+    "meetup-message-encoding",
+    "Meetup frames as canonical CBOR [1, [kind, fields...]] (design B.6, B.6.1)",
+    meetup,
+)
+
+# --- location plaintext ---
+write(
+    "location-plaintext-encoding",
+    "Inner plaintext of SealedLocation as canonical CBOR (design B.6)",
+    [
+        {
+            "name": "with-heading-no-speed",
+            "inputs": {
+                "latitude": 515_007_000,
+                "longitude": -1_246_000,
+                "accuracy": 8,
+                "heading": 270,
+                "speed": "",
+                "taken_at": 1_790_000_000,
+            },
+            "expected": {
+                "encoding": h(
+                    versioned(
+                        a(i(515_007_000), i(-1_246_000), u(8), u(270), NULL, u(1_790_000_000))
+                    )
+                )
+            },
+        },
+        {
+            "name": "heading-360",
+            "inputs": {
+                "encoding": h(versioned(a(u(0), u(0), u(8), u(360), NULL, u(0))))
+            },
+            "expected": {"error": "OutOfRange"},
+        },
+    ],
+)
+
+# --- mailbox spec ---
+mbox = ramp(0x11, 16)
+blob = ramp(0, 256) + ramp(0, 64)
+handle = ramp(0xf0, 8)
+listed = a(a(u(0), u(2)), b(blob), u(1), b(handle))
+custom_hash = fill(0x77, 32)
+custom = a(a(u(1), t("https://push.example"), b(custom_hash)), b(blob), u(0), b(handle))
+write(
+    "mailbox-spec-encoding",
+    "POST /v1/mailboxes body as canonical CBOR (design B.4.9, D)",
+    [
+        {
+            "name": "listed-relay-quiet",
+            "inputs": {
+                "mailbox_id": h(mbox),
+                "ttl_seconds": 3600,
+                "relay_id": 2,
+                "relay_url": "",
+                "key_config_hash": "",
+                "blob": h(blob),
+                "urgency": "quiet",
+                "handle": h(handle),
+            },
+            "expected": {"encoding": h(versioned(a(b(mbox), u(3600), listed)))},
+        },
+        {
+            "name": "custom-relay-alert",
+            "inputs": {
+                "mailbox_id": h(mbox),
+                "ttl_seconds": 2_592_000,
+                "relay_id": "",
+                "relay_url": "https://push.example",
+                "key_config_hash": h(custom_hash),
+                "blob": h(blob),
+                "urgency": "alert",
+                "handle": h(handle),
+            },
+            "expected": {"encoding": h(versioned(a(b(mbox), u(2_592_000), custom)))},
+        },
+        {
+            "name": "no-push",
+            "inputs": {
+                "mailbox_id": h(mbox),
+                "ttl_seconds": 60,
+                "relay_id": "",
+                "relay_url": "",
+                "key_config_hash": "",
+                "blob": "",
+                "urgency": "",
+                "handle": "",
+            },
+            "expected": {"encoding": h(versioned(a(b(mbox), u(60), NULL)))},
+        },
+        {
+            "name": "zero-ttl",
+            "inputs": {"encoding": h(versioned(a(b(mbox), u(0), NULL)))},
+            "expected": {"error": "OutOfRange"},
+        },
+    ],
+)
+
+# --- knock ---
+kp = ramp(0x33, 70)
+sig = fill(0x99, 64)
+reply = ramp(0x55, 16)
+sub_id = ramp(0x66, 16)
+subscription = a(b(sub_id), listed, u(900))
+write(
+    "knock-encoding",
+    "Knock plaintext as canonical CBOR, before padding and sealing (design B.4.2)",
+    [
+        {
+            "name": "with-subscription",
+            "inputs": {
+                "matched_randomness": h(r),
+                "own_randomness": h(tag),
+                "leaf_index": 5,
+                "party_epoch": 12,
+                "key_package": h(kp),
+                "reply_mailbox": h(reply),
+                "subscription_id": h(sub_id),
+                "subscription_ttl_seconds": 900,
+                "signature": h(sig),
+            },
+            "expected": {
+                "encoding": h(
+                    versioned(
+                        a(b(r), b(tag), u(5), u(12), b(kp), b(reply), subscription, b(sig))
+                    )
+                )
+            },
+        },
+        {
+            "name": "first-arrival",
+            "inputs": {
+                "matched_randomness": h(r),
+                "own_randomness": "",
+                "leaf_index": 0,
+                "party_epoch": 1,
+                "key_package": h(kp),
+                "reply_mailbox": h(reply),
+                "subscription_id": "",
+                "subscription_ttl_seconds": 0,
+                "signature": h(sig),
+            },
+            "expected": {
+                "encoding": h(
+                    versioned(a(b(r), NULL, u(0), u(1), b(kp), b(reply), NULL, b(sig)))
+                )
+            },
+        },
+    ],
+)
+
+# --- board page ---
+page_records = b"".join(ramp(k, 96) for k in range(3))
+page_hash = fill(0xab, 32)
+cursor = ramp(0xc0, 24)
+write(
+    "board-page-encoding",
+    "Board page as canonical CBOR: segments, raw concatenated records, cursor (design D)",
+    [
+        {
+            "name": "closed-and-open-segments",
+            "inputs": {
+                "first_start_bucket": 1_956_999,
+                "first_record_count": 1,
+                "first_hash": h(page_hash),
+                "second_start_bucket": 1_957_000,
+                "second_record_count": 2,
+                "records": h(page_records),
+                "next": h(cursor),
+            },
+            "expected": {
+                "encoding": h(
+                    versioned(
+                        a(
+                            a(
+                                a(u(1_956_999), u(1), b(page_hash)),
+                                a(u(1_957_000), u(2), NULL),
+                            ),
+                            b(page_records),
+                            b(cursor),
+                        )
+                    )
+                )
+            },
+        },
+        {
+            "name": "counts-disagree",
+            "inputs": {
+                "encoding": h(versioned(a(a(a(u(1), u(2), NULL)), b(page_records[:96]), NULL)))
+            },
+            "expected": {"error": "OutOfRange"},
+        },
+        {
+            "name": "partial-record",
+            "inputs": {
+                "encoding": h(versioned(a(a(a(u(1), u(1), NULL)), b(page_records[:95]), NULL)))
+            },
+            "expected": {"error": "WrongLength"},
+        },
+    ],
+)
+
+# --- app message ---
+body = ramp(0x01, 50)
+write(
+    "app-message-encoding",
+    "Group message envelope (POST /v1/groups/{id}/msgs) as canonical CBOR (design D)",
+    [
+        {
+            "name": "stored-alert",
+            "inputs": {"epoch": 7, "body": h(body), "delivery": "stored", "wake": "alert"},
+            "expected": {"encoding": h(versioned(a(u(7), b(body), u(0), u(0))))},
+        },
+        {
+            "name": "ephemeral-no-wake",
+            "inputs": {"epoch": 70_000, "body": h(body), "delivery": "ephemeral", "wake": ""},
+            "expected": {"encoding": h(versioned(a(u(70_000), b(body), u(1), NULL)))},
+        },
+        {
+            "name": "unknown-delivery",
+            "inputs": {"encoding": h(versioned(a(u(7), b(body), u(2), NULL)))},
+            "expected": {"error": "OutOfRange"},
+        },
+    ],
+)

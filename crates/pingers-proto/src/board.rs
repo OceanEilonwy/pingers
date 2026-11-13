@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The blind board: records, beacons, leases and pages (design B.4.2, B.4.3, D).
 
+use minicbor::Decoder;
 use pingers_time::Bucket;
 
-use crate::stub::not_implemented;
-use crate::{MailboxId, ProtoError, RecordRandomness, WireDecode, WireEncode};
+use crate::cbor::{self, CborBody, Writer, versioned_cbor};
+use crate::{MailboxId, ProtoError, RecordRandomness};
 
 /// Bytes in the reserved half of a beacon's `reply` field, which must be zero.
 const RESERVED_REPLY_BYTES: usize = 16;
@@ -366,17 +367,88 @@ impl BoardPage {
     pub const MAX_RECORDS: usize = 2_730;
 }
 
-impl WireEncode for BoardPage {
-    fn encode(&self) -> Result<Vec<u8>, ProtoError> {
-        not_implemented(self)
+/// Reads a bucket index from the wire.
+pub(crate) fn decode_bucket(decoder: &mut Decoder<'_>) -> Result<Bucket, ProtoError> {
+    Bucket::from_index(decoder.u64()?).map_err(ProtoError::Bucket)
+}
+
+impl CborBody for SegmentInfo {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(3)?;
+        writer.unsigned(self.start.index());
+        writer.unsigned(self.record_count);
+        writer.option(self.closed_hash.as_ref(), |writer, hash| {
+            writer.bytes(hash.as_bytes())
+        })
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 3)?;
+        Ok(Self {
+            start: decode_bucket(decoder)?,
+            record_count: decoder.u32()?,
+            closed_hash: cbor::option(decoder, |decoder| {
+                cbor::fixed_bytes(decoder).map(SegmentHash::from_bytes)
+            })?,
+        })
     }
 }
 
-impl WireDecode for BoardPage {
-    fn decode(bytes: &[u8]) -> Result<Self, ProtoError> {
-        not_implemented(bytes)
+impl BoardPage {
+    /// Checks the page limits that both sides of the wire rely on.
+    fn validate(&self) -> Result<(), ProtoError> {
+        if self.records.len() > Self::MAX_RECORDS {
+            return Err(ProtoError::OutOfRange {
+                field: "board page records",
+            });
+        }
+        let counted = self.segments.iter().try_fold(0_usize, |total, segment| {
+            usize::try_from(segment.record_count)
+                .ok()
+                .and_then(|count| total.checked_add(count))
+        });
+        if counted != Some(self.records.len()) {
+            return Err(ProtoError::OutOfRange {
+                field: "segment record count",
+            });
+        }
+        Ok(())
     }
 }
+
+/// Layout: `[segments, records as one byte string of 96-byte records, next cursor or null]`.
+/// The segments' record counts must add up to the number of records, which is at most
+/// [`BoardPage::MAX_RECORDS`].
+impl CborBody for BoardPage {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        self.validate()?;
+        writer.array(3)?;
+        writer.list(&self.segments)?;
+        let records: Vec<u8> = self.records.iter().flat_map(Record::to_bytes).collect();
+        writer.bytes(&records)?;
+        writer.option(self.next.as_ref(), |writer, cursor| {
+            writer.bytes(cursor.as_bytes())
+        })
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 3)?;
+        let segments = cbor::list(decoder)?;
+        let records = Record::parse_concatenated(decoder.bytes()?)?;
+        let next = cbor::option(decoder, |decoder| {
+            Ok(BoardCursor::from_bytes(decoder.bytes()?.to_vec()))
+        })?;
+        let page = Self {
+            segments,
+            records,
+            next,
+        };
+        page.validate()?;
+        Ok(page)
+    }
+}
+
+versioned_cbor!(BoardPage);
 
 #[cfg(test)]
 mod tests {

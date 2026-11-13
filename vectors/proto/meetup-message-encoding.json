@@ -1,0 +1,151 @@
+{
+  "name": "meetup-message-encoding",
+  "description": "Meetup frames as canonical CBOR [1, [kind, fields...]] (design B.6, B.6.1)",
+  "vectors": [
+    {
+      "name": "keep-alive",
+      "inputs": {
+        "kind": "keep_alive"
+      },
+      "expected": {
+        "encoding": "82018107"
+      }
+    },
+    {
+      "name": "chat-reply",
+      "inputs": {
+        "kind": "chat",
+        "id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "parent": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "body": "On my way ☕",
+        "written_at": 1790000000
+      },
+      "expected": {
+        "encoding": "8201850350a0a1a2a3a4a5a6a7a8a9aaabacadaeaf50b0b1b2b3b4b5b6b7b8b9babbbcbdbebf6d4f6e206d792077617920e298951a6ab13b80"
+      }
+    },
+    {
+      "name": "chat-root",
+      "inputs": {
+        "kind": "chat",
+        "id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "parent": "",
+        "body": "hi",
+        "written_at": 0
+      },
+      "expected": {
+        "encoding": "8201850350a0a1a2a3a4a5a6a7a8a9aaabacadaeaff662686900"
+      }
+    },
+    {
+      "name": "sealed-location",
+      "inputs": {
+        "kind": "sealed_location",
+        "generation": 3,
+        "nonce": "000102030405060708090a0b",
+        "ciphertext": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f8081828384858687"
+      },
+      "expected": {
+        "encoding": "82018400034c000102030405060708090a0b5828606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f8081828384858687"
+      }
+    },
+    {
+      "name": "meet-point-fixed-southern-hemisphere",
+      "inputs": {
+        "kind": "meet_point_fixed",
+        "latitude": -338688000,
+        "longitude": 1512093000,
+        "label": "Opera House steps",
+        "lamport": 42
+      },
+      "expected": {
+        "encoding": "8201820485003a142ff7ff1a5a20b548714f7065726120486f757365207374657073182a"
+      }
+    },
+    {
+      "name": "meet-point-at-member",
+      "inputs": {
+        "kind": "meet_point_at_member",
+        "leaf": 2,
+        "lamport": 300
+      },
+      "expected": {
+        "encoding": "8201820483010219012c"
+      }
+    },
+    {
+      "name": "board-seen",
+      "inputs": {
+        "kind": "board_seen",
+        "start_bucket": 1957000,
+        "hash": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+      },
+      "expected": {
+        "encoding": "8201820681821a001ddc8858205e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+      }
+    },
+    {
+      "name": "long-form-kind",
+      "inputs": {
+        "encoding": "8201811807"
+      },
+      "expected": {
+        "error": "NonCanonical"
+      }
+    },
+    {
+      "name": "indefinite-array",
+      "inputs": {
+        "encoding": "82019f07ff"
+      },
+      "expected": {
+        "error": "NonCanonical"
+      }
+    },
+    {
+      "name": "trailing-byte",
+      "inputs": {
+        "encoding": "8201810700"
+      },
+      "expected": {
+        "error": "TrailingBytes"
+      }
+    },
+    {
+      "name": "version-two",
+      "inputs": {
+        "encoding": "82028107"
+      },
+      "expected": {
+        "error": "UnsupportedVersion"
+      }
+    },
+    {
+      "name": "unknown-kind",
+      "inputs": {
+        "encoding": "82018108"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    },
+    {
+      "name": "empty-chat-body",
+      "inputs": {
+        "encoding": "8201850350a0a1a2a3a4a5a6a7a8a9aaabacadaeaff66000"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    },
+    {
+      "name": "short-chat-id",
+      "inputs": {
+        "encoding": "820185034fa0a1a2a3a4a5a6a7a8a9aaabacadaef662686900"
+      },
+      "expected": {
+        "error": "WrongLength"
+      }
+    }
+  ]
+}

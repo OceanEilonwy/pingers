@@ -1,0 +1,39 @@
+{
+  "name": "app-message-encoding",
+  "description": "Group message envelope (POST /v1/groups/{id}/msgs) as canonical CBOR (design D)",
+  "vectors": [
+    {
+      "name": "stored-alert",
+      "inputs": {
+        "epoch": 7,
+        "body": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132",
+        "delivery": "stored",
+        "wake": "alert"
+      },
+      "expected": {
+        "encoding": "8201840758320102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f3031320000"
+      }
+    },
+    {
+      "name": "ephemeral-no-wake",
+      "inputs": {
+        "epoch": 70000,
+        "body": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132",
+        "delivery": "ephemeral",
+        "wake": ""
+      },
+      "expected": {
+        "encoding": "8201841a0001117058320102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30313201f6"
+      }
+    },
+    {
+      "name": "unknown-delivery",
+      "inputs": {
+        "encoding": "8201840758320102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30313202f6"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    }
+  ]
+}

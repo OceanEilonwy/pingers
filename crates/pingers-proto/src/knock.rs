@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The knock a newcomer posts to a matched record's mailbox (design B.4.2, B.4.4).
 
-use crate::stub::not_implemented;
+use minicbor::Decoder;
+
+use crate::cbor::{self, CborBody, Writer, versioned_cbor};
 use crate::{
     Epoch, KeyPackageBytes, LeafIndex, MailboxId, ProtoError, RecordRandomness, Subscription,
-    WireDecode, WireEncode,
 };
 
 /// The knocker's Ed25519 leaf signature over the knock's signed fields (design B.4.2). Which
@@ -56,14 +57,40 @@ pub struct Knock {
     pub signature: KnockSignature,
 }
 
-impl WireEncode for Knock {
-    fn encode(&self) -> Result<Vec<u8>, ProtoError> {
-        not_implemented(self)
+/// Layout: `[matched r, own r or null, leaf index, party epoch, key package, reply mailbox,
+/// subscription or null, signature]`.
+impl CborBody for Knock {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(8)?;
+        writer.bytes(self.matched_randomness.as_bytes())?;
+        writer.option(self.own_randomness.as_ref(), |writer, randomness| {
+            writer.bytes(randomness.as_bytes())
+        })?;
+        writer.unsigned(self.leaf_index.get());
+        writer.unsigned(self.party_epoch.get());
+        writer.bytes(self.key_package.as_bytes())?;
+        writer.bytes(self.reply_mailbox.as_bytes())?;
+        writer.option(self.meetup_subscription.as_ref(), |writer, subscription| {
+            subscription.encode_body(writer)
+        })?;
+        writer.bytes(self.signature.as_bytes())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 8)?;
+        Ok(Self {
+            matched_randomness: RecordRandomness::from_bytes(cbor::fixed_bytes(decoder)?),
+            own_randomness: cbor::option(decoder, |decoder| {
+                cbor::fixed_bytes(decoder).map(RecordRandomness::from_bytes)
+            })?,
+            leaf_index: LeafIndex::new(decoder.u32()?),
+            party_epoch: Epoch::new(decoder.u64()?),
+            key_package: KeyPackageBytes::from_bytes(decoder.bytes()?.to_vec()),
+            reply_mailbox: MailboxId::from_bytes(cbor::fixed_bytes(decoder)?),
+            meetup_subscription: cbor::option(decoder, Subscription::decode_body)?,
+            signature: KnockSignature::from_bytes(cbor::fixed_bytes(decoder)?),
+        })
     }
 }
 
-impl WireDecode for Knock {
-    fn decode(bytes: &[u8]) -> Result<Self, ProtoError> {
-        not_implemented(bytes)
-    }
-}
+versioned_cbor!(Knock);

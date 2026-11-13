@@ -1,0 +1,245 @@
+[package]
+name = "pingers-proto-fuzz"
+description = "cargo-fuzz targets, one per pingers-proto decoder."
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+pingers-proto = { path = ".." }
+
+# Not a member of the main workspace: fuzzing needs nightly and its own profile.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "board_page"
+path = "fuzz_targets/board_page.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "knock"
+path = "fuzz_targets/knock.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mailbox_spec"
+path = "fuzz_targets/mailbox_spec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "subscription"
+path = "fuzz_targets/subscription.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "create_group"
+path = "fuzz_targets/create_group.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "commit_request"
+path = "fuzz_targets/commit_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "commit_response"
+path = "fuzz_targets/commit_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "app_message"
+path = "fuzz_targets/app_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "group_log_entry"
+path = "fuzz_targets/group_log_entry.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "live_frame"
+path = "fuzz_targets/live_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "meetup_message"
+path = "fuzz_targets/meetup_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "location_plaintext"
+path = "fuzz_targets/location_plaintext.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rln_auth"
+path = "fuzz_targets/rln_auth.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "params"
+path = "fuzz_targets/params.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "register_request"
+path = "fuzz_targets/register_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "register_response"
+path = "fuzz_targets/register_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "auth_request"
+path = "fuzz_targets/auth_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "auth_response"
+path = "fuzz_targets/auth_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "membership_leaf_request"
+path = "fuzz_targets/membership_leaf_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "membership_leaf_response"
+path = "fuzz_targets/membership_leaf_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "membership_leaves"
+path = "fuzz_targets/membership_leaves.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "board_sync_request"
+path = "fuzz_targets/board_sync_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "board_sync_response"
+path = "fuzz_targets/board_sync_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mailbox_messages"
+path = "fuzz_targets/mailbox_messages.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "message_accepted"
+path = "fuzz_targets/message_accepted.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "group_messages"
+path = "fuzz_targets/group_messages.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "group_state"
+path = "fuzz_targets/group_state.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lease"
+path = "fuzz_targets/lease.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "records"
+path = "fuzz_targets/records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "board_beacon"
+path = "fuzz_targets/board_beacon.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "push_token_plaintext"
+path = "fuzz_targets/push_token_plaintext.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "padded"
+path = "fuzz_targets/padded.rs"
+test = false
+doc = false
+bench = false

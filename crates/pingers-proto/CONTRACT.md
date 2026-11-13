@@ -28,7 +28,7 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
 - **Auth**: `RlnAuth` (265 B), `RlnScope`, `ServerId`.
 - **API**: `Params`, `PushRelayInfo`, `AnonymousCredential`, `Slashing`, `CustomPushRelays`,
   `CoverReadRatio`, `RegisterRequest`, `AuthRequest`, `BoardSyncRequest`, `LeaseReplacement`,
-  `ReadBoard`, `BoardSyncResponse`.
+  `ReadBoard`, `BoardSyncResponse`, and the response bodies listed under "Encoding" below.
 - **Padding** (implemented): `SizeClass` (`Bytes256` .. `Bytes32768`, `MEETUP_FRAME`,
   `MAILBOX_POST`), `Padded` (`pad`, `pad_smallest`, `from_wire`, `payload`).
 - **Codec traits**: `WireEncode::encode(&self) -> Result<Vec<u8>, ProtoError>` and
@@ -68,3 +68,42 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
   data message for a liveness check".
 - **`ChatBody` is at most 3,500 bytes** and `MeetPointLabel` at most 120, so a frame fits the
   4 KiB class; the design gives no limits.
+
+### Encoding (implemented 2026-11-13)
+
+- **CBOR layout**: every top-level message is `[version, body]` with version `1`; bodies are
+  definite-length arrays of the fields in declaration order (no maps). `None` is `null`;
+  fixed-size byte arrays are byte strings of exactly that length; enums with data are
+  `[variant, fields...]`; two-state enums are `0`/`1`. Each impl's doc comment in the source
+  gives its layout, and `vectors/proto/` pins them. Nested structures carry no version.
+- **Canonical check**: decoders parse with `minicbor`, then re-encode and compare. Anything
+  that is not byte-for-byte the canonical encoding (long-form integers, indefinite lengths,
+  `f16` floats, `-0.0`) is rejected. `decode` accepts exactly one encoding per value.
+- **New `ProtoError` variants** (additive; the enum is `#[non_exhaustive]`): `NonCanonical`
+  and `TrailingBytes`. `NotImplemented` is removed. A CBOR array with the wrong number of
+  elements, a wrong CBOR type or invalid UTF-8 is `Cbor(..)`; an unknown enum value is
+  `OutOfRange { field }`; a fixed-size field of the wrong length is `WrongLength`.
+- **`PushTokenPlaintext`** padded layout: `version (1) || platform (1) || class (1) ||
+  be64(not_after) || be16(token length) || token || zero bytes` to 272 bytes. Version 1;
+  platform 1 FCM, 2 `UnifiedPush`; class 0 Standard, 1 Location. Tokens up to
+  `MAX_TOKEN_BYTES` (259). `encode_padded` reports an over-long token as
+  `OutOfRange { field: "push token" }`, not `PayloadTooLarge` as the stub's doc said:
+  `PayloadTooLarge` names a `SizeClass`, and 272 bytes is not one. The signature is unchanged.
+- **`RlnAuth`**: the 265-byte layout in design D's field order, scope as one byte, bucket as
+  `be64`; no version byte (the length is the version).
+- **`BoardPage`**: `[segments, records, next]`, records as one byte string of concatenated
+  96-byte records. Both `encode` and `decode` reject a page with more than `MAX_RECORDS`
+  records, or whose segments' `record_count`s do not add up to the number of records
+  (`OutOfRange`). Builders of pages (pingers-board-store) must keep the counts consistent.
+- **`CoverReadRatio`** is a CBOR `f32` (`0xfa`). `-0.0` is written as `0.0`.
+- **Wire values**: `Urgency` Alert 0, Quiet 1; `Delivery` Stored 0, Ephemeral 1;
+  `ContentType` uses the MLS values (1 application, 2 proposal, 3 commit);
+  `AnonymousCredential` MembershipProof 0, PrivacyPass 1; `Slashing`, `CustomPushRelays` and
+  `ReadBoard` are 0 for off, not allowed and skip.
+- **Added API bodies** (design D): `RegisterResponse`, `AuthResponse`, `MembershipLeafRequest`,
+  `MembershipLeafResponse`, `MembershipLeaves` (with `MembershipRoot`, `MembershipIndex`,
+  `RootEpoch`), `MailboxMessages` (`MailboxMessage` carries a `Padded` body, so its length
+  must be a size class), `MessageAccepted`, `GroupMessages`, `GroupState`. Privacy Pass
+  issuance and invite payloads are not added yet: their contents belong to pingers-anon and
+  pingers-parties and are opaque to this crate until those are fixed.
+- The unused `serde` dependency is removed.

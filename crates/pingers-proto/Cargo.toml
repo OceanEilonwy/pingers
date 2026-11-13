@@ -13,10 +13,11 @@ layer = 0
 [dependencies]
 pingers-time = { workspace = true }
 minicbor = { workspace = true }
-serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+pingers-testkit = { workspace = true }
+serde_json = { workspace = true }
 proptest = { workspace = true }
 
 [lints]
