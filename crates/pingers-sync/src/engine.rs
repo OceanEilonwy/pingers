@@ -500,3 +500,13 @@ impl SyncEngine {
         }
     }
 }
+
+/// The engine's futures must be `Send`: the client runs them on a multi-thread runtime.
+#[cfg(test)]
+#[expect(dead_code, reason = "compiled, never run: the bounds are the test")]
+fn futures_are_send(engine: &SyncEngine, request: ApiRequest, sending: Sending) {
+    fn send<T: Send>(_: &T) {}
+    send(&engine.send(request, sending));
+    send(&engine.flush_queue(sending.budget));
+    send(&engine.credential_choice());
+}

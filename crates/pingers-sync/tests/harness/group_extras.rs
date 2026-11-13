@@ -66,12 +66,6 @@ async fn subscriptions_state_and_deletion() -> TestResult {
         .delete_subscription(call, &subscription.id, budget)
         .await?;
     assert!(alice.session.subscriptions().get(&GROUP)?.is_none());
-    // Already gone on the server (404): still fine.
-    alice
-        .engine
-        .delete_subscription(call, &subscription.id, budget)
-        .await?;
-
     let ephemeral = alice
         .engine
         .post_group_message(
@@ -93,6 +87,11 @@ async fn subscriptions_state_and_deletion() -> TestResult {
 
     alice.engine.delete_group(call, budget).await?;
     alice.engine.delete_group(call, budget).await?;
+    // The group, and with it the subscription, is gone on the server (404): still fine.
+    alice
+        .engine
+        .delete_subscription(call, &subscription.id, budget)
+        .await?;
     assert!(matches!(
         alice.engine.group_state(call, budget).await,
         Err(SyncError::Status {
