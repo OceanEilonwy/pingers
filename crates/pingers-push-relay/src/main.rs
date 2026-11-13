@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use pingers_push_relay::error::RelayError;
+use pingers_time::SystemClock;
 
 fn main() -> ExitCode {
     match run() {
@@ -32,7 +33,10 @@ fn run() -> Result<(), RelayError> {
         .enable_all()
         .build()
         .map_err(RelayError::Serve)?;
-    runtime.block_on(pingers_push_relay::serve(config, shutdown_signal()))
+    runtime.block_on(async {
+        let listener = pingers_push_relay::listen(&config).await?;
+        pingers_push_relay::serve(config, listener, SystemClock, shutdown_signal()).await
+    })
 }
 
 /// Completes on Ctrl-C or SIGTERM. If a signal handler cannot be installed, that signal is

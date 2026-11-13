@@ -69,7 +69,7 @@ counts_interval_s = 1
 [[keys]]
 key_id = 1
 private_key = "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"
-public_key = "8520f0098930a754748b7ddcb43ef75c0dbf3a0d26381af4eba4a98eaa9b4e6a"
+public_key = "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"
 activated_at = 0
 
 [[servers]]

@@ -31,13 +31,13 @@ use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 
-use pingers_time::{Clock, SystemClock};
+use pingers_time::Clock;
 use pingers_transport::TokioTimer;
 use zeroize::Zeroizing;
 
 use crate::config::{Logging, RelayConfig};
 use crate::counts::{CountsSnapshot, report_counts};
-use crate::delivery::{Dispatcher, DispatcherSettings, FcmAccessToken, FcmSettings};
+use crate::delivery::{Dispatcher, DispatcherSettings, FcmAccessToken, FcmSettings, PushSender};
 use crate::error::{ConfigError, RelayError};
 use crate::opener::CryptoOpener;
 use crate::service::{Relay, RelayParts};
@@ -74,21 +74,28 @@ pub fn load_config(path: &Path) -> Result<RelayConfig, RelayError> {
     RelayConfig::parse(&text).map_err(RelayError::Config)
 }
 
-/// Runs the relay until `shutdown` completes. Must be called inside a tokio runtime.
+/// Opens the listening socket named in the configuration.
 ///
 /// # Errors
 ///
-/// [`RelayError::NoActiveKey`] if no key is active now, [`RelayError::ReadFile`] if the FCM
-/// token file cannot be read, [`RelayError::HttpClient`], [`RelayError::Listen`] or
-/// [`RelayError::Serve`].
-pub async fn serve(
-    config: RelayConfig,
-    shutdown: impl Future<Output = ()> + Send + 'static,
-) -> Result<(), RelayError> {
-    let clock = SystemClock;
-    if config.keys.published(clock.now()).is_none() {
-        return Err(RelayError::NoActiveKey);
-    }
+/// [`RelayError::Listen`] if the address cannot be bound.
+pub async fn listen(config: &RelayConfig) -> Result<tokio::net::TcpListener, RelayError> {
+    tokio::net::TcpListener::bind(config.listen)
+        .await
+        .map_err(|source| RelayError::Listen {
+            address: config.listen,
+            source,
+        })
+}
+
+/// The production [`PushSender`]: UnifiedPush and FCM HTTP v1 over a non-redirecting client,
+/// as the configuration enables them. Must be called inside a tokio runtime.
+///
+/// # Errors
+///
+/// [`RelayError::ReadFile`] if the FCM access token file cannot be read,
+/// [`RelayError::HttpClient`] if the client cannot be built.
+pub fn dispatcher(config: &RelayConfig) -> Result<Dispatcher<TokioTimer>, RelayError> {
     let fcm = match &config.fcm {
         Some(fcm) => {
             let token = read_secret(&fcm.access_token_file)?;
@@ -99,19 +106,62 @@ pub async fn serve(
         }
         None => None,
     };
-    let timer = TokioTimer::new();
-    let dispatcher = Dispatcher::new(
+    Ok(Dispatcher::new(
         http_client()?,
-        timer,
+        TokioTimer::new(),
         DispatcherSettings {
             timeout: config.upstream_timeout,
             unifiedpush: config.unifiedpush,
             fcm,
         },
-    );
+    ))
+}
+
+/// Runs the relay on `listener` with the real HPKE opener and the HTTP [`dispatcher`] until
+/// `shutdown` completes. The binary passes [`pingers_time::SystemClock`]; tests pass a manual
+/// clock. Must be called inside a tokio runtime.
+///
+/// # Errors
+///
+/// As [`dispatcher`] and [`serve_with`].
+pub async fn serve(
+    config: RelayConfig,
+    listener: tokio::net::TcpListener,
+    clock: impl Clock + 'static,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), RelayError> {
+    let sender = dispatcher(&config)?;
+    serve_with(config, Outside { sender, clock }, listener, shutdown).await
+}
+
+/// The relay's view of the outside world, injected into [`serve_with`].
+pub struct Outside<S, C> {
+    /// Delivers pushes: the HTTP [`dispatcher`], or a capturing sender in tests.
+    pub sender: S,
+    /// Wall time for expiry, key rotation and rate limits.
+    pub clock: C,
+}
+
+/// As [`serve`], with an injected [`PushSender`] in place of real HTTP delivery: for in-process
+/// harnesses that capture pushes instead of sending them.
+///
+/// # Errors
+///
+/// [`RelayError::NoActiveKey`] if no key is active at the injected clock's time, or
+/// [`RelayError::Serve`] if the HTTP server fails.
+pub async fn serve_with<S: PushSender, C: Clock + 'static>(
+    config: RelayConfig,
+    outside: Outside<S, C>,
+    listener: tokio::net::TcpListener,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), RelayError> {
+    let Outside { sender, clock } = outside;
+    if config.keys.published(clock.now()).is_none() {
+        return Err(RelayError::NoActiveKey);
+    }
     let relay = Arc::new(Relay::new(RelayParts {
         opener: CryptoOpener,
-        sender: dispatcher,
+        sender,
         clock,
         keys: config.keys,
         servers: config.servers,
@@ -119,17 +169,12 @@ pub async fn serve(
         max_ttl: config.max_ttl,
         operator: config.operator,
     }));
-    let listener = tokio::net::TcpListener::bind(config.listen)
-        .await
-        .map_err(|source| RelayError::Listen {
-            address: config.listen,
-            source,
-        })?;
     let reporter = match config.logging {
         Logging::Off => None,
         Logging::Counts { interval } => {
             let relay = Arc::clone(&relay);
             Some(tokio::spawn(async move {
+                let timer = TokioTimer::new();
                 report_counts(relay.counts(), &timer, interval, write_counts).await;
             }))
         }
