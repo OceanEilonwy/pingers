@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sharing and Focus settings</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#2F5BFF}a:hover{color:#1E40C8}
+</style>
+</helmet>
+<div style="width: 390px; height: 960px; box-sizing: border-box; background: #F6F5F1; color: #15171C; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden">
+  <div style="padding: 56px 20px 12px">
+    <h1 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 30px; font-weight: 700">Privacy</h1>
+  </div>
+
+  <div style="margin: 0 20px; background: #15171C; color: #fff; border-radius: 20px; padding: 16px 18px; display: flex; align-items: center; gap: 14px">
+    <span style="width: 42px; height: 42px; border-radius: 21px; background: #2A2E38; display: flex; align-items: center; justify-content: center; flex-shrink: 0">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C9D4FF" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </span>
+    <span style="display: flex; flex-direction: column; gap: 3px">
+      <span style="font-size: 15px; font-weight: 600">Paused · Sleep Focus is on</span>
+      <span style="font-size: 13px; color: #B9BDC7; line-height: 1.4">Nobody can tell you've paused. Resumes when Focus ends.</span>
+    </span>
+  </div>
+
+  <h2 style="margin: 20px 24px 8px; font-size: 13px; font-weight: 600; color: #5B606B; letter-spacing: 0.4px">WHEN TO SHARE</h2>
+  <div style="margin: 0 20px; background: #fff; border: 1px solid #E3E1DA; border-radius: 18px; display: flex; flex-direction: column">
+    <div style="display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid #EEECE6">
+      <label for="t1" style="flex-grow: 1; font-size: 16px; font-weight: 500">Location sharing</label>
+      <input id="t1" type="checkbox" checked style="width: 24px; height: 24px; accent-color: #2F5BFF">
+    </div>
+    <div style="display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid #EEECE6">
+      <label for="t2" style="flex-grow: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 500">Pause during Focus</span><span style="font-size: 13px; color: #5B606B">Do Not Disturb, Sleep, any Focus</span></label>
+      <input id="t2" type="checkbox" checked style="width: 24px; height: 24px; accent-color: #2F5BFF">
+    </div>
+    <div style="display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid #EEECE6">
+      <label for="t3" style="flex-grow: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 500">Quiet hours</span><span style="font-size: 13px; color: #5B606B">23:00–07:00</span></label>
+      <input id="t3" type="checkbox" style="width: 24px; height: 24px; accent-color: #2F5BFF">
+    </div>
+    <a href="ExclusionZones.dc.html" style="text-decoration: none; color: inherit; display: flex; align-items: center; gap: 12px; padding: 14px 16px">
+      <span style="flex-grow: 1; font-size: 16px; font-weight: 500">Exclusion zones</span>
+      <span style="font-size: 15px; color: #5B606B">2</span>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5B606B" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+    </a>
+  </div>
+
+  <h2 style="margin: 20px 24px 8px; font-size: 13px; font-weight: 600; color: #5B606B; letter-spacing: 0.4px">WHO SEES MY EXACT SPOT IN MEETUPS</h2>
+  <fieldset style="margin: 0 20px; background: #fff; border: 1px solid #E3E1DA; border-radius: 18px; padding: 4px 16px; display: flex; flex-direction: column">
+    <legend style="position: absolute; width: 1px; height: 1px; overflow: hidden">Who sees my exact spot</legend>
+    <label style="display: flex; align-items: center; gap: 12px; min-height: 52px; border-bottom: 1px solid #EEECE6">
+      <span style="flex-grow: 1; display: flex; flex-direction: column; gap: 1px"><span style="font-size: 16px; font-weight: 500">Ask me each time</span><span style="font-size: 12px; color: #5B606B">Others see you're here, not where</span></span>
+      <input type="radio" name="vis" checked style="width: 22px; height: 22px; accent-color: #2F5BFF; margin: 0">
+    </label>
+    <label style="display: flex; align-items: center; gap: 12px; min-height: 48px; border-bottom: 1px solid #EEECE6">
+      <span style="flex-grow: 1; font-size: 16px; font-weight: 500">Everyone in the meetup</span>
+      <input type="radio" name="vis" style="width: 22px; height: 22px; accent-color: #2F5BFF; margin: 0">
+    </label>
+    <label style="display: flex; align-items: center; gap: 12px; min-height: 48px">
+      <span style="flex-grow: 1; font-size: 16px; font-weight: 500">Nobody</span>
+      <input type="radio" name="vis" style="width: 22px; height: 22px; accent-color: #2F5BFF; margin: 0">
+    </label>
+  </fieldset>
+
+  <h2 style="margin: 20px 24px 8px; font-size: 13px; font-weight: 600; color: #5B606B; letter-spacing: 0.4px">DELIVERY</h2>
+  <div style="margin: 0 20px; background: #fff; border: 1px solid #E3E1DA; border-radius: 18px; display: flex; flex-direction: column">
+    <div style="display: flex; align-items: center; gap: 12px; padding: 14px 16px">
+      <label for="t4" style="flex-grow: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 500">No wake-up pushes</span><span style="font-size: 13px; color: #5B606B; line-height: 1.4">Nobody, not even Apple or Google, sees when you're woken. Meetups can take up to an hour to start.</span></label>
+      <input id="t4" type="checkbox" style="width: 24px; height: 24px; accent-color: #2F5BFF; flex-shrink: 0">
+    </div>
+  </div>
+
+  <a href="SecurityDetails.dc.html" style="margin: 20px 20px 0; text-decoration: none; color: inherit; background: #E8EDFF; border-radius: 18px; padding: 14px 16px; display: flex; align-items: center; gap: 12px">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1E40C8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    <span style="flex-grow: 1; font-size: 15px; font-weight: 600; color: #1E40C8">How Pingers keeps you private</span>
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1E40C8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+  </a>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":960}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

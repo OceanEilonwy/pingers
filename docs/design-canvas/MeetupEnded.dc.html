@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Meetup ended</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#2F5BFF}a:hover{color:#1E40C8}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #F6F5F1; color: #15171C; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; padding: 120px 24px 34px; gap: 24px; overflow: hidden">
+  <div style="display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center">
+    <span style="width: 72px; height: 72px; border-radius: 36px; background: #fff; border: 1px solid #E3E1DA; display: flex; align-items: center; justify-content: center">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#15171C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+    </span>
+    <h1 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 30px; font-weight: 700">Meetup ended</h1>
+    <span style="font-size: 15px; color: #5B606B">Everyone left Riverside Park</span>
+  </div>
+
+  <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 20px; padding: 18px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; text-align: center">
+    <span style="display: flex; flex-direction: column; gap: 4px"><span style="font-family: 'Space Grotesk', sans-serif; font-size: 24px; font-weight: 600">1 h 34</span><span style="font-size: 12px; color: #5B606B">14:31–16:05</span></span>
+    <span style="display: flex; flex-direction: column; gap: 4px"><span style="font-family: 'Space Grotesk', sans-serif; font-size: 24px; font-weight: 600">4</span><span style="font-size: 12px; color: #5B606B">people met</span></span>
+    <span style="display: flex; flex-direction: column; gap: 4px"><span style="font-family: 'Space Grotesk', sans-serif; font-size: 24px; font-weight: 600">23</span><span style="font-size: 12px; color: #5B606B">messages</span></span>
+  </div>
+
+  <div style="background: #15171C; color: #fff; border-radius: 20px; padding: 16px 18px; display: flex; gap: 12px; align-items: flex-start">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C9D4FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink: 0; margin-top: 2px"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
+    <span style="display: flex; flex-direction: column; gap: 4px">
+      <span style="font-size: 15px; font-weight: 600">Chat and locations erased</span>
+      <span style="font-size: 13px; color: #B9BDC7; line-height: 1.45">Every phone deleted the meetup keys, so nothing can be read again, including by the server.</span>
+    </span>
+  </div>
+
+  <div style="flex-grow: 1"></div>
+  <a href="Main.dc.html" style="text-decoration: none; height: 52px; border-radius: 26px; background: #2F5BFF; color: #fff; font-size: 16px; font-weight: 600; display: flex; align-items: center; justify-content: center">Done</a>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

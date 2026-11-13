@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>New party advanced settings</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#2F5BFF}a:hover{color:#1E40C8}
+@keyframes pingers-spin{to{transform:rotate(360deg)}}
+.spin{animation:pingers-spin .9s linear infinite;transform-origin:50% 50%}
+@media (prefers-reduced-motion: reduce){.spin{animation-duration:2.5s}}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #F6F5F1; color: #15171C; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden">
+  <div style="padding: 56px 12px 4px; display: flex; align-items: center; gap: 4px">
+    <a href="CreateParty.dc.html" aria-label="Back to New party" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#15171C" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+    </a>
+    <h1 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 600">Advanced</h1>
+  </div>
+
+  <div style="margin: 8px 20px 0; background: #E8EDFF; border-radius: 16px; padding: 12px 14px; display: flex; align-items: center; gap: 10px">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1E40C8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink: 0"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+    <span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 15px; font-weight: 600; color: #1E40C8">Full privacy</span><span style="font-size: 13px; color: #2B3A7A; line-height: 1.4">Server, privacy relay and push relay are run by three different operators.</span></span>
+  </div>
+
+  <div style="padding: 16px 20px 0; display: flex; flex-direction: column; gap: 14px; flex-grow: 1">
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <label for="srv" style="font-size: 13px; font-weight: 600; color: #5B606B">Server</label>
+      <div style="position: relative">
+        <input id="srv" defaultValue="pingers.flat7.org" onInput="{{srvInput}}" aria-describedby="srv-status" style="width: 100%; height: 48px; border-radius: 14px; border: 1px solid #E3E1DA; background: #fff; padding: 0 44px 0 14px; font: inherit; font-size: 16px; color: #15171C; box-sizing: border-box">
+        <span id="srv-status" role="status" aria-label="{{srvLabel}}" style="position: absolute; right: 12px; top: 12px; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center">
+          <sc-if value="{{srvChecking}}" hint-placeholder-val="{{true}}">
+            <svg class="spin" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="#E3E1DA" stroke-width="3"/><path d="M21 12a9 9 0 0 0-9-9" stroke="#2F5BFF" stroke-width="3" stroke-linecap="round"/></svg>
+          </sc-if>
+          <sc-if value="{{srvOk}}" hint-placeholder-val="{{false}}">
+            <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#1F8A4C"/><path d="M7 12.5l3.2 3.2L17 9" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </sc-if>
+        </span>
+      </div>
+      <span style="font-size: 12px; color: #5B606B; line-height: 1.4">The server that hosts this party. Everyone who joins uses it, and it can't be changed later.</span>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <label for="ohttp" style="font-size: 13px; font-weight: 600; color: #5B606B">Privacy relay</label>
+      <div style="position: relative">
+        <input id="ohttp" defaultValue="relay.quietpath.net" onInput="{{relayInput}}" aria-describedby="ohttp-status" style="width: 100%; height: 48px; border-radius: 14px; border: 1px solid #E3E1DA; background: #fff; padding: 0 44px 0 14px; font: inherit; font-size: 16px; color: #15171C; box-sizing: border-box">
+        <span id="ohttp-status" role="status" aria-label="{{relayLabel}}" style="position: absolute; right: 12px; top: 12px; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center">
+          <sc-if value="{{relayChecking}}" hint-placeholder-val="{{true}}">
+            <svg class="spin" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="#E3E1DA" stroke-width="3"/><path d="M21 12a9 9 0 0 0-9-9" stroke="#2F5BFF" stroke-width="3" stroke-linecap="round"/></svg>
+          </sc-if>
+          <sc-if value="{{relayOk}}" hint-placeholder-val="{{false}}">
+            <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#1F8A4C"/><path d="M7 12.5l3.2 3.2L17 9" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </sc-if>
+        </span>
+      </div>
+      <span style="font-size: 12px; color: #5B606B; line-height: 1.4">Hides your IP address from the server. Suggested by the server; each member can choose their own.</span>
+    </div>
+
+    <fieldset style="border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px">
+      <legend style="font-size: 13px; font-weight: 600; color: #5B606B; padding: 0; margin-bottom: 6px">Push relay</legend>
+      <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; display: flex; flex-direction: column">
+        <label style="display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 14px; border-bottom: 1px solid #EEECE6; font-size: 15px">
+          <input type="radio" name="push" checked style="width: 20px; height: 20px; accent-color: #2F5BFF; margin: 0">Pingers (official app)
+        </label>
+        <label style="display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 14px; font-size: 15px">
+          <input type="radio" name="push" style="width: 20px; height: 20px; accent-color: #2F5BFF; margin: 0">Custom URL (UnifiedPush or own build)
+        </label>
+      </div>
+      <span style="font-size: 12px; color: #5B606B; line-height: 1.4">Sees when a phone is woken, never why or by whom.</span>
+    </fieldset>
+
+    <div style="background: #fff; border: 1px solid #E3E1DA; border-radius: 14px; padding: 12px 14px; display: flex; align-items: center; gap: 12px">
+      <label for="pq" style="flex-grow: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 15px; font-weight: 500">Post-quantum encryption</span><span style="font-size: 12px; color: #5B606B; line-height: 1.4">Protects against future quantum computers. Larger messages; every member needs a recent app.</span></label>
+      <input id="pq" type="checkbox" style="width: 24px; height: 24px; accent-color: #2F5BFF; flex-shrink: 0">
+    </div>
+  </div>
+
+  <div style="padding: 0 20px 34px">
+    <a href="CreateParty.dc.html" style="text-decoration: none; height: 52px; border-radius: 26px; background: #15171C; color: #fff; font-size: 16px; font-weight: 600; display: flex; align-items: center; justify-content: center">Done</a>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { srv: 'checking', relay: 'checking' };
+    this.timers = {};
+  }
+  componentDidMount() {
+    this.check('srv', 1200);
+    this.check('relay', 1800);
+  }
+  componentWillUnmount() {
+    Object.keys(this.timers).forEach((k) => clearTimeout(this.timers[k]));
+  }
+  check(key, ms) {
+    clearTimeout(this.timers[key]);
+    this.setState({ [key]: 'checking' });
+    this.timers[key] = setTimeout(() => this.setState({ [key]: 'ok' }), ms);
+  }
+  renderVals() {
+    const s = this.state;
+    return {
+      srvChecking: s.srv === 'checking', srvOk: s.srv === 'ok',
+      relayChecking: s.relay === 'checking', relayOk: s.relay === 'ok',
+      srvLabel: s.srv === 'ok' ? 'Server reachable' : 'Checking server',
+      relayLabel: s.relay === 'ok' ? 'Privacy relay reachable' : 'Checking privacy relay',
+      srvInput: () => this.check('srv', 1200),
+      relayInput: () => this.check('relay', 1200)
+    };
+  }
+}
+</script>
+</body>
+</html>

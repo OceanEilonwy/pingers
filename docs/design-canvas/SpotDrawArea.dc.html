@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Draw a Spot area</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#2F5BFF}a:hover{color:#1E40C8}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #ECEAE3; color: #15171C; font-family: Inter, system-ui, sans-serif; position: relative; overflow: hidden">
+  <div onClick="{{mapClick}}" onPointerMove="{{mapMove}}" onPointerUp="{{mapUp}}" onPointerLeave="{{mapUp}}" style="position: absolute; left: 0; top: 0; width: 390px; height: 600px; touch-action: none; cursor: crosshair">
+    <svg width="390" height="600" viewBox="0 0 390 600" aria-hidden="true" style="position: absolute; left: 0; top: 0">
+      <rect width="390" height="600" fill="#ECEAE3"/>
+      <path d="M0 420 C80 390 150 460 240 435 S360 390 390 410 L390 600 L0 600Z" fill="#CFE0EC"/>
+      <rect x="70" y="150" width="250" height="210" rx="40" fill="#DCE8D2"/>
+      <path d="M0 120 L390 100" stroke="#fff" stroke-width="14"/>
+      <path d="M340 0 L360 600" stroke="#fff" stroke-width="10"/>
+      <path d="M40 0 L30 600" stroke="#fff" stroke-width="7"/>
+      <path d="M0 40 L390 55" stroke="#fff" stroke-width="6"/>
+      <path d="M90 300 C150 250 230 340 310 270" stroke="#F4F1E8" stroke-width="5" fill="none"/>
+    </svg>
+    <svg width="390" height="600" viewBox="0 0 390 600" aria-hidden="true" style="position: absolute; left: 0; top: 0; pointer-events: none">
+      <sc-if value="{{closed}}" hint-placeholder-val="{{false}}">
+        <polygon points="{{line}}" fill="#2F5BFF" fill-opacity="0.16" stroke="#2F5BFF" stroke-width="2.5" stroke-linejoin="round"></polygon>
+      </sc-if>
+      <sc-if value="{{open}}" hint-placeholder-val="{{true}}">
+        <polyline points="{{line}}" fill="none" stroke="#2F5BFF" stroke-width="2.5" stroke-dasharray="7 5" stroke-linejoin="round"></polyline>
+      </sc-if>
+    </svg>
+    <sc-for list="{{mids}}" as="m" hint-placeholder-count="0">
+      <button type="button" aria-label="{{m.label}}" onClick="{{m.add}}" style="position: absolute; left: {{m.left}}px; top: {{m.top}}px; width: 22px; height: 22px; padding: 0; border-radius: 11px; border: 2px solid #2F5BFF; background: rgba(255,255,255,0.85); color: #2F5BFF; font: 600 14px/1 Inter, sans-serif; display: flex; align-items: center; justify-content: center">+</button>
+    </sc-for>
+    <sc-for list="{{vertices}}" as="v" hint-placeholder-count="4">
+      <button type="button" aria-label="{{v.label}}" onPointerDown="{{v.down}}" onClick="{{v.stop}}" style="position: absolute; left: {{v.left}}px; top: {{v.top}}px; width: {{v.size}}px; height: {{v.size}}px; padding: 0; border-radius: 50%; border: 3px solid {{v.ring}}; background: {{v.fill}}; box-shadow: 0 1px 4px rgba(0,0,0,.25); touch-action: none"></button>
+    </sc-for>
+  </div>
+
+  <div style="position: absolute; top: 56px; left: 16px; right: 16px; display: flex; align-items: center; gap: 10px; pointer-events: none">
+    <a href="SpotEditor.dc.html" aria-label="Back to Spot editor" style="pointer-events: auto; width: 44px; height: 44px; border-radius: 22px; background: #fff; display: flex; align-items: center; justify-content: center; flex-shrink: 0">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#15171C" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+    </a>
+    <span style="background: #fff; border-radius: 22px; min-height: 44px; padding: 0 16px; display: flex; align-items: center; font-size: 14px; font-weight: 600">Draw area · Riverside Park</span>
+  </div>
+
+  <div style="position: absolute; left: 0; right: 0; bottom: 0; background: #fff; border-radius: 28px 28px 0 0; padding: 10px 20px 34px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px">
+    <span style="align-self: center; width: 40px; height: 5px; border-radius: 3px; background: #D6D3CB"></span>
+    <div style="display: flex; align-items: baseline; justify-content: space-between">
+      <span style="font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 600">{{readout}}</span>
+      <span style="font-size: 13px; color: #5B606B">{{status}}</span>
+    </div>
+    <p style="margin: 0; font-size: 14px; color: #3A3F49; line-height: 1.45; min-height: 40px">{{hint}}</p>
+    <div style="display: flex; gap: 8px">
+      <button type="button" onClick="{{undo}}" disabled="{{cantUndo}}" style="flex: 1; height: 44px; border-radius: 22px; border: 1px solid #D6D3CB; background: #fff; font: inherit; font-size: 14px; font-weight: 600; color: #15171C; display: flex; align-items: center; justify-content: center; gap: 6px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>Undo</button>
+      <sc-if value="{{hasSel}}" hint-placeholder-val="{{false}}">
+        <button type="button" onClick="{{deleteSel}}" style="flex: 1; height: 44px; border-radius: 22px; border: 1px solid #F0C4B0; background: #FFF3EC; font: inherit; font-size: 14px; font-weight: 600; color: #B23C00">Delete point</button>
+      </sc-if>
+      <button type="button" onClick="{{clear}}" style="flex: 1; height: 44px; border-radius: 22px; border: 1px solid #D6D3CB; background: #fff; font: inherit; font-size: 14px; font-weight: 600; color: #15171C">Clear</button>
+    </div>
+    <sc-if value="{{closed}}" hint-placeholder-val="{{false}}">
+      <a href="SpotEditor.dc.html" style="text-decoration: none; height: 52px; flex-shrink: 0; border-radius: 26px; background: #2F5BFF; color: #fff; font-size: 16px; font-weight: 600; display: flex; align-items: center; justify-content: center">Use this area</a>
+    </sc-if>
+    <sc-if value="{{open}}" hint-placeholder-val="{{true}}">
+      <button type="button" disabled="{{true}}" style="height: 52px; flex-shrink: 0; border-radius: 26px; border: 0; background: #E3E1DA; color: #5B606B; font: inherit; font-size: 16px; font-weight: 600">Close the shape to continue</button>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      pts: [{ x: 112, y: 188 }, { x: 268, y: 168 }, { x: 306, y: 300 }, { x: 156, y: 336 }],
+      closed: false, sel: null, drag: null, moved: false, skipClick: false, hist: []
+    };
+  }
+  snap() {
+    const s = this.state;
+    return s.hist.concat([{ pts: s.pts.map((p) => ({ x: p.x, y: p.y })), closed: s.closed }]).slice(-50);
+  }
+  pos(e) {
+    const r = e.currentTarget.getBoundingClientRect();
+    const k = 390 / r.width;
+    return { x: (e.clientX - r.left) * k, y: (e.clientY - r.top) * k };
+  }
+  mapClick(e) {
+    const s = this.state;
+    if (s.skipClick) { this.setState({ skipClick: false }); return; }
+    if (s.closed) { this.setState({ sel: null }); return; }
+    const p = this.pos(e);
+    if (p.y > 590) return;
+    this.setState({ hist: this.snap(), pts: s.pts.concat([p]), sel: null });
+  }
+  down(e, i) {
+    e.stopPropagation();
+    this.setState({ drag: i, moved: false, dragStart: this.snap() });
+  }
+  mapMove(e) {
+    const s = this.state;
+    if (s.drag === null) return;
+    const p = this.pos(e);
+    const pts = s.pts.slice();
+    pts[s.drag] = { x: Math.max(8, Math.min(382, p.x)), y: Math.max(8, Math.min(590, p.y)) };
+    this.setState({ pts, moved: true });
+  }
+  mapUp() {
+    const s = this.state;
+    if (s.drag === null) return;
+    const i = s.drag;
+    if (s.moved) {
+      this.setState({ drag: null, hist: s.dragStart, skipClick: true });
+    } else if (!s.closed && i === 0 && s.pts.length >= 3) {
+      this.setState({ drag: null, hist: this.snap(), closed: true, sel: null, skipClick: true });
+    } else {
+      this.setState({ drag: null, sel: s.closed ? (s.sel === i ? null : i) : null, skipClick: true });
+    }
+  }
+  insertAt(i, p) {
+    const s = this.state;
+    const pts = s.pts.slice();
+    pts.splice(i + 1, 0, p);
+    this.setState({ hist: this.snap(), pts, sel: i + 1 });
+  }
+  area() {
+    const p = this.state.pts;
+    let a = 0;
+    for (let i = 0; i < p.length; i++) {
+      const j = (i + 1) % p.length;
+      a += p[i].x * p[j].y - p[j].x * p[i].y;
+    }
+    return Math.abs(a / 2) * 4; // map scale: 1 px = 2 m
+  }
+  renderVals() {
+    const s = this.state;
+    const n = s.pts.length;
+    const closable = !s.closed && n >= 3;
+    const vertices = s.pts.map((p, i) => {
+      const first = i === 0 && closable;
+      const size = first ? 30 : 24;
+      const selected = s.sel === i;
+      return {
+        left: p.x - size / 2, top: p.y - size / 2, size,
+        ring: first ? '#E8590C' : '#2F5BFF',
+        fill: selected ? '#2F5BFF' : '#fff',
+        label: first ? 'Point 1, tap to close the shape' : 'Point ' + (i + 1),
+        down: (e) => this.down(e, i),
+        stop: (e) => e.stopPropagation()
+      };
+    });
+    const mids = s.closed ? s.pts.map((p, i) => {
+      const q = s.pts[(i + 1) % n];
+      const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
+      return {
+        left: mx - 11, top: my - 11,
+        label: 'Add a point between ' + (i + 1) + ' and ' + (((i + 1) % n) + 1),
+        add: (e) => { e.stopPropagation(); this.insertAt(i, { x: mx, y: my }); }
+      };
+    }) : [];
+    let hint;
+    if (n === 0) hint = 'Tap the map to drop the first point.';
+    else if (!s.closed && n < 3) hint = 'Keep tapping to add points. You need at least 3.';
+    else if (!s.closed) hint = 'Tap the orange first point to close the shape.';
+    else if (s.sel !== null) hint = 'Point ' + (s.sel + 1) + ' selected. Drag to move it, or delete it.';
+    else hint = 'Drag a point to adjust it. Tap + on an edge to add a point. Tap a point to select it.';
+    const m2 = s.closed ? this.area() : 0;
+    const readout = n + (n === 1 ? ' point' : ' points');
+    const status = s.closed ? (m2 >= 10000 ? '≈ ' + (m2 / 10000).toFixed(2) + ' ha' : '≈ ' + Math.round(m2 / 10) * 10 + ' m²') : 'Shape open';
+    return {
+      vertices, mids, hint, readout, status,
+      line: s.pts.map((p) => p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' '),
+      closed: s.closed, open: !s.closed,
+      hasSel: s.closed && s.sel !== null && n > 3,
+      cantUndo: s.hist.length === 0,
+      mapClick: (e) => this.mapClick(e),
+      mapMove: (e) => this.mapMove(e),
+      mapUp: () => this.mapUp(),
+      undo: () => {
+        const h = s.hist;
+        if (!h.length) return;
+        const last = h[h.length - 1];
+        this.setState({ pts: last.pts, closed: last.closed, hist: h.slice(0, -1), sel: null });
+      },
+      clear: () => this.setState({ hist: this.snap(), pts: [], closed: false, sel: null }),
+      deleteSel: () => {
+        if (s.sel === null || n <= 3) return;
+        const pts = s.pts.slice();
+        pts.splice(s.sel, 1);
+        this.setState({ hist: this.snap(), pts, sel: null });
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

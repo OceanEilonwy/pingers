@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Set meet point</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#2F5BFF}a:hover{color:#1E40C8}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #ECEAE3; color: #15171C; font-family: Inter, system-ui, sans-serif; position: relative; overflow: hidden">
+  <svg width="390" height="480" viewBox="0 0 390 480" aria-hidden="true" style="position: absolute; left: 0; top: 0">
+    <rect width="390" height="480" fill="#ECEAE3"/>
+    <path d="M0 360 C80 330 150 400 240 375 S360 330 390 350 L390 480 L0 480Z" fill="#CFE0EC"/>
+    <rect x="50" y="150" width="280" height="190" rx="44" fill="#DCE8D2"/>
+    <path d="M0 130 L390 112" stroke="#fff" stroke-width="14"/>
+    <path d="M350 0 L365 480" stroke="#fff" stroke-width="10"/>
+    <path d="M90 270 C150 220 230 310 310 240" stroke="#F4F1E8" stroke-width="5" fill="none"/>
+    <circle cx="195" cy="262" r="28" fill="#E8590C" fill-opacity="0.14"/>
+  </svg>
+  <span style="position: absolute; left: 177px; top: 210px; width: 36px; height: 36px; border-radius: 18px 18px 18px 4px; background: #E8590C; display: flex; align-items: center; justify-content: center; transform: rotate(-45deg); box-shadow: 0 6px 14px rgba(0,0,0,.2)">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="transform: rotate(45deg)"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>
+  </span>
+  <span style="position: absolute; left: 120px; top: 165px; background: #15171C; color: #fff; font-size: 12px; font-weight: 600; border-radius: 8px; padding: 4px 10px">Drag map to move pin</span>
+  <span style="position: absolute; left: 268px; top: 250px; width: 34px; height: 34px; border-radius: 17px; background: #FFE7B8; border: 3px solid #fff; font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center">BE</span>
+  <span style="position: absolute; left: 86px; top: 220px; width: 34px; height: 34px; border-radius: 17px; background: #CFE0FF; border: 3px solid #fff; font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center">CH</span>
+
+  <div style="position: absolute; top: 56px; left: 16px">
+    <a href="Meetup.dc.html" aria-label="Close" style="width: 44px; height: 44px; border-radius: 22px; background: #fff; display: flex; align-items: center; justify-content: center">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#15171C" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </a>
+  </div>
+
+  <div style="position: absolute; left: 0; right: 0; bottom: 0; height: 400px; background: #fff; border-radius: 28px 28px 0 0; padding: 10px 20px 34px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px">
+    <span style="align-self: center; width: 40px; height: 5px; border-radius: 3px; background: #D6D3CB"></span>
+    <h1 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 600">Meet point</h1>
+    <div role="group" aria-label="Meet point type" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); background: #F0EFEA; border-radius: 12px; padding: 3px; gap: 3px">
+      <button aria-pressed="true" style="height: 38px; border: 0; border-radius: 10px; background: #fff; font: inherit; font-size: 13px; font-weight: 600; color: #15171C; box-shadow: 0 1px 2px rgba(0,0,0,.08)">Pin on map</button>
+      <button aria-pressed="false" style="height: 38px; border: 0; border-radius: 10px; background: transparent; font: inherit; font-size: 13px; font-weight: 600; color: #5B606B">At a person</button>
+      <button aria-pressed="false" style="height: 38px; border: 0; border-radius: 10px; background: transparent; font: inherit; font-size: 13px; font-weight: 600; color: #5B606B">Midpoint</button>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <label for="mpname" style="font-size: 13px; font-weight: 600; color: #5B606B">Label (optional)</label>
+      <input id="mpname" value="Bandstand" style="height: 48px; border-radius: 14px; border: 1px solid #E3E1DA; background: #F6F5F1; padding: 0 14px; font: inherit; font-size: 16px; color: #15171C; box-sizing: border-box">
+    </div>
+    <div style="display: flex; gap: 14px; font-size: 13px; color: #5B606B">
+      <span>You 60 m</span><span>Ben 70 m</span><span>Chloé: private</span>
+    </div>
+    <div style="flex-grow: 1"></div>
+    <a href="Meetup.dc.html" style="text-decoration: none; height: 52px; border-radius: 26px; background: #E8590C; color: #fff; font-size: 16px; font-weight: 600; display: flex; align-items: center; justify-content: center">Share meet point</a>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

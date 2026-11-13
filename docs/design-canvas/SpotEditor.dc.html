@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Spot editor</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#2F5BFF}a:hover{color:#1E40C8}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #ECEAE3; color: #15171C; font-family: Inter, system-ui, sans-serif; position: relative; overflow: hidden">
+  <svg width="390" height="480" viewBox="0 0 390 480" aria-hidden="true" style="position: absolute; left: 0; top: 0">
+    <rect width="390" height="480" fill="#ECEAE3"/>
+    <path d="M0 330 C80 300 150 370 240 345 S360 300 390 320 L390 480 L0 480Z" fill="#CFE0EC"/>
+    <rect x="70" y="150" width="230" height="150" rx="40" fill="#DCE8D2"/>
+    <path d="M0 120 L390 100" stroke="#fff" stroke-width="14"/>
+    <path d="M330 0 L350 480" stroke="#fff" stroke-width="10"/>
+    <path d="M40 0 L30 480" stroke="#fff" stroke-width="7"/>
+    <path d="M0 40 L390 55" stroke="#fff" stroke-width="6"/>
+    <circle cx="190" cy="235" r="118" fill="#2F5BFF" fill-opacity="0.14" stroke="#2F5BFF" stroke-width="2.5"/>
+    <circle cx="190" cy="235" r="6" fill="#2F5BFF"/>
+    <circle cx="308" cy="235" r="11" fill="#fff" stroke="#2F5BFF" stroke-width="3"/>
+  </svg>
+  <div style="position: absolute; top: 56px; left: 16px; right: 16px; display: flex; justify-content: space-between">
+    <a href="PartyDetail.dc.html" aria-label="Close" style="width: 44px; height: 44px; border-radius: 22px; background: #fff; display: flex; align-items: center; justify-content: center">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#15171C" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </a>
+    <label style="height: 44px; border-radius: 22px; background: #fff; display: flex; align-items: center; gap: 8px; padding: 0 16px; width: 240px; box-sizing: border-box">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5B606B" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+      <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">Search a place</span>
+      <input placeholder="Search a place" style="border: 0; outline: none; font: inherit; font-size: 15px; width: 100%; background: transparent">
+    </label>
+  </div>
+  <span style="position: absolute; left: 236px; top: 252px; background: #15171C; color: #fff; font-size: 12px; font-weight: 600; border-radius: 8px; padding: 4px 8px">300 m</span>
+
+  <div style="position: absolute; left: 0; right: 0; bottom: 0; background: #fff; border-radius: 28px 28px 0 0; padding: 10px 20px 34px; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px">
+    <span style="align-self: center; width: 40px; height: 5px; border-radius: 3px; background: #D6D3CB"></span>
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <label for="sname" style="font-size: 13px; font-weight: 600; color: #5B606B">Spot name</label>
+      <input id="sname" value="Riverside Park" style="height: 48px; border-radius: 14px; border: 1px solid #E3E1DA; background: #F6F5F1; padding: 0 14px; font: inherit; font-size: 16px; color: #15171C; box-sizing: border-box">
+    </div>
+    <div role="group" aria-label="Shape" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); background: #F0EFEA; border-radius: 12px; padding: 3px; gap: 3px">
+      <button aria-pressed="true" style="height: 38px; border: 0; border-radius: 10px; background: #fff; font: inherit; font-size: 14px; font-weight: 600; color: #15171C; box-shadow: 0 1px 2px rgba(0,0,0,.08)">Circle</button>
+      <a href="SpotDrawArea.dc.html" style="height: 38px; border-radius: 10px; background: transparent; font-size: 14px; font-weight: 600; color: #5B606B; text-decoration: none; display: flex; align-items: center; justify-content: center">Draw area</a>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <div style="display: flex; justify-content: space-between"><label for="rad" style="font-size: 13px; font-weight: 600; color: #5B606B">Radius</label><span style="font-size: 13px; font-weight: 600">300 m</span></div>
+      <input id="rad" type="range" min="40" max="1000" value="300" style="width: 100%; accent-color: #2F5BFF">
+    </div>
+    <div style="display: flex; gap: 10px; align-items: flex-start; background: #F6F5F1; border-radius: 14px; padding: 12px 14px">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2F5BFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink: 0; margin-top: 1px"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+      <span style="font-size: 13px; line-height: 1.45; color: #3A3F49">Encrypted for Climbing crew. The server stores this Spot as unreadable data and never learns where it is.</span>
+    </div>
+    <a href="PartyDetail.dc.html" style="text-decoration: none; height: 52px; flex-shrink: 0; border-radius: 26px; background: #2F5BFF; color: #fff; font-size: 16px; font-weight: 600; display: flex; align-items: center; justify-content: center">Save spot</a>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
