@@ -40,6 +40,14 @@ pub(crate) fn ciphersuite(policy: CipherSuitePolicy) -> Result<Ciphersuite, MlsE
     }
 }
 
+/// Whether a big-endian suite code from the wire is one of the suites this build can run.
+pub(crate) fn is_supported_suite_code(code: &[u8]) -> bool {
+    [CipherSuitePolicy::Classical, CipherSuitePolicy::QuantumResistant]
+        .into_iter()
+        .filter_map(|policy| ciphersuite(policy).ok())
+        .any(|suite| u16::from(suite).to_be_bytes() == code)
+}
+
 /// Leaf capabilities: the group's suite, basic credentials and, in Meetups, the grant-key
 /// extension.
 pub(crate) fn capabilities(kind: KindTag, suite: Ciphersuite) -> Capabilities {
@@ -188,4 +196,18 @@ pub(crate) fn load_party_roster(
         });
     }
     Ok(Roster::new(entries))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_supported_suite_code;
+
+    #[test]
+    fn only_the_suites_this_build_runs_are_supported() {
+        // 0x0003: X25519, ChaCha20-Poly1305, Ed25519.
+        assert!(is_supported_suite_code(&[0x00, 0x03]));
+        // 0x0002: P-256, whose verification code RUSTSEC-2026-0387 concerns.
+        assert!(!is_supported_suite_code(&[0x00, 0x02]));
+        assert!(!is_supported_suite_code(&[0x00]));
+    }
 }

@@ -273,10 +273,21 @@ impl<'context, S: MlsStorage> MlsContext<'context, S> {
         suite: CipherSuitePolicy,
         rng: &mut impl CryptoRng,
     ) -> Result<Group<'context, S, Party>, MlsError> {
+        self.build_party_group(group_id.as_bytes(), suite, rng)
+    }
+
+    /// [`Self::create_party_group`] with an arbitrary OpenMLS group id, so tests can build the
+    /// Welcome of a group whose id is not [`GroupId::LENGTH`] bytes.
+    pub(crate) fn build_party_group(
+        &self,
+        raw_group_id: &[u8],
+        suite: CipherSuitePolicy,
+        rng: &mut impl CryptoRng,
+    ) -> Result<Group<'context, S, Party>, MlsError> {
         let suite = policy::ciphersuite(suite)?;
         let provider = Provider::new(self.storage, InjectedRand::new(rng));
         let inner = MlsGroup::builder()
-            .with_group_id(openmls::prelude::GroupId::from_slice(group_id.as_bytes()))
+            .with_group_id(openmls::prelude::GroupId::from_slice(raw_group_id))
             .ciphersuite(suite)
             .with_wire_format_policy(openmls::prelude::PURE_CIPHERTEXT_WIRE_FORMAT_POLICY)
             .use_ratchet_tree_extension(true)
@@ -320,6 +331,7 @@ impl<'context, S: MlsStorage> MlsContext<'context, S> {
         if policy::is_meetup(staged.group_context().extensions()) {
             return Err(MlsError::InvalidMessage);
         }
+        check_group_id_length(&staged)?;
         let inner = staged
             .into_group(&provider)
             .map_err(|_| provider.adapter().error_or(MlsError::InvalidMessage))?;
@@ -423,6 +435,7 @@ impl<'context, S: MlsStorage> MlsContext<'context, S> {
         if !policy::is_meetup(staged.group_context().extensions()) {
             return Err(MlsError::InvalidMessage);
         }
+        check_group_id_length(&staged)?;
         for member in staged.members() {
             let key = policy::leaf_account_key(member.signature_key.as_slice())
                 .ok_or(MlsError::InvalidMessage)?;
@@ -963,6 +976,17 @@ fn stage_commit<S: MlsStorage, R: openmls_traits::random::OpenMlsRand>(
 }
 
 /// Decrypts a Meetup Welcome whose PSK is already stored, checking it injects exactly that PSK.
+/// Refuses a Welcome whose group id is not [`GroupId::LENGTH`] bytes. [`Group::group_id`]
+/// truncates or zero-pads the OpenMLS id, so a longer id such as `victim_id || 0x00` would
+/// otherwise make the roster, the storage prefix and `delete_group` address another group.
+fn check_group_id_length(staged: &StagedWelcome) -> Result<(), MlsError> {
+    if staged.group_context().group_id().as_slice().len() == GroupId::LENGTH {
+        Ok(())
+    } else {
+        Err(MlsError::InvalidMessage)
+    }
+}
+
 fn stage_meetup_welcome<S: MlsStorage>(
     provider: &Provider<'_, S, NoRand>,
     welcome: Welcome,
@@ -1096,6 +1120,16 @@ pub(crate) fn parse_key_package<S: MlsStorage, R: openmls_traits::random::OpenMl
     bytes: &KeyPackageBytes,
     provider: &Provider<'_, S, R>,
 ) -> Result<KeyPackage, MlsError> {
+    // `validate` checks the leaf signature with whatever suite the KeyPackage names, so an
+    // untrusted KeyPackage could otherwise reach ECDSA P-256 code (deny.toml,
+    // RUSTSEC-2026-0387). The suite is the second field: version (u16), then suite (u16).
+    let suite = bytes
+        .as_bytes()
+        .get(2..4)
+        .ok_or(MlsError::InvalidMessage)?;
+    if !policy::is_supported_suite_code(suite) {
+        return Err(MlsError::InvalidMessage);
+    }
     KeyPackageIn::tls_deserialize_exact_bytes(bytes.as_bytes())
         .map_err(|_| MlsError::InvalidMessage)?
         .validate(provider.crypto(), ProtocolVersion::Mls10)
