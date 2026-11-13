@@ -12,13 +12,17 @@
 //! in pingers-quota; the client's counters live in pingers-store.
 #![forbid(unsafe_code)]
 
+#[cfg(any(feature = "prover", feature = "verifier"))]
+mod circuit;
 mod error;
+mod field;
 mod identity;
 #[cfg(feature = "issuer")]
 mod issuer;
+#[cfg(any(feature = "prover", feature = "issuer"))]
+mod pp;
 #[cfg(feature = "prover")]
 mod prove;
-mod stub;
 #[cfg(feature = "prover")]
 mod token;
 #[cfg(any(feature = "prover", feature = "verifier"))]

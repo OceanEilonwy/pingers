@@ -2,9 +2,10 @@
 //! Privacy Pass client: token requests and redemption (RFC 9576/9578, type 0x0001).
 
 use rand_core::CryptoRng;
+use voprf::{EvaluationElement, Group as _, Proof, VoprfClient};
 
 use crate::AnonError;
-use crate::stub::{Unimplemented, not_implemented};
+use crate::pp::{self, NONCE_LEN, Suite};
 
 /// How many tokens to request in one batch (up to 300 a day, design B.4.8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,14 +37,23 @@ impl TokenCount {
 
 /// A batch request in flight: blinded elements sent, blinds kept to finalise the answer.
 pub struct PendingIssuance {
-    unimplemented: Unimplemented,
+    /// The encoded request.
+    request: Vec<u8>,
+    /// The issuer's public key, which the batch proof must verify under.
+    public_key: <Suite as voprf::Group>::Elem,
+    /// `SHA-256(public key)`.
+    key_id: [u8; 32],
+    /// One nonce per token, in request order.
+    nonces: Vec<[u8; NONCE_LEN]>,
+    /// One blind per token, in request order.
+    clients: Vec<VoprfClient<Suite>>,
 }
 
 impl PendingIssuance {
     /// The request body for `POST /v1/pp/issue`.
     #[must_use]
     pub fn request(&self) -> &[u8] {
-        match self.unimplemented {}
+        &self.request
     }
 
     /// Verifies the issuer's batch proof and unblinds the tokens.
@@ -52,8 +62,37 @@ impl PendingIssuance {
     ///
     /// [`AnonError::BadIssuance`] if the response does not match or its proof fails.
     pub fn finish(self, response: &[u8]) -> Result<Vec<PrivacyPassToken>, AnonError> {
-        let _ = response;
-        match self.unimplemented {}
+        let decoded = pp::decode_response(response)?;
+        if decoded.elements.len() != self.clients.len() {
+            return Err(AnonError::BadIssuance);
+        }
+        let elements = decoded
+            .elements
+            .iter()
+            .map(|element| EvaluationElement::<Suite>::deserialize(element))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| AnonError::BadIssuance)?;
+        let proof =
+            Proof::<Suite>::deserialize(decoded.proof).map_err(|_| AnonError::BadIssuance)?;
+        let inputs: Vec<Vec<u8>> = self
+            .nonces
+            .iter()
+            .map(|nonce| pp::token_input(nonce, &self.key_id))
+            .collect();
+        let outputs =
+            VoprfClient::batch_finalize(&inputs, &self.clients, &elements, &proof, self.public_key)
+                .map_err(|_| AnonError::BadIssuance)?;
+        inputs
+            .iter()
+            .zip(outputs)
+            .map(|(input, output)| {
+                let output = output.map_err(|_| AnonError::BadIssuance)?;
+                let mut token = Vec::with_capacity(pp::TOKEN_LEN);
+                token.extend_from_slice(input);
+                token.extend_from_slice(&output);
+                Ok(PrivacyPassToken(token))
+            })
+            .collect()
     }
 }
 
@@ -67,7 +106,30 @@ pub fn begin_token_issuance(
     count: TokenCount,
     rng: &mut impl CryptoRng,
 ) -> Result<PendingIssuance, AnonError> {
-    not_implemented((issuer_public_key, count, rng))
+    let public_key =
+        Suite::deserialize_elem(issuer_public_key).map_err(|_| AnonError::BadIssuance)?;
+    let key_id = pp::key_id(issuer_public_key);
+    let capacity = usize::from(count.get());
+    let mut nonces = Vec::with_capacity(capacity);
+    let mut clients = Vec::with_capacity(capacity);
+    let mut blinded = Vec::with_capacity(capacity);
+    for _ in 0..count.get() {
+        let mut nonce = [0_u8; NONCE_LEN];
+        rng.fill_bytes(&mut nonce);
+        let blind = VoprfClient::<Suite>::blind(&pp::token_input(&nonce, &key_id), rng)
+            .map_err(|_| AnonError::Internal)?;
+        nonces.push(nonce);
+        clients.push(blind.state);
+        blinded.push(blind.message.serialize());
+    }
+    let truncated_key_id = key_id.last().copied().ok_or(AnonError::Internal)?;
+    Ok(PendingIssuance {
+        request: pp::encode_request(truncated_key_id, &blinded)?,
+        public_key,
+        key_id,
+        nonces,
+        clients,
+    })
 }
 
 /// One unspent token, shared with the app's background handlers through the `pp_token` table.
@@ -94,7 +156,7 @@ impl PrivacyPassToken {
     ///
     /// [`AnonError::Internal`] if the encoding fails.
     pub fn authorization(&self) -> Result<String, AnonError> {
-        not_implemented(self)
+        Ok(format!("PrivateToken token=\"{}\"", pp::base64url(&self.0)))
     }
 }
 

@@ -7,7 +7,12 @@ use rand_core::CryptoRng;
 use zeroize::Zeroizing;
 
 use crate::AnonError;
-use crate::stub::not_implemented;
+use crate::field;
+
+/// Domain label of the external nullifier preimage (design B.4.8).
+const EXTERNAL_NULLIFIER_LABEL: &[u8] = b"pingers/v1/rln";
+/// Domain label of the request digest preimage.
+const REQUEST_DIGEST_LABEL: &[u8] = b"pingers/v1/rln/x";
 
 /// Requests per scope per bucket per device: the RLN message limit `k` (design B.4.8).
 pub const MESSAGE_LIMIT: u8 = 8;
@@ -62,6 +67,22 @@ field_element!(
     ExternalNullifier
 );
 
+impl IdCommitment {
+    /// The tree leaf for this identity: `rate_commitment = Poseidon(id_commitment, k)` with
+    /// `k = MESSAGE_LIMIT`. The server appends it on `POST /v1/rln/leaf`.
+    ///
+    /// # Errors
+    ///
+    /// [`AnonError::NotAFieldElement`] if the commitment is not canonical.
+    pub fn leaf(&self) -> Result<LeafValue, AnonError> {
+        let commitment = field::decode(&self.0)?;
+        let limit = rln::circuit::Fr::from(MESSAGE_LIMIT);
+        Ok(LeafValue(field::encode(field::poseidon(&[
+            commitment, limit,
+        ]))))
+    }
+}
+
 /// Which of a bucket's [`MESSAGE_LIMIT`] slots a request spends. Persist the next id before
 /// sending, and skip ahead on any doubt: reusing one with a different body leaks the secret
 /// to a slashing server (design B.4.8).
@@ -109,7 +130,13 @@ impl RlnSecret {
     ///
     /// [`AnonError::Internal`] if sampling fails.
     pub fn generate(rng: &mut impl CryptoRng) -> Result<Self, AnonError> {
-        not_implemented(rng)
+        // 64 bytes reduced modulo a 254-bit order: the bias is below 2^-250.
+        let mut wide = Zeroizing::new([0_u8; 64]);
+        rng.fill_bytes(wide.as_mut_slice());
+        let mut scalar = field::reduce(wide.as_slice());
+        let secret = Self(Zeroizing::new(field::encode(scalar)));
+        zeroize::Zeroize::zeroize(&mut scalar);
+        Ok(secret)
     }
 
     /// Loads a stored secret.
@@ -118,7 +145,9 @@ impl RlnSecret {
     ///
     /// [`AnonError::NotAFieldElement`] if the bytes are not a canonical scalar.
     pub fn from_bytes(bytes: Zeroizing<[u8; 32]>) -> Result<Self, AnonError> {
-        not_implemented(bytes)
+        let mut scalar = field::decode(&bytes)?;
+        zeroize::Zeroize::zeroize(&mut scalar);
+        Ok(Self(bytes))
     }
 
     /// The encoding, for pingers-store only.
@@ -133,7 +162,14 @@ impl RlnSecret {
     ///
     /// [`AnonError::Internal`] if hashing fails.
     pub fn id_commitment(&self) -> Result<IdCommitment, AnonError> {
-        not_implemented(self)
+        let secret = self.scalar()?;
+        Ok(IdCommitment(field::encode(field::poseidon(&[*secret]))))
+    }
+
+    /// The secret as a field element, wiped on drop.
+    pub(crate) fn scalar(&self) -> Result<rln::circuit::SecretFr, AnonError> {
+        let mut scalar = field::decode(&self.0)?;
+        Ok(rln::circuit::SecretFr::from(&mut scalar))
     }
 }
 
@@ -147,7 +183,17 @@ pub fn external_nullifier(
     scope: RlnScope,
     bucket: Bucket,
 ) -> Result<ExternalNullifier, AnonError> {
-    not_implemented((server, scope, bucket))
+    let server = server.as_str().as_bytes();
+    let preimage = field::sha256_to_field(&[
+        EXTERNAL_NULLIFIER_LABEL,
+        &length_prefix(server)?,
+        server,
+        &[scope.to_wire()],
+        &bucket.index().to_be_bytes(),
+    ]);
+    Ok(ExternalNullifier(field::encode(field::poseidon(&[
+        preimage,
+    ]))))
 }
 
 /// `x = H(method, path, body)` reduced into the scalar field. Client and server compute it the
@@ -157,7 +203,22 @@ pub fn external_nullifier(
 ///
 /// [`AnonError::Internal`] if hashing fails.
 pub fn request_digest(method: &str, path: &str, body: &[u8]) -> Result<RequestDigest, AnonError> {
-    not_implemented((method, path, body))
+    let digest = field::sha256_to_field(&[
+        REQUEST_DIGEST_LABEL,
+        &length_prefix(method.as_bytes())?,
+        method.as_bytes(),
+        &length_prefix(path.as_bytes())?,
+        path.as_bytes(),
+        body,
+    ]);
+    Ok(RequestDigest(field::encode(digest)))
+}
+
+/// The length of a variable-length preimage field, as 8 bytes big-endian.
+fn length_prefix(bytes: &[u8]) -> Result<[u8; 8], AnonError> {
+    u64::try_from(bytes.len())
+        .map(u64::to_be_bytes)
+        .map_err(|_| AnonError::Internal)
 }
 
 #[cfg(test)]
