@@ -1,0 +1,163 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! The OpenMLS provider for one operation: crypto, injected randomness and the storage adapter.
+
+use core::cell::RefCell;
+
+use openmls::prelude::{BasicCredential, CredentialWithKey, SignatureScheme};
+use openmls_basic_credential::SignatureKeyPair;
+use openmls_rust_crypto::RustCrypto;
+use openmls_traits::OpenMlsProvider;
+use openmls_traits::random::OpenMlsRand;
+use pingers_crypto::AccountSigningKey;
+use rand_core::CryptoRng;
+
+use crate::MlsStorage;
+use crate::adapter::StorageAdapter;
+
+/// Crypto, randomness and storage for one wrapper call.
+pub(crate) struct Provider<'storage, S: MlsStorage, R> {
+    crypto: RustCrypto,
+    rand: R,
+    storage: StorageAdapter<'storage, S>,
+}
+
+impl<'storage, S: MlsStorage, R: OpenMlsRand> Provider<'storage, S, R> {
+    pub(crate) fn new(storage: &'storage S, rand: R) -> Self {
+        Self {
+            crypto: RustCrypto::default(),
+            rand,
+            storage: StorageAdapter::new(storage),
+        }
+    }
+
+    /// The storage adapter, to turn an OpenMLS failure into the right [`crate::MlsError`].
+    pub(crate) const fn adapter(&self) -> &StorageAdapter<'storage, S> {
+        &self.storage
+    }
+}
+
+impl<'storage, S: MlsStorage, R: OpenMlsRand> OpenMlsProvider for Provider<'storage, S, R> {
+    type CryptoProvider = RustCrypto;
+    type RandProvider = R;
+    type StorageProvider = StorageAdapter<'storage, S>;
+
+    fn storage(&self) -> &Self::StorageProvider {
+        &self.storage
+    }
+
+    fn crypto(&self) -> &Self::CryptoProvider {
+        &self.crypto
+    }
+
+    fn rand(&self) -> &Self::RandProvider {
+        &self.rand
+    }
+}
+
+/// Why OpenMLS could not have randomness.
+#[derive(Debug, thiserror::Error)]
+#[error("randomness unavailable")]
+pub(crate) struct RandUnavailable;
+
+/// OpenMLS randomness drawn from the caller's RNG (style guide §6).
+pub(crate) struct InjectedRand<'rng, R: CryptoRng> {
+    rng: RefCell<&'rng mut R>,
+}
+
+impl<'rng, R: CryptoRng> InjectedRand<'rng, R> {
+    pub(crate) const fn new(rng: &'rng mut R) -> Self {
+        Self {
+            rng: RefCell::new(rng),
+        }
+    }
+}
+
+impl<R: CryptoRng> OpenMlsRand for InjectedRand<'_, R> {
+    type Error = RandUnavailable;
+
+    fn random_array<const N: usize>(&self) -> Result<[u8; N], Self::Error> {
+        let mut bytes = [0; N];
+        self.rng
+            .try_borrow_mut()
+            .map_err(|_| RandUnavailable)?
+            .fill_bytes(&mut bytes);
+        Ok(bytes)
+    }
+
+    fn random_vec(&self, length: usize) -> Result<Vec<u8>, Self::Error> {
+        let mut bytes = vec![0; length];
+        self.rng
+            .try_borrow_mut()
+            .map_err(|_| RandUnavailable)?
+            .fill_bytes(&mut bytes);
+        Ok(bytes)
+    }
+}
+
+/// Randomness for operations that the contract gives no RNG (processing, joining, merging):
+/// OpenMLS needs none for them, and if it ever asks, the call fails rather than using an
+/// uninjected source.
+pub(crate) struct NoRand;
+
+impl OpenMlsRand for NoRand {
+    type Error = RandUnavailable;
+
+    fn random_array<const N: usize>(&self) -> Result<[u8; N], Self::Error> {
+        Err(RandUnavailable)
+    }
+
+    fn random_vec(&self, _length: usize) -> Result<Vec<u8>, Self::Error> {
+        Err(RandUnavailable)
+    }
+}
+
+/// The OpenMLS signer for the account key, which is the leaf signature key (design B.1).
+/// Signing itself happens in `openmls_basic_credential`.
+pub(crate) fn leaf_signer(key: &AccountSigningKey) -> SignatureKeyPair {
+    SignatureKeyPair::from_raw(
+        SignatureScheme::ED25519,
+        key.expose_bytes().to_vec(),
+        key.public_key().as_bytes().to_vec(),
+    )
+}
+
+/// The leaf credential: a `BasicCredential` whose identity is the account public key, with
+/// the same key as signature key.
+pub(crate) fn credential(key: &AccountSigningKey) -> CredentialWithKey {
+    let public = key.public_key().as_bytes().to_vec();
+    CredentialWithKey {
+        credential: BasicCredential::new(public.clone()).into(),
+        signature_key: public.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use rand_core::Rng as _;
+
+    use super::*;
+
+    #[test]
+    fn openmls_randomness_comes_from_the_injected_rng() -> Result<(), RandUnavailable> {
+        let mut injected = pingers_testkit::seeded_rng(3);
+        let mut reference = pingers_testkit::seeded_rng(3);
+        let rand = InjectedRand::new(&mut injected);
+        let array: [u8; 16] = rand.random_array()?;
+        let vector = rand.random_vec(24)?;
+        let mut expected_array = [0; 16];
+        reference.fill_bytes(&mut expected_array);
+        let mut expected_vector = vec![0; 24];
+        reference.fill_bytes(&mut expected_vector);
+        assert_eq!(array, expected_array);
+        assert_eq!(vector, expected_vector);
+        Ok(())
+    }
+
+    #[test]
+    fn operations_without_an_rng_get_no_randomness() {
+        assert!(NoRand.random_array::<4>().is_err());
+        assert!(NoRand.random_vec(4).is_err());
+    }
+}

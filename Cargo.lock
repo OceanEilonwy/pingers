@@ -3336,8 +3336,12 @@ dependencies = [
  "openmls_traits",
  "pingers-crypto",
  "pingers-proto",
+ "pingers-testkit",
  "pingers-time",
+ "rand_chacha 0.10.0",
  "rand_core 0.10.1",
+ "serde",
+ "serde_json",
  "thiserror",
  "zeroize",
 ]

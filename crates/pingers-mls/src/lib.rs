@@ -15,11 +15,18 @@
 //! `PrivateMessage`, no external commits, proposals or senders.
 #![forbid(unsafe_code)]
 
+mod adapter;
 mod group;
+#[cfg(any(test, feature = "test-util"))]
+mod memory;
+mod policy;
+mod provider;
 mod roster;
 mod storage;
-mod stub;
+#[cfg(test)]
+mod tests;
 
+pub use adapter::group_storage_prefix;
 pub use group::{
     CipherSuitePolicy, Commit, CommitSummary, CreatedMeetup, Group, KeyPackagePurpose, Meetup,
     MeetupCreation, MeetupPskBinding, MeetupPskId, MemberGrantKey, MlsContext, MlsError, Party,
@@ -27,3 +34,6 @@ pub use group::{
 };
 pub use roster::{Roster, RosterEntry};
 pub use storage::{MlsStorage, StorageError};
+
+#[cfg(any(test, feature = "test-util"))]
+pub use memory::MemoryStorage;

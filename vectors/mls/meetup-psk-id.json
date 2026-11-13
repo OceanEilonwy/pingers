@@ -1,0 +1,42 @@
+{
+  "name": "meetup-psk-id",
+  "description": "The Meetup external PSK id (design B.5): party_id || be64(epoch) || spot_id || be64(bucket), 48 bytes. A pingers-mls decision (CONTRACT.md).",
+  "vectors": [
+    {
+      "name": "zero-epoch-and-bucket",
+      "inputs": {
+        "party_id": "00000000000000000000000000000000",
+        "epoch": 0,
+        "spot_id": "00000000000000000000000000000000",
+        "bucket": 0
+      },
+      "expected": {
+        "psk_id": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "typical",
+      "inputs": {
+        "party_id": "101112131415161718191a1b1c1d1e1f",
+        "epoch": 42,
+        "spot_id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "bucket": 5916000
+      },
+      "expected": {
+        "psk_id": "101112131415161718191a1b1c1d1e1f000000000000002aa0a1a2a3a4a5a6a7a8a9aaabacadaeaf00000000005a4560"
+      }
+    },
+    {
+      "name": "large-epoch",
+      "inputs": {
+        "party_id": "ffffffffffffffffffffffffffffffff",
+        "epoch": 1099511627783,
+        "spot_id": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+        "bucket": 123456789
+      },
+      "expected": {
+        "psk_id": "ffffffffffffffffffffffffffffffff00000100000000075a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a00000000075bcd15"
+      }
+    }
+  ]
+}

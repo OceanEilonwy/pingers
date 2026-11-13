@@ -14,6 +14,8 @@ layer = 1
 # The X-Wing ciphersuite (0x004D) for "quantum-resistant" Parties (design B.8), via a libcrux
 # provider the implementer adds.
 x-wing = ["pingers-crypto/x-wing"]
+# An in-memory `MlsStorage` for tests here and in other crates.
+test-util = []
 
 [dependencies]
 pingers-crypto = { workspace = true }
@@ -24,8 +26,14 @@ openmls_basic_credential = { workspace = true }
 openmls_rust_crypto = { workspace = true }
 openmls_traits = { workspace = true }
 rand_core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 zeroize = { workspace = true }
+
+[dev-dependencies]
+pingers-testkit = { workspace = true }
+rand_chacha = { workspace = true }
 
 [lints]
 workspace = true
