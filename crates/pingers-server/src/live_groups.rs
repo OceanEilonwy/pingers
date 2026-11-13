@@ -17,7 +17,7 @@ use pingers_ohttp::BinaryRequest;
 use pingers_proto::{GroupId, SubscriptionId, WireDecode as _};
 use tokio::sync::mpsc;
 
-use crate::groups::{FromChannel, authorise, forward_frame, status_of};
+use crate::groups::{Anon, FromChannel, authorise, forward_frame, status_of};
 use crate::wire::{hex_array, query};
 use crate::{LIVE_BUFFER, LiveFrame, Shared};
 
@@ -67,7 +67,8 @@ fn attach(
     head: &BinaryRequest,
 ) -> Result<(Attached, mpsc::Receiver<LiveFrame>), StatusCode> {
     // The head of a live exchange has no body of its own: it signs an empty one.
-    let (group, _anon) = authorise(shared, head, &[]).map_err(|reply| reply.status)?;
+    let (group, _anon) =
+        authorise(shared, head, &[], Anon::NotRequired).map_err(|reply| reply.status)?;
     let subscription = match query(&head.path, "sub") {
         None => None,
         Some(text) => Some(SubscriptionId::from_bytes(

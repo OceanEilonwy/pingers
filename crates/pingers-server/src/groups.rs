@@ -6,8 +6,8 @@
 //! Every route handler here may block (SQLite, proof verification): `dispatch.rs` runs them on
 //! the blocking pool.
 //!
-//! Wire encodings: `POST /v1/groups?lifetime=meetup|party&epoch=n` (`lifetime` required: the
-//! lifetime class, design A.2; `epoch` the MLS epoch the members are in at upload, decimal,
+//! Wire encodings: `POST /v1/groups?lifetime=meetup|party&epoch=n` (`lifetime` the lifetime
+//! class, design A.2, Meetup when absent; `epoch` the MLS epoch the members are in at upload, decimal,
 //! 0 when absent: a Meetup group is uploaded at epoch 1, after the commit its Welcome
 //! carries, design G.4); `{id}` is the group id in hex, `{sub_id}` the subscription id; `?after=` is a
 //! decimal sequence number (0 when absent). Messages forwarded on live channels are
@@ -69,12 +69,14 @@ fn bad_request() -> Reply {
     Reply::status(StatusCode::BAD_REQUEST)
 }
 
-/// The lifetime class named by `?lifetime=`.
+/// The lifetime class named by `?lifetime=`. Absent, it is a Meetup, the shorter-lived and
+/// so the more private class: pingers-sync does not send the class yet, and a Party created
+/// without it expires after two idle hours rather than lingering for half a year.
 fn lifetime(path: &str) -> Option<GroupLifetime> {
-    match query(path, "lifetime")? {
-        "meetup" => Some(GroupLifetime::Meetup),
-        "party" => Some(GroupLifetime::Party),
-        _ => None,
+    match query(path, "lifetime") {
+        None | Some("meetup") => Some(GroupLifetime::Meetup),
+        Some("party") => Some(GroupLifetime::Party),
+        Some(_) => None,
     }
 }
 
@@ -86,21 +88,72 @@ fn start_epoch(path: &str) -> Option<Epoch> {
     }
 }
 
+/// Whether a group request needs an Anon credential besides its signature.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Anon {
+    /// A write: create, commit, post, put subscription.
+    Required,
+    /// A read, a delete or the live channel: the signature alone.
+    NotRequired,
+}
+
 /// Checks a Grp request to the group in its path (signature first, so a bad signature spends
-/// no credential), and returns the group and what the Anon half came to.
+/// no credential), and returns the group and what the Anon half came to. Only the current
+/// epoch's key is accepted.
 pub(crate) fn authorise(
     shared: &Shared,
     request: &BinaryRequest,
     body: &[u8],
+    anon: Anon,
 ) -> Result<(GroupId, GroupAnon), Reply> {
     let group = group_id(&request.path).ok_or_else(bad_request)?;
     let auth_key = shared
         .groups
         .auth_key(&group)
         .map_err(|error| refused(&error))?;
-    check_signature(shared, request, &auth_key, body)?;
-    let anon = admit_group(shared, request, group)?;
+    check_signature(shared, request, &[auth_key], body)?;
+    let anon = match anon {
+        Anon::Required => admit_group(shared, request, group)?,
+        Anon::NotRequired => GroupAnon::Session,
+    };
     Ok((group, anon))
+}
+
+/// Which epoch's key signed a request that may come from a member behind the head.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Signer {
+    /// The current epoch's key.
+    Current,
+    /// An earlier epoch's: the member has not applied the later commits yet.
+    Behind,
+}
+
+/// As [`authorise`] without the Anon half, accepting earlier epochs' keys too: for log reads
+/// (a member that missed a commit can read it only with the key it still has) and for
+/// commits (one made in an epoch that has moved on is answered with the conflict).
+fn authorise_behind(
+    shared: &Shared,
+    request: &BinaryRequest,
+    body: &[u8],
+) -> Result<(GroupId, Signer), Reply> {
+    let group = group_id(&request.path).ok_or_else(bad_request)?;
+    let mut keys = vec![
+        shared
+            .groups
+            .auth_key(&group)
+            .map_err(|error| refused(&error))?,
+    ];
+    keys.extend(
+        shared
+            .groups
+            .past_auth_keys(&group)
+            .map_err(|error| refused(&error))?,
+    );
+    let signer = match check_signature(shared, request, &keys, body)? {
+        0 => Signer::Current,
+        _ => Signer::Behind,
+    };
+    Ok((group, signer))
 }
 
 /// Adds the new session, if one was started, to `reply`.
@@ -149,7 +202,20 @@ pub(crate) fn create(shared: &Shared, request: &BinaryRequest) -> Result<Reply, 
 
 /// `POST /v1/groups/{id}/commit`: 200 with the sequence, or 409 with the head epoch.
 pub(crate) fn commit(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
-    let (group, anon) = authorise(shared, request, &request.body)?;
+    let (group, signer) = authorise_behind(shared, request, &request.body)?;
+    if signer == Signer::Behind {
+        // Signed with an earlier epoch's key, so made in an epoch another commit took:
+        // nothing is appended and no credential is spent.
+        let head_epoch = shared
+            .groups
+            .head_epoch(&group)
+            .map_err(|error| refused(&error))?;
+        return Ok(encoded(
+            StatusCode::CONFLICT,
+            &pingers_proto::CommitResponse::Conflict { head_epoch },
+        ));
+    }
+    let anon = admit_group(shared, request, group)?;
     let commit = decode::<CommitRequest>(&request.body)?;
     let frame = LiveFrame {
         epoch: commit.epoch,
@@ -181,7 +247,7 @@ fn subscription_id(path: &str) -> Option<SubscriptionId> {
 
 /// `PUT /v1/groups/{id}/subs/{sub_id}`: the body's id must be the path's.
 pub(crate) fn put_subscription(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
-    let (group, anon) = authorise(shared, request, &request.body)?;
+    let (group, anon) = authorise(shared, request, &request.body, Anon::Required)?;
     let id = subscription_id(&request.path).ok_or_else(bad_request)?;
     let subscription = decode::<Subscription>(&request.body)?;
     if subscription.id != id {
@@ -199,7 +265,7 @@ pub(crate) fn delete_subscription(
     shared: &Shared,
     request: &BinaryRequest,
 ) -> Result<Reply, Reply> {
-    let (group, anon) = authorise(shared, request, &request.body)?;
+    let (group, anon) = authorise(shared, request, &request.body, Anon::NotRequired)?;
     let id = subscription_id(&request.path).ok_or_else(bad_request)?;
     shared
         .groups
@@ -211,7 +277,7 @@ pub(crate) fn delete_subscription(
 /// `POST /v1/groups/{id}/msgs`: 200 with the sequence for a stored message, 202 for an
 /// ephemeral one.
 pub(crate) fn post(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
-    let (group, anon) = authorise(shared, request, &request.body)?;
+    let (group, anon) = authorise(shared, request, &request.body, Anon::Required)?;
     let message = decode::<AppMessage>(&request.body)?;
     let frame = LiveFrame {
         epoch: message.epoch,
@@ -233,7 +299,8 @@ pub(crate) fn post(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Re
 
 /// `GET /v1/groups/{id}/msgs?after=seq`.
 pub(crate) fn read(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
-    let (group, anon) = authorise(shared, request, &request.body)?;
+    let (group, _signer) = authorise_behind(shared, request, &request.body)?;
+    let anon = GroupAnon::Session;
     let after = match query(&request.path, "after") {
         None => SequenceNumber::new(0),
         Some(text) => SequenceNumber::new(text.parse().map_err(|_| bad_request())?),
@@ -247,7 +314,8 @@ pub(crate) fn read(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Re
 
 /// `GET /v1/groups/{id}/state`: 204 when no snapshot was uploaded.
 pub(crate) fn state(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
-    let (group, anon) = authorise(shared, request, &request.body)?;
+    let (group, _signer) = authorise_behind(shared, request, &request.body)?;
+    let anon = GroupAnon::Session;
     let reply = match shared
         .groups
         .state(&group)
@@ -261,7 +329,7 @@ pub(crate) fn state(shared: &Shared, request: &BinaryRequest) -> Result<Reply, R
 
 /// `DELETE /v1/groups/{id}`.
 pub(crate) fn delete(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
-    let (group, anon) = authorise(shared, request, &request.body)?;
+    let (group, anon) = authorise(shared, request, &request.body, Anon::NotRequired)?;
     shared
         .groups
         .delete_group(&group)
@@ -272,7 +340,7 @@ pub(crate) fn delete(shared: &Shared, request: &BinaryRequest) -> Result<Reply, 
 /// `POST /v1/groups/{id}/live?sub=` as a one-shot request: one uplink frame of a split
 /// channel, from the member whose downlink was opened with the same `sub`.
 pub(crate) fn uplink(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
-    let (group, anon) = authorise(shared, request, &request.body)?;
+    let (group, anon) = authorise(shared, request, &request.body, Anon::NotRequired)?;
     let subscription = query(&request.path, "sub")
         .and_then(hex_array::<{ SubscriptionId::LENGTH }>)
         .map(SubscriptionId::from_bytes)

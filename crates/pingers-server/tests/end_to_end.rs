@@ -283,7 +283,7 @@ fn group_request(
         path,
         headers: vec![
             header("pingers-group-session", session),
-            header("pingers-group-timestamp", &now.get().to_string()),
+            header("pingers-group-time", &now.get().to_string()),
             header(
                 "pingers-group-signature",
                 &hex::encode(signature.as_bytes()),
@@ -508,17 +508,15 @@ async fn a_device_registers_proves_commits_and_is_woken() -> TestResult {
         (_, 200) => (8_u8, one),
         statuses => return Err(format!("no commit won: {statuses:?}").into()),
     };
-    // The loser is refused either way: 409 with the head epoch if its commit reached the log
-    // check first, or 403 if the winner had already rotated the log-auth key it signed with.
-    match loser.status.get() {
-        409 => assert_eq!(
-            CommitResponse::decode(&loser.body)?,
-            CommitResponse::Conflict {
-                head_epoch: Epoch::new(1)
-            }
-        ),
-        status => assert_eq!(status, 403),
-    }
+    // The loser gets 409 with the head epoch, whether its commit reached the log check first
+    // or arrived signed with the key the winner had just rotated away.
+    assert_eq!(loser.status.get(), 409);
+    assert_eq!(
+        CommitResponse::decode(&loser.body)?,
+        CommitResponse::Conflict {
+            head_epoch: Epoch::new(1)
+        }
+    );
 
     // The winning commit wakes both subscriptions quietly, each after a delay of at most
     // 30 s: nothing reaches the relay until the clock moves.

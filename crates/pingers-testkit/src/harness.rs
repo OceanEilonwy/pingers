@@ -158,6 +158,9 @@ pub enum HarnessError {
         #[source]
         source: std::io::Error,
     },
+    /// A direct request to the server could not be made or answered.
+    #[error("direct request to the harness server failed")]
+    Direct,
 }
 
 /// The running server and relays. Dropping it shuts them down.
@@ -271,6 +274,72 @@ pub async fn run_ohttp_relay(
     shutdown: impl Future<Output = ()>,
 ) {
     relay::serve(listener, gateway, shutdown).await;
+}
+
+/// Sends `request` straight to the harness server at `server` over plain HTTP/2, as an
+/// identified (direct) request: for tests whose client transport would need `https://`
+/// (accounts, `POST /v1/auth`, Privacy Pass issuance). Header names are sent as given.
+///
+/// # Errors
+///
+/// [`HarnessError::Direct`] if the connection, request or answer fails.
+#[cfg(feature = "harness")]
+pub async fn send_direct(
+    server: SocketAddr,
+    request: &pingers_ohttp::BinaryRequest,
+) -> Result<pingers_ohttp::BinaryResponse, HarnessError> {
+    use axum::body::{Body, HttpBody as _};
+    use hyper_util::rt::{TokioExecutor, TokioIo};
+
+    let failed = |_| HarnessError::Direct;
+    let stream = tokio::net::TcpStream::connect(server)
+        .await
+        .map_err(failed)?;
+    let (mut sender, connection) =
+        hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(stream))
+            .await
+            .map_err(|_| HarnessError::Direct)?;
+    let connection = tokio::spawn(connection);
+    let mut builder = hyper::Request::builder()
+        .method(request.method.as_str())
+        .uri(format!("http://{server}{}", request.path));
+    for header in &request.headers {
+        builder = builder.header(header.name.as_str(), header.value.as_slice());
+    }
+    let outgoing = builder
+        .body(Body::from(request.body.clone()))
+        .map_err(|_| HarnessError::Direct)?;
+    let response = sender
+        .send_request(outgoing)
+        .await
+        .map_err(|_| HarnessError::Direct)?;
+    let status = pingers_ohttp::StatusCode::new(response.status().as_u16())
+        .map_err(|_| HarnessError::Direct)?;
+    let content_type = response
+        .headers()
+        .get(hyper::header::CONTENT_TYPE)
+        .map(|value| value.as_bytes().to_vec());
+    let mut body = response.into_body();
+    let mut bytes = Vec::new();
+    while let Some(frame) =
+        std::future::poll_fn(|context| std::pin::Pin::new(&mut body).poll_frame(context)).await
+    {
+        if let Ok(data) = frame.map_err(|_| HarnessError::Direct)?.into_data() {
+            bytes.extend_from_slice(&data);
+        }
+    }
+    connection.abort();
+    Ok(pingers_ohttp::BinaryResponse {
+        status,
+        headers: content_type
+            .into_iter()
+            .map(|value| pingers_ohttp::Header {
+                name: "content-type".to_owned(),
+                value,
+            })
+            .collect(),
+        body: bytes,
+    })
 }
 
 #[cfg(test)]

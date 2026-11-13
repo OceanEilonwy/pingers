@@ -371,10 +371,9 @@ fn signed_at(
             timestamp,
         },
     )?;
-    request.headers.push(header(
-        "pingers-group-timestamp",
-        &timestamp.get().to_string(),
-    ));
+    request
+        .headers
+        .push(header("pingers-group-time", &timestamp.get().to_string()));
     request.headers.push(header(
         "pingers-group-signature",
         &hex::encode(signature.as_bytes()),
@@ -449,8 +448,8 @@ async fn group_creation_needs_a_lifetime_class_and_a_credential() -> TestResult 
     }
     .encode()?;
     for path in [
-        "/v1/groups",
         "/v1/groups?lifetime=forever",
+        "/v1/groups?lifetime=",
         "/v1/groups?lifetime=meetup&epoch=x",
     ] {
         let refused = call(
@@ -510,14 +509,13 @@ async fn group_requests_need_a_fresh_signature_by_the_current_key() -> TestResul
     let wallet = Wallet::fetch(&server, 1, 4).await?;
     let creator = create_group(&server, &wallet, 5).await?;
     let path = group_path(&creator.group, "/state");
-    let session = header(
-        "pingers-group-session",
-        creator.session.as_deref().ok_or("no session")?,
-    );
     let now = server.clock.now();
     let other_key = LogAuthKeyPair::from_bytes(Zeroizing::new([6; 32]));
-    let skew = Duration::from_secs(121);
-    let unsigned = inner("GET", &path, vec![session.clone()], Vec::new());
+    // Design F.1: a device uses its clock unchanged up to half a bucket off.
+    let skew = Duration::from_secs(451);
+    let within = Duration::from_secs(450);
+    // A read needs the signature and nothing else.
+    let unsigned = inner("GET", &path, Vec::new(), Vec::new());
     for (request, expected) in [
         (unsigned.clone(), 401),
         (signed_at(&other_key, unsigned.clone(), now)?, 403),
@@ -541,7 +539,15 @@ async fn group_requests_need_a_fresh_signature_by_the_current_key() -> TestResul
             signed_at(
                 &creator.key,
                 unsigned.clone(),
-                now.checked_add(Duration::from_secs(120)).ok_or("time")?,
+                now.checked_add(within).ok_or("time")?,
+            )?,
+            200,
+        ),
+        (
+            signed_at(
+                &creator.key,
+                unsigned.clone(),
+                now.checked_sub(within).ok_or("time")?,
             )?,
             200,
         ),
@@ -550,29 +556,39 @@ async fn group_requests_need_a_fresh_signature_by_the_current_key() -> TestResul
         let answer = call(&server, &request).await?;
         assert_eq!(answer.status.get(), expected);
     }
-    // Without the session (or with another group's), the request needs a credential again.
+    // A write also needs an Anon credential, or the session one bought.
+    let message = AppMessage {
+        epoch: Epoch::new(0),
+        body: MlsMessageBytes::from_bytes(vec![0x11; 3]),
+        delivery: Mode::Ephemeral,
+        wake: None,
+    }
+    .encode()?;
+    let post_path = group_path(&creator.group, "/msgs");
+    let post = |headers: Vec<Header>| inner("POST", &post_path, headers, message.clone());
+    let with_session = creator.request("POST", "/msgs", message.clone())?;
+    assert_eq!(call(&server, &with_session).await?.status.get(), 202);
+    // Without the session (or with another group's), the write needs a credential again.
     let other = create_group(&server, &wallet, 7).await?;
     let foreign = header(
         "pingers-group-session",
         other.session.as_deref().ok_or("no session")?,
     );
     for headers in [Vec::new(), vec![foreign]] {
-        let request = signed_at(&creator.key, inner("GET", &path, headers, Vec::new()), now)?;
+        let request = signed_at(&creator.key, post(headers), now)?;
         assert_eq!(call(&server, &request).await?.status.get(), 401);
     }
     // A credential instead of the session starts a new session.
-    let paid = signed_at(
-        &creator.key,
-        wallet.pay(inner("GET", &path, Vec::new(), Vec::new()))?,
-        now,
-    )?;
+    let paid = signed_at(&creator.key, wallet.pay(post(Vec::new()))?, now)?;
     let answer = call(&server, &paid).await?;
-    assert_eq!(answer.status.get(), 200);
+    assert_eq!(answer.status.get(), 202);
     assert!(response_header(&answer, "pingers-group-session").is_some());
-    // Sessions end with the bucket.
+    // Sessions end with the bucket; reads go on.
     server.clock.advance(pingers_time::Bucket::LENGTH);
-    let late = creator.request("GET", "/state", Vec::new())?;
+    let late = creator.request("POST", "/msgs", message.clone())?;
     assert_eq!(call(&server, &late).await?.status.get(), 401);
+    let read = creator.request("GET", "/state", Vec::new())?;
+    assert_eq!(call(&server, &read).await?.status.get(), 200);
     server.stop().await
 }
 
@@ -596,10 +612,27 @@ async fn group_logs_take_one_commit_per_epoch_and_rotate_the_key() -> TestResult
         CommitResponse::decode(&won.body)?,
         CommitResponse::Accepted { .. }
     ));
-    // The old key no longer opens the log; the next one does, and a second commit for epoch 0
-    // loses with the head epoch.
-    let stale_key = call(&server, &creator.request("GET", "/msgs", Vec::new())?).await?;
-    assert_eq!(stale_key.status.get(), 403);
+    // A member still on the old key can read the log to catch up, and its commit loses with
+    // the head epoch, but it can no longer write or delete.
+    let behind = call(&server, &creator.request("GET", "/msgs", Vec::new())?).await?;
+    assert_eq!(behind.status.get(), 200);
+    let late_commit = creator.request(
+        "POST",
+        "/commit",
+        commit_body(0, &LogAuthKeyPair::from_bytes(Zeroizing::new([11; 32])))?,
+    )?;
+    let late = call(&server, &late_commit).await?;
+    assert_eq!(late.status.get(), 409);
+    assert_eq!(
+        CommitResponse::decode(&late.body)?,
+        CommitResponse::Conflict {
+            head_epoch: Epoch::new(1)
+        }
+    );
+    for (method, rest) in [("DELETE", ""), ("PUT", "/subs/00")] {
+        let refused = call(&server, &creator.request(method, rest, Vec::new())?).await?;
+        assert_eq!(refused.status.get(), 403, "{method} {rest}");
+    }
     creator.key = next;
     let lost = call(
         &server,

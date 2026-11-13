@@ -13,15 +13,19 @@
 //!   group routes.
 //! - `Authorization: PrivateToken token="<base64url(token)>"` (RFC 9577); spent once, on any
 //!   route that takes an Anon credential.
-//! - Grp: `pingers-group-timestamp: <unix seconds>` and `pingers-group-signature: <hex>`, the
+//! - Grp: `pingers-group-time: <unix seconds>` and `pingers-group-signature: <hex>`, the
 //!   Ed25519 signature of pingers-crypto's `GroupRequest { method, path, body, timestamp }`
-//!   (for the live channel's head the body is empty). The timestamp must be within
-//!   [`GROUP_CLOCK_SKEW`] of the server's clock.
+//!   (for the live channel's head the body is empty). The time must be within
+//!   [`GROUP_CLOCK_SKEW`] of the server's clock (design F.1: a device uses its own clock
+//!   unchanged up to half a bucket off).
+//! - Which group requests also need an Anon credential (pingers-sync's contract): the writes
+//!   (create, commit, post, put subscription). Reads, deletes and the live channel carry
+//!   only the signature, which already proves the sender holds the epoch's key.
 //! - Sessions: design D's "one Anon credential per group per bucket buys a session cookie for
-//!   that group". A group request that spends an Anon credential (and `POST /v1/groups`) is
-//!   answered with `pingers-group-session: <hex>`; presenting it on later requests to that
-//!   group, until the end of the bucket, stands in for the Anon credential. The Grp signature
-//!   is still required on every request.
+//!   that group". A group write that spends an Anon credential (and `POST /v1/groups`) is
+//!   answered with `pingers-group-session: <hex>`; presenting it on later writes to that
+//!   group, until the end of the bucket, stands in for the credential. Optional: a client may
+//!   send a credential on every write instead.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
@@ -45,12 +49,13 @@ pub(crate) const AUTHORIZATION: &str = "authorization";
 /// The Grp signature header.
 pub(crate) const GROUP_SIGNATURE: &str = "pingers-group-signature";
 /// The Grp timestamp header.
-pub(crate) const GROUP_TIMESTAMP: &str = "pingers-group-timestamp";
+pub(crate) const GROUP_TIMESTAMP: &str = "pingers-group-time";
 /// The group session header, in requests and responses.
 pub(crate) const GROUP_SESSION: &str = "pingers-group-session";
-/// How far a Grp timestamp may be from the server's clock (design A.2: clients accept a
-/// server offset of up to 120 s).
-pub(crate) const GROUP_CLOCK_SKEW: Duration = Duration::from_secs(120);
+/// How far a Grp time may be from the server's clock: half a bucket (design F.1: within
+/// ±120 s a device corrects its clock, up to 450 s it uses it unchanged, beyond that it
+/// sends no credentialed request).
+pub(crate) const GROUP_CLOCK_SKEW: Duration = Duration::from_secs(450);
 
 const RLN_SCHEME: &str = "PingersRln ";
 const TOKEN_SCHEME: &str = "PrivateToken token=";
@@ -184,14 +189,15 @@ pub(crate) fn start_session(shared: &Shared, group: GroupId) -> (&'static str, S
     (GROUP_SESSION, hex::encode(id))
 }
 
-/// Checks the Grp signature of `request` against `auth_key`: 401 if the headers are missing
-/// or malformed or the timestamp is too far off, 403 if the signature does not verify.
+/// Checks the Grp signature of `request` against `keys` and returns the position of the key
+/// that verifies it: 401 if the headers are missing or malformed or the time is too far off,
+/// 403 if no key verifies it.
 pub(crate) fn check_signature(
     shared: &Shared,
     request: &BinaryRequest,
-    auth_key: &GroupAuthKey,
+    keys: &[GroupAuthKey],
     body: &[u8],
-) -> Result<(), Reply> {
+) -> Result<usize, Reply> {
     let signature = header(request, GROUP_SIGNATURE)
         .and_then(hex_array::<64>)
         .ok_or_else(unauthorized)?;
@@ -208,22 +214,21 @@ pub(crate) fn check_signature(
     if skew > GROUP_CLOCK_SKEW {
         return Err(unauthorized());
     }
-    verify_group_request(
-        auth_key,
-        &GroupRequest {
-            method: &request.method,
-            path: &request.path,
-            body,
-            timestamp,
-        },
-        &Signature::from_bytes(signature),
-    )
-    .map_err(|_| forbidden())
+    let signed = GroupRequest {
+        method: &request.method,
+        path: &request.path,
+        body,
+        timestamp,
+    };
+    let signature = Signature::from_bytes(signature);
+    keys.iter()
+        .position(|key| verify_group_request(key, &signed, &signature).is_ok())
+        .ok_or_else(forbidden)
 }
 
 /// What a group request's Anon half came to.
 pub(crate) enum GroupAnon {
-    /// A live session was presented.
+    /// A live session was presented, or the request needs no Anon credential.
     Session,
     /// A credential was spent; the answer should carry this new session.
     NewSession((&'static str, String)),
