@@ -71,3 +71,8 @@ Client network I/O (architecture §3, design B.12 and B.4.9). L2: tokio, hyper, 
   is fatal (`Ohttp`), never retried.
 - **Integration tests** compile the reference relay's own `config.rs` and `relay.rs` with
   `#[path]`, because pingers-ohttp-relay is a binary without a library target.
+- **Surviving mutants (cargo mutants), both unobservable:** `Io::poll_flush` and
+  `Io::poll_shutdown` replaced with `Ok(())`. Over plain TCP both are no-ops; over TLS,
+  tokio-rustls writes each record as it is produced, so nothing waits on a flush, and the
+  close_notify a shutdown would send changes nothing the peer acts on (HTTP/2 ends streams
+  itself). They stay as plain delegations because skipping them would be wrong in general.
