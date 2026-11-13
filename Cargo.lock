@@ -3471,8 +3471,12 @@ version = "0.1.0"
 dependencies = [
  "pingers-anon",
  "pingers-proto",
+ "pingers-testkit",
  "pingers-time",
+ "rand_core 0.10.1",
+ "rusqlite",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]
