@@ -399,3 +399,822 @@ impl SpotPresence {
         self.progress.exit_evidence = ExitEvidence::None;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use super::*;
+    use crate::testing::{offset, polygon_around};
+    use crate::{Circle, Coordinate, Meters};
+
+    /// A 200 m Spot: exit buffer 50 m, entry accuracy limit 100 m.
+    const RADIUS: u32 = 200;
+    const START: u64 = 10_000;
+
+    fn center() -> Result<Coordinate, GeoError> {
+        Coordinate::new(48.85, 2.35)
+    }
+
+    fn circle_fence() -> Result<Fence, GeoError> {
+        Ok(Fence::Circle(Circle::new(
+            center()?,
+            Meters::from_whole(RADIUS),
+        )?))
+    }
+
+    fn time(seconds_after_start: u64) -> UnixSeconds {
+        UnixSeconds::new(START.saturating_add(seconds_after_start))
+    }
+
+    /// A fix `north` metres north of the centre, with `accuracy`.
+    fn fix(north: f64, accuracy: u32, seconds: u64) -> Result<PresenceInput, GeoError> {
+        Ok(PresenceInput::Fix(Fix {
+            coordinate: offset(center()?, 0.0, north)?,
+            accuracy: Meters::from_whole(accuracy),
+            taken_at: time(seconds),
+        }))
+    }
+
+    fn good_fix_inside(seconds: u64) -> Result<PresenceInput, GeoError> {
+        fix(0.0, 10, seconds)
+    }
+
+    /// Beyond the fence by more than the 50 m exit buffer.
+    fn fix_beyond(seconds: u64) -> Result<PresenceInput, GeoError> {
+        fix(260.0, 10, seconds)
+    }
+
+    fn outside() -> Result<SpotPresence, GeoError> {
+        Ok(SpotPresence::new(circle_fence()?, time(0)))
+    }
+
+    fn inside_at(seconds: u64) -> Result<SpotPresence, GeoError> {
+        let mut presence = outside()?;
+        let _ = presence.handle(good_fix_inside(seconds.saturating_sub(30))?)?;
+        let _ = presence.handle(good_fix_inside(seconds)?)?;
+        assert_eq!(presence.state(), PresenceState::Inside);
+        Ok(presence)
+    }
+
+    fn changed(from: PresenceState, to: PresenceState, seconds: u64) -> PresenceChange {
+        PresenceChange::Changed(PresenceTransition {
+            from,
+            to,
+            at: time(seconds),
+        })
+    }
+
+    #[test]
+    fn starts_outside_with_no_fix() -> Result<(), GeoError> {
+        let presence = outside()?;
+        assert_eq!(
+            presence.snapshot(),
+            PresenceSnapshot {
+                state: PresenceState::Outside,
+                since: time(0),
+                last_fix_at: None,
+            }
+        );
+        assert_eq!(presence.fence(), &circle_fence()?);
+        Ok(())
+    }
+
+    #[test]
+    fn a_fix_inside_makes_a_candidate() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        assert_eq!(
+            presence.handle(good_fix_inside(40)?)?,
+            changed(PresenceState::Outside, PresenceState::Candidate, 40)
+        );
+        assert_eq!(presence.snapshot().since, time(40));
+        assert_eq!(presence.snapshot().last_fix_at, Some(time(40)));
+        Ok(())
+    }
+
+    #[test]
+    fn a_fix_outside_leaves_outside_alone() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        assert_eq!(
+            presence.handle(fix(201.0, 10, 5)?)?,
+            PresenceChange::Unchanged
+        );
+        assert_eq!(presence.state(), PresenceState::Outside);
+        Ok(())
+    }
+
+    #[test]
+    fn os_enter_makes_a_candidate() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        assert_eq!(
+            presence.handle(PresenceInput::OsEnter { at: time(5) })?,
+            changed(PresenceState::Outside, PresenceState::Candidate, 5)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn two_good_fixes_30_s_apart_confirm_entry() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        let _ = presence.handle(good_fix_inside(0)?)?;
+        assert_eq!(
+            presence.handle(good_fix_inside(30)?)?,
+            changed(PresenceState::Candidate, PresenceState::Inside, 30)
+        );
+        assert_eq!(presence.snapshot().since, time(30));
+        Ok(())
+    }
+
+    #[test]
+    fn fixes_29_s_apart_do_not_confirm_entry() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        let _ = presence.handle(good_fix_inside(0)?)?;
+        assert_eq!(
+            presence.handle(good_fix_inside(29)?)?,
+            PresenceChange::Unchanged
+        );
+        assert_eq!(presence.state(), PresenceState::Candidate);
+        Ok(())
+    }
+
+    #[test]
+    fn an_early_second_fix_does_not_restart_the_pair() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        let _ = presence.handle(good_fix_inside(0)?)?;
+        let _ = presence.handle(good_fix_inside(20)?)?;
+        // 30 s after the first fix, though only 10 s after the second.
+        assert!(presence.handle(good_fix_inside(30)?)?.is_entry());
+        Ok(())
+    }
+
+    #[test]
+    fn a_candidate_from_the_os_needs_two_fixes() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        let _ = presence.handle(PresenceInput::OsEnter { at: time(0) })?;
+        let _ = presence.handle(good_fix_inside(40)?)?;
+        assert_eq!(presence.state(), PresenceState::Candidate);
+        let _ = presence.handle(good_fix_inside(70)?)?;
+        assert_eq!(presence.state(), PresenceState::Inside);
+        Ok(())
+    }
+
+    #[test]
+    fn entry_fixes_need_accuracy_within_half_the_radius() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        // 101 m is worse than max(50 m, 200 m / 2): it makes a candidate but does not count.
+        let _ = presence.handle(fix(0.0, 101, 0)?)?;
+        assert_eq!(presence.state(), PresenceState::Candidate);
+        let _ = presence.handle(fix(0.0, 100, 40)?)?;
+        assert_eq!(presence.state(), PresenceState::Candidate);
+        let _ = presence.handle(fix(0.0, 101, 80)?)?;
+        assert_eq!(presence.state(), PresenceState::Candidate);
+        let _ = presence.handle(fix(0.0, 100, 70 + 30)?)?;
+        assert_eq!(presence.state(), PresenceState::Inside);
+        Ok(())
+    }
+
+    #[test]
+    fn a_fix_outside_between_entry_fixes_breaks_the_pair() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        let _ = presence.handle(good_fix_inside(0)?)?;
+        assert_eq!(
+            presence.handle(fix(201.0, 10, 20)?)?,
+            PresenceChange::Unchanged
+        );
+        assert_eq!(presence.state(), PresenceState::Candidate);
+        let _ = presence.handle(good_fix_inside(40)?)?;
+        assert_eq!(presence.state(), PresenceState::Candidate);
+        let _ = presence.handle(good_fix_inside(70)?)?;
+        assert_eq!(presence.state(), PresenceState::Inside);
+        Ok(())
+    }
+
+    #[test]
+    fn a_candidate_times_out_after_three_minutes() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        let _ = presence.handle(good_fix_inside(0)?)?;
+        assert_eq!(
+            presence.handle(PresenceInput::Tick { at: time(179) })?,
+            PresenceChange::Unchanged
+        );
+        assert_eq!(
+            presence.handle(PresenceInput::Tick { at: time(180) })?,
+            changed(PresenceState::Candidate, PresenceState::Outside, 180)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_confirming_fix_after_the_timeout_starts_a_new_candidate() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        let _ = presence.handle(good_fix_inside(0)?)?;
+        // The old candidacy has expired, so this fix only starts a new one.
+        assert_eq!(
+            presence.handle(good_fix_inside(200)?)?,
+            PresenceChange::Unchanged
+        );
+        assert_eq!(presence.state(), PresenceState::Candidate);
+        assert_eq!(presence.snapshot().since, time(200));
+        let _ = presence.handle(good_fix_inside(230)?)?;
+        assert_eq!(presence.state(), PresenceState::Inside);
+        Ok(())
+    }
+
+    #[test]
+    fn an_expired_candidate_with_a_fix_outside_reports_leaving() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        let _ = presence.handle(good_fix_inside(0)?)?;
+        assert_eq!(
+            presence.handle(fix(201.0, 10, 200)?)?,
+            changed(PresenceState::Candidate, PresenceState::Outside, 200)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn os_exit_ends_a_candidate() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        let _ = presence.handle(good_fix_inside(0)?)?;
+        assert_eq!(
+            presence.handle(PresenceInput::OsExit { at: time(10) })?,
+            changed(PresenceState::Candidate, PresenceState::Outside, 10)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn os_dwell_confirms_a_circle() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        let _ = presence.handle(PresenceInput::OsEnter { at: time(0) })?;
+        assert_eq!(
+            presence.handle(PresenceInput::OsDwell { at: time(90) })?,
+            changed(PresenceState::Candidate, PresenceState::Inside, 90)
+        );
+        let mut missed_enter = outside()?;
+        assert_eq!(
+            missed_enter.handle(PresenceInput::OsDwell { at: time(90) })?,
+            changed(PresenceState::Outside, PresenceState::Inside, 90)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn os_dwell_in_a_polygon_region_only_makes_a_candidate() -> Result<(), GeoError> {
+        let square = polygon_around(
+            center()?,
+            &[[0.0, 0.0], [300.0, 0.0], [300.0, 300.0], [0.0, 300.0]],
+        )?;
+        let mut presence = SpotPresence::new(Fence::Polygon(square), time(0));
+        assert_eq!(
+            presence.handle(PresenceInput::OsDwell { at: time(90) })?,
+            changed(PresenceState::Outside, PresenceState::Candidate, 90)
+        );
+        assert_eq!(
+            presence.handle(PresenceInput::OsDwell { at: time(100) })?,
+            PresenceChange::Unchanged
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn os_events_that_add_nothing_change_nothing() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        assert_eq!(
+            presence.handle(PresenceInput::OsExit { at: time(1) })?,
+            PresenceChange::Unchanged
+        );
+        let _ = presence.handle(PresenceInput::OsEnter { at: time(2) })?;
+        assert_eq!(
+            presence.handle(PresenceInput::OsEnter { at: time(3) })?,
+            PresenceChange::Unchanged
+        );
+        assert_eq!(presence.snapshot().since, time(2));
+        Ok(())
+    }
+
+    #[test]
+    fn os_exit_then_a_fix_beyond_the_buffer_confirms_exit() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        assert_eq!(
+            presence.handle(PresenceInput::OsExit { at: time(100) })?,
+            PresenceChange::Unchanged
+        );
+        assert_eq!(
+            presence.handle(fix_beyond(110)?)?,
+            changed(PresenceState::Inside, PresenceState::Outside, 110)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_fix_beyond_then_os_exit_confirms_exit() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        let _ = presence.handle(fix_beyond(100)?)?;
+        assert_eq!(
+            presence.handle(PresenceInput::OsExit { at: time(110) })?,
+            changed(PresenceState::Inside, PresenceState::Outside, 110)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn two_fixes_beyond_the_buffer_confirm_exit() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        assert_eq!(
+            presence.handle(fix_beyond(100)?)?,
+            PresenceChange::Unchanged
+        );
+        assert_eq!(
+            presence.handle(fix_beyond(110)?)?,
+            changed(PresenceState::Inside, PresenceState::Outside, 110)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn two_os_exits_alone_do_not_confirm_exit() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        let _ = presence.handle(PresenceInput::OsExit { at: time(100) })?;
+        let _ = presence.handle(PresenceInput::OsExit { at: time(110) })?;
+        assert_eq!(presence.state(), PresenceState::Inside);
+        Ok(())
+    }
+
+    #[test]
+    fn exit_needs_buffer_beyond_fence() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        let _ = presence.handle(PresenceInput::OsExit { at: time(100) })?;
+        // 249 m from the centre is 49 m beyond a 200 m fence: inside the 50 m buffer.
+        assert_eq!(
+            presence.handle(fix(249.0, 10, 110)?)?,
+            PresenceChange::Unchanged
+        );
+        assert_eq!(
+            presence.handle(fix(249.0, 10, 120)?)?,
+            PresenceChange::Unchanged
+        );
+        assert_eq!(presence.state(), PresenceState::Inside);
+        Ok(())
+    }
+
+    #[test]
+    fn a_fix_back_inside_cancels_exit_evidence() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        let _ = presence.handle(fix_beyond(100)?)?;
+        let _ = presence.handle(good_fix_inside(110)?)?;
+        assert_eq!(
+            presence.handle(fix_beyond(120)?)?,
+            PresenceChange::Unchanged
+        );
+        let _ = presence.handle(PresenceInput::OsExit { at: time(130) })?;
+        assert_eq!(presence.state(), PresenceState::Outside);
+        Ok(())
+    }
+
+    #[test]
+    fn os_enter_cancels_an_os_exit() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        let _ = presence.handle(PresenceInput::OsExit { at: time(100) })?;
+        let _ = presence.handle(PresenceInput::OsEnter { at: time(105) })?;
+        assert_eq!(
+            presence.handle(fix_beyond(110)?)?,
+            PresenceChange::Unchanged
+        );
+        assert_eq!(presence.state(), PresenceState::Inside);
+        Ok(())
+    }
+
+    #[test]
+    fn os_dwell_cancels_exit_evidence_for_a_circle() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        let _ = presence.handle(fix_beyond(100)?)?;
+        let _ = presence.handle(PresenceInput::OsDwell { at: time(105) })?;
+        assert_eq!(
+            presence.handle(fix_beyond(110)?)?,
+            PresenceChange::Unchanged
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inside_times_out_after_an_hour_without_confirmation() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        let hour = SpotPresence::INSIDE_TIMEOUT.as_secs();
+        assert_eq!(
+            presence.handle(PresenceInput::Tick {
+                at: time(30 + hour - 1)
+            })?,
+            PresenceChange::Unchanged
+        );
+        assert_eq!(
+            presence.handle(PresenceInput::Tick {
+                at: time(30 + hour)
+            })?,
+            changed(PresenceState::Inside, PresenceState::Outside, 30 + hour)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_fix_within_the_buffer_keeps_inside_alive() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        let hour = SpotPresence::INSIDE_TIMEOUT.as_secs();
+        let _ = presence.handle(fix(240.0, 10, 1_000)?)?;
+        let _ = presence.handle(PresenceInput::Tick {
+            at: time(30 + hour),
+        })?;
+        assert_eq!(presence.state(), PresenceState::Inside);
+        let _ = presence.handle(PresenceInput::Tick {
+            at: time(1_000 + hour),
+        })?;
+        assert_eq!(presence.state(), PresenceState::Outside);
+        Ok(())
+    }
+
+    #[test]
+    fn os_dwell_keeps_a_circle_inside_alive() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        let hour = SpotPresence::INSIDE_TIMEOUT.as_secs();
+        let _ = presence.handle(PresenceInput::OsDwell { at: time(1_000) })?;
+        let _ = presence.handle(PresenceInput::Tick {
+            at: time(30 + hour),
+        })?;
+        assert_eq!(presence.state(), PresenceState::Inside);
+        Ok(())
+    }
+
+    #[test]
+    fn a_fix_beyond_does_not_keep_inside_alive() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        let hour = SpotPresence::INSIDE_TIMEOUT.as_secs();
+        let _ = presence.handle(fix_beyond(1_000)?)?;
+        let _ = presence.handle(PresenceInput::Tick {
+            at: time(30 + hour),
+        })?;
+        assert_eq!(presence.state(), PresenceState::Outside);
+        Ok(())
+    }
+
+    #[test]
+    fn an_expired_inside_with_a_fix_inside_becomes_a_candidate() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        let late = 30 + SpotPresence::INSIDE_TIMEOUT.as_secs();
+        assert_eq!(
+            presence.handle(good_fix_inside(late)?)?,
+            changed(PresenceState::Inside, PresenceState::Candidate, late)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn suppress_from_any_state_and_resume_to_outside() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        assert_eq!(
+            presence.handle(PresenceInput::Suppress { at: time(40) })?,
+            changed(PresenceState::Inside, PresenceState::Suppressed, 40)
+        );
+        assert_eq!(
+            presence.handle(PresenceInput::Suppress { at: time(50) })?,
+            PresenceChange::Unchanged
+        );
+        assert_eq!(presence.snapshot().since, time(40));
+        assert_eq!(
+            presence.handle(PresenceInput::Resume { at: time(60) })?,
+            changed(PresenceState::Suppressed, PresenceState::Outside, 60)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resume_when_not_suppressed_changes_nothing() -> Result<(), GeoError> {
+        let mut presence = inside_at(30)?;
+        assert_eq!(
+            presence.handle(PresenceInput::Resume { at: time(40) })?,
+            PresenceChange::Unchanged
+        );
+        assert_eq!(presence.state(), PresenceState::Inside);
+        Ok(())
+    }
+
+    #[test]
+    fn suppressed_ignores_everything_but_resume() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        let _ = presence.handle(PresenceInput::Suppress { at: time(0) })?;
+        for input in [
+            good_fix_inside(10)?,
+            good_fix_inside(50)?,
+            PresenceInput::OsEnter { at: time(60) },
+            PresenceInput::OsDwell { at: time(70) },
+            PresenceInput::OsExit { at: time(80) },
+            PresenceInput::Tick { at: time(10_000) },
+        ] {
+            assert_eq!(presence.handle(input)?, PresenceChange::Unchanged);
+        }
+        assert_eq!(presence.state(), PresenceState::Suppressed);
+        assert_eq!(presence.snapshot().last_fix_at, Some(time(50)));
+        Ok(())
+    }
+
+    #[test]
+    fn stale_inputs_are_rejected_and_change_nothing() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        let _ = presence.handle(good_fix_inside(100)?)?;
+        let before = presence.clone();
+        assert_eq!(
+            presence.handle(good_fix_inside(99)?),
+            Err(GeoError::StaleInput)
+        );
+        assert_eq!(
+            presence.handle(PresenceInput::Suppress { at: time(99) }),
+            Err(GeoError::StaleInput)
+        );
+        assert_eq!(presence, before);
+        // An input at the same second is not stale.
+        assert!(
+            presence
+                .handle(PresenceInput::Tick { at: time(100) })
+                .is_ok()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inputs_before_creation_are_stale() -> Result<(), GeoError> {
+        let mut presence = SpotPresence::new(circle_fence()?, time(100));
+        assert_eq!(
+            presence.handle(PresenceInput::OsEnter { at: time(99) }),
+            Err(GeoError::StaleInput)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn restore_round_trips_the_snapshot() -> Result<(), GeoError> {
+        let presence = inside_at(30)?;
+        let restored = SpotPresence::restore(circle_fence()?, presence.snapshot());
+        assert_eq!(restored.snapshot(), presence.snapshot());
+        assert_eq!(restored.state(), PresenceState::Inside);
+        Ok(())
+    }
+
+    #[test]
+    fn restore_rejects_inputs_older_than_the_last_fix() -> Result<(), GeoError> {
+        let snapshot = PresenceSnapshot {
+            state: PresenceState::Inside,
+            since: time(30),
+            last_fix_at: Some(time(500)),
+        };
+        let mut restored = SpotPresence::restore(circle_fence()?, snapshot);
+        assert_eq!(
+            restored.handle(PresenceInput::Tick { at: time(499) }),
+            Err(GeoError::StaleInput)
+        );
+        // The Inside timeout runs from the last fix.
+        let hour = SpotPresence::INSIDE_TIMEOUT.as_secs();
+        let _ = restored.handle(PresenceInput::Tick {
+            at: time(500 + hour - 1),
+        })?;
+        assert_eq!(restored.state(), PresenceState::Inside);
+        let _ = restored.handle(PresenceInput::Tick {
+            at: time(500 + hour),
+        })?;
+        assert_eq!(restored.state(), PresenceState::Outside);
+        Ok(())
+    }
+
+    #[test]
+    fn restore_without_a_fix_runs_from_since() -> Result<(), GeoError> {
+        let snapshot = PresenceSnapshot {
+            state: PresenceState::Candidate,
+            since: time(500),
+            last_fix_at: None,
+        };
+        let mut restored = SpotPresence::restore(circle_fence()?, snapshot);
+        assert_eq!(
+            restored.handle(PresenceInput::Tick { at: time(499) }),
+            Err(GeoError::StaleInput)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn restore_ignores_a_fix_older_than_since() -> Result<(), GeoError> {
+        let snapshot = PresenceSnapshot {
+            state: PresenceState::Outside,
+            since: time(500),
+            last_fix_at: Some(time(100)),
+        };
+        let mut restored = SpotPresence::restore(circle_fence()?, snapshot);
+        assert_eq!(
+            restored.handle(PresenceInput::Tick { at: time(499) }),
+            Err(GeoError::StaleInput)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_restored_candidate_needs_a_fresh_pair() -> Result<(), GeoError> {
+        let mut presence = outside()?;
+        let _ = presence.handle(good_fix_inside(0)?)?;
+        let mut restored = SpotPresence::restore(circle_fence()?, presence.snapshot());
+        let _ = restored.handle(good_fix_inside(40)?)?;
+        assert_eq!(restored.state(), PresenceState::Candidate);
+        let _ = restored.handle(good_fix_inside(70)?)?;
+        assert_eq!(restored.state(), PresenceState::Inside);
+        Ok(())
+    }
+
+    impl PresenceChange {
+        fn is_entry(self) -> bool {
+            matches!(
+                self,
+                Self::Changed(PresenceTransition {
+                    to: PresenceState::Inside,
+                    ..
+                })
+            )
+        }
+    }
+
+    mod properties {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        /// A fix input at `north` metres from the centre, `seconds` after the start.
+        fn fix_at(north: f64, accuracy: u32, seconds: u64) -> Result<PresenceInput, GeoError> {
+            fix(north, accuracy, seconds)
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        enum Step {
+            Fix { north: f64, accuracy: u32 },
+            OsEnter,
+            OsExit,
+            OsDwell,
+            Suppress,
+            Resume,
+            Tick,
+        }
+
+        fn step() -> impl Strategy<Value = Step> {
+            prop_oneof![
+                4 => (-400.0..400.0_f64, 1_u32..200).prop_map(|(north, accuracy)| Step::Fix { north, accuracy }),
+                1 => Just(Step::OsEnter),
+                1 => Just(Step::OsExit),
+                1 => Just(Step::OsDwell),
+                1 => Just(Step::Suppress),
+                1 => Just(Step::Resume),
+                1 => Just(Step::Tick),
+            ]
+        }
+
+        fn input(step: Step, seconds: u64) -> Result<PresenceInput, GeoError> {
+            let at = time(seconds);
+            Ok(match step {
+                Step::Fix { north, accuracy } => fix_at(north, accuracy, seconds)?,
+                Step::OsEnter => PresenceInput::OsEnter { at },
+                Step::OsExit => PresenceInput::OsExit { at },
+                Step::OsDwell => PresenceInput::OsDwell { at },
+                Step::Suppress => PresenceInput::Suppress { at },
+                Step::Resume => PresenceInput::Resume { at },
+                Step::Tick => PresenceInput::Tick { at },
+            })
+        }
+
+        /// Steps with gaps in seconds, up to just over the Candidate timeout.
+        fn script() -> impl Strategy<Value = Vec<(Step, u64)>> {
+            prop::collection::vec((step(), 0_u64..200), 1..40)
+        }
+
+        proptest! {
+            #[test]
+            fn every_transition_is_one_the_table_allows(script in script()) {
+                let mut presence = outside()?;
+                let mut seconds = 0_u64;
+                for (step, gap) in script {
+                    seconds = seconds.saturating_add(gap);
+                    let change = presence.handle(input(step, seconds)?)?;
+                    if let PresenceChange::Changed(transition) = change {
+                        let allowed = match (transition.from, transition.to) {
+                            (PresenceState::Suppressed, to) => {
+                                matches!(step, Step::Resume) && to == PresenceState::Outside
+                            }
+                            (_, PresenceState::Suppressed) => matches!(step, Step::Suppress),
+                            (PresenceState::Outside, PresenceState::Inside) => {
+                                matches!(step, Step::OsDwell)
+                            }
+                            (PresenceState::Outside | PresenceState::Inside, PresenceState::Candidate)
+                            | (PresenceState::Candidate | PresenceState::Inside, PresenceState::Outside)
+                            | (PresenceState::Candidate, PresenceState::Inside) => true,
+                            (from, to) => from == to,
+                        };
+                        prop_assert!(allowed, "{transition:?} after {step:?}");
+                        prop_assert_ne!(transition.from, transition.to);
+                        prop_assert_eq!(transition.at, time(seconds));
+                    }
+                }
+            }
+
+            #[test]
+            fn without_os_dwell_entry_needs_two_good_fixes_30_s_apart(script in script()) {
+                let mut presence = outside()?;
+                let mut seconds = 0_u64;
+                let mut good_inside_fixes: Vec<u64> = Vec::new();
+                for (step, gap) in script {
+                    if matches!(step, Step::OsDwell) {
+                        continue;
+                    }
+                    seconds = seconds.saturating_add(gap);
+                    if let Step::Fix { north, accuracy } = step
+                        && north.abs() <= 199.0
+                        && accuracy <= 100
+                    {
+                        good_inside_fixes.push(seconds);
+                    }
+                    let change = presence.handle(input(step, seconds)?)?;
+                    if let PresenceChange::Changed(PresenceTransition { to: PresenceState::Inside, .. }) = change {
+                        let earliest = good_inside_fixes.first().copied().unwrap_or(seconds);
+                        prop_assert!(seconds.saturating_sub(earliest) >= 30);
+                        let by_fix = matches!(step, Step::Fix { .. });
+                        prop_assert!(by_fix);
+                    }
+                }
+            }
+
+            #[test]
+            fn wandering_inside_the_exit_buffer_never_leaves(
+                norths in prop::collection::vec((-249.0..249.0_f64, 0_u64..3_000), 1..40),
+            ) {
+                let mut presence = inside_at(30)?;
+                let mut seconds = 30_u64;
+                for (north, gap) in norths {
+                    seconds = seconds.saturating_add(gap);
+                    let _ = presence.handle(PresenceInput::OsExit { at: time(seconds) })?;
+                    let _ = presence.handle(fix_at(north, 150, seconds)?)?;
+                    prop_assert_eq!(presence.state(), PresenceState::Inside);
+                }
+            }
+
+            #[test]
+            fn fixes_outside_the_fence_never_enter(
+                norths in prop::collection::vec((201.0..5_000.0_f64, 0_u64..300), 1..40),
+                south in any::<bool>(),
+            ) {
+                let mut presence = outside()?;
+                let mut seconds = 0_u64;
+                for (north, gap) in norths {
+                    seconds = seconds.saturating_add(gap);
+                    let signed = if south { -north } else { north };
+                    let _ = presence.handle(fix_at(signed, 5, seconds)?)?;
+                    prop_assert_eq!(presence.state(), PresenceState::Outside);
+                }
+            }
+
+            #[test]
+            fn a_burst_of_fixes_under_30_s_never_enters(
+                offsets in prop::collection::vec(0_u64..30, 1..20),
+            ) {
+                let mut presence = outside()?;
+                let mut sorted = offsets;
+                sorted.sort_unstable();
+                for seconds in sorted {
+                    let _ = presence.handle(good_fix_inside(seconds)?)?;
+                    prop_assert_ne!(presence.state(), PresenceState::Inside);
+                }
+            }
+
+            #[test]
+            fn a_stale_input_is_an_error_and_changes_nothing(
+                script in script(),
+                step in step(),
+                back in 1_u64..1_000,
+            ) {
+                let mut presence = outside()?;
+                let mut seconds = 1_000_u64;
+                for (scripted, gap) in script {
+                    seconds = seconds.saturating_add(gap);
+                    let _ = presence.handle(input(scripted, seconds)?)?;
+                }
+                let before = presence.clone();
+                prop_assert_eq!(
+                    presence.handle(input(step, seconds.saturating_sub(back))?),
+                    Err(GeoError::StaleInput)
+                );
+                prop_assert_eq!(presence, before);
+            }
+
+            #[test]
+            fn restoring_a_snapshot_keeps_state_and_snapshot(script in script()) {
+                let mut presence = outside()?;
+                let mut seconds = 0_u64;
+                for (step, gap) in script {
+                    seconds = seconds.saturating_add(gap);
+                    let _ = presence.handle(input(step, seconds)?)?;
+                    let restored = SpotPresence::restore(circle_fence()?, presence.snapshot());
+                    prop_assert_eq!(restored.snapshot(), presence.snapshot());
+                }
+            }
+        }
+    }
+}
