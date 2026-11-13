@@ -37,6 +37,8 @@ fn quiet_delay(rng: &mut impl CryptoRng) -> Duration {
         .unwrap_or(u64::MAX);
     loop {
         let draw = rng.next_u64();
+        // `<` and `<=` differ only for `draw == zone`, a 2⁻⁶⁴ event: cargo mutants reports
+        // that mutant as surviving, and no test can tell them apart.
         if draw < zone {
             return Duration::from_millis(draw.checked_rem(QUIET_DELAY_STEPS).unwrap_or(0));
         }

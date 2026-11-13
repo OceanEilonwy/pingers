@@ -235,7 +235,7 @@ mod tests {
     fn credential_is_sent_as_a_bearer_token_and_never_printed() {
         let credential = RelayCredential::new(String::from("s3cret"));
         assert_eq!(credential.authorization(), "Bearer s3cret");
-        assert!(!format!("{credential:?}").contains("s3cret"));
+        assert_eq!(format!("{credential:?}"), "RelayCredential(redacted)");
     }
 
     #[test]
