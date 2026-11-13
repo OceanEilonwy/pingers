@@ -143,9 +143,6 @@ mod tests {
 
     use super::*;
 
-    // RFC 4231 test case 2 is keyed with "Jefe" (not 32 bytes); test case with a 32-byte key
-    // is not in the RFC, so the HMAC wrapper is pinned through the presence vectors instead.
-
     #[test]
     fn hkdf_expand_matches_rfc5869_case_1_prefix() -> Result<(), CryptoError> {
         // RFC 5869 A.1: PRK and info, first 32 bytes of OKM.

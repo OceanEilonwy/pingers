@@ -335,11 +335,12 @@ impl HpkeCrypto for Provider {
     }
 
     fn kdf_derive(
-        algorithm: SingleStageKdfAlgorithm,
-        ikm: &[u8],
-        length: usize,
+        _algorithm: SingleStageKdfAlgorithm,
+        _ikm: &[u8],
+        _length: usize,
     ) -> Result<Vec<u8>, ProviderError> {
-        HpkeRustCrypto::kdf_derive(algorithm, ikm, length)
+        // Single-stage (SHAKE) KDFs belong to suites Pingers does not use.
+        Err(ProviderError::UnknownKdfAlgorithm)
     }
 
     fn dh(
@@ -422,10 +423,11 @@ impl HpkeCrypto for Provider {
     }
 
     fn dh_validate_sk(
-        algorithm: KemAlgorithm,
-        secret_key: &[u8],
+        _algorithm: KemAlgorithm,
+        _secret_key: &[u8],
     ) -> Result<Vec<u8>, ProviderError> {
-        HpkeRustCrypto::dh_validate_sk(algorithm, secret_key)
+        // Only the NIST curves need secret-key validation; X25519 accepts every 32 bytes.
+        Err(ProviderError::UnknownKemAlgorithm)
     }
 
     fn aead_seal(
@@ -570,6 +572,78 @@ mod tests {
             Zeroizing::new(vec![1; 32]),
         );
         assert!(matches!(result, Err(CryptoError::InvalidKey)));
+    }
+
+    #[test]
+    fn tape_replays_its_bytes_in_order_then_fails() {
+        use rand_core::TryRng as _;
+        let mut tape = Tape {
+            bytes: Zeroizing::new((1..=12).collect()),
+            position: 0,
+        };
+        assert_eq!(
+            tape.try_next_u32().ok(),
+            Some(u32::from_le_bytes([1, 2, 3, 4]))
+        );
+        assert_eq!(
+            tape.try_next_u64().ok(),
+            Some(u64::from_le_bytes([5, 6, 7, 8, 9, 10, 11, 12]))
+        );
+        assert!(tape.try_fill_bytes(&mut [0]).is_err());
+        assert!(tape.try_next_u32().is_err());
+        assert!(tape.try_next_u64().is_err());
+    }
+
+    #[test]
+    fn provider_never_draws_on_its_own_prng() {
+        // hpke-rs falls back to these when derandomized operations are unsupported; they must
+        // fail rather than reach for randomness the caller did not supply.
+        let mut tape = Tape {
+            bytes: Zeroizing::new(vec![0; 64]),
+            position: 0,
+        };
+        assert!(matches!(
+            Provider::kem_key_gen(KemAlgorithm::DhKem25519, &mut tape),
+            Err(ProviderError::UnsupportedKemOperation)
+        ));
+        assert!(matches!(
+            Provider::kem_encaps(KemAlgorithm::DhKem25519, &[9; 32], &mut tape),
+            Err(ProviderError::UnsupportedKemOperation)
+        ));
+        assert_eq!(tape.position, 0);
+    }
+
+    #[test]
+    fn provider_refuses_primitives_of_other_suites() {
+        assert!(Provider::kdf_derive(SingleStageKdfAlgorithm::Shake256, b"ikm", 32).is_err());
+        assert!(Provider::dh_validate_sk(KemAlgorithm::DhKemP256, &[1; 32]).is_err());
+        assert!(matches!(
+            Provider::kem_key_gen_derand(KemAlgorithm::DhKem25519, &[1; 32]),
+            Err(ProviderError::UnsupportedKemOperation)
+        ));
+        assert!(matches!(
+            Provider::kem_encaps_derand(KemAlgorithm::DhKem25519, &[9; 32], &[1; 64]),
+            Err(ProviderError::UnsupportedKemOperation)
+        ));
+        assert!(matches!(
+            Provider::kem_decaps(KemAlgorithm::DhKem25519, &[9; 32], &[1; 32]),
+            Err(ProviderError::UnsupportedKemOperation)
+        ));
+    }
+
+    #[test]
+    fn provider_supports_only_the_pinned_algorithms() {
+        assert!(Provider::supports_kdf(KdfAlgorithm::HkdfSha256).is_ok());
+        assert!(Provider::supports_kdf(KdfAlgorithm::HkdfSha384).is_err());
+        assert!(Provider::supports_kem(KemAlgorithm::DhKem25519).is_ok());
+        assert!(Provider::supports_kem(KemAlgorithm::DhKemP256).is_err());
+        assert_eq!(
+            Provider::supports_kem(KemAlgorithm::XWingDraft06).is_ok(),
+            cfg!(feature = "x-wing")
+        );
+        assert!(Provider::supports_aead(AeadAlgorithm::Aes128Gcm).is_ok());
+        assert!(Provider::supports_aead(AeadAlgorithm::ChaCha20Poly1305).is_ok());
+        assert!(Provider::supports_aead(AeadAlgorithm::Aes256Gcm).is_err());
     }
 
     fn prefix32(bytes: &[u8]) -> Result<[u8; 32], CryptoError> {

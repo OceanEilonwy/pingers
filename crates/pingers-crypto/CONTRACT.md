@@ -64,3 +64,37 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
   fits the same type.
 - **Snapshots, join requests and knocks** carry a random 24-byte XChaCha20 nonce in front of
   the ciphertext.
+- **Grant and ask HPKE suite** (design B.6.1 names X25519 but no KDF or AEAD):
+  DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305, base mode, matching MLS suite
+  0x0003. Under feature `x-wing` the KEM is X-Wing draft 06 (HPKE KEM id 0x647a) with the same
+  KDF and AEAD. Sealed format is `enc || ciphertext`, AAD empty (bindings are in `info`). The
+  suite is chosen by the recipient key's length when sealing and by the sealed length when
+  opening; a grant secret key is 32 bytes for both (for X-Wing it is the seed).
+- **Grant key pairs** are RFC 9180 `DeriveKeyPair` over 32 bytes from the caller's RNG.
+  `GrantKeyPair::generate_x_wing` is added behind `x-wing`; `generate` stays X25519.
+- **HPKE randomness is injected.** hpke-rs seeds its PRNG from the OS; pingers-crypto wraps
+  the RustCrypto provider with a PRNG that replays bytes drawn from the caller's RNG (32 bytes
+  of `ikmE` per X25519 seal, 64 per X-Wing seal), checked against RFC 9180 A.1.1. This needs
+  two new workspace dependencies, `hpke-rs-crypto` (the provider trait) and `x-wing`
+  (optional), and hpke-rs's `hazmat` feature (to read derived private-key bytes).
+- **Push relay `key_id`** is not sealed or bound: the 320-byte blob has no room, and the design
+  puts only `bind` in `info`.
+- **Mailbox and subscription binds share the `pingers/v1/push-bind` label** (design D says
+  "as for a mailbox"); ids are 16 random bytes, so the two namespaces do not collide in
+  practice.
+- **Join key** is `HKDF-Expand(invite_secret, "join", 32)` without an Extract step: the invite
+  secret is already 32 uniform bytes, as `PR_e` is for the Spot keys.
+- **Group request signature input** uses `be32` length prefixes for method and path.
+- **Signatures are verified with `verify_strict`** (no small-order keys, canonical encodings).
+- **Location frames**: a ciphertext that is not 80 bytes gives `WrongLength`; the generation in
+  the AAD is the caller's `aad.generation`, so a frame of another generation does not open.
+- **Grants and asks are not padded here.** The 256-byte frame class is applied when the
+  `MeetupMessage` is padded; an X-Wing grant (1,180 bytes) cannot fit 256 bytes and takes the
+  4 KiB class.
+- **Additions** (no fixed signature changed): `verify_group_request` and
+  `verify_registration` (server side), `PushRelayPrivateKey::generate` and
+  `PushRelayPrivateKey::public_key(key_id)` (relay key config). `CryptoError::NotImplemented`
+  is removed now that nothing is stubbed.
+- **Vectors** live in `vectors/crypto/` and load as `load_vectors("crypto/<name>")`. Fields that
+  need no AEAD or curve arithmetic (derivations, tags, hashes, signed messages, AAD, info) were
+  recomputed independently with Python's standard library when the files were written.
