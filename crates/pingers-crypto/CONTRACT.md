@@ -28,7 +28,7 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
 - **Location**: `GrantKeyPair::generate`, `seal_location`, `open_location`, `dummy_location`
   (implemented), `seal_location_grant`, `open_location_grant`, `seal_location_ask`,
   `open_location_ask`.
-- **Invites**: `seal_join_request`, `open_join_request`.
+- **Invites**: `seal_join_request`, `open_join_request` (padded), `seal_join_request_in_class`.
 - Every fallible function returns `CryptoError`; unreachable primitive errors map to
   `CryptoError::Internal`, never a panic.
 
@@ -93,6 +93,13 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
   subscription and a mailbox whose ids had the same bytes would have the same bind, so a blob
   registered for one would open when presented for the other; the labels rule that out by
   construction instead of relying on random ids.
+- **Join requests are padded inside the AEAD** (wave 1 review, high): `nonce || XChaCha20(
+  join_key, be16(len) || request || zeros)`, exactly one mailbox size class long, as knocks
+  are (the two share `padded.rs`). `seal_join_request` keeps its signature and picks the
+  smallest class that fits (a classical join request, about 650 bytes, takes 1 KiB; one with
+  an X-Wing key package 4 KiB), so the post reveals only the class. Added
+  `seal_join_request_in_class(secret, request, SizeClass, rng)` for callers that want a fixed
+  class. `open_join_request` strips the padding and refuses non-zero padding.
 - **Join key** is `HKDF-Expand(invite_secret, "join", 32)` without an Extract step: the invite
   secret is already 32 uniform bytes, as `PR_e` is for the Spot keys.
 - **Group request signature input** uses `be32` length prefixes for method and path.

@@ -453,6 +453,50 @@ fn two_snapshots_of_the_same_state_differ() -> Result<(), TestError> {
     Ok(())
 }
 
+// Join requests.
+
+#[test]
+fn join_requests_fill_the_smallest_mailbox_class_whatever_their_size() -> Result<(), TestError> {
+    let secret = InviteSecret::from_bytes(Zeroizing::new([3; 32]));
+    let mut rng = seeded_rng(1);
+    for (length, class) in [
+        (1, SizeClass::Bytes1024),
+        (982, SizeClass::Bytes1024),
+        (983, SizeClass::Bytes4096),
+    ] {
+        let request = vec![0x5a; length];
+        let sealed = seal_join_request(&secret, &request, &mut rng)?;
+        assert_eq!(sealed.len(), class.size(), "{length}");
+        assert_eq!(*open_join_request(&secret, &sealed)?, request);
+    }
+    Ok(())
+}
+
+#[test]
+fn a_join_request_too_big_for_its_class_is_refused() -> Result<(), TestError> {
+    let secret = InviteSecret::from_bytes(Zeroizing::new([3; 32]));
+    let sealed = crate::seal_join_request_in_class(
+        &secret,
+        &[1; 4054],
+        SizeClass::Bytes4096,
+        &mut seeded_rng(1),
+    )?;
+    assert_eq!(sealed.len(), 4096);
+    assert!(matches!(
+        crate::seal_join_request_in_class(
+            &secret,
+            &[1; 4055],
+            SizeClass::Bytes4096,
+            &mut seeded_rng(1)
+        ),
+        Err(CryptoError::WrongLength {
+            expected: 4054,
+            actual: 4055
+        })
+    ));
+    Ok(())
+}
+
 // Push tokens.
 
 fn open_push(

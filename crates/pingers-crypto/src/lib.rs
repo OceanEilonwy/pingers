@@ -31,6 +31,7 @@ mod location;
 mod mailbox;
 #[cfg(test)]
 mod negative_tests;
+mod padded;
 mod presence;
 mod primitives;
 mod secret;
@@ -49,7 +50,7 @@ pub use identity::{
     AccountPublicKey, AccountSigningKey, Signature, account_id, sign_registration,
     verify_registration,
 };
-pub use invite::{InviteSecret, open_join_request, seal_join_request};
+pub use invite::{InviteSecret, open_join_request, seal_join_request, seal_join_request_in_class};
 pub use keyed_hash::{KeyedHash, KeyedHashKey, KeyedHashPurpose, keyed_hash};
 pub use labels::ExporterLabel;
 pub use location::{
