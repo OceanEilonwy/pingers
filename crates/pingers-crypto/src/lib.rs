@@ -7,7 +7,8 @@
 //!
 //! - Presence key schedule from the Party exporter: `K_spot`, `K_tag`, record tags, `K_seal`,
 //!   the board beacon seal, `K_knock`, the meetup PSK (design B.4.1, B.4.2, B.5).
-//! - Knock sealing and signatures (B.4.2), revoke commitments, segment hashes (B.4.3).
+//! - Knock sealing and signatures (B.4.2), revoke commitments, segment hashes and board
+//!   cursors (B.4.3).
 //! - Mailbox ids from read keys and sealed push tokens to the push relay (B.4.9).
 //! - Group state snapshots and log-auth keys from the MLS exporter (B.2).
 //! - Location keys, grants and asks inside a Meetup (B.6.1).
@@ -20,6 +21,7 @@
 #![forbid(unsafe_code)]
 
 mod board;
+mod cursor;
 mod error;
 mod group;
 mod hpke;
@@ -41,6 +43,7 @@ mod test_support;
 mod vector_tests;
 
 pub use board::{RevokeKey, revoke_commitment, revoke_key_matches, segment_hash};
+pub use cursor::{BoardCursorKey, open_board_cursor, seal_board_cursor};
 pub use error::CryptoError;
 pub use group::{
     GroupRequest, LogAuthKeyPair, StateKey, open_state_snapshot, seal_state_snapshot,

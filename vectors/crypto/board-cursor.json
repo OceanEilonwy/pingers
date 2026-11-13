@@ -1,0 +1,37 @@
+{
+  "name": "board-cursor",
+  "description": "Board cursor: nonce (24) || XChaCha20-Poly1305(key, nonce, aad = \"pingers/v1/board-cursor\", position) (design B.4.3, D; the label is a decision). `nonce` is the randomness consumed. Vectors with an `error` open `cursor` and must fail: a state snapshot sealed with the same key bytes and nonce (empty AAD) is not a cursor.",
+  "vectors": [
+    {
+      "name": "cursor",
+      "inputs": {
+        "key": "3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c",
+        "nonce": "404142434445464748494a4b4c4d4e4f5051525354555657",
+        "position": "01000000006b49d2000200000000001e8f400000000c00000000001e8f4100000000"
+      },
+      "expected": {
+        "cursor": "404142434445464748494a4b4c4d4e4f505152535455565718b17cc6bcdacb4601103053f5eb1e2ec1e52218d5d9f2441001e9b0d390d31a02789ae6417ff5add39e7cb308eccb336078"
+      }
+    },
+    {
+      "name": "snapshot-is-not-a-cursor",
+      "inputs": {
+        "key": "3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c",
+        "cursor": "404142434445464748494a4b4c4d4e4f505152535455565718b17cc6bcdacb4601103053f5eb1e2ec1e52218d5d9f2441001e9b0d390d31a0278c5412182424bd061869cdbd547e1e95c"
+      },
+      "expected": {
+        "error": "OpenFailed"
+      }
+    },
+    {
+      "name": "truncated-cursor",
+      "inputs": {
+        "key": "3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c",
+        "cursor": "404142434445464748494a4b4c4d4e4f50515253545556"
+      },
+      "expected": {
+        "error": "OpenFailed"
+      }
+    }
+  ]
+}

@@ -60,7 +60,7 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
 - **Labels not in the design**: `pingers/v1/lk-ask` (HPKE info for asks, with the group id),
   `pingers/v1/grp-request` (group request signatures), `pingers/v1/register` (registration
   proof), `pingers/v1/sub-bind` (subscription binds), `pingers/v1/relay-token` and
-  `pingers/v1/relay-credential` (keyed hashes). The design gives no label for these;
+  `pingers/v1/relay-credential` (keyed hashes), `pingers/v1/board-cursor` (cursor AAD). The design gives no label for these;
   domain separation needs one.
 - **Grant public keys are variable-length bytes** so the X-Wing variant (feature `x-wing`)
   fits the same type.
@@ -97,6 +97,11 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
   review): the server's constant-time check that `SHA-256(revealed) == commitment`.
   `KeyedHash` no longer derives `PartialEq`, `Eq` or `Hash`; compare with `ct_eq`, key maps
   on `as_bytes()`.
+- **Board cursors** (added): `BoardCursorKey` (secret; `generate`, and `from_bytes` for tests), `seal_board_cursor
+  (key, position, rng) -> BoardCursor` and `open_board_cursor(key, &BoardCursor)`: `nonce ||
+  XChaCha20-Poly1305(key, aad = "pingers/v1/board-cursor", position)`. pingers-board-store had
+  reused `seal_state_snapshot` under a cursor-only key; the label in the AAD keeps the two
+  apart even under equal key bytes. Vectors in `vectors/crypto/board-cursor.json`.
 - **Join requests are padded inside the AEAD** (wave 1 review, high): `nonce || XChaCha20(
   join_key, be16(len) || request || zeros)`, exactly one mailbox size class long, as knocks
   are (the two share `padded.rs`). `seal_join_request` keeps its signature and picks the

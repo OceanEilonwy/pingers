@@ -45,6 +45,8 @@ pub(crate) const KNOCK: &[u8] = b"knock";
 pub(crate) const BOARD: &[u8] = b"pingers/v1/board";
 /// First field of the knock signature (design B.4.2).
 pub(crate) const KNOCK_SIGNATURE: &[u8] = b"pingers/v1/knock";
+/// AEAD associated data of board cursors. Decision: the design says only "server-MACed".
+pub(crate) const BOARD_CURSOR: &[u8] = b"pingers/v1/board-cursor";
 /// Mailbox id derivation (design B.4.9).
 pub(crate) const MAILBOX: &[u8] = b"pingers/v1/mbox";
 /// HPKE info prefix of sealed push tokens (design B.4.9).
@@ -73,7 +75,7 @@ pub(crate) const REGISTRATION: &[u8] = b"pingers/v1/register";
 
 /// Every private label, so tests can check they are distinct and vectors can name them.
 #[cfg(test)]
-pub(crate) const ALL: [&[u8]; 18] = [
+pub(crate) const ALL: [&[u8]; 19] = [
     SPOT,
     TAG,
     SEAL,
@@ -81,6 +83,7 @@ pub(crate) const ALL: [&[u8]; 18] = [
     KNOCK,
     BOARD,
     KNOCK_SIGNATURE,
+    BOARD_CURSOR,
     MAILBOX,
     PUSH,
     PUSH_BIND,

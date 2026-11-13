@@ -607,3 +607,27 @@ fn snapshot_and_join_request() -> Result<(), TestError> {
     }
     Ok(())
 }
+
+#[test]
+fn board_cursor() -> Result<(), TestError> {
+    for vector in load("board-cursor")?.vectors {
+        let key = crate::BoardCursorKey::from_bytes(Zeroizing::new(input_array(&vector, "key")?));
+        if expected_error(&vector).is_some() {
+            assert_error(
+                &vector,
+                &crate::open_board_cursor(
+                    &key,
+                    &pingers_proto::BoardCursor::from_bytes(vector.input_bytes("cursor")?),
+                ),
+            );
+            continue;
+        }
+        let position = vector.input_bytes("position")?;
+        let mut rng = FixedRng::new(&vector.input_bytes("nonce")?);
+        let cursor = crate::seal_board_cursor(&key, &position, &mut rng)?;
+        assert!(rng.exhausted_exactly());
+        assert_eq!(cursor.as_bytes(), vector.expected_bytes("cursor")?);
+        assert_eq!(*crate::open_board_cursor(&key, &cursor)?, position);
+    }
+    Ok(())
+}
