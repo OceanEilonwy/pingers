@@ -53,8 +53,10 @@ pingers-meetup-session and the shell.
   that would not be posted now (suppressed, or exit); otherwise a cover `Wake`.
 - **Mailboxes** are read on a `Mailbox` or `Unknown` push, or on every wake with
   `MailboxReads::EveryWake` ("No wake-up pushes"). Every live real record's knock mailbox is
-  read, whether or not its Spot has keys, so a suppressed device reads like any other. A knock
-  is decided once (keyed by its reply mailbox).
+  read, whether or not its Spot has keys, so a suppressed device reads like any other. This
+  includes records held when the wake began that its own upload replaced, so a knock is not
+  lost to a re-post, and a knock sent in the same wake counts for the tie-break. A knock is
+  decided once (keyed by its reply mailbox).
 - **Liveness**: one GPS fix per wake with knocks to decide; `FreshFix::InsideSpot` only for a
   fix inside the fence (not the exit band); Focus and the gate are read again after the fix.
 - **Fixes**: the wake asks for one when the last is a minute old, a Spot is `Candidate` or
