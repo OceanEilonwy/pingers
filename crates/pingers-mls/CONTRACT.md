@@ -102,3 +102,13 @@ A narrow wrapper over OpenMLS 0.9. No other crate touches OpenMLS types.
 - **Storage failures**: the group handle may be ahead of the store after `MlsError::Storage`;
   callers drop it, roll back, and reload.
 - **`MlsError::NotImplemented`** is no longer returned; kept so the variant list is unchanged.
+- **Mutation testing** (`cargo mutants -p pingers-mls`): 14 survivors, all justified. 13 are
+  adapter methods OpenMLS 0.9.2 calls only from APIs the wrapper never uses: the signature key
+  store (`write/read/delete_signature_key_pair`, application-managed), update-proposal leaves
+  (`append_own_leaf_node`, `own_leaf_nodes`, `delete_own_leaf_nodes`,
+  `write/read/delete_encryption_key_pair`, used only by `propose_self_update`), single
+  proposal removal (`remove_proposal` and its `remove_from_list` helper, two mutants, used only
+  by `remove_pending_proposal`), and `queued_proposal_refs` (loading reads
+  `queued_proposals`). They are implemented so the adapter stays a complete
+  `StorageProvider`. The 14th replaces `Provider::crypto` with a fresh backend, which is
+  equivalent: the crypto backend holds no state the wrapper relies on.
