@@ -853,6 +853,173 @@ mod tests {
 
     use super::*;
 
+    #[derive(Debug, thiserror::Error)]
+    enum TestError {
+        #[error(transparent)]
+        Snapshot(#[from] SnapshotError),
+        #[error(transparent)]
+        Geo(#[from] pingers_geo::GeoError),
+        #[error(transparent)]
+        Gate(#[from] pingers_gate::GateError),
+    }
+
+    fn meetup(id: u8, others: &[u32]) -> Result<Meetup, SnapshotError> {
+        Ok(Meetup {
+            id: GroupId::from_bytes([id; 32]),
+            party: PartyId::from_bytes([id; 16]),
+            spot: SpotId::from_bytes([id; 16]),
+            started_at: UnixSeconds::new(0),
+            me: MeetupSelf {
+                leaf: LeafIndex::new(0),
+                name: Name::new("Ana")?,
+            },
+            others: others
+                .iter()
+                .map(|leaf| {
+                    Ok(MeetupPeer {
+                        leaf: LeafIndex::new(*leaf),
+                        name: Name::new("Ben")?,
+                        access: PeerAccess::Private,
+                    })
+                })
+                .collect::<Result<_, SnapshotError>>()?,
+            meet_point: None,
+            chat: Vec::new(),
+            sharing_with: Vec::new(),
+        })
+    }
+
+    fn party(id: u8, spots: &[u8]) -> Result<Party, TestError> {
+        let fence = Fence::Circle(pingers_geo::Circle::new(
+            Coordinate::new(51.5, -0.1)?,
+            pingers_geo::Meters::from_whole(150),
+        )?);
+        let service = Service {
+            host: Host::new("pingers.test")?,
+            operator: Operator::new("Flat 7")?,
+        };
+        Ok(Party {
+            id: PartyId::from_bytes([id; 16]),
+            name: Name::new("Crew")?,
+            colour: PartyColour::Blue,
+            members: Vec::new(),
+            spots: spots
+                .iter()
+                .map(|spot| {
+                    Ok(Spot {
+                        id: SpotId::from_bytes([*spot; 16]),
+                        name: Name::new("Hall")?,
+                        fence: fence.clone(),
+                    })
+                })
+                .collect::<Result<_, SnapshotError>>()?,
+            config: PartyConfig {
+                server: service.clone(),
+                hosting: Hosting::SelfHosted,
+                relay: service.clone(),
+                push_relay: PushRelay {
+                    kind: PushRelayKind::Official,
+                    operator: service.operator,
+                },
+                post_quantum: PostQuantum::Off,
+            },
+            invites: Vec::new(),
+            invite_link: None,
+        })
+    }
+
+    fn snapshot(parties: Vec<Party>, meetups: Vec<Meetup>) -> Result<ClientSnapshot, TestError> {
+        Ok(ClientSnapshot {
+            settings: Settings {
+                location_sharing: LocationSharing::On,
+                pause_in_focus: PauseInFocus::On,
+                focus: FocusState::Off,
+                quiet_hours: QuietHoursPreference {
+                    state: Toggle::Off,
+                    window: DailyWindow::new(MinuteOfDay::new(1)?, MinuteOfDay::new(2)?)?,
+                },
+                visibility: LocationVisibility::AskEachTime,
+                wake_pushes: WakePushes::On,
+                hide_trail: HideTrail::On,
+            },
+            gate: GateDecision::Share,
+            parties,
+            zones: Vec::new(),
+            meetups,
+            alert: None,
+            location_requests: Vec::new(),
+            ended_meetup: None,
+            join_preview: None,
+            own_position: None,
+            fallbacks: Vec::new(),
+            relay: RelayStatus::Reachable,
+        })
+    }
+
+    #[test]
+    fn lookups_find_the_matching_party_meetup_spot_and_peer() -> Result<(), TestError> {
+        let snapshot = snapshot(
+            vec![party(1, &[])?, party(2, &[7, 8])?],
+            vec![meetup(3, &[])?, meetup(4, &[5, 6])?],
+        )?;
+        let second = snapshot.party(PartyId::from_bytes([2; 16]))?;
+        assert_eq!(second.id, PartyId::from_bytes([2; 16]));
+        assert_eq!(
+            snapshot
+                .party(PartyId::from_bytes([9; 16]))
+                .map(|found| found.id),
+            Err(SnapshotError::UnknownParty)
+        );
+        assert_eq!(
+            second.spot(SpotId::from_bytes([8; 16])).map(|spot| spot.id),
+            Some(SpotId::from_bytes([8; 16]))
+        );
+        assert_eq!(second.spot(SpotId::from_bytes([9; 16])), None);
+        let meetup = snapshot.meetup(GroupId::from_bytes([4; 32]))?;
+        assert_eq!(meetup.id, GroupId::from_bytes([4; 32]));
+        assert_eq!(
+            snapshot
+                .meetup(GroupId::from_bytes([9; 32]))
+                .map(|found| found.id),
+            Err(SnapshotError::UnknownMeetup)
+        );
+        assert_eq!(meetup.peer(LeafIndex::new(6))?.leaf, LeafIndex::new(6));
+        assert_eq!(
+            meetup.peer(LeafIndex::new(0)).map(|peer| peer.leaf),
+            Err(SnapshotError::UnknownMember)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn head_count_includes_this_device() -> Result<(), SnapshotError> {
+        assert_eq!(meetup(1, &[])?.head_count(), 1);
+        assert_eq!(meetup(1, &[2, 3])?.head_count(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn own_coordinate_is_the_latest_fix() -> Result<(), TestError> {
+        let mut snapshot = snapshot(Vec::new(), Vec::new())?;
+        assert_eq!(snapshot.own_coordinate(), None);
+        let coordinate = Coordinate::new(51.5, -0.1)?;
+        snapshot.own_position = Some(OwnPosition {
+            fix: Fix {
+                coordinate,
+                accuracy: pingers_geo::Meters::from_whole(10),
+                taken_at: UnixSeconds::new(0),
+            },
+            heading: None,
+        });
+        assert_eq!(snapshot.own_coordinate(), Some(coordinate));
+        Ok(())
+    }
+
+    #[test]
+    fn zone_ids_keep_their_row_id() {
+        assert_eq!(ZoneId::new(42).get(), 42);
+    }
+
     #[test]
     fn safety_codes_are_groups_of_digits() -> Result<(), SnapshotError> {
         assert_eq!(SafetyCode::new("4729 1836")?.as_str(), "4729 1836");
