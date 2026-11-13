@@ -87,6 +87,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn exporter_labels_are_the_design_strings() {
+        // Every member's MLS exporter must be asked for exactly these (design B.2, B.4.1).
+        assert_eq!(ExporterLabel::Presence.label(), "pingers/v1/presence");
+        assert_eq!(ExporterLabel::State.label(), "pingers/v1/state");
+        assert_eq!(ExporterLabel::LogAuth.label(), "pingers/v1/log-auth");
+        assert_eq!(ExporterLabel::Presence.output_length(), 32);
+    }
+
+    #[test]
     fn labels_are_distinct() {
         for (index, label) in ALL.iter().enumerate() {
             assert!(

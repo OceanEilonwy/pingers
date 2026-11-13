@@ -32,6 +32,18 @@ fn bucket(index: u64) -> Result<Bucket, TestError> {
     Ok(Bucket::from_index(index)?)
 }
 
+// Redaction (style guide §9).
+
+#[test]
+fn public_values_debug_as_their_type_name_only() {
+    let key = AccountSigningKey::from_bytes(Zeroizing::new([0xab; 32])).public_key();
+    let signature = crate::Signature::from_bytes([0xcd; 64]);
+    let grant_key = GrantPublicKey::from_bytes(vec![0xef; 32]);
+    assert_eq!(format!("{key:?}"), "AccountPublicKey(redacted)");
+    assert_eq!(format!("{signature:?}"), "Signature(..)");
+    assert_eq!(format!("{grant_key:?}"), "GrantPublicKey(redacted)");
+}
+
 // Presence key schedule.
 
 #[test]
@@ -261,6 +273,30 @@ fn knock_signature_covers_the_key_package() -> Result<(), TestError> {
         verify_knock(&key.public_key(), &other.fields(7, bucket(9)?), &signature),
         Err(CryptoError::BadSignature)
     ));
+    Ok(())
+}
+
+#[test]
+fn knock_signature_without_subscription_does_not_cover_one_with() -> Result<(), TestError> {
+    // Fails with Encoding until pingers-proto encodes subscriptions, BadSignature after.
+    let key = AccountSigningKey::generate(&mut seeded_rng(1));
+    let fixture = KnockFixture::new();
+    let signature = sign_knock(&key, &fixture.fields(7, bucket(9)?))?;
+    let subscription = pingers_proto::Subscription {
+        id: pingers_proto::SubscriptionId::from_bytes([6; 16]),
+        push: pingers_proto::SealedPush {
+            relay: pingers_proto::RelayRef::Listed(pingers_proto::RelayId::new(1)),
+            blob: pingers_proto::SealedPushBlob::from_bytes([7; 320]),
+            urgency: pingers_proto::Urgency::Alert,
+            handle: pingers_proto::PushHandle::from_bytes([8; 8]),
+        },
+        time_to_live: pingers_proto::TimeToLive::new(core::time::Duration::from_secs(600))?,
+    };
+    let with_subscription = KnockSignedFields {
+        meetup_subscription: Some(&subscription),
+        ..fixture.fields(7, bucket(9)?)
+    };
+    assert!(verify_knock(&key.public_key(), &with_subscription, &signature).is_err());
     Ok(())
 }
 
