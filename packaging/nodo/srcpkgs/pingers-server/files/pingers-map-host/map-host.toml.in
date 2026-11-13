@@ -1,0 +1,9 @@
+# pingers-map-host's configuration, rendered by nodo from pingers-map-host's settings: change
+# them in nodo-tui, not here. The format is crates/pingers-map-host/src/config.rs.
+listen = "127.0.0.1:9474"
+# The data directory itself (on the data drive with UseDataDrive), so it exists before the
+# first upload. Upload packs into it with rsync.
+directory = "/var/lib/apps/pingers-map-host"
+max_disk = "$(pingers-map-host.max_disk)"
+hosted = "$(pingers-map-host.hosted)"                        # TODO(p-relays): hosted as a string
+logging = "$(pingers-map-host.logging)"

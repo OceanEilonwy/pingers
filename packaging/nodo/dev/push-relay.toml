@@ -1,0 +1,33 @@
+# Tier-1 local stack: pingers-push-relay with the shape of packaging/nodo's push-relay.toml.in
+# and TEST KEYS ONLY. UnifiedPush may reach a local ntfy; no FCM (no tool handles the real
+# service account). Run from the repository root:
+#   cargo run --release -p pingers-push-relay -- packaging/nodo/dev/push-relay.toml
+listen = "127.0.0.1:9472"
+operator = "Local test"
+logging = "counts"
+counts_interval_s = 60
+hash_key = "4444444444444444444444444444444444444444444444444444444444444444"
+upstream_timeout_ms = 10000
+token_pushes_per_minute = 30
+max_ttl_s = 2592000
+
+[[keys]]
+key_id = 1
+private_key = "5555555555555555555555555555555555555555555555555555555555555555"
+activated_at = 0
+retired_at = 0                                               # TODO(p-relays): 0 = not scheduled
+
+[[keys]]
+key_id = 2
+private_key = "6666666666666666666666666666666666666666666666666666666666666666"
+activated_at = 4102444800
+retired_at = 0                                               # TODO(p-relays): 0 = not scheduled
+
+[[servers]]
+server_id = "local"
+credential = "3333333333333333333333333333333333333333333333333333333333333333"   # TODO(p-relays): inline credential
+pushes_per_minute = 600
+
+[unifiedpush]
+# Only here: lets the relay post to http://127.0.0.1 and LAN ntfy servers.
+allow_insecure_local_endpoints = true

@@ -1,0 +1,37 @@
+# pingers-push-relay on monokulo-nodo: wakes devices through FCM and UnifiedPush.
+# docs/deploy-nodo.md explains every choice here.
+api_version = 1
+id = "pingers-push-relay"
+version = "@VERSION@"
+# The launcher runs libexec/pingers-push-relay /etc/apps/pingers-push-relay/push-relay.toml.
+exec = ["bin/pingers-push-relay"]
+settings = "settings.lua"
+# A push in flight has upstream_timeout_ms (10 s) to reach FCM or a UnifiedPush server.
+stop_timeout_secs = 15
+health = { tcp = { port = 9472 } }
+
+[config]
+template = "push-relay.toml.in"
+name = "push-relay.toml"
+
+# No [storage]: the relay keeps no database (design C.1a). Its sealed secrets put the rendered
+# config in memory (/run/nodo/secrets/pingers-push-relay), never on the disk in clear.
+
+[network]
+# FCM, Google's OAuth token endpoint, and whatever UnifiedPush server a device names.
+outbound = "internet"
+
+# Declared so pingers-server can reference server-url and be granted this loopback port.
+[[network.inbound]]
+port = 9472
+protocol = "tcp"
+scope = "local"
+
+[[web]]
+name = "push"
+upstream = "127.0.0.1:9472"
+suggested_subdomain = "push"
+# Only this device's server pushes, over loopback, so POST /v1/push is never public. Devices
+# still fetch GET /v1/config here.
+admin_paths = ["/v1/push"]
+multi_address = true

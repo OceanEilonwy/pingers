@@ -1,0 +1,11 @@
+# Tier-1 local stack: pingers-map-host with the shape of packaging/nodo's map-host.toml.in. Cut
+# the Melbourne CBD test pack into target/dev-stack/maps first (crates/pingers-tiles/README.md).
+# Run from the repository root:
+#   cargo run --release -p pingers-map-host -- packaging/nodo/dev/map-host.toml
+listen = "127.0.0.1:9474"
+# Relative to the working directory, like every path here.
+directory = "target/dev-stack/maps"
+max_disk = "1GB"
+hosted = "oceania/australia"                                 # TODO(p-relays): hosted as a string
+logging = "counts"
+counts_interval_s = 60

@@ -1,0 +1,7 @@
+# Tier-1 local stack: pingers-ohttp-relay with the shape of packaging/nodo's relay.toml.in. Run
+# from the repository root:
+#   cargo run --release -p pingers-ohttp-relay -- packaging/nodo/dev/relay.toml
+listen = "127.0.0.1:9473"
+gateway = "http://127.0.0.1:9471/ohttp"
+gateway_key_config = "http://127.0.0.1:9471/v1/ohttp/config"
+response_timeout_seconds = 30

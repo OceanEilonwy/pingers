@@ -1,0 +1,155 @@
+# Template file for 'pingers-server'
+#
+# The four Pingers services as monokulo-nodo feed apps: pingers-server (this package) and the
+# subpackages pingers-push-relay, pingers-ohttp-relay and pingers-map-host. nodo runs one service
+# per package, so there are four apps; one recipe compiles the shared crates once. Everything
+# lands in /opt/nodo/apps/<id>/ (docs/deploy-nodo.md, "Package layout").
+#
+# This file is a template of the template: `cargo xtask nodo-dist` replaces @VERSION@,
+# @COMMIT@ and @SOURCE_SHA256@ and writes the result to target/nodo/srcpkgs/, next to the source
+# tarball it describes. Build from there, never from packaging/nodo/srcpkgs/ directly.
+#
+# The source is `git archive` of one commit plus `cargo vendor` output and a .cargo/config.toml
+# that points cargo at it, so the build needs no network and no access to the repository.
+# nodo-dist puts the tarball where xbps-src looks before fetching
+# (hostdir/sources/pingers-server-<version>/); the URL below is where the feed workflow
+# publishes the same file, for anyone rebuilding a published package.
+pkgname=pingers-server
+version=@VERSION@
+revision=1
+_commit=@COMMIT@
+_rust=1.98.1
+archs="aarch64 x86_64"
+# perl and make: OpenSSL, vendored by rusqlite for SQLCipher. cmake and clang: aws-lc-rs (rustls).
+hostmakedepends="gcc cmake make perl pkg-config clang"
+short_desc="Pingers server (API and OHTTP gateway) for monokulo-nodo"
+maintainer="Pingers <noreply@localhost>"
+license="AGPL-3.0-only"
+homepage="https://github.com/OceanEilonwy/pingers"
+
+_dist=https://static.rust-lang.org/dist
+case "$XBPS_MACHINE" in
+	x86_64)
+		_host=x86_64-unknown-linux-gnu
+		_rustc_sum=e974f036b28565f37c0f3bd92ddefa809bee16c04f9dcf07b9ed96e05aaaf7c4
+		_cargo_sum=ea1de9f9e23107d97ee2b41a72c552f34064a593da503789218387aee59f3ba4
+		_std_sum=fa3ff450172a16c026944030230c5069947af93c728d9179971d44e5e0cfb561
+		;;
+	aarch64)
+		_host=aarch64-unknown-linux-gnu
+		_rustc_sum=89fb83041993b48816514815606f53a5264729b8b449671a6b291e6f0ae74f40
+		_cargo_sum=c09425a7f300af148c0bdfded0e7d5f1fe7c075b2b9674e8935afa769297b2f6
+		_std_sum=9bf796a6ec5b004813ebd0b650775a7c6a4f3aae97ad362ae294798dca4f3b23
+		;;
+	*) broken="no pinned toolchain for build machine $XBPS_MACHINE" ;;
+esac
+
+distfiles="https://github.com/OceanEilonwy/pingers/releases/download/feed/pingers-${_commit}.tar.gz
+ ${_dist}/rustc-${_rust}-${_host}.tar.xz
+ ${_dist}/cargo-${_rust}-${_host}.tar.xz
+ ${_dist}/rust-std-${_rust}-${_host}.tar.xz"
+checksum="@SOURCE_SHA256@
+ ${_rustc_sum}
+ ${_cargo_sum}
+ ${_std_sum}"
+
+# A cross build also needs the target's standard library.
+if [ "$CROSS_BUILD" ] && [ "$XBPS_TARGET_MACHINE" = aarch64 ]; then
+	distfiles+=" ${_dist}/rust-std-${_rust}-aarch64-unknown-linux-gnu.tar.xz"
+	checksum+=" 9bf796a6ec5b004813ebd0b650775a7c6a4f3aae97ad362ae294798dca4f3b23"
+elif [ "$CROSS_BUILD" ] && [ "$XBPS_TARGET_MACHINE" = x86_64 ]; then
+	distfiles+=" ${_dist}/rust-std-${_rust}-x86_64-unknown-linux-gnu.tar.xz"
+	checksum+=" fa3ff450172a16c026944030230c5069947af93c728d9179971d44e5e0cfb561"
+fi
+
+build_wrksrc="pingers-${_commit}"
+post_extract() {
+	local d
+	mkdir -p "${wrksrc}/toolchain"
+	for d in "${wrksrc}"/rustc-${_rust}-* "${wrksrc}"/cargo-${_rust}-* "${wrksrc}"/rust-std-${_rust}-*; do
+		[ -d "$d" ] || continue
+		"$d"/install.sh --prefix="${wrksrc}/toolchain" --disable-ldconfig >/dev/null
+	done
+}
+
+_toolchain_env() {
+	_tc="${wrksrc}/toolchain"
+	export PATH="${_tc}/bin:${PATH}"
+	export RUSTC="${_tc}/bin/rustc"
+	export CARGO="${_tc}/bin/cargo"
+	# Every crate is in the tarball's cargo-vendor/; nothing is downloaded.
+	export CARGO_HOME="${wrksrc}/.cargo-home"
+	export CARGO_NET_OFFLINE=true
+	export CARGO_BUILD_JOBS="${XBPS_MAKEJOBS}"
+	export HOST_CC=gcc HOST_CXX=g++
+	local t="${RUST_TARGET^^}" b="${RUST_BUILD^^}"
+	t="${t//-/_}"
+	b="${b//-/_}"
+	if [ "$CROSS_BUILD" ]; then
+		unset RUSTFLAGS
+		export "CARGO_TARGET_${b}_LINKER=gcc"
+		export PKG_CONFIG_ALLOW_CROSS=1
+	fi
+	export "CARGO_TARGET_${t}_LINKER=${CC}"
+}
+
+do_configure() {
+	_toolchain_env
+	"${RUSTC}" -vV
+}
+
+do_build() {
+	_toolchain_env
+	"${CARGO}" build --release --locked --offline --target "${RUST_TARGET}" \
+		-p pingers-server -p pingers-push-relay -p pingers-ohttp-relay -p pingers-map-host
+}
+
+# Installs one app: the binary in libexec/, the launcher (which keeps the binary's name, so the
+# generated control/t's `pkill -x <name>` matches whichever is running) in bin/, and the
+# manifest, settings and config template beside them.
+_install_app() {
+	local id="$1" files="${FILESDIR}/$1" app="opt/nodo/apps/$1" f
+	vmkdir "${app}/bin" 755
+	vmkdir "${app}/libexec" 755
+	install -m 755 "target/${RUST_TARGET}/release/${id}" "${DESTDIR}/${app}/libexec/${id}"
+	install -m 755 "${files}/launcher" "${DESTDIR}/${app}/bin/${id}"
+	install -m 644 "${files}/manifest.toml" "${DESTDIR}/${app}/manifest.toml"
+	# The licence goes with each app: nodo refuses package files outside /opt/nodo/apps/<id>/.
+	install -m 644 LICENSE "${DESTDIR}/${app}/LICENSE"
+	sed -i "s/@VERSION@/${version}/" "${DESTDIR}/${app}/manifest.toml"
+	for f in "${files}"/settings.lua "${files}"/*.toml.in; do
+		[ -f "$f" ] || continue
+		install -m 644 "$f" "${DESTDIR}/${app}/${f##*/}"
+	done
+}
+
+do_install() {
+	_install_app pingers-server
+	_install_app pingers-push-relay
+	_install_app pingers-ohttp-relay
+	_install_app pingers-map-host
+}
+
+pingers-push-relay_package() {
+	short_desc="Pingers push relay (FCM and UnifiedPush) for monokulo-nodo"
+	license="AGPL-3.0-only"
+	pkg_install() {
+		vmove opt/nodo/apps/pingers-push-relay
+	}
+}
+
+pingers-ohttp-relay_package() {
+	short_desc="Pingers Oblivious HTTP relay for monokulo-nodo"
+	license="AGPL-3.0-only"
+	pkg_install() {
+		vmove opt/nodo/apps/pingers-ohttp-relay
+	}
+}
+
+pingers-map-host_package() {
+	short_desc="Pingers map pack host for monokulo-nodo"
+	license="AGPL-3.0-only"
+	pkg_install() {
+		vmove opt/nodo/apps/pingers-map-host
+	}
+}

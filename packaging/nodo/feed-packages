@@ -1,0 +1,7 @@
+# The packages the Pingers feed publishes, one per line: the recipe (pingers-server) and its
+# subpackages, all built from packaging/nodo/srcpkgs/pingers-server. Read by
+# .github/workflows/feed.yml and, through FEED_PACKAGES, by nodo's scripts/publish-feed.sh.
+pingers-server
+pingers-push-relay
+pingers-ohttp-relay
+pingers-map-host
