@@ -7,7 +7,10 @@
 //! - `scenario check|run FILE`: scripted timelines (format: `scenarios/README.md`) replayed on
 //!   pingers-testkit's fake platforms and manual clock.
 //! - `e2e g3..g7|all`: the bundled design scenarios.
-//! - `load`: load plans (board size, knock rate); generation needs the in-process harness.
+//! - `load`: N simulated devices (pingers-e2e's protocol-level devices) each post one lease
+//!   through the relay to an in-process server; then one more device syncs and reads the
+//!   whole board. Prints the board size, the bytes of one read and one upload, and the daily
+//!   totals they imply. Knocks are planned but not generated yet.
 //!
 //! Until pingers-client has its API (wave 3) only `--dry-run` runs: the timeline is replayed
 //! without clients and expectations are skipped. The runner calls the `ScenarioDriver` trait
@@ -25,7 +28,6 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::Context as _;
-use pingers_testkit::{HarnessConfig, InProcessHarness};
 
 use crate::args::{Command, LoadMode, RunMode};
 use crate::config::{Config, Target};
@@ -88,13 +90,19 @@ fn run(arguments: impl IntoIterator<Item = String>) -> anyhow::Result<ExitCode> 
             if mode == LoadMode::PlanOnly {
                 return Ok(ExitCode::SUCCESS);
             }
-            let harness_config = HarnessConfig {
-                seed: plan.seed,
-                ..HarnessConfig::default()
-            };
-            let _harness = InProcessHarness::start(&harness_config)
-                .context("load generation needs the in-process harness")?;
-            anyhow::bail!("the load generator's client driver arrives with pingers-client (wave 3)")
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .context("starting the async runtime")?;
+            let report = runtime
+                .block_on(pingers_e2e::load::run(pingers_e2e::load::LoadConfig {
+                    devices: plan.devices(),
+                    seed: plan.seed,
+                }))
+                .context("generating load against the in-process server")?;
+            writeln!(out, "{report}")?;
+            Ok(ExitCode::SUCCESS)
         }
     }
 }
