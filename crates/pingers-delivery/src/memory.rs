@@ -10,11 +10,11 @@ use pingers_proto::{
 };
 use pingers_time::UnixSeconds;
 
-use crate::DeliveryError;
 use crate::store::{
     CommitWrite, DeliveryStore, GroupHead, NewCommit, NewEntry, NewGroup, PAGE_ENTRIES,
     StoredSubscription,
 };
+use crate::{DeliveryError, GroupLifetime};
 
 /// Keeps every group in a map behind one lock.
 #[derive(Debug, Default)]
@@ -26,6 +26,8 @@ pub struct MemoryDeliveryStore {
 struct Group {
     head_epoch: Epoch,
     auth_key: GroupAuthKey,
+    past_keys: Vec<GroupAuthKey>,
+    lifetime: GroupLifetime,
     idle_expires_at: UnixSeconds,
     log: Vec<GroupLogEntry>,
     state: Option<GroupState>,
@@ -84,12 +86,14 @@ impl DeliveryStore for MemoryDeliveryStore {
         if groups.contains_key(&group.id) {
             return Err(DeliveryError::GroupExists);
         }
-        let epoch = Epoch::new(0);
+        let epoch = group.epoch;
         groups.insert(
             group.id,
             Group {
                 head_epoch: epoch,
                 auth_key: group.auth_key,
+                past_keys: Vec::new(),
+                lifetime: group.lifetime,
                 idle_expires_at: group.idle_expires_at,
                 log: Vec::new(),
                 state: group.state.map(|state| GroupState { epoch, state }),
@@ -108,8 +112,13 @@ impl DeliveryStore for MemoryDeliveryStore {
             Ok(GroupHead {
                 head_epoch: found.head_epoch,
                 auth_key: found.auth_key,
+                lifetime: found.lifetime,
             })
         })
+    }
+
+    fn past_auth_keys(&self, group: &GroupId) -> Result<Vec<GroupAuthKey>, DeliveryError> {
+        self.with_group(group, |found| Ok(found.past_keys.clone()))
     }
 
     fn touch(&self, group: &GroupId, idle_expires_at: UnixSeconds) -> Result<(), DeliveryError> {
@@ -146,6 +155,7 @@ impl DeliveryStore for MemoryDeliveryStore {
             }
             let sequence = found.push(commit.epoch, ContentType::Commit, commit.commit)?;
             found.head_epoch = commit.next_epoch;
+            found.past_keys.insert(0, found.auth_key);
             found.auth_key = commit.next_auth_key;
             found.idle_expires_at = idle_expires_at;
             if let Some(state) = commit.state {

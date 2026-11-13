@@ -12,17 +12,18 @@ use pingers_proto::{
 use pingers_time::UnixSeconds;
 use rusqlite::{Connection, OptionalExtension as _, Transaction, TransactionBehavior, params};
 
-use crate::DeliveryError;
 use crate::store::{
     CommitWrite, DeliveryStore, GroupHead, NewCommit, NewEntry, NewGroup, PAGE_ENTRIES,
     StoredSubscription,
 };
+use crate::{DeliveryError, GroupLifetime};
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS grp (
     group_id        BLOB PRIMARY KEY,
     auth_pk         BLOB NOT NULL,
     head_epoch      INTEGER NOT NULL,
+    lifetime        INTEGER NOT NULL,
     idle_expires_at INTEGER NOT NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS grp_idle ON grp (idle_expires_at);
@@ -42,6 +43,12 @@ CREATE TABLE IF NOT EXISTS grp_sub (
     PRIMARY KEY (group_id, sub_id)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS grp_sub_expiry ON grp_sub (expires_at);
+CREATE TABLE IF NOT EXISTS grp_past_key (
+    group_id BLOB NOT NULL,
+    epoch    INTEGER NOT NULL,
+    auth_pk  BLOB NOT NULL,
+    PRIMARY KEY (group_id, epoch)
+) STRICT;
 CREATE TABLE IF NOT EXISTS grp_state (
     group_id BLOB PRIMARY KEY,
     epoch    INTEGER NOT NULL,
@@ -78,10 +85,22 @@ impl SqliteDeliveryStore {
     }
 
     fn with_connection(connection: Connection) -> Result<Self, DeliveryError> {
+        // Deleted groups' pages are overwritten, not left free in the file (design G.7: a
+        // Meetup's rows are dropped when it ends).
+        connection.pragma_update(None, "secure_delete", "ON")?;
         connection.execute_batch(SCHEMA)?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
+    }
+
+    /// Copies the write-ahead log into the database and empties it, so deleted rows (already
+    /// overwritten there by `secure_delete`) do not survive in the log file either. A no-op
+    /// for an in-memory database.
+    fn truncate_wal(&self) -> Result<(), DeliveryError> {
+        let connection = self.lock()?;
+        connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        Ok(())
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, DeliveryError> {
@@ -102,14 +121,14 @@ impl SqliteDeliveryStore {
 }
 
 fn head_of(transaction: &Transaction<'_>, group: &GroupId) -> Result<GroupHead, DeliveryError> {
-    let row: Option<(u64, Vec<u8>)> = transaction
+    let row: Option<(u64, Vec<u8>, u8)> = transaction
         .query_row(
-            "SELECT head_epoch, auth_pk FROM grp WHERE group_id = ?1",
+            "SELECT head_epoch, auth_pk, lifetime FROM grp WHERE group_id = ?1",
             [group.as_bytes().as_slice()],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    let (head_epoch, auth_key) = row.ok_or(DeliveryError::UnknownGroup)?;
+    let (head_epoch, auth_key, lifetime) = row.ok_or(DeliveryError::UnknownGroup)?;
     Ok(GroupHead {
         head_epoch: Epoch::new(head_epoch),
         auth_key: GroupAuthKey::from_bytes(
@@ -117,6 +136,8 @@ fn head_of(transaction: &Transaction<'_>, group: &GroupId) -> Result<GroupHead, 
                 .try_into()
                 .map_err(|_| DeliveryError::CorruptField { field: "auth_pk" })?,
         ),
+        lifetime: GroupLifetime::from_stored(lifetime)
+            .ok_or(DeliveryError::CorruptField { field: "lifetime" })?,
     })
 }
 
@@ -235,11 +256,13 @@ impl DeliveryStore for SqliteDeliveryStore {
     fn create_group(&self, group: NewGroup) -> Result<(), DeliveryError> {
         self.transact(|transaction| {
             let inserted = transaction.execute(
-                "INSERT OR IGNORE INTO grp (group_id, auth_pk, head_epoch, idle_expires_at)
-                 VALUES (?1, ?2, 0, ?3)",
+                "INSERT OR IGNORE INTO grp (group_id, auth_pk, head_epoch, lifetime, idle_expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
                     group.id.as_bytes().as_slice(),
                     group.auth_key.as_bytes().as_slice(),
+                    group.epoch.get(),
+                    group.lifetime.to_stored(),
                     group.idle_expires_at.get()
                 ],
             )?;
@@ -247,7 +270,7 @@ impl DeliveryStore for SqliteDeliveryStore {
                 return Err(DeliveryError::GroupExists);
             }
             if let Some(state) = &group.state {
-                put_state(transaction, &group.id, Epoch::new(0), state)?;
+                put_state(transaction, &group.id, group.epoch, state)?;
             }
             for stored in &group.subscriptions {
                 put_subscription_row(transaction, &group.id, stored)?;
@@ -258,6 +281,25 @@ impl DeliveryStore for SqliteDeliveryStore {
 
     fn head(&self, group: &GroupId) -> Result<GroupHead, DeliveryError> {
         self.transact(|transaction| head_of(transaction, group))
+    }
+
+    fn past_auth_keys(&self, group: &GroupId) -> Result<Vec<GroupAuthKey>, DeliveryError> {
+        self.transact(|transaction| {
+            head_of(transaction, group)?;
+            let mut statement = transaction.prepare(
+                "SELECT auth_pk FROM grp_past_key WHERE group_id = ?1 ORDER BY epoch DESC",
+            )?;
+            let rows = statement.query_map([group.as_bytes().as_slice()], |row| {
+                row.get::<_, Vec<u8>>(0)
+            })?;
+            rows.map(|row| {
+                let bytes = row?;
+                Ok(GroupAuthKey::from_bytes(bytes.try_into().map_err(
+                    |_| DeliveryError::CorruptField { field: "auth_pk" },
+                )?))
+            })
+            .collect()
+        })
     }
 
     fn touch(&self, group: &GroupId, idle_expires_at: UnixSeconds) -> Result<(), DeliveryError> {
@@ -305,6 +347,14 @@ impl DeliveryStore for SqliteDeliveryStore {
                     content_type: ContentType::Commit,
                     body: &commit.commit,
                 },
+            )?;
+            transaction.execute(
+                "INSERT INTO grp_past_key (group_id, epoch, auth_pk) VALUES (?1, ?2, ?3)",
+                params![
+                    group.as_bytes().as_slice(),
+                    head.head_epoch.get(),
+                    head.auth_key.as_bytes().as_slice()
+                ],
             )?;
             transaction.execute(
                 "UPDATE grp SET head_epoch = ?2, auth_pk = ?3, idle_expires_at = ?4
@@ -449,7 +499,8 @@ impl DeliveryStore for SqliteDeliveryStore {
                 return Err(DeliveryError::UnknownGroup);
             }
             delete_children(transaction, id)
-        })
+        })?;
+        self.truncate_wal()
     }
 
     fn expire(&self, now: UnixSeconds) -> Result<Vec<GroupId>, DeliveryError> {
@@ -466,7 +517,16 @@ impl DeliveryStore for SqliteDeliveryStore {
                 delete_children(transaction, id)?;
             }
             transaction.execute("DELETE FROM grp_sub WHERE expires_at <= ?1", [now.get()])?;
-            expired.into_iter().map(group_id_from_column).collect()
+            expired
+                .into_iter()
+                .map(group_id_from_column)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .and_then(|expired| {
+            if !expired.is_empty() {
+                self.truncate_wal()?;
+            }
+            Ok(expired)
         })
     }
 }
@@ -475,6 +535,7 @@ fn delete_children(transaction: &Transaction<'_>, id: &[u8]) -> Result<(), Deliv
     transaction.execute("DELETE FROM grp_msg WHERE group_id = ?1", [id])?;
     transaction.execute("DELETE FROM grp_sub WHERE group_id = ?1", [id])?;
     transaction.execute("DELETE FROM grp_state WHERE group_id = ?1", [id])?;
+    transaction.execute("DELETE FROM grp_past_key WHERE group_id = ?1", [id])?;
     Ok(())
 }
 

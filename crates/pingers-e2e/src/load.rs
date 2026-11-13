@@ -169,6 +169,7 @@ pub async fn run(config: LoadConfig) -> Result<LoadReport, E2eError> {
             config.seed.wrapping_add(u64::from(index)).wrapping_add(1),
             Arc::clone(&transport),
             Arc::clone(&recorder),
+            stack.credentials(),
         );
         device.sync(&stack, false).await?;
     }

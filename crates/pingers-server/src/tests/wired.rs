@@ -23,6 +23,7 @@ use pingers_proto::{
 use pingers_time::{Clock as _, ManualClock, UnixSeconds};
 use zeroize::Zeroizing;
 
+use super::wallet::Wallet;
 use super::{Echo, Running, Setup, TestError, TestResult, connect, oblivious, start};
 use crate::tasks::{HttpPushRelay, push_url};
 use crate::wire::READ_KEY_HEADER;
@@ -73,14 +74,15 @@ fn sync_body(lease: &Lease, read: ReadBoard) -> Result<Vec<u8>, TestError> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_board_syncs_reads_and_revokes_through_ohttp() -> TestResult {
     let server = start(Setup::default(), Echo).await?;
+    let wallet = Wallet::fetch(&server, 1, 3).await?;
     let synced = call(
         &server,
-        &inner(
+        &wallet.pay(inner(
             "POST",
             "/v1/board/sync".to_owned(),
             Vec::new(),
             sync_body(&lease(&server, 1), ReadBoard::Read)?,
-        ),
+        ))?,
     )
     .await?;
     assert_eq!(synced.status.get(), 200);
@@ -104,7 +106,7 @@ async fn the_board_syncs_reads_and_revokes_through_ohttp() -> TestResult {
     ] {
         let refused = call(
             &server,
-            &inner("POST", "/v1/board/sync".to_owned(), Vec::new(), body),
+            &wallet.pay(inner("POST", "/v1/board/sync".to_owned(), Vec::new(), body))?,
         )
         .await?;
         assert_eq!(refused.status.get(), expected);
@@ -172,6 +174,7 @@ fn mailbox_path(key: &[u8; 32], rest: &str) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mailboxes_register_post_read_and_delete_through_ohttp() -> TestResult {
     let server = start(Setup::default(), Echo).await?;
+    let wallet = Wallet::fetch(&server, 1, 4).await?;
     let key = [5_u8; 32];
     let register = inner(
         "POST",
@@ -179,26 +182,30 @@ async fn mailboxes_register_post_read_and_delete_through_ohttp() -> TestResult {
         Vec::new(),
         spec(&key, None)?,
     );
-    assert_eq!(call(&server, &register).await?.status.get(), 201);
-    assert_eq!(call(&server, &register).await?.status.get(), 409);
+    let paid = wallet.pay(register.clone())?;
+    assert_eq!(call(&server, &paid).await?.status.get(), 201);
+    // The same token again is a double spend.
+    assert_eq!(call(&server, &paid).await?.status.get(), 403);
+    let again = wallet.pay(register)?;
+    assert_eq!(call(&server, &again).await?.status.get(), 409);
 
     let post_path = mailbox_path(&key, "/msgs");
     let post_body = Padded::pad(b"knock", SizeClass::Bytes1024)?;
     let posted = call(
         &server,
-        &inner(
+        &wallet.pay(inner(
             "POST",
             post_path.clone(),
             Vec::new(),
             post_body.as_bytes().to_vec(),
-        ),
+        ))?,
     )
     .await?;
     assert_eq!(posted.status.get(), 202);
     let first = MessageAccepted::decode(&posted.body)?.sequence;
     let unpadded = call(
         &server,
-        &inner("POST", post_path.clone(), Vec::new(), vec![0; 100]),
+        &wallet.pay(inner("POST", post_path.clone(), Vec::new(), vec![0; 100]))?,
     )
     .await?;
     assert_eq!(unpadded.status.get(), 422);
@@ -286,6 +293,7 @@ async fn a_post_answers_at_once_and_its_wake_goes_to_the_relay() -> TestResult {
         Echo,
     )
     .await?;
+    let wallet = Wallet::fetch(&server, 1, 3).await?;
     let key = [8_u8; 32];
     let push = |relay| SealedPush {
         relay: RelayRef::Listed(RelayId::new(relay)),
@@ -301,23 +309,29 @@ async fn a_post_answers_at_once_and_its_wake_goes_to_the_relay() -> TestResult {
         Vec::new(),
         spec(&key, Some(push(2)))?,
     );
-    assert_eq!(call(&server, &unknown).await?.status.get(), 422);
+    assert_eq!(
+        call(&server, &wallet.pay(unknown)?).await?.status.get(),
+        422
+    );
     let register = inner(
         "POST",
         "/v1/mailboxes".to_owned(),
         Vec::new(),
         spec(&key, Some(push(1)))?,
     );
-    assert_eq!(call(&server, &register).await?.status.get(), 201);
+    assert_eq!(
+        call(&server, &wallet.pay(register)?).await?.status.get(),
+        201
+    );
     let body = Padded::pad(b"knock", SizeClass::Bytes1024)?;
     let posted = call(
         &server,
-        &inner(
+        &wallet.pay(inner(
             "POST",
             mailbox_path(&key, "/msgs"),
             Vec::new(),
             body.as_bytes().to_vec(),
-        ),
+        ))?,
     )
     .await?;
     assert_eq!(posted.status.get(), 202);
@@ -404,7 +418,8 @@ async fn the_push_client_sends_the_credential_and_body_and_maps_the_status() -> 
         (StatusCode::TOO_MANY_REQUESTS, RelayAnswer::RateLimited),
     ] {
         let (address, received) = fake_relay(status).await?;
-        let relay = HttpPushRelay::new(Arc::new(clock.clone()), Duration::from_secs(10))?;
+        let relay =
+            HttpPushRelay::new(Arc::new(clock.clone()), Duration::from_secs(10), Vec::new())?;
         let answer = relay
             .post(
                 &format!("http://{address}/v1/push"),
@@ -426,7 +441,7 @@ async fn the_push_client_sends_the_credential_and_body_and_maps_the_status() -> 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unreachable_or_silent_relay_is_unreachable() -> TestResult {
     let clock = ManualClock::new(UnixSeconds::new(1));
-    let relay = HttpPushRelay::new(Arc::new(clock.clone()), Duration::from_secs(10))?;
+    let relay = HttpPushRelay::new(Arc::new(clock.clone()), Duration::from_secs(10), Vec::new())?;
     // Nothing listens on port 1.
     let refused = relay
         .post("http://127.0.0.1:1/v1/push", String::new(), &push_request())
@@ -476,7 +491,7 @@ async fn push_urls_join_the_relay_and_the_push_path() -> TestResult {
     }
     // `push` goes to that URL with the target's credential: an https URL nobody serves.
     let clock = ManualClock::new(UnixSeconds::new(1));
-    let relay = HttpPushRelay::new(Arc::new(clock), Duration::from_secs(10))?;
+    let relay = HttpPushRelay::new(Arc::new(clock), Duration::from_secs(10), Vec::new())?;
     let target = RelayTarget {
         url: RelayUrl::new("https://127.0.0.1:1".to_owned())?,
         credential: RelayCredential::new("credential".to_owned()),

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The Meetup live channel (design B.4.9, D `POST /v1/groups/{id}/live`): the server's half of
-//! the chunked OHTTP plumbing, and the seam where pingers-delivery's fan-out registry plugs in.
+//! the chunked OHTTP plumbing, and the seam where tests replace pingers-delivery's fan-out
+//! registry (`live_groups.rs`) with a channel of their own.
 //!
 //! The gateway opens each request chunk into one [`LiveFrame`] and hands the stream to a
 //! [`LiveChannel`]; whatever frames the channel returns are sealed as response chunks. When the
@@ -59,14 +60,29 @@ impl core::fmt::Debug for LiveFrame {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LiveRefused {
-    /// pingers-delivery's fan-out registry is not wired in yet.
+    /// This channel does not take exchanges itself ([`DeliveryLive`]).
     NotWired,
     /// An uplink frame names a channel with no open downlink.
     NoChannel,
 }
 
+/// Where the server sends live channels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LiveBackend {
+    /// pingers-delivery's fan-out registry, after the Grp and Anon checks.
+    Delivery,
+    /// This [`LiveChannel`] (tests that echo or record frames).
+    Custom,
+}
+
 /// Joins a member's live exchange to its group.
 pub trait LiveChannel: Send + Sync + 'static {
+    /// Whether the server uses this channel or its own delivery-backed one.
+    fn backend(&self) -> LiveBackend {
+        LiveBackend::Custom
+    }
+
     /// Opens a channel for `request` (the inner request head: path, query and headers carry
     /// the group, subscription and `Grp` credentials). `inbound` yields the member's frames and
     /// ends when the member's stream does; the returned receiver yields the frames to send back
@@ -91,24 +107,25 @@ pub trait LiveChannel: Send + Sync + 'static {
     fn send(&self, request: &BinaryRequest, frame: LiveFrame) -> Result<(), LiveRefused>;
 }
 
-/// The production live channel: pingers-delivery's fan-out registry once it has one; until
-/// then every channel is refused.
+/// The production live channel: the server routes each exchange to pingers-delivery's
+/// fan-out registry ([`LiveBackend::Delivery`]), so its own methods are never called.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DeliveryLive;
 
 impl LiveChannel for DeliveryLive {
+    fn backend(&self) -> LiveBackend {
+        LiveBackend::Delivery
+    }
+
     fn open(
         &self,
         _request: &BinaryRequest,
         _inbound: mpsc::Receiver<LiveFrame>,
     ) -> Result<mpsc::Receiver<LiveFrame>, LiveRefused> {
-        // Waiting on pingers-delivery: its fan-out registry takes the member's inbound frames
-        // and returns the merged stream of the other members' frames.
         Err(LiveRefused::NotWired)
     }
 
     fn send(&self, _request: &BinaryRequest, _frame: LiveFrame) -> Result<(), LiveRefused> {
-        // Waiting on pingers-delivery, as `open`.
         Err(LiveRefused::NotWired)
     }
 }

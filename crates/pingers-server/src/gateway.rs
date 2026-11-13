@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 use crate::dispatch::{Reply, answer};
 use crate::live::{LIVE_BUFFER, LiveBody, OpenChannel, next_data};
 use crate::route::{Channel, Resolved, Route, resolve};
-use crate::{Peer, Shared};
+use crate::{LiveRoute, Peer, Shared};
 
 const OHTTP_REQUEST: &str = "message/ohttp-req";
 const OHTTP_CHUNKED_REQUEST: &str = "message/ohttp-chunked-req";
@@ -119,7 +119,7 @@ fn relay_allowed(shared: &Shared, peer: SocketAddr) -> bool {
     shared.relays.allows(peer.ip())
 }
 
-async fn one_shot(shared: &Shared, mut body: Body) -> Response {
+async fn one_shot(shared: &Arc<Shared>, mut body: Body) -> Response {
     let message = match read_body(shared, &mut body, MAX_ONE_SHOT).await {
         Ok(message) => message,
         Err(error) => return status(shared, Channel::Oblivious, error.status()),
@@ -170,7 +170,7 @@ async fn accept(shared: &Shared, body: &mut Body) -> Result<ChunkedGateway, Stat
     }
 }
 
-async fn chunked(shared: &Shared, mut body: Body) -> Response {
+async fn chunked(shared: &Arc<Shared>, mut body: Body) -> Response {
     let gateway = match accept(shared, &mut body).await {
         Ok(gateway) => gateway,
         Err(code) => return status(shared, Channel::ObliviousStream, code),
@@ -189,24 +189,33 @@ async fn chunked(shared: &Shared, mut body: Body) -> Response {
         LiveBody::closed(gateway)
     } else {
         let (inbound, inbound_receiver) = mpsc::channel(LIVE_BUFFER);
-        if let Ok(outbound) = shared.live.open(head, inbound_receiver) {
-            shared
-                .metrics
-                .record(Channel::ObliviousStream, StatusCode::OK);
-            LiveBody::open(
-                gateway,
-                body,
-                OpenChannel {
-                    inbound,
-                    outbound,
-                    timer: Arc::clone(&shared.timer),
-                },
-            )
-        } else {
-            shared
-                .metrics
-                .record(Channel::ObliviousStream, StatusCode::NOT_IMPLEMENTED);
-            LiveBody::closed(gateway)
+        let opened = match &shared.live {
+            LiveRoute::Groups => {
+                crate::live_groups::open(shared, head.clone(), inbound_receiver).await
+            }
+            LiveRoute::Custom(channel) => channel
+                .open(head, inbound_receiver)
+                .map_err(|_| StatusCode::NOT_IMPLEMENTED),
+        };
+        match opened {
+            Ok(outbound) => {
+                shared
+                    .metrics
+                    .record(Channel::ObliviousStream, StatusCode::OK);
+                LiveBody::open(
+                    gateway,
+                    body,
+                    OpenChannel {
+                        inbound,
+                        outbound,
+                        timer: Arc::clone(&shared.timer),
+                    },
+                )
+            }
+            Err(code) => {
+                shared.metrics.record(Channel::ObliviousStream, code);
+                LiveBody::closed(gateway)
+            }
         }
     };
     ohttp_response(OHTTP_CHUNKED_RESPONSE, Body::new(live_body))

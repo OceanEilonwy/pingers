@@ -11,7 +11,7 @@ use pingers_proto::{
 };
 use pingers_time::UnixSeconds;
 
-use crate::DeliveryError;
+use crate::{DeliveryError, GroupLifetime};
 
 /// The most log entries one read returns; the client asks again after the last one it got.
 pub const PAGE_ENTRIES: usize = 512;
@@ -30,12 +30,16 @@ pub struct StoredSubscription {
 pub struct NewGroup {
     /// Its id.
     pub id: GroupId,
-    /// Epoch 0's log-auth key.
+    /// The starting epoch's log-auth key.
     pub auth_key: GroupAuthKey,
-    /// The first snapshot, for epoch 0.
+    /// The epoch the log starts at (the members' epoch at upload).
+    pub epoch: Epoch,
+    /// The first snapshot, for the starting epoch.
     pub state: Option<SealedSnapshot>,
     /// The first subscriptions.
     pub subscriptions: Vec<StoredSubscription>,
+    /// How long it may be idle; fixed for the group's life.
+    pub lifetime: GroupLifetime,
     /// When the group expires unless something touches it first.
     pub idle_expires_at: UnixSeconds,
 }
@@ -47,6 +51,8 @@ pub struct GroupHead {
     pub head_epoch: Epoch,
     /// The key that authorises requests in the head epoch.
     pub auth_key: GroupAuthKey,
+    /// Its lifetime class, which sets how far each touch moves the idle expiry.
+    pub lifetime: GroupLifetime,
 }
 
 /// A stored non-commit message.
@@ -98,19 +104,27 @@ pub enum CommitWrite {
 ///
 /// Sequence numbers start at 1 and increase by one per stored entry within a group.
 pub trait DeliveryStore: Send + Sync {
-    /// Creates a group at epoch 0 with an empty log.
+    /// Creates a group at `group.epoch` with an empty log.
     ///
     /// # Errors
     ///
     /// [`DeliveryError::GroupExists`] if the id is taken; storage errors.
     fn create_group(&self, group: NewGroup) -> Result<(), DeliveryError>;
 
-    /// The group's head epoch and current log-auth key.
+    /// The group's head epoch, current log-auth key and lifetime class.
     ///
     /// # Errors
     ///
     /// [`DeliveryError::UnknownGroup`]; storage errors.
     fn head(&self, group: &GroupId) -> Result<GroupHead, DeliveryError>;
+
+    /// The log-auth keys of the group's earlier epochs, newest first: a member that missed a
+    /// commit still signs with one of them until it has read and applied that commit.
+    ///
+    /// # Errors
+    ///
+    /// [`DeliveryError::UnknownGroup`]; storage errors.
+    fn past_auth_keys(&self, group: &GroupId) -> Result<Vec<GroupAuthKey>, DeliveryError>;
 
     /// Moves the group's idle expiry to `idle_expires_at`.
     ///
@@ -131,7 +145,8 @@ pub trait DeliveryStore: Send + Sync {
         idle_expires_at: UnixSeconds,
     ) -> Result<SequenceNumber, DeliveryError>;
 
-    /// Appends a commit, advances the head epoch, swaps the auth key, replaces the snapshot if
+    /// Appends a commit, advances the head epoch, swaps the auth key (keeping the old one
+    /// among the past keys), replaces the snapshot if
     /// one is given and applies the subscription changes, all at once and only if
     /// `commit.epoch` is the head epoch. Otherwise writes nothing and reports the head.
     ///
