@@ -319,6 +319,8 @@ class CoreRepository(
         val draft = partyDraft
         call("create party", onError = { createError = it; publishNewParty() }) { core ->
             val created = uniffi.pingers.NewPartyDraft(
+                // The built-in server; picking another one is the redesigned New party's.
+                server = null,
                 name = draft.name,
                 myName = myName(),
                 colour = draft.colour,
