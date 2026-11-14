@@ -146,7 +146,7 @@ pub struct YourNameText {
     pub name: Option<String>,
     /// "First name or nickname", for an empty field.
     pub placeholder: String,
-    /// Who sees it, and that Parties already joined keep the old name.
+    /// Who sees it: every member of every Party, as soon as it changes.
     pub help: String,
 }
 
@@ -158,8 +158,7 @@ pub fn your_name(language: Language, view: &YourName) -> YourNameText {
         title: "Your name".into(),
         name: view.name.as_ref().map(|name| name.as_str().to_owned()),
         placeholder: "First name or nickname".into(),
-        help: "Members see this name in parties you create or join from now on. Parties you're \
-               already in keep the name you joined with."
+        help: "Members of all your parties see this name. Changing it updates it everywhere."
             .into(),
     }
 }
@@ -271,7 +270,7 @@ mod tests {
         let text = your_name(EN, &pingers_screens::settings::your_name(&snapshot));
         assert_eq!(text.title, "Your name");
         assert_eq!(text.name.as_deref(), Some("Sam"));
-        assert!(text.help.contains("keep the name you joined with"));
+        assert!(text.help.contains("updates it everywhere"));
         snapshot.display_name = None;
         let unset = your_name(EN, &pingers_screens::settings::your_name(&snapshot));
         assert_eq!(unset.name, None);

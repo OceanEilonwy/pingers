@@ -53,6 +53,9 @@ const KEEP_FOR: Duration = Duration::from_hours(1);
 /// an hour, so a day covers every lease started while it is pooled.
 const KNOCK_POOL: u32 = 4;
 const MAILBOX_LIFETIME: Duration = Duration::from_hours(24);
+/// Rounds of one flush: a request sent in one round can queue another (a settled commit frees
+/// a waiting profile), which the next round sends.
+const FLUSH_ROUNDS: usize = 3;
 
 /// What a client with an instance talks through: the engine, and the build's registration
 /// code for the first registration.
@@ -224,22 +227,34 @@ impl Net {
             return Ok(false);
         }
         self.ready().await?;
-        let waiting = std::mem::take(&mut *self.outbox());
         let mut changed = false;
-        let mut kept = Vec::new();
-        for outbound in waiting {
-            match self.send(outbound).await {
-                Ok(Sent::Done { changed: party }) => changed |= party,
-                Ok(Sent::Later(outbound)) => kept.push(*outbound),
-                Err(error @ (ClientError::Store(_) | ClientError::Records(_))) => {
-                    self.push(kept);
-                    return Err(error);
+        // Sending can queue more (a commit that settles frees a profile that waited for it);
+        // what a round queued goes out in the next one, for a few rounds.
+        for _ in 0..FLUSH_ROUNDS {
+            let waiting = std::mem::take(&mut *self.outbox());
+            let mut kept = Vec::new();
+            let mut sent = false;
+            for outbound in waiting {
+                match self.send(outbound).await {
+                    Ok(Sent::Done { changed: party }) => {
+                        changed |= party;
+                        sent = true;
+                    }
+                    Ok(Sent::Later(outbound)) => kept.push(*outbound),
+                    Err(error @ (ClientError::Store(_) | ClientError::Records(_))) => {
+                        self.push(kept);
+                        return Err(error);
+                    }
+                    // Refused, or not ours to retry (a commit pingers-parties dropped).
+                    Err(_) => {}
                 }
-                // Refused, or not ours to retry (a commit pingers-parties dropped).
-                Err(_) => {}
+            }
+            let queued_more = !self.outbox().is_empty();
+            self.push(kept);
+            if !(sent && queued_more) {
+                break;
             }
         }
-        self.push(kept);
         Ok(changed)
     }
 
@@ -328,7 +343,9 @@ impl Net {
         let result = engine
             .commit(&log.group(), &mut log, WakeBudget::UNLIMITED)
             .await;
+        let published = log.publish_waiting_profile();
         self.push(std::mem::take(&mut log.outbound));
+        published?;
         match result {
             Ok(Committed::Accepted(_)) => {
                 if let Some(welcome) = log.accepted.take().and_then(|commit| commit.welcome) {
@@ -390,7 +407,9 @@ impl Net {
             let result = engine
                 .pull_group(&log.group(), &mut log, WakeBudget::UNLIMITED)
                 .await;
+            let published = log.publish_waiting_profile();
             self.push(std::mem::take(&mut log.outbound));
+            published?;
             changed |= log.changed;
             match result {
                 Ok(_) => {}
@@ -490,7 +509,10 @@ impl ServerPort for Net {
         {
             return Err(port_error(&error));
         }
-        self.pull_all()
+        self.pull_all().await.map_err(|error| port_error(&error))?;
+        // What the log asked for (a leaver's proposal to commit, a profile that waited for a
+        // commit) goes out now rather than on the next wake.
+        self.flush()
             .await
             .map(drop)
             .map_err(|error| port_error(&error))
