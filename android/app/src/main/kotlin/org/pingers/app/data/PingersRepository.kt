@@ -32,6 +32,8 @@ interface PingersRepository {
     fun setNewPartyName(name: String)
     fun setNewPartyColour(colour: PartyColour)
     fun createParty()
+    /** New party was opened: check the server and relay are reachable, so Create can enable. */
+    fun openNewParty()
     /** Advanced was opened: check the server and relay are reachable. */
     fun openAdvanced()
     fun setServer(url: String)

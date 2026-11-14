@@ -221,6 +221,8 @@ pub struct ServerSection {
     pub relay: RelayStatus,
     /// The map host the server advertises (`map_host` in `/v1/params`), once read.
     pub map_host: Option<pingers_proto::MapHostUrl>,
+    /// Who runs the server and its push relay, once read.
+    pub operators: Option<crate::snapshot::ServerOperators>,
 }
 
 /// pingers-meetup-session's part of the snapshot.

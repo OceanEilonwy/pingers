@@ -319,6 +319,8 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
         checkRelay(1800)
     }
 
+    override fun openNewParty() = openAdvanced()
+
     override fun setServer(url: String) {
         _advanced.update { it.copy(server = url) }
         _newParty.update { it.copy(server = url) }

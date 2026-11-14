@@ -221,8 +221,15 @@ async fn a_pinned_instance_is_reachable_and_seals_wake_pushes_to_the_pinned_key(
         RelayStatus::Reachable
     );
     assert_eq!(rig.client.snapshot().relay, RelayStatus::Reachable);
-    // Nothing has asked for the parameters yet, and none were recorded.
-    assert_eq!(rig.client.snapshot().map_host, None);
+    // The check read the parameters too, for New party's operators: the map host came with them.
+    assert_eq!(
+        rig.client
+            .snapshot()
+            .map_host
+            .as_ref()
+            .map(|url| url.as_str().to_owned()),
+        Some(HARNESS_MAP_HOST.to_owned())
+    );
 
     rig.platform.set_push_registration(Some(PushRegistration {
         platform: PushPlatform::UnifiedPush,
@@ -233,7 +240,7 @@ async fn a_pinned_instance_is_reachable_and_seals_wake_pushes_to_the_pinned_key(
     // The key matched the build's pins: nothing is recorded as a first-use pin.
     assert_eq!(recorded_pin(&rig)?, None);
     rig.client.push_tokens_changed().await?;
-    // Fetching the push relay's id read /v1/params, which carries the map host.
+    // The map host stays known.
     assert_eq!(
         rig.client
             .snapshot()

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use pingers_client::ports::PartyDraft;
-use pingers_client::snapshot::{Name, PartyColour, PostQuantum};
+use pingers_client::snapshot::{Name, PartyColour, PostQuantum, RelayStatus};
 use pingers_client::{Client, ClientConfig, ClientError, Crates, Instance, Outside, Trust};
 use pingers_ohttp::BinaryRequest;
 use pingers_parties::PartyLifecycle;
@@ -190,6 +190,19 @@ async fn a_fresh_client_registers_gets_tokens_creates_a_party_and_a_mailbox()
     let dir = TestDir::new()?;
     let path = dir.0.join("pingers.db");
     let client = open(&harness, &clock, path.clone(), Some(CODE)).await?;
+    // New party's checks: the relay answers with the pinned gateway key, and the server's
+    // parameters name who runs it and the push relay.
+    assert_eq!(client.check_reachability().await?, RelayStatus::Reachable);
+    let operators = client
+        .snapshot()
+        .operators
+        .clone()
+        .ok_or(TestError::Setup("no operators after the check"))?;
+    assert!(!operators.server.as_str().is_empty());
+    assert!(
+        operators.push_relay.is_some(),
+        "the server lists the instance's push relay"
+    );
 
     let party = tokio::time::timeout(
         STEP,

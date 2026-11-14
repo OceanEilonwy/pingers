@@ -512,5 +512,6 @@ pub fn snapshot() -> Result<ClientSnapshot, FixtureError> {
         fallbacks: Vec::<Fallback>::new(),
         relay: RelayStatus::Reachable,
         map_host: None,
+        operators: None,
     })
 }

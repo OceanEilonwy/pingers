@@ -634,7 +634,16 @@ impl SyncPort for Sync {
         let result = engine.check_relay(WakeBudget::UNLIMITED).await;
         self.0.observe(&result);
         match result {
-            Ok(()) => Ok(RelayStatus::Reachable),
+            Ok(()) => {
+                // Who runs the server, for New party: the parameters, read once per process. A
+                // failure here leaves the operators unknown; only a store failure is an error.
+                if let Err(error @ (ClientError::Store(_) | ClientError::Records(_))) =
+                    self.0.server_params().await
+                {
+                    return Err(error);
+                }
+                Ok(RelayStatus::Reachable)
+            }
             Err(SyncError::NoRelay { .. }) => Ok(RelayStatus::Unreachable),
             Err(SyncError::RelayKeyMismatch) => Ok(RelayStatus::KeyMismatch),
             Err(error) => Err(error.into()),
@@ -647,6 +656,7 @@ impl SyncPort for Sync {
             fallbacks: Vec::new(),
             relay: *self.0.relay.lock().unwrap_or_else(PoisonError::into_inner),
             map_host,
+            operators: self.0.operators(),
         })
     }
 }

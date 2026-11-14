@@ -220,7 +220,11 @@ private fun App(repo: PingersRepository, nav: Navigator, pending: Intent?, consu
 private fun Screen(route: Route, repo: PingersRepository, nav: Navigator, simulateAlert: () -> Unit) {
     when (route) {
         Route.Home -> HomeScreen(repo.home.collectAsStateWithLifecycle().value, repo, nav, simulateAlert)
-        Route.NewParty -> NewPartyScreen(repo.newParty.collectAsStateWithLifecycle().value, repo, nav)
+        Route.NewParty -> {
+            // One check each time the screen opens: Create enables once server and relay answer.
+            LaunchedEffect(Unit) { repo.openNewParty() }
+            NewPartyScreen(repo.newParty.collectAsStateWithLifecycle().value, repo, nav)
+        }
         Route.Advanced -> AdvancedScreen(repo.advanced.collectAsStateWithLifecycle().value, repo, nav)
         Route.Invite -> InviteScreen(repo.invite.collectAsStateWithLifecycle().value, repo, nav)
         Route.AcceptInvite -> AcceptInviteScreen(repo.acceptInvite.collectAsStateWithLifecycle().value, repo, nav)

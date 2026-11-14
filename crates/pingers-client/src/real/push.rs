@@ -21,6 +21,7 @@ use pingers_sync::{PushSeal, VerifiedPushRelay, WakeBudget, WakePush};
 
 use super::records::{self, Key, corrupt};
 use super::sync::Net;
+use crate::snapshot::{Operator, ServerOperators};
 use crate::{ClientError, Platform, PushTokens, Unavailable};
 
 /// The longest a sealed token is good for: a Party subscription lives 30 days (design B.4.9),
@@ -104,6 +105,24 @@ impl Net {
     /// # Errors
     ///
     /// A storage failure, or a corrupt record.
+    /// Who runs the server and the instance's push relay, from the parameters this process
+    /// read; `None` before they were read or if the server declares no operator.
+    pub(crate) fn operators(&self) -> Option<ServerOperators> {
+        let params = lock(&self.learned.params);
+        let params = params.as_ref()?;
+        let push_relay = self.learned.push_relay.as_ref().and_then(|setup| {
+            params
+                .push_relays
+                .iter()
+                .find(|relay| same_origin(relay.url.as_str(), &setup.origin))
+                .and_then(|relay| Operator::new(&relay.operator).ok())
+        });
+        Some(ServerOperators {
+            server: Operator::new(&params.server_operator).ok()?,
+            push_relay,
+        })
+    }
+
     pub(crate) async fn map_host(&self) -> Result<Option<MapHostUrl>, ClientError> {
         if let Some(params) = lock(&self.learned.params).as_ref() {
             return Ok(params.map_host.clone());

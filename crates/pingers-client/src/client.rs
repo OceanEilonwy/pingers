@@ -530,5 +530,6 @@ async fn assemble(crates: &Crates) -> Result<ClientSnapshot, ClientError> {
         fallbacks: server.fallbacks,
         relay: server.relay,
         map_host: server.map_host,
+        operators: server.operators,
     })
 }

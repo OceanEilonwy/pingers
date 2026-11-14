@@ -980,6 +980,11 @@ mod tests {
                 pingers_proto::MapHostUrl::new("https://maps.pingers.invalid".into())
                     .map_err(|_| CoreError::invalid("map host"))?,
             ),
+            operators: Some(pingers_client::snapshot::ServerOperators {
+                server: pingers_client::snapshot::Operator::new("Flat 7")
+                    .map_err(|_| CoreError::invalid("operator"))?,
+                push_relay: None,
+            }),
         });
         let check = core.check_reachability().await?;
         assert_eq!(check.status, RelayStatus::KeyMismatch);
@@ -988,6 +993,8 @@ mod tests {
             core.snapshot().server_map_host().as_deref(),
             Some("https://maps.pingers.invalid")
         );
+        assert_eq!(core.snapshot().server_operator().as_deref(), Some("Flat 7"));
+        assert_eq!(core.snapshot().push_relay_operator(), None);
         assert!(
             check
                 .text
