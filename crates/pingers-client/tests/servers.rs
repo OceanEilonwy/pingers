@@ -281,7 +281,9 @@ async fn ana_on_both(world: &World) -> Result<(Device, PartyId, PartyId), TestEr
     ana.client
         .submit_registration_code(b.clone(), SecretText::new(B_CODE.to_owned()))
         .await?;
-    let on_b = ana.create_party(Some(b), "Book club").await?;
+    let on_b = ana.create_party(Some(b.clone()), "Book club").await?;
+    // Looked at again, B is one this device already trusts.
+    assert!(ana.client.probe_server(b.as_str().to_owned()).await?.known);
     Ok((ana, on_a, on_b))
 }
 
