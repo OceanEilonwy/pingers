@@ -12,7 +12,17 @@ layer = "dev"
 
 [dependencies]
 anyhow = { workspace = true }
+# `pins`: key configs from the deployed private keys, with the server's and relay's own calls.
+pingers-crypto = { workspace = true }
+pingers-ohttp = { workspace = true }
+pingers-proto = { workspace = true }
+hex = { workspace = true }
 toml = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+# `pins` is checked against the relay's own `pins` subcommand.
+pingers-push-relay = { path = "../crates/pingers-push-relay" }
 
 [lints]
 workspace = true

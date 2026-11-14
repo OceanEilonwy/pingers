@@ -123,6 +123,8 @@ struct Setup {
     supported: Vec<PushPlatform>,
     server_a_per_minute: u32,
     token_per_minute: u32,
+    /// When key 3 activates, if it is configured.
+    key_3_activates_at: Option<u64>,
 }
 
 impl Setup {
@@ -133,6 +135,7 @@ impl Setup {
             supported: vec![PushPlatform::UnifiedPush, PushPlatform::Fcm],
             server_a_per_minute: 1000,
             token_per_minute: 1000,
+            key_3_activates_at: None,
         }
     }
 
@@ -148,10 +151,16 @@ impl Setup {
             },
             clock: clock.clone(),
             // Key 2 took over a day ago; key 1 opens for the rest of the 30-day overlap.
-            keys: KeyRing::new(vec![
-                key(1, 0, Some(NOW + 29 * DAY)),
-                key(2, NOW - DAY, None),
-            ])?,
+            keys: KeyRing::new(
+                [
+                    Some(key(1, 0, Some(NOW + 29 * DAY))),
+                    Some(key(2, NOW - DAY, None)),
+                    self.key_3_activates_at.map(|at| key(3, at, None)),
+                ]
+                .into_iter()
+                .flatten()
+                .collect(),
+            )?,
             servers: ServerRegistry::new(
                 hash_key(),
                 vec![
@@ -581,5 +590,47 @@ fn the_published_config_follows_rotation_and_lists_served_platforms() -> TestRes
         Duration::from_secs(30 * DAY)
     );
     assert_eq!(config.operator, "Test Relay Ltd");
+    Ok(())
+}
+
+#[test]
+fn the_next_key_is_announced_before_it_is_published() -> TestResult {
+    let mut setup = Setup::new(FakeOpener::default());
+    setup.key_3_activates_at = Some(NOW + DAY);
+    let harness = setup.build()?;
+    let next = harness.relay.next_config().ok_or("no next key")?;
+    assert_eq!(next.key_config.key_id, PushRelayKeyId::new(3));
+    assert_eq!(next.operator, "Test Relay Ltd");
+    let published = harness
+        .relay
+        .published_config()
+        .ok_or("nothing published")?;
+    assert_eq!(published.key_config.key_id, PushRelayKeyId::new(2));
+    harness.clock.advance(Duration::from_secs(DAY));
+    let published = harness
+        .relay
+        .published_config()
+        .ok_or("nothing published")?;
+    assert_eq!(published.key_config, next.key_config);
+    assert_eq!(harness.relay.next_config(), None);
+    Ok(())
+}
+
+#[test]
+fn the_status_reports_the_rotation_and_platforms() -> TestResult {
+    let mut setup = Setup::new(FakeOpener::default());
+    setup.supported = vec![PushPlatform::Fcm];
+    setup.key_3_activates_at = Some(NOW + DAY);
+    let harness = setup.build()?;
+    assert_eq!(
+        harness.relay.status(),
+        RelayStatus {
+            operator: "Test Relay Ltd".to_owned(),
+            platforms: vec![PushPlatform::Fcm],
+            published_key: Some(PushRelayKeyId::new(2)),
+            next_key: Some(PushRelayKeyId::new(3)),
+            next_key_activates_at: Some(UnixSeconds::new(NOW + DAY)),
+        }
+    );
     Ok(())
 }

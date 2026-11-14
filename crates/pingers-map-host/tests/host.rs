@@ -317,6 +317,45 @@ async fn catalog_lists_only_allow_listed_manifests() -> TestResult {
 }
 
 #[tokio::test]
+async fn the_status_names_the_mode_and_hosted_prefixes_only() -> TestResult {
+    let directory = TempDir::new("status")?;
+    write_pre_extracted(directory.path())?;
+    let host = start(
+        config(directory.path(), &["oceania", "broken"], 1 << 30),
+        None,
+        clock(),
+    )
+    .await?;
+    let response = reqwest::get(host.url("/status")).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("cache-control")
+            .map(reqwest::header::HeaderValue::as_bytes),
+        Some(&b"no-store"[..])
+    );
+    let status: serde_json::Value = response.json().await?;
+    assert_eq!(
+        status,
+        serde_json::json!({
+            "service": "pingers-map-host",
+            "version": env!("CARGO_PKG_VERSION"),
+            "status": "ok",
+            "mode": "pre-extracted",
+            "hosted": ["oceania", "broken"],
+        })
+    );
+    let head = reqwest::Client::new()
+        .head(host.url("/status"))
+        .send()
+        .await?;
+    assert_eq!(head.status(), StatusCode::OK);
+    assert_eq!(head.bytes().await?.len(), 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn other_paths_and_methods_are_refused() -> TestResult {
     let directory = TempDir::new("refused")?;
     write_pre_extracted(directory.path())?;

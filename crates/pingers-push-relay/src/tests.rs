@@ -115,6 +115,18 @@ fn fcm_config(service_account_file: &std::path::Path) -> Result<RelayConfig, Con
 }
 
 #[tokio::test]
+async fn the_dispatcher_uses_an_inline_service_account() -> TestResult {
+    let json = crate::fcm_auth::tests::account_json("https://oauth2.googleapis.com/token")?;
+    let config = RelayConfig::parse(&config_text("127.0.0.1:0", 0).replace(
+        "[unifiedpush]",
+        &format!("[fcm]\nproject_id = \"p\"\nservice_account_json = '{json}'"),
+    ))?;
+    let sender = dispatcher(&config, Arc::new(clock()))?;
+    assert!(sender.supports(pingers_proto::PushPlatform::Fcm));
+    Ok(())
+}
+
+#[tokio::test]
 async fn the_dispatcher_loads_the_service_account_file() -> TestResult {
     let file = TempFile::new(
         "good.json",

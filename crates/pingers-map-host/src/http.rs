@@ -8,6 +8,9 @@
 //!   `If-Range`, and long-lived caching for packs and indexes.
 //! - In cache mode, a listed region not on disk yet: 503 with `Retry-After` and
 //!   `{"status":"preparing","retry_after":N}` while it is cut.
+//! - `/status`: JSON for an operator's status panel, `Cache-Control: no-store`: `service`,
+//!   `version`, `status` (`ok`), `mode` (`pre-extracted` or `cache`) and `hosted` (the
+//!   configured prefixes). No counts, no disk use, nothing about requests.
 //! - Anything else: 404 with no body.
 //!
 //! No cookies are set and no request detail is kept; see [`crate::counts`].
@@ -34,7 +37,7 @@ use crate::catalog;
 use crate::counts::Counts;
 use crate::files::{Directory, OpenError, OpenedFile, etag_of};
 use crate::range::{RangeAnswer, parse_range};
-use crate::region::{AllowList, FileKind, RegionFile};
+use crate::region::{AllowList, FileKind, RegionFile, RegionId};
 
 /// Read size when streaming a file.
 const CHUNK: usize = 64 * 1024;
@@ -95,6 +98,9 @@ async fn respond(
     if name == "catalog.json" {
         return catalog_response(host, head, headers).await;
     }
+    if name == "status" {
+        return status_response(host, head);
+    }
     let Some(file) = RegionFile::parse(name) else {
         return not_found();
     };
@@ -144,6 +150,33 @@ fn status_only(status: StatusCode) -> (Response, u64) {
 
 fn not_found() -> (Response, u64) {
     status_only(StatusCode::NOT_FOUND)
+}
+
+/// `GET /status`: what an operator's status panel shows. The hosted prefixes are public (the
+/// catalog lists them); nothing about requests, regions on disk or disk use, since in cache
+/// mode those would show what people asked for.
+fn status_response(host: &Host, head: bool) -> (Response, u64) {
+    let body = serde_json::json!({
+        "service": "pingers-map-host",
+        "version": env!("CARGO_PKG_VERSION"),
+        "status": "ok",
+        "mode": if host.cache.is_some() { "cache" } else { "pre-extracted" },
+        "hosted": host.allow.hosted.iter().map(RegionId::as_str).collect::<Vec<_>>(),
+    })
+    .to_string();
+    let length = u64::try_from(body.len()).unwrap_or(u64::MAX);
+    let headers = [
+        (CONTENT_TYPE, HeaderValue::from_static("application/json")),
+        (CACHE_CONTROL, HeaderValue::from_static("no-store")),
+    ];
+    if head {
+        (
+            (headers, [(CONTENT_LENGTH, HeaderValue::from(length))]).into_response(),
+            0,
+        )
+    } else {
+        ((headers, body).into_response(), length)
+    }
 }
 
 fn preparing(retry_after: u32) -> (Response, u64) {

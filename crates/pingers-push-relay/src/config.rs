@@ -12,14 +12,26 @@
 //! hash_key = "<64 hex>"            # keys the credential hashes and the token rate limits
 //!
 //! [[keys]]
-//! key_id = 1
-//! private_key = "<64 hex>"            # the public key is derived from it
+//! key_id = 1                       # 0 to 255, distinct
+//! private_key = "<64 hex>"         # the public key is derived from it
 //! activated_at = 1790000000        # Unix seconds
-//! retired_at = 1795000000          # optional; at least 30 days after the next key activates
+//! retired_at = 1795000000          # optional, 0 = not scheduled; at least 30 days after the
+//!                                  # next key activates
+//!
+//! [[keys]]                         # the next key: published at GET /v1/config/next, and
+//! key_id = 2                       # printed by `pins`, before it activates
+//! private_key = "<64 hex>"
+//! activated_at = 4102444800        # far in the future until the rotation
+//! retired_at = 0
 //!
 //! [[servers]]
 //! server_id = "pingers.example"
 //! credential_hash = "<64 hex>"     # HMAC of the server's credential; see below
+//! pushes_per_minute = 600
+//!
+//! [[servers]]
+//! server_id = "local"
+//! credential = "<at least 32 characters>"   # or the credential itself, hashed at load
 //! pushes_per_minute = 600
 //!
 //! [unifiedpush]
@@ -28,25 +40,44 @@
 //! [fcm]                            # optional: FCM HTTP v1
 //! project_id = "my-project"        # the Firebase project id
 //! service_account_file = "/etc/pingers-push-relay/fcm-service-account.json"
+//! # or, instead of the file, the key file's JSON itself (one line is fine):
+//! # service_account_json = '{"type": "service_account", ...}'
 //! endpoint = "https://fcm.googleapis.com/"   # optional; the default
 //! ```
 //!
-//! The file holds private keys and the hash key: keep it readable by the relay only. It holds
-//! no server credential, only its keyed hash, so a copy of the file does not let anyone push.
+//! Each `[[servers]]` entry has exactly one of `credential_hash` and `credential`, and `[fcm]`
+//! exactly one of `service_account_file` and `service_account_json`. `retired_at = 0` means
+//! the same as leaving it out, for templates that cannot leave a key out.
+//!
+//! The file holds private keys and the hash key: keep it readable by the relay only. With
+//! `credential_hash` it holds no server credential, so a copy of the file does not let anyone
+//! push. A plain `credential` (for a relay whose configuration is rendered into memory beside
+//! the server's, as on an appliance) is hashed when the file is read and the text is wiped;
+//! `service_account_json` is checked when the file is read and kept only in zeroized memory.
+//! Configuration errors name fields, never values.
 //!
 //! Issuing a server credential (pingers-crypto's `keyed_hash` with purpose
 //! `ServerCredential`: `HMAC-SHA-256(hash_key, "pingers/v1/relay-credential" || credential)`):
 //!
 //! ```sh
-//! openssl rand -hex 32 > hash_key           # once per relay; paste into hash_key
-//! credential=$(openssl rand -hex 32)        # give this to the server operator only
-//! printf '%s%s' 'pingers/v1/relay-credential' "$credential" \
-//!   | openssl dgst -sha256 -mac HMAC -macopt hexkey:"$(cat hash_key)" -r | cut -d' ' -f1
+//! pingers-push-relay keygen > hash_key      # once per relay; paste into hash_key
+//! pingers-push-relay keygen > credential    # give this to the server operator only
+//! cat hash_key credential | pingers-push-relay credential-hash
 //! ```
 //!
-//! The last line prints the `credential_hash` for the server's entry. The server presents the
-//! credential as `Authorization: Bearer <credential>`; credentials shorter than 32 characters
-//! are refused. Changing `hash_key` invalidates every credential hash.
+//! `credential-hash` reads the hash key and the credential, one per line, on standard input
+//! (never the command line, which other users can see) and prints the `credential_hash` for
+//! the server's entry. The server presents the credential as `Authorization: Bearer
+//! <credential>`; credentials shorter than 32 characters are refused. Changing `hash_key`
+//! invalidates every `credential_hash` (a plain `credential` is simply hashed anew).
+//!
+//! # Rotating the HPKE key (two slots, yearly)
+//!
+//! Keep two `[[keys]]`: A active, and B with a far-future `activated_at`. The app pins both:
+//! `pingers-push-relay pins <file>` prints one pin per configured key, earliest activation
+//! first. To rotate, set B's `activated_at` to now and A's `retired_at` to at least 30 days
+//! later. Once no supported app build needs A, replace A with a fresh key (`pingers-push-relay
+//! keygen`), a far-future `activated_at` and `retired_at = 0`, and ship the new pin set.
 //!
 //! # FCM setup
 //!
@@ -69,27 +100,32 @@
 //!    ```
 //!
 //! 4. Set `service_account_file` to that path and `project_id` to the Firebase project id.
+//!    Where the configuration is itself a sealed secret rendered into memory (an appliance),
+//!    paste the key file's JSON into `service_account_json` instead and keep no file.
 //!
-//! The relay reads `client_email`, `private_key`, `token_uri` and `private_key_id` from the file
-//! at start and never writes, logs or reports any of them; a malformed file stops the relay
+//! The relay reads `client_email`, `private_key`, `token_uri` and `private_key_id` from the key
+//! at start and never writes, logs or reports any of them; a malformed key stops the relay
 //! with an error naming the field, not its value. To rotate the key, add a new key to the
-//! account, replace the file, restart the relay, then delete the old key in the console.
+//! account, replace the file (or the JSON), restart the relay, then delete the old key in the
+//! console.
 
+use std::fmt;
 use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use pingers_crypto::{KeyedHash, KeyedHashKey, PushRelayPrivateKey};
+use pingers_crypto::{KeyedHash, KeyedHashKey, KeyedHashPurpose, PushRelayPrivateKey, keyed_hash};
 use pingers_proto::{PushRelayKeyId, TimeToLive};
 use pingers_time::UnixSeconds;
 use reqwest::Url;
 use serde::Deserialize;
 use zeroize::{Zeroize as _, Zeroizing};
 
-use crate::credentials::{ServerEntry, ServerRegistry};
+use crate::credentials::{MIN_CREDENTIAL_LENGTH, ServerEntry, ServerRegistry};
 use crate::delivery::EndpointPolicy;
 use crate::error::ConfigError;
+use crate::fcm_auth::ServiceAccount;
 use crate::keys::{KeyLifetime, KeyRing, RelayKey};
 use crate::rate::RateLimit;
 
@@ -105,15 +141,43 @@ pub enum Logging {
     },
 }
 
+/// A service account key file's JSON, held in zeroized memory. No `Clone`; `Debug` prints
+/// only the type name.
+pub struct ServiceAccountJson(Zeroizing<String>);
+
+impl ServiceAccountJson {
+    /// The JSON text, to parse into a [`ServiceAccount`].
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for ServiceAccountJson {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ServiceAccountJson(redacted)")
+    }
+}
+
+/// Where the FCM service account key comes from.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ServiceAccountSource {
+    /// `service_account_file`: the JSON key file, read at start.
+    File(PathBuf),
+    /// `service_account_json`: the key file's text, from the configuration itself.
+    Inline(ServiceAccountJson),
+}
+
 /// FCM HTTP v1 settings from the file.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct FcmConfig {
     /// The Firebase project.
     pub project_id: String,
     /// Where to send; normally `https://fcm.googleapis.com/`.
     pub endpoint: Url,
-    /// The service account's JSON key file, read at start.
-    pub service_account_file: PathBuf,
+    /// The service account's key.
+    pub service_account: ServiceAccountSource,
 }
 
 /// The validated configuration.
@@ -206,7 +270,8 @@ struct FileKey {
 #[serde(deny_unknown_fields)]
 struct FileServer {
     server_id: String,
-    credential_hash: String,
+    credential_hash: Option<String>,
+    credential: Option<Zeroizing<String>>,
     pushes_per_minute: u32,
 }
 
@@ -221,7 +286,8 @@ struct FileUnifiedPush {
 #[serde(deny_unknown_fields)]
 struct FileFcm {
     project_id: String,
-    service_account_file: PathBuf,
+    service_account_file: Option<PathBuf>,
+    service_account_json: Option<Zeroizing<String>>,
     #[serde(default = "default_fcm_endpoint")]
     endpoint: String,
 }
@@ -259,6 +325,12 @@ impl RelayConfig {
         file.hash_key.zeroize();
         let hash_key = hash_key?;
         let token_hash_key = KeyedHashKey::from_bytes(Zeroizing::new(*hash_key));
+        let credential_key = KeyedHashKey::from_bytes(hash_key);
+        let servers = file
+            .servers
+            .into_iter()
+            .map(|server| server_entry(&credential_key, server))
+            .collect::<Result<_, _>>()?;
         Ok(Self {
             listen: file.listen,
             operator: file.operator,
@@ -273,13 +345,7 @@ impl RelayConfig {
                     .map(relay_key)
                     .collect::<Result<_, _>>()?,
             )?,
-            servers: ServerRegistry::new(
-                KeyedHashKey::from_bytes(hash_key),
-                file.servers
-                    .into_iter()
-                    .map(server_entry)
-                    .collect::<Result<_, _>>()?,
-            )?,
+            servers: ServerRegistry::new(credential_key, servers)?,
             token_hash_key,
             unifiedpush: file.unifiedpush.map(|unifiedpush| {
                 if unifiedpush.allow_insecure_local_endpoints {
@@ -314,7 +380,7 @@ fn rate(field: &'static str, per_minute: u32) -> Result<RateLimit, ConfigError> 
         .ok_or(ConfigError::OutOfRange { field })
 }
 
-fn hex_32(field: &'static str, text: &str) -> Result<Zeroizing<[u8; 32]>, ConfigError> {
+pub(crate) fn hex_32(field: &'static str, text: &str) -> Result<Zeroizing<[u8; 32]>, ConfigError> {
     let mut bytes = Zeroizing::new([0; 32]);
     hex::decode_to_slice(text, bytes.as_mut_slice())
         .map_err(|_| ConfigError::BadHex { field, bytes: 32 })?;
@@ -329,18 +395,43 @@ fn relay_key(mut key: FileKey) -> Result<RelayKey, ConfigError> {
         PushRelayPrivateKey::from_bytes(private_key?),
         KeyLifetime {
             activated_at: UnixSeconds::new(key.activated_at),
-            retired_at: key.retired_at.map(UnixSeconds::new),
+            // 0: not scheduled. No key can retire at the epoch, since none activates before it.
+            retired_at: key.retired_at.filter(|at| *at != 0).map(UnixSeconds::new),
         },
     )
     .map_err(|_error| ConfigError::InvalidKey { key_id: key.key_id })
 }
 
-fn server_entry(server: FileServer) -> Result<ServerEntry, ConfigError> {
+/// The keyed hash a server's entry stores for `credential` (`credential-hash` prints it).
+///
+/// # Errors
+///
+/// [`ConfigError::CredentialTooShort`] for a credential that could never authenticate, or
+/// [`ConfigError::CredentialHash`] if hashing fails (it cannot with a 32-byte key).
+pub fn hash_credential(
+    hash_key: &KeyedHashKey,
+    credential: &[u8],
+) -> Result<KeyedHash, ConfigError> {
+    if credential.len() < MIN_CREDENTIAL_LENGTH {
+        return Err(ConfigError::CredentialTooShort);
+    }
+    keyed_hash(hash_key, KeyedHashPurpose::ServerCredential, credential)
+        .map_err(|_error| ConfigError::CredentialHash)
+}
+
+fn server_entry(hash_key: &KeyedHashKey, server: FileServer) -> Result<ServerEntry, ConfigError> {
+    let credential_hash = match (server.credential_hash, server.credential) {
+        (Some(hash), None) => KeyedHash::from_bytes(*hex_32("servers.credential_hash", &hash)?),
+        // The plain text is wiped when `credential` drops at the end of this arm.
+        (None, Some(credential)) => hash_credential(hash_key, credential.as_bytes())?,
+        (Some(_), Some(_)) | (None, None) => {
+            return Err(ConfigError::CredentialSource {
+                server_id: server.server_id,
+            });
+        }
+    };
     Ok(ServerEntry {
-        credential_hash: KeyedHash::from_bytes(*hex_32(
-            "servers.credential_hash",
-            &server.credential_hash,
-        )?),
+        credential_hash,
         limit: rate("servers.pushes_per_minute", server.pushes_per_minute)?,
         server_id: server.server_id,
     })
@@ -356,10 +447,19 @@ fn fcm_config(fcm: FileFcm) -> Result<FcmConfig, ConfigError> {
             field: "fcm.project_id",
         });
     }
+    let service_account = match (fcm.service_account_file, fcm.service_account_json) {
+        (Some(path), None) => ServiceAccountSource::File(path),
+        (None, Some(json)) => {
+            // Checked now, so a bad paste stops the relay before it serves anything.
+            ServiceAccount::from_json(&json).map_err(ConfigError::ServiceAccount)?;
+            ServiceAccountSource::Inline(ServiceAccountJson(json))
+        }
+        (Some(_), Some(_)) | (None, None) => return Err(ConfigError::ServiceAccountSource),
+    };
     Ok(FcmConfig {
         project_id: fcm.project_id,
         endpoint,
-        service_account_file: fcm.service_account_file,
+        service_account,
     })
 }
 

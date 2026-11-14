@@ -5,13 +5,15 @@
 use std::sync::{Mutex, PoisonError};
 
 use pingers_crypto::{KeyedHashKey, KeyedHashPurpose, keyed_hash};
-use pingers_proto::{PushPlatform, PushRelayConfig, PushRequest, TimeToLive, WireDecode as _};
-use pingers_time::Clock;
+use pingers_proto::{
+    PushPlatform, PushRelayConfig, PushRelayKeyId, PushRequest, TimeToLive, WireDecode as _,
+};
+use pingers_time::{Clock, UnixSeconds};
 
 use crate::counts::Counts;
 use crate::credentials::{ServerIndex, ServerRegistry};
 use crate::delivery::{DeliveryOutcome, MAX_PUSH_TTL, PushMessage, PushSender, WakeClass};
-use crate::keys::KeyRing;
+use crate::keys::{KeyRing, RelayKey};
 use crate::opener::{OpenError, TokenOpener};
 use crate::rate::{Decision, Limiter, RateLimit};
 
@@ -57,6 +59,23 @@ pub enum PushOutcome {
 /// memory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct TokenFingerprint([u8; 32]);
+
+/// What `GET /status` reports, for an operator's status panel: who runs the relay, what it
+/// delivers, and where its key rotation stands. No secrets, and no counts that would show how
+/// much it is used.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RelayStatus {
+    /// Who runs the relay.
+    pub operator: String,
+    /// The platforms it delivers on.
+    pub platforms: Vec<PushPlatform>,
+    /// The key devices seal to now; `None` if no key is active.
+    pub published_key: Option<PushRelayKeyId>,
+    /// The key announced to take over next, if one is scheduled.
+    pub next_key: Option<PushRelayKeyId>,
+    /// When that key activates.
+    pub next_key_activates_at: Option<UnixSeconds>,
+}
 
 /// Everything [`Relay::new`] needs.
 pub struct RelayParts<O, S, C> {
@@ -124,17 +143,43 @@ impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
 
     /// The `GET /v1/config` body to publish now, or `None` if no key is active.
     pub fn published_config(&self) -> Option<PushRelayConfig> {
-        let key = self.keys.published(self.clock.now())?;
-        let platforms = [PushPlatform::UnifiedPush, PushPlatform::Fcm]
+        Some(self.config_for(self.keys.published(self.clock.now())?))
+    }
+
+    /// The `GET /v1/config/next` body: the config devices will fetch once the next key
+    /// activates, or `None` if no key is scheduled. Announcing it early lets members add its
+    /// hash to their pins before the relay starts publishing it (two-slot rotation).
+    pub fn next_config(&self) -> Option<PushRelayConfig> {
+        Some(self.config_for(self.keys.next(self.clock.now())?))
+    }
+
+    /// The `GET /status` facts: nothing secret and no counts.
+    pub fn status(&self) -> RelayStatus {
+        let now = self.clock.now();
+        let next = self.keys.next(now);
+        RelayStatus {
+            operator: self.operator.clone(),
+            platforms: self.platforms(),
+            published_key: self.keys.published(now).map(RelayKey::key_id),
+            next_key: next.map(RelayKey::key_id),
+            next_key_activates_at: next.map(RelayKey::activated_at),
+        }
+    }
+
+    fn platforms(&self) -> Vec<PushPlatform> {
+        [PushPlatform::UnifiedPush, PushPlatform::Fcm]
             .into_iter()
             .filter(|platform| self.sender.supports(*platform))
-            .collect();
-        Some(PushRelayConfig {
+            .collect()
+    }
+
+    fn config_for(&self, key: &RelayKey) -> PushRelayConfig {
+        PushRelayConfig {
             key_config: key.key_config(),
-            platforms,
+            platforms: self.platforms(),
             max_time_to_live: self.max_ttl,
             operator: self.operator.clone(),
-        })
+        }
     }
 
     /// Handles one push request from a server presenting `bearer`, and counts the outcome.
