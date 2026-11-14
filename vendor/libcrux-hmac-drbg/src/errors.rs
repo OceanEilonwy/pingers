@@ -96,7 +96,7 @@ pub enum GenerateError {
     /// [`RESEED_INTERVAL`]: crate::RESEED_INTERVAL
     ReseedRequired,
 
-    /// The requested output length is zero or exceeds [`MAX_GENERATE_BYTES`].
+    /// The requested output length exceeds [`MAX_GENERATE_BYTES`].
     ///
     /// [`MAX_GENERATE_BYTES`]: crate::MAX_GENERATE_BYTES
     RequestInvalid,

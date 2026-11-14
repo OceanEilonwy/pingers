@@ -284,7 +284,6 @@ impl<const OUTLEN: usize, Alg: HmacAlgorithm<OUTLEN>> HmacDrbg<OUTLEN, Alg> {
     /// On any failure the instance is poisoned and `Error::HealthCheckFailed` is
     /// returned.
     //
-    // #hax: requires output.len() > 0
     // #hax: requires output.len() <= MAX_GENERATE_BYTES
     // #hax: requires true   // additional_input has no length constraint
     // #hax: requires self.reseed_counter <= RESEED_INTERVAL
@@ -302,9 +301,8 @@ impl<const OUTLEN: usize, Alg: HmacAlgorithm<OUTLEN>> HmacDrbg<OUTLEN, Alg> {
         if self.reseed_counter > RESEED_INTERVAL {
             return Err(GenerateError::ReseedRequired);
         }
-        if output.is_empty() {
-            return Err(GenerateError::RequestInvalid);
-        }
+        // Pingers backport of libcrux #1558: an empty request is allowed (it was refused, which
+        // made the reseeding wrapper panic on lengths divisible by MAX_GENERATE_BYTES).
         if output.len() > MAX_GENERATE_BYTES {
             return Err(GenerateError::RequestInvalid);
         }

@@ -2676,8 +2676,6 @@ dependencies = [
 [[package]]
 name = "libcrux-hmac-drbg"
 version = "0.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "860985647c344b7357ce950bf8e13f076db47df36132d49b48a6fff30abe5be6"
 dependencies = [
  "libcrux-hmac",
  "rand 0.10.3",
@@ -2706,8 +2704,6 @@ dependencies = [
 [[package]]
 name = "libcrux-kem"
 version = "0.0.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "541a7377fb35060892e0620982e224e47419f10da8c212453bf642dafe529691"
 dependencies = [
  "libcrux-curve25519",
  "libcrux-ecdh",

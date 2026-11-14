@@ -227,10 +227,9 @@ fn generate_different_seeds_sha256() {
 }
 
 #[test]
-fn request_zero_bytes_rejected() {
+fn request_zero_bytes_allowed() {
     let mut drbg = make_sha256();
-    let err = drbg.generate(&mut [], &[]).unwrap_err();
-    assert_eq!(err, GenerateError::RequestInvalid);
+    drbg.generate(&mut [], &[]).unwrap();
 }
 
 #[test]

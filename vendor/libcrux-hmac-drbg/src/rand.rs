@@ -373,13 +373,11 @@ impl<const OUTLEN: usize, Hmac: HmacAlgorithm<OUTLEN>, ReseedRng: CryptoRng> ran
     }
 
     fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
-        let (chunks, rest): (&mut [[u8; MAX_GENERATE_BYTES]], _) = dst.as_chunks_mut();
-
-        for chunk in chunks {
+        // Pingers backport of libcrux #1558 (RUSTSEC-2026-0329): the empty remainder of a
+        // length divisible by MAX_GENERATE_BYTES reached `generate` and hit `unreachable!`.
+        for chunk in dst.chunks_mut(MAX_GENERATE_BYTES) {
             self.safe_generate_small(chunk);
         }
-
-        self.safe_generate_small(rest);
 
         Ok(())
     }

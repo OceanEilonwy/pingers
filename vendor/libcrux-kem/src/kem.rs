@@ -156,13 +156,12 @@ pub struct X25519MlKem768Draft00PrivateKey {
 
 impl X25519MlKem768Draft00PrivateKey {
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        // Pingers backport of libcrux #1560 (RUSTSEC-2026-0331): check the length first.
+        let key: &[u8; 2400 + 32] = bytes.try_into().map_err(|_| Error::InvalidPrivateKey)?;
+        let (mlkem, x25519) = key.split_at(2400);
         Ok(Self {
-            mlkem: bytes[..2400]
-                .try_into()
-                .map_err(|_| Error::InvalidPrivateKey)?,
-            x25519: bytes[2400..]
-                .try_into()
-                .map_err(|_| Error::InvalidPrivateKey)?,
+            mlkem: mlkem.try_into().map_err(|_| Error::InvalidPrivateKey)?,
+            x25519: x25519.try_into().map_err(|_| Error::InvalidPrivateKey)?,
         })
     }
 
@@ -210,18 +209,19 @@ pub struct X25519MlKem768Draft00PublicKey {
 
 impl X25519MlKem768Draft00PublicKey {
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        // Pingers backport of libcrux #1560 (RUSTSEC-2026-0331): check the length first.
+        let key: &[u8; 1184 + 32] = bytes.try_into().map_err(|_| Error::InvalidPublicKey)?;
+        let (mlkem, x25519) = key.split_at(1184);
         Ok(Self {
             mlkem: {
-                let key = MlKem768PublicKey::try_from(&bytes[..1184])
+                let key = MlKem768PublicKey::try_from(mlkem)
                     .map_err(|_| Error::InvalidPublicKey)?;
                 if !mlkem768::validate_public_key(&key) {
                     return Err(Error::InvalidPublicKey);
                 }
                 key
             },
-            x25519: bytes[1184..]
-                .try_into()
-                .map_err(|_| Error::InvalidPublicKey)?,
+            x25519: x25519.try_into().map_err(|_| Error::InvalidPublicKey)?,
         })
     }
 
@@ -241,18 +241,19 @@ pub struct XWingKemDraft06PublicKey {
 
 impl XWingKemDraft06PublicKey {
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        // Pingers backport of libcrux #1560 (RUSTSEC-2026-0331): check the length first.
+        let key: &[u8; 1184 + 32] = bytes.try_into().map_err(|_| Error::InvalidPublicKey)?;
+        let (pk_m, pk_x) = key.split_at(1184);
         Ok(Self {
             pk_m: {
-                let key = MlKem768PublicKey::try_from(&bytes[0..1184])
-                    .map_err(|_| Error::InvalidPublicKey)?;
+                let key =
+                    MlKem768PublicKey::try_from(pk_m).map_err(|_| Error::InvalidPublicKey)?;
                 if !mlkem768::validate_public_key(&key) {
                     return Err(Error::InvalidPublicKey);
                 }
                 key
             },
-            pk_x: bytes[1184..]
-                .try_into()
-                .map_err(|_| Error::InvalidPublicKey)?,
+            pk_x: pk_x.try_into().map_err(|_| Error::InvalidPublicKey)?,
         })
     }
 
@@ -555,10 +556,13 @@ impl PublicKey {
                 x25519: xpk,
             }) => {
                 // seed = mlkem_seed || x_sk
+                // Pingers backport of libcrux #1595 (RUSTSEC-2026-0330): check the seed length.
+                let seed: &[u8; 64] = seed.try_into().map_err(|_| Error::KeyGen)?;
+                let (mlkem_seed, x25519_seed) = seed.split_at(32);
                 let (mlkem_ct, mlkem_ss) =
-                    mlkem768::encapsulate(kpk, seed[0..32].try_into().map_err(|_| Error::KeyGen)?);
+                    mlkem768::encapsulate(kpk, mlkem_seed.try_into().map_err(|_| Error::KeyGen)?);
 
-                let x_sk = X25519PrivateKey::try_from(&seed[32..])?; // clamps
+                let x_sk = X25519PrivateKey::try_from(x25519_seed)?; // clamps
                 let x_pk = x25519_secret_to_public(&x_sk)?;
 
                 let x_ss = x25519_derive(xpk, &x_sk)?;
@@ -570,10 +574,13 @@ impl PublicKey {
             }
 
             PublicKey::XWingKemDraft06(XWingKemDraft06PublicKey { pk_m, pk_x }) => {
+                // Pingers backport of libcrux #1595 (RUSTSEC-2026-0330): check the seed length.
+                let seed: &[u8; 64] = seed.try_into().map_err(|_| Error::KeyGen)?;
+                let (mlkem_seed, x25519_seed) = seed.split_at(32);
                 let (ct_m, ss_m) =
-                    mlkem768::encapsulate(pk_m, seed[0..32].try_into().map_err(|_| Error::KeyGen)?);
+                    mlkem768::encapsulate(pk_m, mlkem_seed.try_into().map_err(|_| Error::KeyGen)?);
 
-                let ek_x = X25519PrivateKey::try_from(&seed[32..])?; // clamps
+                let ek_x = X25519PrivateKey::try_from(x25519_seed)?; // clamps
                 let ct_x = x25519_secret_to_public(&ek_x)?;
 
                 let ss_x = x25519_derive(pk_x, &ek_x)?;
