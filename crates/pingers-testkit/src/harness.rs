@@ -18,7 +18,10 @@
 //! The push relay serves HTTPS (pingers-proto's `RelayUrl` takes nothing else) with a
 //! certificate from a test CA made at start; the server is configured with the relay as
 //! relay id [`HARNESS_PUSH_RELAY_ID`] and trusts that CA ([`Endpoints::push_relay_ca`]), so
-//! mailbox and group wakes reach it.
+//! mailbox and group wakes reach it. The server's own origin ([`Endpoints::server_id`]) is a
+//! TLS front with a certificate from the same CA ([`Endpoints::server_https`]), so a client's
+//! direct transport (which takes only `https://`) reaches it when it trusts that CA; the plain
+//! listener ([`Endpoints::server`]) stays for [`send_direct`].
 //!
 //! Without the feature `start` returns [`HarnessError::NotWired`], so crates that only need
 //! the fake platform do not compile the server.
@@ -67,6 +70,9 @@ pub struct HarnessConfig {
     /// The address to bind; each service gets an ephemeral port on it. Use a concrete address
     /// (the services connect to each other on it), not `0.0.0.0`.
     pub bind: IpAddr,
+    /// The operator's registration codes (design B.1): empty, the server takes any
+    /// registration; otherwise `POST /v1/accounts` must present one of them.
+    pub registration_codes: Vec<String>,
 }
 
 impl Default for HarnessConfig {
@@ -76,6 +82,7 @@ impl Default for HarnessConfig {
             clock: test_clock(),
             seed: 0,
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            registration_codes: Vec::new(),
         }
     }
 }
@@ -85,6 +92,10 @@ impl Default for HarnessConfig {
 pub struct Endpoints {
     /// pingers-server: identified endpoints directly, anonymous ones only via the relay.
     pub server: SocketAddr,
+    /// pingers-server behind TLS with a certificate from the test CA ([`Endpoints::push_relay_ca`]):
+    /// the origin [`Endpoints::server_id`] names, for clients whose direct transport takes only
+    /// `https://`. It forwards the decrypted HTTP/2 to [`Endpoints::server`].
+    pub server_https: SocketAddr,
     /// pingers-server's gateway listener (`POST /ohttp`, `GET /v1/ohttp/config`), which only
     /// the relay forwards to.
     pub gateway: SocketAddr,
@@ -96,7 +107,7 @@ pub struct Endpoints {
     /// The test CA that issued the push relay's certificate, in PEM: trust it to call the
     /// relay directly.
     pub push_relay_ca: String,
-    /// The server's origin (`https://<server address>`), which RLN proofs and account
+    /// The server's origin (`https://<server_https address>`), which RLN proofs and account
     /// registrations are bound to.
     pub server_id: String,
     /// The server's OHTTP key configuration (RFC 9458 `application/ohttp-keys`, one config).

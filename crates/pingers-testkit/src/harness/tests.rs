@@ -161,6 +161,45 @@ mod running {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_server_origin_is_https_and_checks_registration_codes() -> TestResult {
+        use pingers_crypto::{AccountSigningKey, sign_registration};
+        use pingers_proto::{RegisterRequest, SecretText, ServerId, WireEncode as _};
+
+        let harness = InProcessHarness::start(&HarnessConfig {
+            registration_codes: vec!["friends".to_owned()],
+            ..HarnessConfig::default()
+        })?;
+        let endpoints = harness.endpoints().clone();
+        assert_eq!(
+            endpoints.server_id,
+            format!("https://{}", endpoints.server_https)
+        );
+        let client = push_client(&endpoints)?;
+        let key = AccountSigningKey::from_bytes(zeroize::Zeroizing::new([5; 32]));
+        let server = ServerId::new(endpoints.server_id.clone())?;
+        for (code, expected) in [
+            (None, 403),
+            (Some("strangers"), 403),
+            (Some("friends"), 200),
+        ] {
+            let body = RegisterRequest {
+                signature_key: *key.public_key().as_bytes(),
+                proof: *sign_registration(&key, &server)?.as_bytes(),
+                registration_code: code.map(|code: &str| SecretText::new(code.to_owned())),
+            }
+            .encode()?;
+            let answer = client
+                .post(format!("{}/v1/accounts", endpoints.server_id))
+                .body(body)
+                .send()
+                .await?;
+            assert_eq!(answer.status().as_u16(), expected, "code {code:?}");
+        }
+        harness.shutdown();
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_parameters_advertise_the_push_relay_and_a_map_host() -> TestResult {
         use pingers_proto::WireDecode as _;
 
