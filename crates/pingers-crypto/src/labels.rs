@@ -78,10 +78,13 @@ pub(crate) const AUTH_CHALLENGE: &[u8] = b"pingers/v1/auth";
 pub(crate) const RLN_EXTERNAL_NULLIFIER: &[u8] = b"pingers/v1/rln";
 /// Prefix of the RLN request digest `x` preimage (design B.4.8). Moved from pingers-anon.
 pub(crate) const RLN_REQUEST_DIGEST: &[u8] = b"pingers/v1/rln/x";
+/// Prefix of the iterated safety-number hash (design B.1). Decision: the design gives none.
+pub(crate) const SAFETY_NUMBER: &[u8] = b"pingers/v1/safety-number";
 
 /// Every private label, so tests can check they are distinct and vectors can name them.
 #[cfg(test)]
-pub(crate) const ALL: [&[u8]; 22] = [
+pub(crate) const ALL: [&[u8]; 23] = [
+    SAFETY_NUMBER,
     AUTH_CHALLENGE,
     RLN_EXTERNAL_NULLIFIER,
     RLN_REQUEST_DIGEST,

@@ -38,6 +38,7 @@ mod padded;
 mod presence;
 mod primitives;
 mod rln;
+mod safety;
 mod secret;
 #[cfg(test)]
 mod test_support;
@@ -76,3 +77,4 @@ pub use presence::{
     sign_knock, tag_matches, verify_knock,
 };
 pub use rln::{RlnPreimageHash, rln_external_nullifier_hash, rln_request_hash};
+pub use safety::{SAFETY_NUMBER_DIGITS, SafetyNumber, inviter_fingerprint, safety_number};
