@@ -20,6 +20,9 @@
 //! logging = "off"                  # or "counts": request totals every counts_interval_s
 //! counts_interval_s = 3600
 //! request_timeout_s = 30           # how long a client may take to send a request body
+//! idle_timeout_s = 120             # how long a connection may stay open with no request in
+//!                                  # progress (both listeners)
+//! max_connections = 4096           # public connections held at once; more are closed
 //! mailbox_db = "/var/lib/pingers/mailboxes.sqlite"   # optional: without it, in memory
 //! mailbox_posts_per_bucket = 60
 //! push_timeout_s = 10              # how long a push relay has to answer
@@ -33,6 +36,7 @@
 //!                                  # on the gateway listener (default: none, header ignored)
 //! served_key_id = 1                # optional: the key served at GET /v1/ohttp/config
 //!                                  # (default: the first [[ohttp.keys]] entry)
+//! max_connections = 256            # gateway connections held at once
 //!
 //! [[ohttp.keys]]                   # every key opens requests; the one not served is the
 //! key_id = 1                       # other rotation slot (1 to 255, distinct)
@@ -353,6 +357,13 @@ pub struct ServerConfig {
     /// How long a client may take to send a whole request body (one-shot requests, the head
     /// of a live channel, direct requests). Live channel bodies are not limited.
     pub request_timeout: Duration,
+    /// How long a connection may stay open with no request in progress, on either listener:
+    /// an idle connection, or one that never finishes sending a request head, is closed.
+    pub idle_timeout: Duration,
+    /// How many connections the public listener holds at once; more are closed on arrival.
+    pub max_connections: NonZeroU32,
+    /// How many connections the gateway listener holds at once.
+    pub gateway_max_connections: NonZeroU32,
     /// The gateway's keys.
     pub ohttp_keys: OhttpKeys,
     /// Where the binary binds the gateway's own listener, which serves only `POST /ohttp` and
@@ -436,6 +447,9 @@ impl ServerConfig {
             quota_store: Database::Memory,
             logging: Logging::Off,
             request_timeout: Duration::from_secs(default_request_timeout()),
+            idle_timeout: Duration::from_secs(default_idle_timeout()),
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+            gateway_max_connections: DEFAULT_GATEWAY_MAX_CONNECTIONS,
             ohttp_keys,
             gateway_listen,
             relays,
@@ -449,6 +463,20 @@ impl ServerConfig {
         }
     }
 }
+
+/// Public connections unless configured: thousands of phones, each holding one HTTP/2
+/// connection for its identified requests (anonymous ones go through the relay).
+const DEFAULT_MAX_CONNECTIONS: NonZeroU32 = match NonZeroU32::new(4096) {
+    Some(count) => count,
+    None => NonZeroU32::MIN,
+};
+
+/// Gateway connections unless configured: only the OHTTP relays connect there, each with a
+/// few pooled connections.
+const DEFAULT_GATEWAY_MAX_CONNECTIONS: NonZeroU32 = match NonZeroU32::new(256) {
+    Some(count) => count,
+    None => NonZeroU32::MIN,
+};
 
 /// New accounts per hour unless configured: far above a household's or a club's sign-ups,
 /// far below what would fill the membership tree.
@@ -484,6 +512,9 @@ struct File {
     counts_interval_s: u64,
     #[serde(default = "default_request_timeout")]
     request_timeout_s: u64,
+    #[serde(default = "default_idle_timeout")]
+    idle_timeout_s: u64,
+    max_connections: Option<u32>,
     ohttp: FileOhttp,
     #[serde(default)]
     metrics: FileMetrics,
@@ -577,6 +608,7 @@ struct FileOhttp {
     #[serde(default)]
     trusted_proxies: Vec<IpAddr>,
     served_key_id: Option<u8>,
+    max_connections: Option<u32>,
     #[serde(default)]
     keys: Vec<FileKey>,
 }
@@ -601,6 +633,10 @@ const fn default_counts_interval() -> u64 {
 
 const fn default_request_timeout() -> u64 {
     30
+}
+
+const fn default_idle_timeout() -> u64 {
+    120
 }
 
 impl ServerConfig {
@@ -662,6 +698,17 @@ impl ServerConfig {
             quota_store: file.quota_db.map_or(Database::Memory, Database::File),
             logging,
             request_timeout: positive_seconds("request_timeout_s", file.request_timeout_s)?,
+            idle_timeout: positive_seconds("idle_timeout_s", file.idle_timeout_s)?,
+            max_connections: count_or(
+                "max_connections",
+                file.max_connections,
+                DEFAULT_MAX_CONNECTIONS,
+            )?,
+            gateway_max_connections: count_or(
+                "ohttp.max_connections",
+                file.ohttp.max_connections,
+                DEFAULT_GATEWAY_MAX_CONNECTIONS,
+            )?,
             ohttp_keys: OhttpKeys::serving(
                 keys,
                 file.ohttp
@@ -692,6 +739,18 @@ fn line_of(text: &str, offset: usize) -> usize {
         .filter(|byte| *byte == b'\n')
         .count()
         .saturating_add(1)
+}
+
+/// A configured count, or `default` when absent; zero is refused.
+fn count_or(
+    field: &'static str,
+    configured: Option<u32>,
+    default: NonZeroU32,
+) -> Result<NonZeroU32, ConfigError> {
+    match configured {
+        None => Ok(default),
+        Some(count) => NonZeroU32::new(count).ok_or(ConfigError::OutOfRange { field }),
+    }
 }
 
 fn positive_seconds(field: &'static str, seconds: u64) -> Result<Duration, ConfigError> {

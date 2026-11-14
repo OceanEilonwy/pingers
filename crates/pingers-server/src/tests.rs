@@ -1143,6 +1143,7 @@ fn live_frames_print_only_their_length() {
     );
 }
 
+mod connections;
 mod credentials;
 mod live;
 mod pushes;

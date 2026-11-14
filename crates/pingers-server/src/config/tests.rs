@@ -281,6 +281,9 @@ fn wiring_fields_are_read_with_defaults() -> TestResult {
     assert_eq!(defaults.mailbox_store, super::Database::Memory);
     assert_eq!(defaults.mailbox_posts_per_bucket.get(), 60);
     assert_eq!(defaults.signups_per_hour.get().get(), 60);
+    assert_eq!(defaults.idle_timeout, Duration::from_secs(120));
+    assert_eq!(defaults.max_connections.get(), 4096);
+    assert_eq!(defaults.gateway_max_connections.get(), 256);
     assert_eq!(defaults.push_timeout, Duration::from_secs(10));
     assert_eq!(defaults.expire_interval, Duration::from_secs(60));
     assert_eq!(
@@ -292,8 +295,8 @@ fn wiring_fields_are_read_with_defaults() -> TestResult {
 
     let config = ServerConfig::parse(&format!(
         "mailbox_db = \"/tmp/m.sqlite\"\nmailbox_posts_per_bucket = 5\nsignups_per_hour = 7\npush_timeout_s = 3\n\
-         expire_interval_s = 9\n{}{}",
-        minimal(&key(1, SECRET_A)),
+         expire_interval_s = 9\nidle_timeout_s = 11\nmax_connections = 12\n{}{}",
+        minimal(&key(1, SECRET_A)).replace("[ohttp]\n", "[ohttp]\nmax_connections = 13\n"),
         relay(7, "https://push.example")
     ))?;
     assert_eq!(
@@ -302,6 +305,9 @@ fn wiring_fields_are_read_with_defaults() -> TestResult {
     );
     assert_eq!(config.mailbox_posts_per_bucket.get(), 5);
     assert_eq!(config.signups_per_hour.get().get(), 7);
+    assert_eq!(config.idle_timeout, Duration::from_secs(11));
+    assert_eq!(config.max_connections.get(), 12);
+    assert_eq!(config.gateway_max_connections.get(), 13);
     assert_eq!(config.push_timeout, Duration::from_secs(3));
     assert_eq!(config.expire_interval, Duration::from_secs(9));
     let target = config
@@ -316,7 +322,7 @@ fn wiring_fields_are_read_with_defaults() -> TestResult {
 #[test]
 fn bad_wiring_fields_are_refused() {
     let with_key = minimal(&key(1, SECRET_A));
-    let cases: [(String, Expected); 6] = [
+    let cases: [(String, Expected); 9] = [
         (
             format!(
                 "{with_key}{}{}",
@@ -355,6 +361,33 @@ fn bad_wiring_fields_are_refused() {
                 }
             )
         }),
+        (format!("idle_timeout_s = 0\n{with_key}"), |error| {
+            matches!(
+                error,
+                ConfigError::OutOfRange {
+                    field: "idle_timeout_s"
+                }
+            )
+        }),
+        (format!("max_connections = 0\n{with_key}"), |error| {
+            matches!(
+                error,
+                ConfigError::OutOfRange {
+                    field: "max_connections"
+                }
+            )
+        }),
+        (
+            with_key.replace("[ohttp]\n", "[ohttp]\nmax_connections = 0\n"),
+            |error| {
+                matches!(
+                    error,
+                    ConfigError::OutOfRange {
+                        field: "ohttp.max_connections"
+                    }
+                )
+            },
+        ),
         (format!("signups_per_hour = 0\n{with_key}"), |error| {
             matches!(
                 error,

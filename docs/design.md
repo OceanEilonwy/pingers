@@ -962,6 +962,25 @@ Welcome messages travel as mailbox posts. Invites reuse mailboxes (below). There
 
 **Removing a member's subscriptions.** A Commit's `subs_del` (the remover lists the removed member's subscription: a Party member's from its roster profile, a Meetup member's as in G.6) is applied in the same transaction as the Commit, so the Commit's own wake never reaches it. The server answers the Commit only after any push already on its way to those subscriptions has been answered, closes the live channels opened with them (the removed member receives nothing further and can send nothing more), and never forwards a later wake to them. `DELETE /v1/groups/{id}/subs/{sub_id}` waits the same way, and `DELETE /v1/groups/{id}` waits for every push to the group in flight: once the server has answered a removal, the push relay hears nothing more for what was removed.
 
+**Limits** (decided 2026-11-14). Every limit is enforced by the server, so no client has to be trusted to keep it:
+
+| What | Limit | Answer |
+|---|---|---|
+| Connections | 4096 on the public listener, 256 on the gateway (`max_connections`, `[ohttp] max_connections`); one more is closed on arrival | close |
+| Idle or slow connections | closed after `idle_timeout_s` (120 s) with no request in progress, including one that never completes a request head; a live channel is a request in progress | GOAWAY |
+| Request head | 16 KiB of header fields; 64 concurrent requests per public connection, 4096 per gateway connection | refused |
+| Request body | 64 KiB, complete within `request_timeout_s` (30 s); a chunked live channel's preamble 20 KiB | 413, 408 |
+| New accounts | `signups_per_hour` (60), counted in `quota_db`; plus the registration code, if set | 429 |
+| Bearers | 4 live per account | oldest dropped |
+| Membership leaves | 4 per account per 24 root epochs | 429 |
+| Privacy Pass | 300 tokens per account per day | 429 |
+| RLN proofs | 8 per identity per scope per bucket (the circuit's message limit) | 403 |
+| Group sessions | one credential buys 64 writes to one group, until the bucket ends | 401 |
+| Subscriptions | 1024 per group | 422 |
+| Live channels | 256 per group; 240 stored frames per channel per bucket (ephemeral frames are not stored or counted) | 429 |
+| Mailbox posts | `mailbox_posts_per_bucket` (60) per mailbox | 429 |
+| Push relay key configs | fetched from the relay at most once per 5 minutes (30 s after a failure), however many ask | cached |
+
 **Push relay API** (a separate service, B.4.9):
 
 ```rust
