@@ -1,6 +1,6 @@
 {
   "name": "party-snapshot-encoding",
-  "description": "Party state snapshot (design B.2, sealed under the next epoch's state key) as canonical CBOR: [1, [party id, name, [[member key, [name, subscription or null]], ...], [spot, ...]]], spots as in party-operation-encoding. Encoded by hand from the layout.",
+  "description": "Party state snapshot (design B.2, sealed under the next epoch's state key) as canonical CBOR: [1, [party id, name, [[member key, [name, subscription or null]], ...], [spot, ...]]], spots as in party-operation-encoding",
   "vectors": [
     {
       "name": "one-member-one-spot",
