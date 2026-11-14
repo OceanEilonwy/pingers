@@ -6,7 +6,9 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use pingers_crypto::{KeyedHashKey, KeyedHashPurpose, PushRelayPrivateKey, keyed_hash};
+use pingers_crypto::{
+    KeyedHashKey, KeyedHashPurpose, PushRelayPrivateKey, PushRelayPublicKey, keyed_hash,
+};
 use pingers_mailbox::{ListedRelays, RelayCredential, RelayTarget};
 use pingers_ohttp::GatewayKey;
 use pingers_proto::{
@@ -28,7 +30,10 @@ use pingers_time::{Clock as _, ManualClock, UnixSeconds};
 use tokio::sync::watch;
 use zeroize::Zeroizing;
 
-use super::{CapturedPush, Endpoints, HARNESS_PUSH_RELAY_ID, HarnessConfig, HarnessError, Service};
+use super::{
+    CapturedPush, Endpoints, HARNESS_MAP_HOST, HARNESS_PUSH_RELAY_ID, HarnessConfig, HarnessError,
+    Service,
+};
 use crate::rng::{random_array, seeded_rng};
 
 /// How long a request body may take to arrive, on the harness clock.
@@ -242,6 +247,30 @@ fn push_relay(
     }))
 }
 
+/// The push relay as `/v1/params` advertises it, as an operator's configuration would, so
+/// clients find its id by its origin.
+fn advertised(url: &RelayUrl, key: &PushRelayPublicKey) -> pingers_proto::PushRelayInfo {
+    pingers_proto::PushRelayInfo {
+        relay_id: HARNESS_PUSH_RELAY_ID,
+        url: url.clone(),
+        key_config_hash: pingers_crypto::key_config_hash(
+            &pingers_proto::PushRelayKeyConfig {
+                key_id: pingers_proto::PushRelayKeyId::new(key.key_id()),
+                public_key: *key.public_key(),
+            }
+            .to_bytes(),
+        ),
+        operator: "pingers-testkit harness".to_owned(),
+    }
+}
+
+/// The map host `/v1/params` advertises.
+fn map_host() -> Result<pingers_proto::MapHostUrl, HarnessError> {
+    pingers_proto::MapHostUrl::new(HARNESS_MAP_HOST.to_owned()).map_err(|_| HarnessError::Keys {
+        service: Service::Server,
+    })
+}
+
 /// Binds, generates keys, and starts the three services on their own runtime thread.
 pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started, HarnessError> {
     let server_listener = bind(config, Service::Server)?;
@@ -293,6 +322,8 @@ pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started,
     let server_config = ServerConfig {
         request_timeout: REQUEST_TIMEOUT,
         metrics: AddressList::new(vec![config.bind]),
+        advertised_push_relays: vec![advertised(&push_url, &push_public)],
+        map_host: Some(map_host()?),
         push_relays: ListedRelays::new([(
             HARNESS_PUSH_RELAY_ID,
             RelayTarget {

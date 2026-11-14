@@ -50,6 +50,9 @@ use crate::time::test_clock;
 /// The relay id devices name (`RelayRef::Listed`) for the harness push relay.
 pub const HARNESS_PUSH_RELAY_ID: RelayId = RelayId::new(1);
 
+/// The map host the harness server advertises in `/v1/params`: a name that never resolves.
+pub const HARNESS_MAP_HOST: &str = "https://maps.harness.invalid";
+
 /// How to start the harness.
 #[derive(Clone, Debug)]
 pub struct HarnessConfig {

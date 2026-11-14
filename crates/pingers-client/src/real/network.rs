@@ -6,11 +6,12 @@
 
 use std::sync::Arc;
 
-use pingers_proto::{KeyConfigHash, ServerId};
+use pingers_ohttp::KeyPins;
+use pingers_proto::ServerId;
 use pingers_time::Timer;
 use pingers_transport::{
     DirectConfig, DirectTransport, KeyPin, OhttpConfig, OhttpTransport, Relay, Router, Routes,
-    TlsRoots, Transport,
+    TlsRoots, Transport, certificates_from_pem,
 };
 
 use pingers_proto::AnonymousCredential;
@@ -23,7 +24,11 @@ use pingers_sync::{
 use super::Outside;
 use crate::ClientError;
 
-/// Where this device's server, OHTTP relay and Privacy Pass issuer are.
+/// Where this device's server, OHTTP relay and push relay are, and the keys they must have.
+///
+/// Official builds carry pin sets for the gateway and the push relay (the key served now and
+/// the next one, design B.12 and proposal §2.1); with a set, first-use pinning is off. The
+/// Privacy Pass issuer key is not pinned at build time: it rotates weekly.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Instance {
     /// The server origin (`https://...`), also the OHTTP gateway.
@@ -31,17 +36,46 @@ pub struct Instance {
     /// The OHTTP relay's origin (`https://...`): requests go to `/ohttp`, the gateway's key
     /// configuration comes from `/v1/ohttp/config`.
     pub relay: String,
-    /// The push relay's origin, for sealed push registration.
+    /// The push relay's origin, for sealed push registration: the server must list it in
+    /// `/v1/params`.
     pub push_relay: Option<String>,
-    /// The pinned hash of the gateway's key configuration, or `None` to pin on first use.
-    pub gateway_key: Option<KeyConfigHash>,
-    /// The Privacy Pass issuer's public key (49-byte compressed P-384), if known yet; the
-    /// server's `/v1/config` gives it otherwise.
-    pub token_issuer_key: Option<Vec<u8>>,
+    /// The gateway key config hashes allowed, or `None` to pin on first use.
+    pub gateway_pins: Option<KeyPins>,
+    /// The push relay key config hashes allowed, or `None` to pin on first use.
+    pub push_relay_pins: Option<KeyPins>,
+    /// Which certificate authorities HTTPS trusts.
+    pub trust: Trust,
+}
+
+/// Which certificate authorities HTTPS connections trust.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Trust {
+    /// Mozilla's root program: every release build.
+    Mozilla,
+    /// Only these DER certificates: a debug build pointed at a local test stack's own CA.
+    Only(Vec<Vec<u8>>),
+}
+
+impl Trust {
+    /// Only the certificates in a PEM bundle.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Transport`] if the bundle holds no valid certificate.
+    pub fn from_pem(pem: &str) -> Result<Self, ClientError> {
+        Ok(Self::Only(certificates_from_pem(pem)?))
+    }
+
+    fn roots(&self) -> Result<TlsRoots, ClientError> {
+        Ok(match self {
+            Self::Mozilla => TlsRoots::mozilla(),
+            Self::Only(certificates) => TlsRoots::from_der(certificates)?,
+        })
+    }
 }
 
 /// The router over the instance: anonymous and stream requests through the OHTTP relay,
-/// identified requests direct to the server. TLS trusts the Mozilla root store.
+/// identified requests direct to the server.
 pub(crate) fn router(
     instance: &Instance,
     timer: Arc<dyn Timer>,
@@ -53,15 +87,17 @@ pub(crate) fn router(
         &format!("{origin}/v1/ohttp/config"),
     )?;
     let pin = instance
-        .gateway_key
+        .gateway_pins
+        .clone()
         .map_or(KeyPin::FirstUse, KeyPin::Pinned);
+    let roots = instance.trust.roots()?;
     let ohttp: Arc<dyn Transport> = Arc::new(OhttpTransport::new(
-        OhttpConfig::new(vec![relay], pin, TlsRoots::mozilla()),
+        OhttpConfig::new(vec![relay], pin, roots.clone()),
         Arc::clone(&timer),
         (outside.rng)(),
     )?);
     let direct = DirectTransport::new(
-        &DirectConfig::new(instance.server.as_str().to_owned(), TlsRoots::mozilla()),
+        &DirectConfig::new(instance.server.as_str().to_owned(), roots),
         timer,
     )?;
     Ok(Arc::new(Router::new(Routes {

@@ -31,6 +31,10 @@ pub(crate) enum Key<'id> {
     AppliedThrough(&'id pingers_proto::GroupId),
     /// The name this device's user goes by in new Parties and joins.
     DisplayName,
+    /// The map host the server last advertised.
+    ServerMapHost,
+    /// The push relay key config hash taken on first use, for a build without pins.
+    PushRelayPin,
 }
 
 impl Key<'_> {
@@ -49,6 +53,8 @@ impl Key<'_> {
                 key.extend_from_slice(group.as_bytes());
             }
             Self::DisplayName => key.extend_from_slice(b"display-name"),
+            Self::ServerMapHost => key.extend_from_slice(b"server-map-host"),
+            Self::PushRelayPin => key.extend_from_slice(b"push-relay-pin"),
         }
         key
     }

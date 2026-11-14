@@ -142,7 +142,10 @@ async fn the_reachability_check_fetches_the_key_config_afresh_and_nothing_else()
     let world = world().await?;
     let next = GatewayKey::generate(2, &mut seeded_rng(98))?.config();
     let pins = pingers_ohttp::KeyPins::new([next.hash(), world.gateway.config.hash()])?;
-    let client = world.client_with(vec![relay_at(world.relay_address()?)?], KeyPin::Pinned(pins))?;
+    let client = world.client_with(
+        vec![relay_at(world.relay_address()?)?],
+        KeyPin::Pinned(pins),
+    )?;
     tokio::time::timeout(STEP, client.check_gateway_key()).await??;
     tokio::time::timeout(
         STEP,

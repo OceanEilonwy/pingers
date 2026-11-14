@@ -127,7 +127,11 @@ fn wake(store: &Store) -> Wake {
 
 /// pingers-sync with no instance: every network call is unavailable.
 fn offline(store: &Store) -> Arc<Net> {
-    Arc::new(Net::new(Arc::clone(&store.backend), None))
+    Arc::new(Net::new(
+        Arc::clone(&store.backend),
+        None,
+        super::push::Learned::new(None),
+    ))
 }
 
 /// A platform with Focus on that ignores every request.
@@ -537,11 +541,20 @@ async fn party_commands_reach_pingers_parties_and_the_store() -> TestResult {
         ));
     }
 
+    // Without an instance nothing is sent: the relay is unreachable by definition.
+    let sync = super::sync::Sync(offline(&store));
+    assert_eq!(
+        sync.check_reachability().await?,
+        crate::snapshot::RelayStatus::Unreachable
+    );
+    assert_eq!(
+        sync.section().await?.relay,
+        crate::snapshot::RelayStatus::Unreachable
+    );
     assert!(matches!(
-        super::sync::Sync(offline(&store))
-            .check_reachability()
+        sync.set_wake_pushes(crate::snapshot::WakePushes::On, None)
             .await,
-        Err(ClientError::Unavailable(crate::Unavailable::Sync))
+        Err(ClientError::Unavailable(crate::Unavailable::NoPushToken))
     ));
 
     parties.leave_party(party).await?;

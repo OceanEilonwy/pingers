@@ -63,4 +63,10 @@ pub enum Unavailable {
     /// No Meetup with this id is live on this device.
     #[error("no such live meetup")]
     NoMeetup,
+    /// Wake-up pushes need the platform's push token, and there is none yet.
+    #[error("no push token from the platform")]
+    NoPushToken,
+    /// Wake-up pushes need a push relay: the build names none, or the server does not list it.
+    #[error("no push relay set up")]
+    NoPushRelay,
 }

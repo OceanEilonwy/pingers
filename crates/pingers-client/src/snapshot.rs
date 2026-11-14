@@ -211,6 +211,9 @@ pub struct ClientSnapshot {
     pub fallbacks: Vec<Fallback>,
     /// Whether anonymous traffic can reach the server now.
     pub relay: RelayStatus,
+    /// The map host the server advertises (`map_host` in `/v1/params`), for the app's map
+    /// host chain: after the user's override, before the publisher's default.
+    pub map_host: Option<pingers_proto::MapHostUrl>,
 }
 
 /// Device-wide settings (design C.2 `settings`).
@@ -938,6 +941,7 @@ mod tests {
             own_position: None,
             fallbacks: Vec::new(),
             relay: RelayStatus::Reachable,
+            map_host: None,
         })
     }
 

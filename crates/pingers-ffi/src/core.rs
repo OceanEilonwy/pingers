@@ -204,8 +204,9 @@ impl From<GeofenceEvent> for GeofenceTransition {
     }
 }
 
-/// The Pingers instance the app talks to: origins only, from the app's build configuration
-/// (`PINGERS_SERVER_HOST`, `PINGERS_OHTTP_RELAY`, `PINGERS_PUSH_RELAY`) or an invite.
+/// The Pingers instance the app talks to, from the app's build configuration
+/// (`PINGERS_SERVER_HOST`, `PINGERS_OHTTP_RELAY`, `PINGERS_PUSH_RELAY`, the key pins, and in
+/// debug builds `PINGERS_EXTRA_CA`) or an invite.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct InstanceConfig {
     /// The server and OHTTP gateway, `https://...`.
@@ -214,6 +215,14 @@ pub struct InstanceConfig {
     pub ohttp_relay: String,
     /// The push relay, `https://...`, if push is set up.
     pub push_relay: Option<String>,
+    /// `PINGERS_GATEWAY_KEY_PINS`: the gateway key config hashes, base64url SHA-256,
+    /// comma-separated (the key served now and the next one). `None` pins on first use.
+    pub gateway_key_pins: Option<String>,
+    /// `PINGERS_PUSH_RELAY_KEY_PINS`, in the same form. `None` pins on first use.
+    pub push_relay_key_pins: Option<String>,
+    /// `PINGERS_EXTRA_CA`: a PEM bundle trusted instead of Mozilla's roots, for a local test
+    /// stack. The app passes it only in debug builds; release builds pass `None`.
+    pub extra_ca_pem: Option<String>,
 }
 
 impl TryFrom<InstanceConfig> for pingers_client::Instance {
@@ -222,12 +231,30 @@ impl TryFrom<InstanceConfig> for pingers_client::Instance {
     fn try_from(config: InstanceConfig) -> Result<Self, CoreError> {
         let server = pingers_proto::ServerId::new(config.server)
             .map_err(|_invalid| CoreError::invalid("the server must be an https:// URL"))?;
+        let pins = |text: Option<String>, what: &'static str| {
+            text.filter(|text| !text.trim().is_empty())
+                .map(|text| pingers_client::KeyPins::parse(&text))
+                .transpose()
+                .map_err(|_invalid| CoreError::invalid(what))
+        };
         Ok(Self {
             server,
             relay: config.ohttp_relay,
             push_relay: config.push_relay,
-            gateway_key: None,
-            token_issuer_key: None,
+            gateway_pins: pins(
+                config.gateway_key_pins,
+                "the gateway key pins must be base64url SHA-256 hashes",
+            )?,
+            push_relay_pins: pins(
+                config.push_relay_key_pins,
+                "the push relay key pins must be base64url SHA-256 hashes",
+            )?,
+            trust: match config.extra_ca_pem.filter(|pem| !pem.trim().is_empty()) {
+                None => pingers_client::Trust::Mozilla,
+                Some(pem) => pingers_client::Trust::from_pem(&pem).map_err(|_invalid| {
+                    CoreError::invalid("the extra CA is not a PEM certificate")
+                })?,
+            },
         })
     }
 }
@@ -775,6 +802,59 @@ mod tests {
             server: "https://pingers.invalid".into(),
             ohttp_relay: "https://relay.pingers.invalid".into(),
             push_relay: None,
+            gateway_key_pins: None,
+            push_relay_key_pins: None,
+            extra_ca_pem: None,
+        }
+    }
+
+    /// Two pins as `cargo xtask pins` prints them.
+    const TWO_PINS: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE,\
+                            AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI";
+
+    #[test]
+    fn build_pins_become_pin_sets_and_blank_ones_mean_first_use() -> Result<(), CoreError> {
+        let pinned = pingers_client::Instance::try_from(InstanceConfig {
+            gateway_key_pins: Some(TWO_PINS.into()),
+            push_relay_key_pins: Some(" ".into()),
+            ..instance()
+        })?;
+        let hashes: Vec<[u8; 32]> = pinned
+            .gateway_pins
+            .as_ref()
+            .map(|pins| pins.hashes().iter().map(|hash| *hash.as_bytes()).collect())
+            .unwrap_or_default();
+        assert_eq!(hashes, [[1; 32], [2; 32]]);
+        assert_eq!(pinned.push_relay_pins, None);
+        assert_eq!(pinned.trust, pingers_client::Trust::Mozilla);
+
+        let unpinned = pingers_client::Instance::try_from(instance())?;
+        assert_eq!(unpinned.gateway_pins, None);
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_pins_or_ca_are_refused() {
+        for config in [
+            InstanceConfig {
+                gateway_key_pins: Some("not-a-pin".into()),
+                ..instance()
+            },
+            InstanceConfig {
+                push_relay_key_pins: Some(format!("{TWO_PINS},")),
+                ..instance()
+            },
+            InstanceConfig {
+                extra_ca_pem: Some(
+                    "-----BEGIN CERTIFICATE-----\n!\n-----END CERTIFICATE-----".into(),
+                ),
+                ..instance()
+            },
+        ] {
+            assert!(matches!(
+                pingers_client::Instance::try_from(config),
+                Err(CoreError::Invalid { .. })
+            ));
         }
     }
 
@@ -865,9 +945,18 @@ mod tests {
         fakes.set_server(ServerSection {
             fallbacks: Vec::new(),
             relay: pingers_client::snapshot::RelayStatus::KeyMismatch,
+            map_host: Some(
+                pingers_proto::MapHostUrl::new("https://maps.pingers.invalid".into())
+                    .map_err(|_| CoreError::invalid("map host"))?,
+            ),
         });
         let check = core.check_reachability().await?;
         assert_eq!(check.status, RelayStatus::KeyMismatch);
+        // The server's map host reaches the app's map host chain through the snapshot.
+        assert_eq!(
+            core.snapshot().server_map_host().as_deref(),
+            Some("https://maps.pingers.invalid")
+        );
         assert!(
             check
                 .text
@@ -999,11 +1088,11 @@ mod tests {
             .map_err(|_| CoreError::invalid("store"))?;
         let core = Core::open(db_path("real"), instance(), app.clone(), app).await?;
         assert!(core.snapshot().home().parties.is_empty(), "a fresh store");
-        // What waits on pingers-sync says so, rather than claiming an answer.
-        let Err(CoreError::Unavailable { reason }) = core.check_reachability().await else {
-            return Err(CoreError::invalid("a check without pingers-sync"));
-        };
-        assert_eq!(reason, "unavailable: waits on pingers-sync");
+        // The relay is on a reserved name that never resolves: the check runs and says so.
+        assert_eq!(
+            core.check_reachability().await?.status,
+            RelayStatus::Unreachable
+        );
         let party = PartyId {
             hex: PARTY_HEX.into(),
         };

@@ -177,6 +177,7 @@ async fn open_builds_the_crates_and_publishes_their_sections() -> Result<(), Tes
     fakes.set_server(ServerSection {
         fallbacks: vec![Fallback::PrivacyPassOnly],
         relay: RelayStatus::KeyMismatch,
+        map_host: None,
     });
     fakes.set_meetups(MeetupsSection {
         meetups: Vec::new(),
@@ -201,6 +202,7 @@ async fn open_builds_the_crates_and_publishes_their_sections() -> Result<(), Tes
         own_position: pipeline.own_position,
         fallbacks: vec![Fallback::PrivacyPassOnly],
         relay: RelayStatus::KeyMismatch,
+        map_host: None,
     };
     assert_eq!(*snapshot, expected);
     assert_eq!(fakes.section_reads(), reads.saturating_add(4));
@@ -415,6 +417,7 @@ async fn a_reachability_check_reaches_sync_and_answers_its_status() -> Result<()
     rig.fakes.set_server(ServerSection {
         fallbacks: Vec::new(),
         relay: RelayStatus::Unreachable,
+        map_host: None,
     });
     let reads = rig.fakes.section_reads();
     assert_eq!(
@@ -635,6 +638,7 @@ async fn subscribers_see_each_published_snapshot() -> Result<(), TestError> {
     rig.fakes.set_server(ServerSection {
         fallbacks: Vec::new(),
         relay: RelayStatus::Unreachable,
+        map_host: None,
     });
     let published = rig.client.publish_snapshot().await?;
     assert!(receiver.has_changed().unwrap_or(false));

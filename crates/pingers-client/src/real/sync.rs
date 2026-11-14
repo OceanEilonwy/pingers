@@ -56,16 +56,22 @@ const MAILBOX_LIFETIME: Duration = Duration::from_hours(24);
 
 /// The engine and the outbox.
 pub(crate) struct Net {
-    backend: Arc<Backend>,
-    engine: Option<Arc<SyncEngine>>,
+    pub(super) backend: Arc<Backend>,
+    pub(super) engine: Option<Arc<SyncEngine>>,
     outbox: Mutex<Vec<Outbound>>,
     relay: Mutex<RelayStatus>,
     clock_skew: AtomicBool,
-    key_mismatch: AtomicBool,
+    pub(super) key_mismatch: AtomicBool,
+    /// The server's parameters and the push relay's key, once fetched (`push.rs`).
+    pub(super) learned: super::push::Learned,
 }
 
 impl Net {
-    pub(crate) fn new(backend: Arc<Backend>, engine: Option<Arc<SyncEngine>>) -> Self {
+    pub(crate) fn new(
+        backend: Arc<Backend>,
+        engine: Option<Arc<SyncEngine>>,
+        learned: super::push::Learned,
+    ) -> Self {
         Self {
             backend,
             engine,
@@ -73,10 +79,11 @@ impl Net {
             relay: Mutex::new(RelayStatus::Unreachable),
             clock_skew: AtomicBool::new(false),
             key_mismatch: AtomicBool::new(false),
+            learned,
         }
     }
 
-    fn engine(&self) -> Result<&SyncEngine, ClientError> {
+    pub(super) fn engine(&self) -> Result<&SyncEngine, ClientError> {
         self.engine.as_deref().ok_or(Unavailable::Sync.into())
     }
 
@@ -90,13 +97,19 @@ impl Net {
     }
 
     /// What a network result says about the relay and the clock.
-    fn observe<T>(&self, result: &Result<T, SyncError>) {
+    pub(super) fn observe<T>(&self, result: &Result<T, SyncError>) {
         let status = match result {
             Ok(_) => RelayStatus::Reachable,
             Err(SyncError::NoRelay { .. }) => RelayStatus::Unreachable,
             Err(SyncError::RelayKeyMismatch) => {
                 self.key_mismatch.store(true, Ordering::Relaxed);
                 RelayStatus::KeyMismatch
+            }
+            // The OHTTP relay answered; only the push relay's key is wrong. No push token is
+            // sealed to it until the user resolves the notice.
+            Err(SyncError::PushRelayKeyMismatch) => {
+                self.key_mismatch.store(true, Ordering::Relaxed);
+                RelayStatus::Reachable
             }
             Err(SyncError::ClockSkew { .. }) => {
                 self.clock_skew.store(true, Ordering::Relaxed);
@@ -392,6 +405,13 @@ impl ServerPort for Net {
     async fn pull_group_logs(&self) -> Result<(), PortError> {
         // A Party may have changed: the wake's next Party view reads it again.
         self.flush().await.map_err(|error| port_error(&error))?;
+        // The server's parameters once per process (the map host, the push relays); a failure
+        // here is the next wake's to retry and does not stop the pull.
+        if let Err(error @ (ClientError::Store(_) | ClientError::Records(_))) =
+            self.server_params().await
+        {
+            return Err(port_error(&error));
+        }
         self.pull_all()
             .await
             .map(drop)
@@ -471,21 +491,43 @@ pub(crate) struct Sync(pub(crate) Arc<Net>);
 
 #[async_trait]
 impl SyncPort for Sync {
-    /// WAITING(push relay key): sealing a token needs the push relay's public key, which the
-    /// instance settings do not carry yet.
-    async fn push_tokens_changed(&self, _tokens: Option<PushTokens>) -> Result<(), ClientError> {
-        Err(Unavailable::Sync.into())
+    /// New mailboxes and subscriptions are sealed with the new tokens from now on; with pushes
+    /// off nothing is sealed. Mailboxes and subscriptions already registered keep their old
+    /// seal until they expire or are renewed.
+    async fn push_tokens_changed(&self, tokens: Option<PushTokens>) -> Result<(), ClientError> {
+        let setting = self
+            .0
+            .backend
+            .store(|session, _clock, _rng| Ok(session.settings().wake_pushes()?))
+            .await?;
+        match (setting, tokens) {
+            (StoredPushes::Disabled, _) => Ok(()),
+            (StoredPushes::Enabled, None) => {
+                self.0.engine()?.set_wake_push(None);
+                Ok(())
+            }
+            (StoredPushes::Enabled, Some(tokens)) => self.0.seal_wake_push(&tokens).await,
+        }
     }
 
-    /// "No wake-up pushes" seals no token anywhere; turning them on needs the push relay key
-    /// (see `push_tokens_changed`).
+    /// "No wake-up pushes" seals no token anywhere; turning them on fetches the push relay's
+    /// key (checked against its pins) and seals the platform's token to it.
     async fn set_wake_pushes(
         &self,
         setting: WakePushes,
-        _tokens: Option<PushTokens>,
+        tokens: Option<PushTokens>,
     ) -> Result<(), ClientError> {
         match setting {
-            WakePushes::On => Err(Unavailable::Sync.into()),
+            WakePushes::On => {
+                let tokens = tokens.ok_or(Unavailable::NoPushToken)?;
+                self.0.seal_wake_push(&tokens).await?;
+                self.0
+                    .backend
+                    .store(|session, _clock, _rng| {
+                        Ok(session.settings().set_wake_pushes(StoredPushes::Enabled)?)
+                    })
+                    .await
+            }
             WakePushes::NoWakePushes => {
                 if let Some(engine) = &self.0.engine {
                     engine.set_wake_push(None);
@@ -500,17 +542,30 @@ impl SyncPort for Sync {
         }
     }
 
-    /// WAITING(pingers-sync): the check is sync's gateway key-config fetch through the relay,
-    /// which the engine does not expose as a standalone call yet. Answering `Unreachable` would
-    /// claim a check that never ran.
+    /// The gateway's key config fetched afresh through the relay and checked against its pin
+    /// (pingers-sync's `check_relay`): nothing reaches the gateway, nothing about the device
+    /// goes with it. Without an instance nothing is sent and the answer is `Unreachable`.
     async fn check_reachability(&self) -> Result<RelayStatus, ClientError> {
-        Err(Unavailable::Sync.into())
+        let Some(engine) = &self.0.engine else {
+            *self.0.relay.lock().unwrap_or_else(PoisonError::into_inner) = RelayStatus::Unreachable;
+            return Ok(RelayStatus::Unreachable);
+        };
+        let result = engine.check_relay(WakeBudget::UNLIMITED).await;
+        self.0.observe(&result);
+        match result {
+            Ok(()) => Ok(RelayStatus::Reachable),
+            Err(SyncError::NoRelay { .. }) => Ok(RelayStatus::Unreachable),
+            Err(SyncError::RelayKeyMismatch) => Ok(RelayStatus::KeyMismatch),
+            Err(error) => Err(error.into()),
+        }
     }
 
     async fn section(&self) -> Result<ServerSection, ClientError> {
+        let map_host = self.0.map_host().await?;
         Ok(ServerSection {
             fallbacks: Vec::new(),
             relay: *self.0.relay.lock().unwrap_or_else(PoisonError::into_inner),
+            map_host,
         })
     }
 }

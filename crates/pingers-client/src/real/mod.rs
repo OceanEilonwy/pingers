@@ -21,6 +21,7 @@ mod meetups;
 mod network;
 mod parties;
 mod party_log;
+mod push;
 mod records;
 mod sync;
 mod wake;
@@ -39,7 +40,7 @@ use pingers_time::{Clock, SystemClock, Timer};
 use pingers_transport::TokioTimer;
 use rand_core::UnwrapErr;
 
-pub use network::Instance;
+pub use network::{Instance, Trust};
 
 use crate::ports::Crates;
 use crate::{ClientError, Platform};
@@ -100,7 +101,16 @@ impl Crates {
             )?),
             _ => None,
         };
-        let net = Arc::new(sync::Net::new(Arc::clone(&backend), engine));
+        let learned = push::Learned::new(instance.and_then(|instance| {
+            instance
+                .push_relay
+                .clone()
+                .map(|origin| push::PushRelaySetup {
+                    origin,
+                    pins: instance.push_relay_pins.clone(),
+                })
+        }));
+        let net = Arc::new(sync::Net::new(Arc::clone(&backend), engine, learned));
         let meetups = Arc::new(meetups::Meetups::new(
             Arc::clone(&backend),
             Arc::clone(&net),

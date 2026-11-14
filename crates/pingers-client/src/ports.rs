@@ -219,6 +219,8 @@ pub struct ServerSection {
     pub fallbacks: Vec<Fallback>,
     /// Whether anonymous traffic can reach the server.
     pub relay: RelayStatus,
+    /// The map host the server advertises (`map_host` in `/v1/params`), once read.
+    pub map_host: Option<pingers_proto::MapHostUrl>,
 }
 
 /// pingers-meetup-session's part of the snapshot.

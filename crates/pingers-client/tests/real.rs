@@ -240,7 +240,17 @@ async fn a_party_its_spot_and_an_invite_show_in_the_snapshot() -> Result<(), Tes
     assert_eq!(snapshot.relay, RelayStatus::Unreachable);
     assert!(matches!(
         rig.client.set_wake_pushes(WakePushes::On).await,
-        Err(ClientError::Unavailable(Unavailable::Sync))
+        Err(ClientError::Unavailable(Unavailable::NoPushToken))
+    ));
+    rig.platform
+        .set_push_registration(Some(pingers_testkit::PushRegistration {
+            platform: pingers_proto::PushPlatform::UnifiedPush,
+            token: pingers_proto::PushToken::from_bytes(b"endpoint".to_vec()),
+        }));
+    // A token, but no instance and so no push relay to seal it to.
+    assert!(matches!(
+        rig.client.set_wake_pushes(WakePushes::On).await,
+        Err(ClientError::Unavailable(Unavailable::NoPushRelay))
     ));
     rig.client.set_wake_pushes(WakePushes::NoWakePushes).await?;
     assert_eq!(

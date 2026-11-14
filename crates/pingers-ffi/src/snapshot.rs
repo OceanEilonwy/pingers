@@ -153,6 +153,13 @@ impl Snapshot {
         Ok(screens::server::server_sees(&self.0, party.try_into()?)?.into())
     }
 
+    /// The map host the user's Pingers server advertises (`map_host` in `/v1/params`), for
+    /// the map host chain: after the user's override, before the publisher's default.
+    #[must_use]
+    pub fn server_map_host(&self) -> Option<String> {
+        self.0.map_host.as_ref().map(|url| url.as_str().to_owned())
+    }
+
     /// The live Meetups, newest last.
     #[must_use]
     pub fn meetups(&self) -> Vec<MeetupId> {

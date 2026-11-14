@@ -136,7 +136,10 @@ mod tests {
     fn padding_and_spaces_are_accepted() -> Result<(), OhttpError> {
         let text = " -_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_s= , \
                     __________________________________________8";
-        assert_eq!(KeyPins::parse(text)?, KeyPins::new([hash(0xfb), hash(0xff)])?);
+        assert_eq!(
+            KeyPins::parse(text)?,
+            KeyPins::new([hash(0xfb), hash(0xff)])?
+        );
         Ok(())
     }
 

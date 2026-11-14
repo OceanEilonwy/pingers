@@ -146,6 +146,7 @@ impl FakeCrates {
             server: ServerSection {
                 fallbacks: Vec::new(),
                 relay: RelayStatus::Reachable,
+                map_host: None,
             },
             meetups: MeetupsSection::default(),
             section_reads: 0,
