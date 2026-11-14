@@ -201,7 +201,7 @@ fun NewPartyScreen(state: NewPartyState, repo: PingersRepository, nav: Navigator
                 )
             }
         }
-        ServerCard(text.advanced, text.advancedDetail, onClick = { nav.go(Route.Advanced) })
+        ServerCard(text.advanced, text.advancedDetail, onClick = { nav.go(Route.Advanced) }, privacy = state.privacy)
         Text(text.later, style = body(14.sp, color = Pc.Muted, lineHeight = 1.5f))
     }
 }
@@ -561,6 +561,7 @@ fun PartyScreen(state: PartyState, repo: PingersRepository, nav: Navigator) {
                 nav.go(Route.PartySettings)
             },
             modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp).testTag(E2eTags.PARTY_SETTINGS_OPEN),
+            privacy = state.privacy,
         )
     }
 }

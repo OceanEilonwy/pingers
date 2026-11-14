@@ -139,6 +139,8 @@ pub struct SafetyCodesView {
     pub members_heading: String,
     /// The members.
     pub members: Vec<SafetyRowView>,
+    /// What to do when nobody else is in the Party yet.
+    pub empty: Option<String>,
     /// That checking is optional.
     pub footnote: String,
 }
@@ -294,6 +296,7 @@ impl Snapshot {
             mark: text.mark,
             checked_note: text.checked_note,
             members_heading: text.members_heading,
+            empty: text.empty,
             members: view
                 .members
                 .iter()

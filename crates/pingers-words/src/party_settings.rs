@@ -342,6 +342,8 @@ pub struct SafetyCodesText {
     pub members_heading: String,
     /// The members.
     pub members: Vec<SafetyRowText>,
+    /// What to do when nobody else is in the Party yet.
+    pub empty: Option<String>,
     /// That checking is optional.
     pub footnote: String,
 }
@@ -387,6 +389,11 @@ pub fn safety_codes(language: Language, view: &SafetyCodes) -> SafetyCodesText {
             .filter(|shown| shown.checked == SafetyCheck::Checked)
             .map(|shown| format!("{} is checked", shown.person.name.as_str())),
         members_heading: "Members".into(),
+        empty: view.members.is_empty().then(|| {
+            "Nobody else is in this Party yet. Once people join, compare codes with each of them \
+             here."
+                .into()
+        }),
         members: view
             .members
             .iter()
@@ -591,6 +598,7 @@ mod tests {
         assert_eq!(text.subtitle, "Climbing crew");
         assert_eq!(text.code_heading.as_deref(), Some("Your code with Ana"));
         assert_eq!(text.code_groups.len(), 12);
+        assert_eq!(text.empty, None);
         assert_eq!(text.code_groups.first().map(String::as_str), Some("48210"));
         assert_eq!(
             text.mark.as_deref(),
@@ -611,6 +619,29 @@ mod tests {
                 ("Dev", "Not checked"),
                 ("Eli", "Not checked")
             ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn safety_codes_with_nobody_else_say_what_to_do() -> Result<(), FixtureError> {
+        let mut snapshot = fixtures::snapshot()?;
+        for party in &mut snapshot.parties {
+            party
+                .members
+                .retain(|member| member.me == pingers_screens::common::Me::Me);
+        }
+        let text = safety_codes(
+            EN,
+            &codes_screen(&snapshot, fixtures::climbing_crew(), None)?,
+        );
+        assert!(text.members.is_empty());
+        assert_eq!(
+            text.empty.as_deref(),
+            Some(
+                "Nobody else is in this Party yet. Once people join, compare codes with each of \
+                 them here."
+            )
         );
         Ok(())
     }

@@ -387,6 +387,7 @@ class FakeSection4(private val variants: Set<String>) {
             mark = "Codes match · Mark ${who.name} as checked".takeUnless { isChecked },
             checkedNote = "${who.name} is checked".takeIf { isChecked },
             membersHeading = "Members",
+            empty = null,
             members = members.map {
                 SafetyRowView(
                     member = uniffi.pingers.MemberId(it.leaf),

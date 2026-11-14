@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.pingers.app.data.PartyColour
 import org.pingers.app.data.Person
+import org.pingers.app.data.PrivacyLevel
 import org.pingers.app.data.Tint
 import org.pingers.app.ui.theme.Pc
 import org.pingers.app.ui.theme.SectionStyle
@@ -484,7 +485,13 @@ fun IconBadge(icon: ImageVector, tint: Color, background: Color, size: Dp = 40.d
 
 /** "pingers.flat7.org · Full privacy": opens the server's privacy details. */
 @Composable
-fun ServerCard(title: String, subtitle: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun ServerCard(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    privacy: PrivacyLevel? = PrivacyLevel.Full,
+) {
     val shape = RoundedCornerShape(16.dp)
     Row(
         modifier
@@ -498,7 +505,11 @@ fun ServerCard(title: String, subtitle: String, onClick: () -> Unit, modifier: M
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Icon(PIcons.ShieldCheck, null, tint = Pc.BlueDark, modifier = Modifier.size(20.dp))
+        if (privacy == PrivacyLevel.Reduced) {
+            Icon(PIcons.ShieldAlert, null, tint = Pc.OrangeText, modifier = Modifier.size(20.dp))
+        } else {
+            Icon(PIcons.ShieldCheck, null, tint = Pc.BlueDark, modifier = Modifier.size(20.dp))
+        }
         TwoLines(title, subtitle, Modifier.weight(1f), body(15.sp, 600), body(12.sp, color = Pc.Muted))
         ChevronIcon()
     }

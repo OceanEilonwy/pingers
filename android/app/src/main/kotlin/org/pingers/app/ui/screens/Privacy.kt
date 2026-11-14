@@ -49,6 +49,7 @@ import org.pingers.app.Navigator
 import org.pingers.app.R
 import org.pingers.app.Route
 import org.pingers.app.data.PingersRepository
+import org.pingers.app.data.PrivacyLevel
 import org.pingers.app.data.PrivacyState
 import org.pingers.app.data.ServerViewState
 import org.pingers.app.data.Visibility
@@ -188,7 +189,11 @@ fun ServerViewScreen(state: ServerViewState, nav: Navigator) {
                     Text(state.server, style = body(15.sp, 600))
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         if (state.selfHosted) Tag(stringResource(R.string.server_self_hosted), Pc.Body, Pc.Chip)
-                        Tag(privacyLabel(state.privacy), Pc.BlueDark, Pc.BlueTint, icon = PIcons.ShieldCheck)
+                        if (state.privacy == PrivacyLevel.Reduced) {
+                            Tag(privacyLabel(state.privacy), Pc.OrangeText, Pc.OrangeTint, icon = PIcons.ShieldAlert)
+                        } else {
+                            Tag(privacyLabel(state.privacy), Pc.BlueDark, Pc.BlueTint, icon = PIcons.ShieldCheck)
+                        }
                     }
                 }
             }

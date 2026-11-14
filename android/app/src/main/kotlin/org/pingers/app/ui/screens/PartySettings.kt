@@ -299,8 +299,13 @@ fun SafetyCodesScreen(state: SafetyCodesView?, repo: PingersRepository, nav: Nav
                 }
             }
         }
-        Heading(state.membersHeading)
-        Card {
+        val empty = state.empty
+        if (empty != null) {
+            Note(empty)
+        } else {
+            Heading(state.membersHeading)
+        }
+        if (state.members.isNotEmpty()) Card {
             state.members.forEachIndexed { i, m ->
                 if (i > 0) RowDivider()
                 Row(
