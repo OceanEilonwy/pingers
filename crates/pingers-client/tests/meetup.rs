@@ -158,8 +158,13 @@ impl Phone {
 
     /// A fix in the Spot, taken now.
     async fn at_the_spot(&self) -> TestResult {
+        self.at(SPOT_LATITUDE).await
+    }
+
+    /// A fix at `latitude` on the Spot's meridian, taken now.
+    async fn at(&self, latitude: f64) -> TestResult {
         let fix = Fix {
-            coordinate: Coordinate::new(SPOT_LATITUDE, SPOT_LONGITUDE)?,
+            coordinate: Coordinate::new(latitude, SPOT_LONGITUDE)?,
             accuracy: Meters::new(8.0)?,
             taken_at: self.clock.now(),
         };
@@ -416,8 +421,8 @@ impl Meeting<'_> {
         Err(TestError::Missing("Ana's position on Ben's phone"))
     }
 
-    /// Ana leaves: her keys go at once and Ben sees her go; then Ben, alone, leaves too, and
-    /// the Meetup is over on both phones.
+    /// Ana taps Leave: her keys go at once and Ben sees her go; then Ben, alone, walks out of
+    /// the Spot, his phone leaves once the exit is confirmed, and the Meetup is over on both.
     async fn both_leave(&self) -> TestResult {
         let Self {
             ana, ben, meetup, ..
@@ -429,15 +434,22 @@ impl Meeting<'_> {
                 .is_ok_and(|shown| shown.others.is_empty())
         })
         .await?;
-        ben.client.leave_meetup(meetup).await?;
-        for phone in [ana, ben] {
+        for _fix in 0..10 {
+            if ben.client.snapshot().meetups.is_empty() {
+                break;
+            }
+            ben.clock.advance(Duration::from_secs(30));
+            ben.at(SPOT_LATITUDE + 0.01).await?;
+        }
+        // Ana is still in the Spot, dwelling; Ben is out of it, idle.
+        for (phone, mode) in [(ana, LocationMode::Dwell), (ben, LocationMode::Idle)] {
             let snapshot = phone.client.snapshot();
             assert!(snapshot.meetups.is_empty());
             assert_eq!(snapshot.alert, None);
             assert_eq!(phone.meetup_rows()?, 0);
             let ended = RecordedEvent::MeetupEnded { meetup };
             assert!(phone.events.events().contains(&ended));
-            assert_eq!(phone.platform.location_mode(), LocationMode::Dwell);
+            assert_eq!(phone.platform.location_mode(), mode);
             let summary = snapshot
                 .ended_meetup
                 .clone()
