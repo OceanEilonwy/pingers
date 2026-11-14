@@ -18,6 +18,8 @@
 //! in front of it. Logging is off by default and never records addresses, paths or regions
 //! ([`counts`]).
 //!
+//! It also runs its own OHTTP gateway ([`gateway`]) for downloads through a privacy relay.
+//!
 //! What it learns: a client's IP address and which region files it downloads (unless the
 //! client fetches through an OHTTP relay). Never viewports, positions or searches: searches
 //! run on the device against the downloaded index.

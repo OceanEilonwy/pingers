@@ -15,6 +15,8 @@ Region ids are lowercase `[a-z0-9-]` segments joined by `/`, for example
 | `GET /<stem>.json` | Region manifest | `public, max-age=300` |
 | `GET /<stem>.pmtiles` | PMTiles pack (`application/vnd.pmtiles`) | `public, max-age=31536000, immutable` |
 | `GET /<stem>.places.tsv` | Place search index | `public, max-age=31536000, immutable` |
+| `POST /ohttp` | The host's own OHTTP gateway (`message/ohttp-req`), below | `no-store` |
+| `GET /ohttp-keys` | The gateway's key config (`application/ohttp-keys`) | `public, max-age=300` |
 
 - Only regions on the `hosted` allow-list are served. Other files are answered 404, even if
   they are in the directory.
@@ -30,7 +32,30 @@ Region ids are lowercase `[a-z0-9-]` segments joined by `/`, for example
   comparison. Files are streamed from disk, never read whole into memory.
 - The catalog lists the manifest of every allow-listed region in the directory, sorted by id.
   In cache mode it lists every allow-listed region in the region list. A region that has not
-  been cut yet appears as `{"id","name","group","status":"on_demand"}`.
+  been cut yet appears as `{"id","name","group","status":"on_demand"}`. It answers byte ranges
+  and `If-Range` like a file, so a client can fetch a large catalog in pieces of one size.
+
+### Downloads through a privacy relay
+
+A phone with "Download maps through privacy relay" on seals each request to this host's key and
+sends it through its OHTTP relay to its Pingers server, which forwards the sealed bytes here
+(`map_host_gateway` in the server's configuration; design B.12). So the relay sees the phone's
+address but not the request, the server sees neither the address nor the file, and this host sees
+the file but only the server's address.
+
+- `POST /ohttp` opens the request (a `GET` or `HEAD` of any route above; anything else gets 405
+  inside) and answers it exactly as a direct request, keeping only `content-type`,
+  `content-range`, `etag`, `retry-after` and `accept-ranges`. Of the request's headers only
+  `range`, `if-range` and `if-none-match` are used.
+- The encoded answer is padded with zeros (RFC 9292) to a power of two of at least 1 KiB, or to
+  the `pingers-pad` length the request names if larger, at most just under 1 MiB; an answer that
+  would not fit is a 413 inside. Phones ask for 256 KiB pieces padded to 256 KiB, so every piece
+  of every download looks the same.
+- A request that does not open is 400, one over 8 KiB is 413, a wrong media type is 415.
+- The key (X25519, key id 1) is 64 hex digits in `ohttp_key_file`, by default `.ohttp-key` in
+  the directory (never served: the host serves no dotfiles). The host makes it on first start,
+  readable by its owner only. If it is lost, phones that saw the old key stop relayed downloads
+  until their users trust the new one; keep it out of `rsync --delete`.
 
 ## Configuration
 
@@ -41,6 +66,7 @@ max_disk = "60GB"                 # B, KB, MB, GB, TB (powers of 1000) or KiB, M
 hosted = ["oceania", "europe/germany", "north-america/us/california"]
 logging = "off"                   # or "counts"
 counts_interval_s = 3600
+ohttp_key_file = "/var/lib/pingers-maps/ohttp-key"   # optional; default <directory>/.ohttp-key
 
 [max_zoom]                        # optional; the longest matching prefix wins
 "europe/germany" = 13
@@ -90,7 +116,8 @@ cuts, evictions and directory disk usage against `max_disk`. The host never logs
 client addresses, paths, regions or single requests. It sets no cookies.
 
 The host still sees each client's IP address and which region files that client downloads,
-unless the client fetches through an OHTTP relay. It never sees viewports, positions or
+unless the client fetches through its privacy relay and Pingers server (above): then it sees the
+server's address instead. It never sees viewports, positions or
 searches, because clients search on the device against the downloaded index.
 
 ## Deployment

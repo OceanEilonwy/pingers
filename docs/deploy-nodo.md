@@ -59,7 +59,7 @@ All listeners are on loopback:
 | 9471 | pingers-server OHTTP gateway (h2c; only `POST /ohttp`, `GET /v1/ohttp/config`) | pingers-ohttp-relay only |
 | 9472 | pingers-push-relay (HTTP/1.1) | Caddy, for `push.example.org`; pingers-server |
 | 9473 | pingers-ohttp-relay (h2c) | Caddy, for `ohttp.example.org` |
-| 9474 | pingers-map-host (HTTP/1.1) | Caddy, for `maps.example.org` |
+| 9474 | pingers-map-host (HTTP/1.1; `POST /ohttp` is its own OHTTP gateway) | Caddy, for `maps.example.org`; pingers-server (map downloads through the relay) |
 
 ```
 phone ──TLS 1.3, X25519MLKEM768──▶ [router :443] ──▶ nodo Caddy (ACME certificates)
@@ -68,15 +68,18 @@ phone ──TLS 1.3, X25519MLKEM768──▶ [router :443] ──▶ nodo Caddy 
             push.…     → 127.0.0.1:9472  h1    pingers-push-relay (GET /v1/config; /v1/push hidden)
             maps.…     → 127.0.0.1:9474  h1    pingers-map-host
 pingers-server ──loopback──▶ 127.0.0.1:9472 /v1/push
+pingers-server ──loopback──▶ 127.0.0.1:9474 /ohttp, /ohttp-keys   (map downloads through the relay, still sealed)
 pingers-push-relay ──TLS──▶ FCM, Google OAuth, UnifiedPush servers
 ```
 
 Firewall, from the manifests and the references between settings: pingers-server has no
-outbound access at all and reaches only 9472, by referencing the push relay's `server-url`.
+outbound access at all and reaches only 9472, by referencing the push relay's `server-url`, and
+9474, by referencing the map host's `gateway-url`.
 pingers-ohttp-relay reaches only 9471, by referencing the server's `gateway-url`. Caddy reaches
 only the web upstreams, so it cannot reach 9471. Only pingers-push-relay has
 `outbound = "internet"`. nodo refuses dependency cycles, and the references run one way:
-`pingers-ohttp-relay → pingers-server → pingers-push-relay`.
+`pingers-ohttp-relay → pingers-server → pingers-push-relay` and `pingers-server →
+pingers-map-host`, so the map host is installed before the server.
 
 ### 1.1 Settings and secrets
 
@@ -91,7 +94,7 @@ config with the gateway keys and the registration code stays inside the volume)
 | `server_id` | url, required | | `server_id`, such as `https://pingers.example.org`. The server's identity: changing it makes a new server |
 | `operator` | string, required | `$(pingers-push-relay.operator)` | `server_operator` |
 | `ohttp_relay_url` | url, required | | `ohttp_relay_urls`, such as `https://ohttp.example.org/ohttp` |
-| `map_host` | url, required | | `map_host`, such as `https://maps.example.org` |
+| `map_host` | url, required | | `map_host`, such as `https://maps.example.org`. Map downloads through the relay are forwarded to this device's map host on loopback (`map_host_gateway`, from pingers-map-host's `gateway-url`) |
 | `logging` | enum `off`/`counts` | `off` | `logging` |
 | `registration_code` | **secret**, generated (16 bytes, hex); 16 to 128 of `A-Z a-z 0-9 - _` if set by hand | | `registration_codes`: only a device presenting it can make an account (design B.1, section 1.3) |
 | `ohttp_key_a`, `ohttp_key_b` | **secret**, generated (32 bytes, hex) | | `[[ohttp.keys]] secret` |
@@ -126,7 +129,8 @@ in memory)
 
 **pingers-map-host** (`map-host.toml.in`; unencrypted data on the data drive): `max_disk`
 (default `40GB`), `hosted` (default `oceania/australia`, space-separated),
-`logging`.
+`logging`, and `gateway_url` (default `http://127.0.0.1:9474`, published to pingers-server as
+`gateway-url`: where it forwards map downloads made through the relay; leave it).
 
 ### 1.3 Registration code
 
@@ -335,6 +339,8 @@ rsync -a --partial --chown=_pingers-map-host:_pingers-map-host ./packs/ \
 
 `map-host.local.toml` mirrors the device's `max_disk` and `hosted`. Packs are immutable and
 their manifests change last, so uploading while the host runs is safe; no restart is needed.
+Do not add `--delete`: the directory also holds the host's OHTTP key (`.ohttp-key`), and a new
+key makes every phone that downloaded through the relay ask whether to trust it.
 
 ## 5. Local testing
 
@@ -365,8 +371,8 @@ tests, `crates/pingers-e2e`, and the push relay's ntfy script.
 
 **Tier 2: the real packages in nodo's x86-kvm VM** (`scripts/dev-vm.sh up` in a nodo checkout
 with N1 and N2): build x86_64 packages, sign a test feed with a throwaway key, copy it into the
-VM as a directory feed, `AddFeed`, then install in dependency order (push relay, server, relay,
-map host). Check the firewall (`_pingers-server` reaches nothing but 9472; only
+VM as a directory feed, `AddFeed`, then install in dependency order (push relay, map host, server,
+relay). Check the firewall (`_pingers-server` reaches nothing but 9472 and 9474; only
 `_pingers-ohttp-relay` reaches 9471), reboot (services wait for the unlock), and restore a backup
 to a fresh VM and check the gateway key hash is unchanged.
 
@@ -383,7 +389,10 @@ to a fresh VM and check the gateway key hash is unchanged.
    sealed secrets). Set `operator` (truthful: the app shows a same-operator warning, which is
    correct here) and `fcm_project_id`. The **owner** pastes the service account JSON, on one line,
    into `fcm_service_account`. Keys, hash key and credential generate themselves.
-4. **Server.** Install `pingers-server` (creates the 1 GiB encrypted volume) and approve its
+4. **Map host.** UseDataDrive on, install, check `max_disk` and `hosted`, rsync the packs (section
+   4). The server references its gateway, so it comes first. Its OHTTP key (`.ohttp-key` in the
+   data directory) makes itself on first start.
+5. **Server.** Install `pingers-server` (creates the 1 GiB encrypted volume) and approve its
    grant for `pingers-push-relay.server_credential`. Set `server_id`
    (`https://pingers.example.org`), `ohttp_relay_url` (`https://ohttp.example.org/ohttp`),
    `map_host`, `push_relay_public_url`, and `push_relay_key_config_hash`: the first pin (slot A,
@@ -392,11 +401,11 @@ to a fresh VM and check the gateway key hash is unchanged.
    /run/nodo/secrets/pingers-push-relay/config/push-relay.toml` prints over the owner's SSH. Leave
    `operator` at its default, the push relay's.
    The registration code generates itself (section 1.3); note it for the first phone.
-5. **Relay.** Install `pingers-ohttp-relay`. Nothing to set.
-6. **Map host.** UseDataDrive on, install, check `max_disk` and `hosted`, rsync the packs.
+6. **Relay.** Install `pingers-ohttp-relay`. Nothing to set.
 7. **Exposure.** Section 2 for each site; wait until the certificate status is valid for all four.
 8. **Smoke tests from outside the LAN:**
-   - `curl -sI https://maps.example.org/catalog.json` gives 200.
+   - `curl -sI https://maps.example.org/catalog.json` gives 200, and
+     `curl -s https://maps.example.org/ohttp-keys | wc -c` prints 41 (the gateway's key config).
    - `curl -s https://ohttp.example.org/v1/ohttp/config | openssl dgst -sha256 -binary | basenc
      --base64url | tr -d =` equals the served key's pin from `pingers-server pins
      /run/nodo/volumes/pingers-server/config/server.toml`.| sha256sum` equals the served key's hash
@@ -406,7 +415,7 @@ to a fresh VM and check the gateway key hash is unchanged.
    - `curl -s -o /dev/null -w '%{http_code}' -X POST https://push.example.org/v1/push` gives 404.
    - The `openssl s_client -groups X25519MLKEM768` check of section 2.1, for each name.
 9. **Pins into CI.** Over the owner's SSH, run `pingers-server pins` and `pingers-push-relay pins`
-   on the rendered configs (paths in steps 4 and 8); each prints one pin per line. Join each
+   on the rendered configs (paths in steps 5 and 8); each prints one pin per line. Join each
    pair with a comma into `PINGERS_GATEWAY_KEY_PINS` and `PINGERS_PUSH_RELAY_KEY_PINS`, check the
    served ones against the curl checks above, and build the release APKs. (`cargo xtask pins
    <server.toml> <push-relay.toml>` prints both lines from copies of the configs, but those hold
