@@ -146,3 +146,71 @@ fn origins_match_with_or_without_a_trailing_slash() {
         "https://other.invalid"
     ));
 }
+
+#[test]
+fn keys_are_fetched_again_after_a_day() -> TestResult<()> {
+    let keys = keys(None)?;
+    assert!(keys.fresh(UnixSeconds::new(NOW)));
+    assert!(keys.fresh(UnixSeconds::new(NOW + DAY - 1)));
+    assert!(!keys.fresh(UnixSeconds::new(NOW + DAY)));
+    Ok(())
+}
+
+#[test]
+fn an_announced_next_key_is_kept_only_beside_the_same_published_key() -> TestResult<()> {
+    let announced = keys(Some(NOW + DAY))?;
+    let kept = carried_next(Some(&announced), &relay(1, 60)?);
+    assert_eq!(
+        kept.map(|next| next.activates_at),
+        Some(UnixSeconds::new(NOW + DAY))
+    );
+    assert_eq!(carried_next(Some(&announced), &relay(2, 60)?), None);
+    assert_eq!(carried_next(None, &relay(1, 60)?), None);
+    Ok(())
+}
+
+fn hash_of(relay: &VerifiedPushRelay) -> KeyConfigHash {
+    key_config_hash(&relay.config.key_config.to_bytes())
+}
+
+#[test]
+fn first_use_pins_grow_by_the_published_and_next_key_and_are_kept_when_complete() -> TestResult<()>
+{
+    let (one, two) = (relay(1, 60)?, relay(2, 60)?);
+    let next = ScheduledPushRelay {
+        verified: two.clone(),
+        activates_at: UnixSeconds::new(NOW + DAY),
+    };
+    assert_eq!(grown_pins(None, &one, None), Some(vec![hash_of(&one)]));
+    let known = KeyPins::from(hash_of(&one));
+    assert_eq!(
+        grown_pins(Some(&known), &one, Some(&next)),
+        Some(vec![hash_of(&one), hash_of(&two)])
+    );
+    assert_eq!(grown_pins(Some(&known), &one, None), None);
+    let both = KeyPins::new([hash_of(&one), hash_of(&two)])?;
+    assert_eq!(grown_pins(Some(&both), &two, None), None);
+    Ok(())
+}
+
+#[test]
+fn seals_are_made_again_for_a_new_token_a_new_key_or_near_their_end() -> TestResult<()> {
+    let key = PushRelayPublicKey::new(1, [1; 32]);
+    let sealed = Sealed {
+        tokens: tokens(),
+        key,
+        not_after: UnixSeconds::new(NOW + 30 * DAY),
+    };
+    let now = UnixSeconds::new(NOW);
+    assert!(sealed.still_good(&tokens(), &key, now));
+    let other_token = PushTokens {
+        platform: PushPlatform::UnifiedPush,
+        token: PushToken::from_bytes(b"other".to_vec()),
+    };
+    assert!(!sealed.still_good(&other_token, &key, now));
+    assert!(!sealed.still_good(&tokens(), &PushRelayPublicKey::new(2, [2; 32]), now));
+    // Renewed once fewer than three days are left, not before.
+    assert!(sealed.still_good(&tokens(), &key, UnixSeconds::new(NOW + 27 * DAY - 1)));
+    assert!(!sealed.still_good(&tokens(), &key, UnixSeconds::new(NOW + 27 * DAY)));
+    Ok(())
+}

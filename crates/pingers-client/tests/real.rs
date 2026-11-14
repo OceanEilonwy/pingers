@@ -253,6 +253,13 @@ async fn a_party_its_spot_and_an_invite_show_in_the_snapshot() -> Result<(), Tes
         rig.client.set_wake_pushes(WakePushes::On).await,
         Err(ClientError::Unavailable(Unavailable::NoPushRelay))
     ));
+    rig.client.publish_snapshot().await?;
+    assert_eq!(
+        rig.client.snapshot().push_delivery,
+        pingers_client::snapshot::PushDelivery::Downgraded(
+            pingers_client::snapshot::PushDowngrade::NoPushRelay
+        )
+    );
     rig.client.set_wake_pushes(WakePushes::NoWakePushes).await?;
     assert_eq!(
         rig.client.snapshot().settings.wake_pushes,

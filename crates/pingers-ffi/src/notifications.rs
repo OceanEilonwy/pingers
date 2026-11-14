@@ -94,3 +94,42 @@ pub(crate) fn tell(events: &dyn Events, changes: &Changes) {
         events.notify(notification.into());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use pingers_screens::fixtures::{self, FixtureError};
+    use pingers_screens::notifications::notifications;
+
+    use super::*;
+
+    #[test]
+    fn each_kind_names_what_it_opens() -> Result<(), FixtureError> {
+        let after = fixtures::snapshot()?;
+        let mut before = after.clone();
+        before.meetups.clear();
+        before.location_requests.clear();
+        for party in &mut before.parties {
+            party.invites.clear();
+        }
+        let meetup = Some(MeetupId::from(fixtures::meetup_id()));
+        let posted: Vec<(NotificationKind, Option<MeetupId>, bool)> =
+            notifications(&before, &after)
+                .iter()
+                .map(CoreNotification::from)
+                .map(|posted| (posted.kind, posted.meetup, posted.party.is_some()))
+                .collect();
+        assert_eq!(
+            posted,
+            [
+                (NotificationKind::MeetupStarted, meetup.clone(), false),
+                (NotificationKind::ChatMessage, meetup.clone(), false),
+                (NotificationKind::ChatMessage, meetup.clone(), false),
+                (NotificationKind::LocationRequest, meetup, false),
+                (NotificationKind::JoinRequest, None, true),
+            ]
+        );
+        Ok(())
+    }
+}

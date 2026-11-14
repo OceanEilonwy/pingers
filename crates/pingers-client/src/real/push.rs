@@ -70,6 +70,13 @@ pub(super) struct SealTo<'keys> {
 }
 
 impl RelayKeys {
+    /// Whether they were fetched within the last [`KEY_REFRESH`].
+    pub(super) fn fresh(&self, now: UnixSeconds) -> bool {
+        self.fetched_at
+            .checked_add(KEY_REFRESH)
+            .is_some_and(|due| now < due)
+    }
+
     pub(super) fn seal_to(&self, now: UnixSeconds) -> SealTo<'_> {
         match &self.next {
             Some(next)
@@ -101,6 +108,51 @@ struct Sealed {
     tokens: PushTokens,
     key: PushRelayPublicKey,
     not_after: UnixSeconds,
+}
+
+impl Sealed {
+    /// Whether seals made from `tokens` to `key` would add nothing now: same token, same key,
+    /// and not yet within the renewal window.
+    fn still_good(&self, tokens: &PushTokens, key: &PushRelayPublicKey, now: UnixSeconds) -> bool {
+        self.tokens == *tokens
+            && self.key == *key
+            && now
+                .checked_add(RENEW_AHEAD)
+                .is_some_and(|soon| self.not_after > soon)
+    }
+}
+
+/// The next key an earlier fetch announced, kept when the next-key fetch was not answered,
+/// as long as the published key is still the one it was announced beside.
+fn carried_next(
+    previous: Option<&RelayKeys>,
+    active: &VerifiedPushRelay,
+) -> Option<ScheduledPushRelay> {
+    previous
+        .filter(|keys| keys.active.key == active.key)
+        .and_then(|keys| keys.next.clone())
+}
+
+/// The first-use pins with the published and the announced next key added, or `None` when
+/// they hold both already.
+fn grown_pins(
+    known: Option<&KeyPins>,
+    active: &VerifiedPushRelay,
+    next: Option<&ScheduledPushRelay>,
+) -> Option<Vec<KeyConfigHash>> {
+    let mut hashes: Vec<KeyConfigHash> =
+        known.map(|pins| pins.hashes().to_vec()).unwrap_or_default();
+    for config in std::iter::once(&active.config).chain(next.map(|next| &next.verified.config)) {
+        let hash = key_config_hash(&config.key_config.to_bytes());
+        if !hashes.contains(&hash) {
+            hashes.push(hash);
+        }
+    }
+    if known.is_some_and(|known| known.hashes() == hashes.as_slice()) {
+        None
+    } else {
+        Some(hashes)
+    }
 }
 
 /// What the server told this process, and the push relay set up for it.
@@ -238,10 +290,7 @@ impl Net {
             .ok_or(Unavailable::NoPushRelay)?;
         let now = self.engine()?.corrected_now();
         if let Some(keys) = lock(&self.learned.keys).clone()
-            && keys
-                .fetched_at
-                .checked_add(KEY_REFRESH)
-                .is_some_and(|due| now < due)
+            && keys.fresh(now)
         {
             return Ok(keys);
         }
@@ -270,10 +319,7 @@ impl Net {
             Ok(NextPushRelayKey::NotScheduled | NextPushRelayKey::Unpinned { .. }) => None,
             Err(SyncError::Store(error)) => return Err(SyncError::Store(error).into()),
             // Not answered now: keep what an earlier fetch announced for this key.
-            Err(_) => lock(&self.learned.keys)
-                .as_ref()
-                .filter(|keys| keys.active.key == active.key)
-                .and_then(|keys| keys.next.clone()),
+            Err(_) => carried_next(lock(&self.learned.keys).as_ref(), &active),
         };
         if setup.pins.is_none() {
             self.remember_first_use(first_use.as_ref(), &active, next.as_ref())
@@ -317,18 +363,9 @@ impl Net {
         active: &VerifiedPushRelay,
         next: Option<&ScheduledPushRelay>,
     ) -> Result<(), ClientError> {
-        let mut hashes: Vec<KeyConfigHash> =
-            known.map(|pins| pins.hashes().to_vec()).unwrap_or_default();
-        for config in std::iter::once(&active.config).chain(next.map(|next| &next.verified.config))
-        {
-            let hash = key_config_hash(&config.key_config.to_bytes());
-            if !hashes.contains(&hash) {
-                hashes.push(hash);
-            }
-        }
-        if known.is_some_and(|known| known.hashes() == hashes.as_slice()) {
+        let Some(hashes) = grown_pins(known, active, next) else {
             return Ok(());
-        }
+        };
         self.backend
             .store(move |session, _clock, _rng| {
                 records::write(session, &Key::PushRelayPin, |writer| {
@@ -435,14 +472,9 @@ impl Net {
         let keys = self.relay_keys().await?;
         let now = self.engine()?.corrected_now();
         let current = lock(&self.learned.sealed).clone();
-        let fresh = current.is_some_and(|sealed| {
-            sealed.tokens == tokens
-                && sealed.key == keys.seal_to(now).relay.key
-                && now
-                    .checked_add(RENEW_AHEAD)
-                    .is_some_and(|soon| sealed.not_after > soon)
-        });
-        if fresh {
+        if current
+            .is_some_and(|sealed| sealed.still_good(&tokens, &keys.seal_to(now).relay.key, now))
+        {
             return Ok(());
         }
         self.seal_wake_push_unrecorded(&tokens).await

@@ -26,3 +26,11 @@ reason = "equivalent in the client tests: they run without an instance, so there
 name = "crates/pingers-client/src/real/meetups.rs: replace <impl MeetupPort for Meetups>::leave -> Result<(), PortError> with Ok(())"
 reason = "equivalent in the client tests: without a harness server no Meetup goes live, so leave always finds none and answers Ok(()). Remove when a client test runs a Meetup against the harness server."
 
+
+[[mutant]]
+name = "crates/pingers-client/src/real/meetups.rs: replace Meetups::pushed -> Result<(), ClientError> with Ok(())"
+reason = "equivalent in the client tests: without a harness server no Meetup goes live, so a push never names a live Meetup and there is no log to read. What it calls is pinned by pingers-meetup-session (a_push_has_an_offline_member_read_the_log_at_once). Remove when a client test runs a Meetup against the harness server."
+
+[[mutant]]
+name = "crates/pingers-meetup-session/src/live.rs: replace Driver::command -> Result<Option<Ended>, SessionError> with Ok(None)"
+reason = "caught by a hang, which cargo-mutants reports as a timeout: the mutant drops every command and its reply, so every handle call in the tests waits forever"

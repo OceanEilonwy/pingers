@@ -1279,6 +1279,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_wake_entry_point_reaches_the_wake_crate() -> Result<(), CoreError> {
+        let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
+        let core = open_on("wakes", &fakes).await?;
+        let wakes = || {
+            fakes
+                .calls()
+                .into_iter()
+                .filter(|call| matches!(call, pingers_testkit::CrateCall::Wake(_)))
+                .count()
+        };
+        core.on_location(crate::Fix {
+            coordinate: crate::Coordinate {
+                latitude: 51.5,
+                longitude: -0.12,
+            },
+            accuracy_m: 10.0,
+            taken_at: 1_800_000_000,
+        })
+        .await?;
+        assert_eq!(wakes(), 1);
+        core.on_os_geofence("spot".into(), crate::GeofenceEvent::Enter)
+            .await?;
+        assert_eq!(wakes(), 2);
+        core.on_foreground(true).await?;
+        assert_eq!(wakes(), 3);
+        core.on_dnd_changed().await?;
+        assert_eq!(wakes(), 4);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn bad_input_is_refused_before_the_client() -> Result<(), CoreError> {
         let core = open("refused").await?;
         let empty = NewPartyDraft {

@@ -492,3 +492,41 @@ async fn a_new_token_and_a_relay_rotation_reach_every_registration() -> Result<(
     assert!(after.iter().all(|seal| *seal == rotated), "{after:?}");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn with_wake_pushes_off_new_mailboxes_carry_no_push() -> Result<(), TestError> {
+    let config = HarnessConfig {
+        registration_codes: vec![CODE.to_owned()],
+        ..HarnessConfig::default()
+    };
+    let clock = config.clock.clone();
+    let harness = InProcessHarness::start(&config)?;
+    let dir = TestDir::new()?;
+    let path = dir.0.join("pingers.db");
+    let platform = FakePlatform::new(clock.clone());
+    platform.set_push_registration(Some(token("https://up.invalid/a")));
+    let build = Build {
+        code: Some(CODE),
+        platform,
+    };
+    let client = open_on(&harness, &clock, path.clone(), build).await?;
+    client.set_wake_pushes(WakePushes::On).await?;
+    tokio::time::timeout(
+        STEP,
+        client.create_party(PartyDraft {
+            name: Name::new("Climbing")?,
+            my_name: Name::new("Ana")?,
+            colour: PartyColour::Blue,
+            post_quantum: PostQuantum::Off,
+        }),
+    )
+    .await
+    .map_err(|_elapsed| TestError::Setup("creating the Party did not finish"))??;
+    // Turning them off makes one step: the empty pool comes first, and gets no push.
+    client.set_wake_pushes(WakePushes::NoWakePushes).await?;
+    let database = Database::open(&path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+    let mailboxes = database.session()?.mailboxes().live(clock.now())?;
+    assert_eq!(mailboxes.len(), 1);
+    assert!(mailboxes.iter().all(|mailbox| mailbox.push.is_none()));
+    Ok(())
+}

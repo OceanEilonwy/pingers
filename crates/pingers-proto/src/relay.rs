@@ -226,3 +226,11 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod overlap_tests {
+    #[test]
+    fn the_key_overlap_is_thirty_days() {
+        assert_eq!(super::PUSH_RELAY_KEY_OVERLAP.as_secs(), 30 * 24 * 60 * 60);
+    }
+}
