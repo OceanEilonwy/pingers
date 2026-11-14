@@ -11,7 +11,32 @@ use zeroize::Zeroizing;
 use pingers_proto::{GroupId, LeafIndex, PartyId};
 use pingers_time::UnixSeconds;
 
-use crate::{Database, DatabaseKey, Party, PartyName, Session, StoreError};
+use pingers_proto::ServerId;
+
+use crate::{
+    Database, DatabaseKey, Party, PartyName, ServerRecord, ServerSession, ServerTrust, Session,
+    StoreError,
+};
+
+/// The server every fixture knows (server key 1).
+pub(crate) const TEST_SERVER: &str = "https://pingers.test";
+
+/// The fixture's server.
+pub(crate) fn test_server() -> Result<ServerId, TestError> {
+    Ok(ServerId::new(TEST_SERVER.to_owned())?)
+}
+
+/// A server record with no relays and no pins.
+pub(crate) fn server_record(origin: &str) -> Result<ServerRecord, TestError> {
+    Ok(ServerRecord {
+        server: ServerId::new(origin.to_owned())?,
+        ohttp_relays: Vec::new(),
+        push_relay: None,
+        gateway_pins: Vec::new(),
+        push_relay_pins: Vec::new(),
+        trust: ServerTrust::BuiltIn,
+    })
+}
 
 /// Everything a test can fail with.
 #[derive(Debug, thiserror::Error)]
@@ -83,11 +108,17 @@ impl Fixture {
         let directory = TestDir::new()?;
         let database = Database::open(&directory.file("store.db"), key(7))?;
         let session = database.session()?;
+        session.servers().put(&server_record(TEST_SERVER)?)?;
         Ok(Self {
             session,
             _database: database,
             _directory: directory,
         })
+    }
+
+    /// The rows of the fixture's server.
+    pub(crate) fn server(&self) -> Result<ServerSession<'_>, TestError> {
+        Ok(self.session.server(&test_server()?)?)
     }
 
     /// Rows in `table`.
@@ -123,5 +154,6 @@ pub(crate) fn party(fill: u8) -> Result<Party, TestError> {
         own_leaf: LeafIndex::new(u32::from(fill)),
         created_at: UnixSeconds::new(1_000 + u64::from(fill)),
         location_visibility: None,
+        server: test_server()?,
     })
 }

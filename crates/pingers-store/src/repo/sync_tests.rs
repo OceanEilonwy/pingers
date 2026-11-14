@@ -6,11 +6,11 @@
 use std::num::NonZeroUsize;
 
 use pingers_crypto::GrantSecretKey;
-use pingers_proto::SpotId;
+use pingers_proto::{ServerId, SpotId};
 
 use super::*;
 use crate::test_support::{Fixture, TestDir, TestError, key, party};
-use crate::{Database, Meetup};
+use crate::{Database, Meetup, ServerSession};
 
 fn bytes(fill: u8) -> RequestBytes {
     RequestBytes::from_bytes(Zeroizing::new(vec![fill; 40]))
@@ -21,7 +21,7 @@ fn capacity(count: usize) -> QueueCapacity {
 }
 
 fn push(
-    session: &Session,
+    session: &ServerSession<'_>,
     group: Option<GroupId>,
     keep_until: u64,
     fill: u8,
@@ -38,7 +38,7 @@ fn push(
 }
 
 /// The fill byte of each queued request, oldest first, emptying the queue.
-fn drain(session: &Session) -> Result<Vec<u8>, StoreError> {
+fn drain(session: &ServerSession<'_>) -> Result<Vec<u8>, StoreError> {
     let mut fills = Vec::new();
     while let Some(entry) = session.request_queue().take_oldest()? {
         fills.extend(entry.request.expose_bytes().first());
@@ -60,9 +60,9 @@ fn meetup(party: &pingers_proto::PartyId, fill: u8) -> Meetup {
 fn a_taken_request_comes_back_whole() -> Result<(), TestError> {
     let fixture = Fixture::new()?;
     let group = GroupId::from_bytes([3; 32]);
-    push(&fixture.session, Some(group), 700, 9)?;
+    push(&fixture.server()?, Some(group), 700, 9)?;
     let entry = fixture
-        .session
+        .server()?
         .request_queue()
         .take_oldest()?
         .ok_or(StoreError::NotFound {
@@ -71,15 +71,16 @@ fn a_taken_request_comes_back_whole() -> Result<(), TestError> {
     assert_eq!(entry.group, Some(group));
     assert_eq!(entry.keep_until, UnixSeconds::new(700));
     assert_eq!(entry.request.expose_bytes(), [9; 40].as_slice());
-    assert_eq!(fixture.session.request_queue().count()?, 0);
-    assert!(fixture.session.request_queue().take_oldest()?.is_none());
+    assert_eq!(fixture.server()?.request_queue().count()?, 0);
+    assert!(fixture.server()?.request_queue().take_oldest()?.is_none());
     Ok(())
 }
 
 #[test]
 fn a_request_put_back_stays_ahead_of_newer_ones() -> Result<(), TestError> {
     let fixture = Fixture::new()?;
-    let session = &fixture.session;
+    let server = fixture.server()?;
+    let session = &server;
     push(session, None, 700, 1)?;
     let taken = session
         .request_queue()
@@ -97,7 +98,8 @@ fn a_request_put_back_stays_ahead_of_newer_ones() -> Result<(), TestError> {
 #[test]
 fn a_full_queue_drops_its_oldest_entry() -> Result<(), TestError> {
     let fixture = Fixture::new()?;
-    let queue = fixture.session.request_queue();
+    let server = fixture.server()?;
+    let queue = server.request_queue();
     let entry = |fill| NewQueuedRequest {
         group: None,
         keep_until: UnixSeconds::new(700),
@@ -111,14 +113,15 @@ fn a_full_queue_drops_its_oldest_entry() -> Result<(), TestError> {
         Pushed::QueuedDroppingOldest
     );
     assert_eq!(queue.count()?, 2);
-    assert_eq!(drain(&fixture.session)?, [2, 3]);
+    assert_eq!(drain(&fixture.server()?)?, [2, 3]);
     Ok(())
 }
 
 #[test]
 fn queued_requests_are_kept_through_their_last_second() -> Result<(), TestError> {
     let fixture = Fixture::new()?;
-    let session = &fixture.session;
+    let server = fixture.server()?;
+    let session = &server;
     push(session, None, 100, 1)?;
     push(session, None, 200, 2)?;
     assert_eq!(
@@ -140,7 +143,8 @@ fn queued_requests_are_kept_through_their_last_second() -> Result<(), TestError>
 #[test]
 fn ending_a_meetup_forgets_its_queued_requests_and_own_entries() -> Result<(), TestError> {
     let fixture = Fixture::new()?;
-    let session = &fixture.session;
+    let server = fixture.server()?;
+    let session = &server;
     let owner = party(1)?;
     session.parties().insert(&owner)?;
     let ended = meetup(&owner.id, 2);
@@ -174,7 +178,8 @@ fn ending_a_meetup_forgets_its_queued_requests_and_own_entries() -> Result<(), T
 #[test]
 fn deleting_a_party_forgets_its_and_its_meetups_requests() -> Result<(), TestError> {
     let fixture = Fixture::new()?;
-    let session = &fixture.session;
+    let server = fixture.server()?;
+    let session = &server;
     let deleted = party(1)?;
     let kept = party(2)?;
     session.parties().insert(&deleted)?;
@@ -210,7 +215,8 @@ fn deleting_a_party_forgets_its_and_its_meetups_requests() -> Result<(), TestErr
 #[test]
 fn the_last_upload_replaces_the_one_before() -> Result<(), TestError> {
     let fixture = Fixture::new()?;
-    let uploads = fixture.session.board_upload();
+    let server = fixture.server()?;
+    let uploads = server.board_upload();
     assert!(uploads.last()?.is_none());
     for fill in [1, 2] {
         uploads.remember(&LastUpload {
@@ -274,12 +280,20 @@ fn a_version_two_database_keeps_its_rows_and_gains_the_sync_tables() -> Result<(
     }
     let database = Database::open(&path, key(1))?;
     let session = database.session()?;
-    assert_eq!(session.parties().list()?.len(), 1);
-    push(&session, Some(started.group), 700, 1)?;
-    push(&session, None, 700, 2)?;
+    let parties = session.parties().list()?;
+    assert_eq!(parties.len(), 1);
+    // Parties without an account cannot be made by the app; they went to a placeholder server.
+    let placeholder = parties.first().map(|party| party.server.clone());
+    assert_eq!(
+        placeholder.as_ref().map(ServerId::as_str),
+        Some("https://unknown-server.invalid")
+    );
+    let server = session.server(&placeholder.ok_or(StoreError::NotFound { table: "party" })?)?;
+    push(&server, Some(started.group), 700, 1)?;
+    push(&server, None, 700, 2)?;
     // The trigger covers a Meetup that existed before the migration.
     session.meetups().end(&started.group)?;
-    assert_eq!(drain(&session)?, [2]);
+    assert_eq!(drain(&server)?, [2]);
     Ok(())
 }
 

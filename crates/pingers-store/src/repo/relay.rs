@@ -9,21 +9,29 @@ use rusqlite::{OptionalExtension as _, Row, params};
 use crate::codec::{narrow, read_array, read_time, time};
 use crate::repo::expect_one;
 use crate::repo::party::LocationVisibility;
-use crate::{FallbackReason, OperatorName, Session, StoreError};
+use crate::server::Scope;
+use crate::{FallbackReason, OperatorName, ServerSession, Session, StoreError};
 
-impl Session {
-    /// Push relays this device seals tokens to (`push_relay` table).
+impl ServerSession<'_> {
+    /// The push relays this server lists that this device seals tokens to (`push_relay`).
     #[must_use]
     pub fn push_relays(&self) -> PushRelays<'_> {
-        PushRelays { session: self }
+        PushRelays {
+            session: self.scope(),
+        }
     }
 
-    /// Active privacy fallbacks, shown in "What your server sees" (`fallback` table).
+    /// Privacy fallbacks active for this server, shown in "What your server sees"
+    /// (`fallback` table).
     #[must_use]
     pub fn fallbacks(&self) -> Fallbacks<'_> {
-        Fallbacks { session: self }
+        Fallbacks {
+            session: self.scope(),
+        }
     }
+}
 
+impl Session {
     /// Device settings (`settings` table).
     #[must_use]
     pub fn settings(&self) -> Settings<'_> {
@@ -59,7 +67,7 @@ pub struct PushRelay {
 
 /// Repository for the `push_relay` table.
 pub struct PushRelays<'session> {
-    session: &'session Session,
+    session: Scope<'session>,
 }
 
 const fn source_code(source: RelaySource) -> i64 {
@@ -109,7 +117,8 @@ impl PushRelays<'_> {
         self.session.with(|connection| {
             connection.execute(
                 "INSERT OR REPLACE INTO push_relay (relay_id, url, key_id, public_key, \
-                 key_config_hash, operator, source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 key_config_hash, operator, source, server_key) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     relay.id.get(),
                     relay.url.as_str(),
@@ -118,6 +127,7 @@ impl PushRelays<'_> {
                     relay.key_config_hash.as_bytes(),
                     relay.operator.as_str(),
                     source_code(relay.source),
+                    self.session.key(),
                 ],
             )?;
             Ok(())
@@ -133,9 +143,9 @@ impl PushRelays<'_> {
         self.session.with(|connection| {
             let mut statement = connection.prepare(
                 "SELECT relay_id, url, key_id, public_key, key_config_hash, operator, source \
-                 FROM push_relay ORDER BY relay_id",
+                 FROM push_relay WHERE server_key = ?1 ORDER BY relay_id",
             )?;
-            let rows = statement.query_map([], |row| Ok(relay_from_row(row)))?;
+            let rows = statement.query_map([self.session.key()], |row| Ok(relay_from_row(row)))?;
             rows.map(|row| row?).collect()
         })
     }
@@ -149,8 +159,8 @@ impl PushRelays<'_> {
     pub fn delete_from(&self, source: RelaySource) -> Result<usize, StoreError> {
         self.session.with(|connection| {
             Ok(connection.execute(
-                "DELETE FROM push_relay WHERE source = ?1",
-                [source_code(source)],
+                "DELETE FROM push_relay WHERE source = ?1 AND server_key = ?2",
+                params![source_code(source), self.session.key()],
             )?)
         })
     }
@@ -193,7 +203,7 @@ pub struct ActiveFallback {
 
 /// Repository for the `fallback` table: at most one row per kind.
 pub struct Fallbacks<'session> {
-    session: &'session Session,
+    session: Scope<'session>,
 }
 
 impl Fallbacks<'_> {
@@ -205,11 +215,13 @@ impl Fallbacks<'_> {
     pub fn activate(&self, fallback: &ActiveFallback) -> Result<(), StoreError> {
         self.session.with(|connection| {
             connection.execute(
-                "INSERT OR REPLACE INTO fallback (kind, reason, since) VALUES (?1, ?2, ?3)",
+                "INSERT OR REPLACE INTO fallback (kind, reason, since, server_key) \
+                 VALUES (?1, ?2, ?3, ?4)",
                 params![
                     fallback.kind.code(),
                     fallback.reason.as_str(),
                     time(fallback.since, "fallback.since")?,
+                    self.session.key(),
                 ],
             )?;
             Ok(())
@@ -224,7 +236,10 @@ impl Fallbacks<'_> {
     pub fn clear(&self, kind: FallbackKind) -> Result<(), StoreError> {
         self.session.with(|connection| {
             expect_one(
-                connection.execute("DELETE FROM fallback WHERE kind = ?1", [kind.code()])?,
+                connection.execute(
+                    "DELETE FROM fallback WHERE kind = ?1 AND server_key = ?2",
+                    params![kind.code(), self.session.key()],
+                )?,
                 "fallback",
             )
         })
@@ -237,9 +252,10 @@ impl Fallbacks<'_> {
     /// [`StoreError::Corrupt`] if a stored value does not decode.
     pub fn list(&self) -> Result<Vec<ActiveFallback>, StoreError> {
         self.session.with(|connection| {
-            let mut statement =
-                connection.prepare("SELECT kind, reason, since FROM fallback ORDER BY kind")?;
-            let rows = statement.query_map([], |row| {
+            let mut statement = connection.prepare(
+                "SELECT kind, reason, since FROM fallback WHERE server_key = ?1 ORDER BY kind",
+            )?;
+            let rows = statement.query_map([self.session.key()], |row| {
                 Ok((|| {
                     Ok(ActiveFallback {
                         kind: match row.get::<_, i64>(0)? {
@@ -388,7 +404,8 @@ mod tests {
     #[test]
     fn relays_round_trip_and_are_replaced_by_source() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let relays = fixture.session.push_relays();
+        let server = fixture.server()?;
+        let relays = server.push_relays();
         let server = relay(2, RelaySource::Server)?;
         let custom = relay(1, RelaySource::Override)?;
         relays.put(&server)?;
@@ -408,7 +425,8 @@ mod tests {
     #[test]
     fn fallbacks_activate_and_clear() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let fallbacks = fixture.session.fallbacks();
+        let server = fixture.server()?;
+        let fallbacks = server.fallbacks();
         let kinds = [
             FallbackKind::SameOperator,
             FallbackKind::KnockRoute,

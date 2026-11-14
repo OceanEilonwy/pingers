@@ -2,24 +2,23 @@
 //! `identity`, `party`, `member` and `always_allow`.
 
 use pingers_crypto::{AccountPublicKey, AccountSigningKey};
-use pingers_proto::{AccountId, GroupId, KeyConfigHash, LeafIndex, PartyId, ServerId};
+use pingers_proto::{AccountId, GroupId, LeafIndex, PartyId, ServerId};
 use pingers_time::UnixSeconds;
 use rusqlite::{OptionalExtension as _, Row, params};
 
 use crate::codec::{narrow, read_array, read_secret, read_time, time};
 use crate::repo::expect_one;
+use crate::server::{origin_of, server_key};
 use crate::{Avatar, MemberName, PartyName, Session, StoreError};
 
 /// This device's account (design B.1, C.2 `identity`): one row.
 pub struct Identity {
     /// The account id, `SHA-256(signature public key)[..16]`.
     pub account: AccountId,
-    /// The account's Ed25519 key, also its MLS leaf signature key.
+    /// The account's Ed25519 key, also its MLS leaf signature key. The same key registers
+    /// the account on every server the device has Parties on (each server's standing is in
+    /// its own rows, see [`crate::ServerSession`]).
     pub signing_key: AccountSigningKey,
-    /// The server this account is registered with.
-    pub server: ServerId,
-    /// The pinned hash of the server's OHTTP key configuration (`server_pin`).
-    pub server_pin: KeyConfigHash,
 }
 
 /// Repository for the `identity` table.
@@ -62,13 +61,10 @@ impl Identities<'_> {
     pub fn save(&self, identity: &Identity) -> Result<(), StoreError> {
         self.session.with(|connection| {
             connection.execute(
-                "INSERT OR REPLACE INTO identity (singleton, account_id, sig_sk, server_url, \
-                 server_pin) VALUES (1, ?1, ?2, ?3, ?4)",
+                "INSERT OR REPLACE INTO identity (singleton, account_id, sig_sk) VALUES (1, ?1, ?2)",
                 params![
                     identity.account.as_bytes(),
                     identity.signing_key.expose_bytes(),
-                    identity.server.as_str(),
-                    identity.server_pin.as_bytes(),
                 ],
             )?;
             Ok(())
@@ -83,27 +79,17 @@ impl Identities<'_> {
     pub fn load(&self) -> Result<Option<Identity>, StoreError> {
         self.session.with(|connection| {
             let row = connection
-                .query_row(
-                    "SELECT account_id, sig_sk, server_url, server_pin FROM identity",
-                    [],
-                    |row| {
-                        Ok((
-                            read_array(row, 0, "identity.account_id"),
-                            read_secret(row, 1, "identity.sig_sk"),
-                            row.get::<_, String>(2)?,
-                            read_array(row, 3, "identity.server_pin"),
-                        ))
-                    },
-                )
+                .query_row("SELECT account_id, sig_sk FROM identity", [], |row| {
+                    Ok((
+                        read_array(row, 0, "identity.account_id"),
+                        read_secret(row, 1, "identity.sig_sk"),
+                    ))
+                })
                 .optional()?;
-            row.map(|(account, secret, server, pin)| {
+            row.map(|(account, secret)| {
                 Ok(Identity {
                     account: AccountId::from_bytes(account?),
                     signing_key: AccountSigningKey::from_bytes(secret?),
-                    server: ServerId::new(server).map_err(|_| StoreError::Corrupt {
-                        field: "identity.server_url",
-                    })?,
-                    server_pin: KeyConfigHash::from_bytes(pin?),
                 })
             })
             .transpose()
@@ -156,6 +142,8 @@ pub struct Party {
     pub created_at: UnixSeconds,
     /// A per-Party override of the device's location visibility; `None` follows the device.
     pub location_visibility: Option<LocationVisibility>,
+    /// The server the Party lives on: its group log, mailboxes and board.
+    pub server: ServerId,
 }
 
 /// Repository for the `party` table.
@@ -163,8 +151,8 @@ pub struct Parties<'session> {
     session: &'session Session,
 }
 
-const PARTY_COLUMNS: &str =
-    "party_id, mls_group_id, name, my_leaf, created_at, location_visibility";
+const PARTY_COLUMNS: &str = "party_id, mls_group_id, name, my_leaf, created_at, \
+     location_visibility, (SELECT origin FROM server WHERE server.server_key = party.server_key)";
 
 fn party_from_row(row: &Row<'_>) -> Result<Party, StoreError> {
     Ok(Party {
@@ -179,6 +167,7 @@ fn party_from_row(row: &Row<'_>) -> Result<Party, StoreError> {
             .get::<_, Option<i64>>(5)?
             .map(|code| LocationVisibility::from_code(code, "party.location_visibility"))
             .transpose()?,
+        server: origin_of(row.get(6)?)?,
     })
 }
 
@@ -190,8 +179,10 @@ impl Parties<'_> {
     /// [`StoreError::Database`] if a Party with this id or group already exists.
     pub fn insert(&self, party: &Party) -> Result<(), StoreError> {
         self.session.with(|connection| {
+            let server = server_key(connection, &party.server)?;
             connection.execute(
-                &format!("INSERT INTO party ({PARTY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"),
+                "INSERT INTO party (party_id, mls_group_id, name, my_leaf, created_at, \
+                 location_visibility, server_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     party.id.as_bytes(),
                     party.group.as_bytes(),
@@ -199,6 +190,7 @@ impl Parties<'_> {
                     party.own_leaf.get(),
                     time(party.created_at, "party.created_at")?,
                     party.location_visibility.map(LocationVisibility::code),
+                    server,
                 ],
             )?;
             Ok(())
@@ -574,8 +566,6 @@ mod tests {
         let identity = Identity {
             account: AccountId::from_bytes([3; 16]),
             signing_key: AccountSigningKey::from_bytes(Zeroizing::new([4; 32])),
-            server: ServerId::new("https://pingers.example".into())?,
-            server_pin: KeyConfigHash::from_bytes([5; 32]),
         };
         identities.save(&identity)?;
         let loaded = identities
@@ -583,8 +573,6 @@ mod tests {
             .ok_or(StoreError::NotFound { table: "identity" })?;
         assert_eq!(loaded.account, identity.account);
         assert_eq!(loaded.signing_key.expose_bytes(), &[4; 32]);
-        assert_eq!(loaded.server, identity.server);
-        assert_eq!(loaded.server_pin, identity.server_pin);
         // Saving again replaces the single row.
         identities.save(&Identity {
             account: AccountId::from_bytes([9; 16]),

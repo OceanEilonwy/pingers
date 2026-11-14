@@ -216,6 +216,9 @@ fn an_ended_meetups_keys_are_nowhere_in_the_database() -> Result<(), TestError> 
     let path = directory.file("store.db");
     let database = Database::open(&path, key(1))?;
     let session = database.session()?;
+    session.servers().put(&crate::test_support::server_record(
+        crate::test_support::TEST_SERVER,
+    )?)?;
     let owner = party(1)?;
     session.parties().insert(&owner)?;
     let ended = meetup(&owner.id, 0x5a);

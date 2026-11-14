@@ -56,6 +56,9 @@ pub enum StoreError {
     /// storage prefix). Not caused by stored data.
     #[error("internal encoding error")]
     Internal,
+    /// A server was named that has no `server` row.
+    #[error("unknown server")]
+    UnknownServer,
     /// A thread panicked while holding the session's connection.
     #[error("the session's connection was poisoned by a panic")]
     Poisoned,
