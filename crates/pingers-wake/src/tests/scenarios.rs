@@ -94,7 +94,7 @@ async fn second_arrival_knocks_and_the_poster_admits_after_a_liveness_check()
     let bob_arrives = entry.confirmed;
     assert_eq!(bob_arrives.matched, vec![anchor]);
     assert_eq!(bob_arrives.knocks_sent, 1);
-    let sent = bob.state.snapshot().sent_knocks;
+    let sent = bob.board().sent_knocks;
     let knock = sent.first().ok_or(TestError::Missing("sent knock"))?;
     assert_eq!(knock.status, KnockStatus::Waiting);
     assert_eq!(knock.epoch, EPOCH);
@@ -123,8 +123,7 @@ async fn second_arrival_knocks_and_the_poster_admits_after_a_liveness_check()
     let admission = admitted.first().ok_or(TestError::Missing("admission"))?;
     // PSK_meet is bound to the Spot, the record's epoch and the start bucket of Alice's record.
     let alice_start = alice
-        .state
-        .snapshot()
+        .board()
         .leases
         .last()
         .map(|lease| lease.start);
@@ -138,7 +137,7 @@ async fn second_arrival_knocks_and_the_poster_admits_after_a_liveness_check()
     );
     assert_eq!(admission.knock.knocker, town.party.member("bob")?.leaf);
     // Bob's knock names his own record, for the tie-break.
-    let bob_record = bob.state.snapshot().leases.last().and_then(|lease| {
+    let bob_record = bob.board().leases.last().and_then(|lease| {
         lease
             .slots
             .iter()
@@ -177,8 +176,7 @@ async fn second_arrival_knocks_and_the_poster_admits_after_a_liveness_check()
     assert_eq!(welcome.psk, admission.psk);
     assert_eq!(welcome.post, b"welcome".to_vec());
     let status = bob
-        .state
-        .snapshot()
+        .board()
         .sent_knocks
         .first()
         .map(|sent| sent.status);
@@ -290,10 +288,10 @@ async fn knock_during_the_grace_period_names_the_epoch_it_matched_under() -> Res
     });
     let arrives = bob.enter(spot, anchor).await?.confirmed;
     assert_eq!(arrives.knocks_sent, 1);
-    let sent = bob.state.snapshot().sent_knocks;
+    let sent = bob.board().sent_knocks;
     assert_eq!(sent.first().map(|knock| knock.epoch), Some(EPOCH));
     // Bob posts with his current epoch's keys only.
-    let bob_lease = bob.state.snapshot().leases;
+    let bob_lease = bob.board().leases;
     let posted = bob_lease
         .last()
         .and_then(|lease| lease.slots.iter().find_map(|slot| slot.real));
@@ -357,7 +355,7 @@ async fn poster_past_a_removal_cannot_answer_a_knock_on_its_old_record() -> Resu
             ..
         }
     ));
-    let lease = alice.state.snapshot().leases;
+    let lease = alice.board().leases;
     let real = lease
         .last()
         .and_then(|lease| lease.slots.iter().find_map(|slot| slot.real));
@@ -385,7 +383,7 @@ async fn knock_unanswered_for_a_lease_raises_a_notice() -> Result<(), TestError>
     bob.platform.script_fix(spot.fix_inside(bob.now()));
     let after = bob.wake(WakeTrigger::Scheduled).await?;
     assert_eq!(after.notices, vec![WakeNotice::UnansweredKnock(anchor)]);
-    assert!(bob.state.snapshot().sent_knocks.is_empty());
+    assert!(bob.board().sent_knocks.is_empty());
     Ok(())
 }
 
@@ -400,8 +398,7 @@ async fn answered_knock_expires_quietly() -> Result<(), TestError> {
     alice.enter(spot, anchor).await?;
     bob.enter(spot, anchor).await?;
     let reply = bob
-        .state
-        .snapshot()
+        .board()
         .sent_knocks
         .first()
         .map(|sent| sent.reply_mailbox)
@@ -496,7 +493,7 @@ async fn without_a_reply_mailbox_no_knock_is_sent() -> Result<(), TestError> {
     let arrives = bob.enter(spot, anchor).await?.confirmed;
     assert_eq!(arrives.matched, vec![anchor]);
     assert_eq!(arrives.knocks_sent, 0);
-    assert!(bob.state.snapshot().sent_knocks.is_empty());
+    assert!(bob.board().sent_knocks.is_empty());
     Ok(())
 }
 
@@ -560,6 +557,7 @@ async fn spots_left_out_of_a_full_lease_rotate_in() -> Result<(), TestError> {
     let left_out: Vec<pingers_proto::SpotId> = alice
         .parties
         .info()
+        .ok_or(TestError::Missing("party"))?
         .spots
         .iter()
         .map(|info| info.spot)
@@ -579,8 +577,7 @@ async fn spots_left_out_of_a_full_lease_rotate_in() -> Result<(), TestError> {
 /// The Spots with a real record in the phone's newest lease.
 fn spots_in_lease(phone: &super::Phone) -> Vec<pingers_proto::SpotId> {
     phone
-        .state
-        .snapshot()
+        .board()
         .leases
         .last()
         .map(|lease| {
@@ -693,22 +690,19 @@ async fn mutual_knocks_are_broken_by_record_randomness() -> Result<(), TestError
     alice.enter(spot, anchor).await?;
     bob.enter(spot, anchor).await?;
     let alice_record = alice
-        .state
-        .snapshot()
+        .board()
         .leases
         .last()
         .and_then(|lease| lease.slots.iter().find(|slot| slot.real.is_some()))
         .map(|slot| slot.randomness)
         .ok_or(TestError::Missing("record"))?;
     let bob_record = bob
-        .state
-        .snapshot()
+        .board()
         .sent_knocks
         .first()
         .ok_or(TestError::Missing("knock"))
         .and_then(|_sent| {
-            bob.state
-                .snapshot()
+            bob.board()
                 .leases
                 .last()
                 .and_then(|lease| lease.slots.iter().find(|slot| slot.real.is_some()))
@@ -755,8 +749,7 @@ async fn poster_and_knocker_derive_psk_meet_for_the_record_start_in_later_bucket
     alice.enter(spot, anchor).await?;
     bob.enter(spot, anchor).await?;
     let alice_start = alice
-        .state
-        .snapshot()
+        .board()
         .leases
         .last()
         .map(|lease| lease.start)
@@ -827,8 +820,7 @@ async fn knocker_who_left_the_spot_reads_the_welcome_but_does_not_join() -> Resu
     assert_eq!(woken.welcomes, 0);
     assert!(bob.meetups.welcomes().is_empty());
     let status = bob
-        .state
-        .snapshot()
+        .board()
         .sent_knocks
         .first()
         .map(|sent| sent.status);

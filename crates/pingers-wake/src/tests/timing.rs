@@ -49,7 +49,7 @@ async fn budget_running_out_mid_upload_keeps_state_consistent() -> Result<(), Te
         Some(RETRY_AFTER)
     );
     assert!(!alice.server.calls().contains(&Call::Refill));
-    assert_eq!(alice.state.snapshot().leases.len(), 2);
+    assert_eq!(alice.board().leases.len(), 2);
     // The server did store it (the answer was lost, not the request).
     assert_eq!(
         alice.server.uploaded().len(),
@@ -86,9 +86,9 @@ async fn budget_running_out_after_the_upload_skips_the_rest() -> Result<(), Test
     let woken = alice.wake(WakeTrigger::Scheduled).await?;
     assert!(matches!(woken.upload, UploadOutcome::Uploaded { .. }));
     assert_eq!(woken.ending, WakeEnding::OutOfBudget(WakeStep::MailboxPool));
-    assert_eq!(alice.state.snapshot().leases.len(), 1);
+    assert_eq!(alice.board().leases.len(), 1);
     assert_eq!(
-        alice.state.snapshot().last_upload,
+        alice.board().last_upload,
         Some(
             alice
                 .now()
@@ -137,7 +137,7 @@ async fn failed_group_log_pull_skips_the_board_sync() -> Result<(), TestError> {
         }
     );
     assert_eq!(alice.server.calls(), vec![Call::PullLogs]);
-    assert!(alice.state.snapshot().leases.is_empty());
+    assert!(alice.board().leases.is_empty());
     Ok(())
 }
 
@@ -649,8 +649,7 @@ async fn expired_lease_needs_no_withdrawal() -> Result<(), TestError> {
     let anchor = town.spot_ref("anchor")?;
     alice.enter(town.spot("anchor")?, anchor).await?;
     let start = alice
-        .state
-        .snapshot()
+        .board()
         .leases
         .last()
         .map(|lease| lease.start)
@@ -672,32 +671,51 @@ async fn expired_lease_needs_no_withdrawal() -> Result<(), TestError> {
     Ok(())
 }
 
-/// Everything the snapshot holds survives a restore.
+/// Everything the snapshot holds survives a restore, each board under its own server.
 #[tokio::test]
 async fn restore_keeps_every_stored_field() -> Result<(), TestError> {
     let town = Town::new()?;
     let anchor = town.spot_ref("anchor")?;
     let mailbox = pingers_proto::MailboxId::from_bytes([5; 16]);
     let record = pingers_proto::RecordRandomness::from_bytes([6; 16]);
+    let lease = crate::LiveLease {
+        start: town.now().bucket(),
+        slots: [crate::LeaseSlot {
+            randomness: record,
+            real: None,
+        }; pingers_proto::Lease::SLOTS],
+    };
     let snapshot = crate::WakeSnapshot {
         spots: Vec::new(),
         last_in_zone: Some(town.now()),
-        leases: Vec::new(),
-        sent_knocks: vec![crate::SentKnock {
-            spot: anchor,
-            epoch: Epoch::new(3),
-            knock_mailbox: mailbox,
-            matched: record,
-            matched_start: town.now().bucket(),
-            reply_mailbox: mailbox,
-            sent_at: town.now(),
-            status: crate::KnockStatus::Waiting,
-        }],
-        decided_knocks: vec![crate::DecidedKnock {
-            reply_mailbox: mailbox,
-            at: town.now(),
-        }],
-        last_upload: Some(town.now()),
+        boards: vec![
+            crate::BoardSnapshot {
+                server: town.server.clone(),
+                leases: Vec::new(),
+                sent_knocks: vec![crate::SentKnock {
+                    spot: anchor,
+                    epoch: Epoch::new(3),
+                    knock_mailbox: mailbox,
+                    matched: record,
+                    matched_start: town.now().bucket(),
+                    reply_mailbox: mailbox,
+                    sent_at: town.now(),
+                    status: crate::KnockStatus::Waiting,
+                }],
+                decided_knocks: vec![crate::DecidedKnock {
+                    reply_mailbox: mailbox,
+                    at: town.now(),
+                }],
+                last_upload: Some(town.now()),
+            },
+            crate::BoardSnapshot {
+                server: super::server_id("https://harbour.example")?,
+                leases: vec![lease],
+                sent_knocks: Vec::new(),
+                decided_knocks: Vec::new(),
+                last_upload: None,
+            },
+        ],
         epochs: vec![crate::KnownEpoch {
             party: town.party.id,
             epoch: Epoch::new(3),

@@ -22,7 +22,7 @@ use pingers_presence::{
 };
 use pingers_proto::{
     BoardPage, CoverReadRatio, Epoch, GroupId, LeafIndex, MailboxId, MeetupHint, PartyId,
-    ReadBoard, RecordRandomness,
+    ReadBoard, RecordRandomness, ServerId,
 };
 use pingers_time::{Bucket, Clock, Timer, UnixSeconds};
 use rand_core::CryptoRng;
@@ -33,7 +33,7 @@ use crate::ports::{
     PartyInfo, PartyView, RegionId, ReplyPost, ServerPort,
 };
 use crate::state::{
-    DecidedKnock, GeofenceAnchor, KnockStatus, KnownEpoch, LeaseSlot, LiveLease, RealRecord,
+    Board, DecidedKnock, GeofenceAnchor, KnockStatus, KnownEpoch, LeaseSlot, LiveLease, RealRecord,
     SentKnock, SpotTransition, TrackedSpot, WakeState,
 };
 use crate::{PortError, WakeError};
@@ -233,6 +233,20 @@ pub enum WakeNotice {
     UnansweredKnock(SpotRef),
 }
 
+/// What one board round did: the lease uploaded to one server's board, and how the round's
+/// network steps ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoardReport {
+    /// The server.
+    pub server: ServerId,
+    /// The lease on its board.
+    pub upload: UploadOutcome,
+    /// How the round ended. If the device part of the wake ended early (the routine fix ran
+    /// out the budget, or leaving a Meetup failed), every round's network steps are skipped and
+    /// this is that ending.
+    pub ending: WakeEnding,
+}
+
 /// What one wake did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WakeReport {
@@ -240,8 +254,13 @@ pub struct WakeReport {
     pub decision: GateDecision,
     /// Spots that changed state.
     pub transitions: Vec<SpotTransition>,
-    /// The lease.
+    /// The lease of the first board round (in round order, see [`WakeReport::boards`]). With
+    /// no round at all (no Party, and no board that still needs reading) nothing was due:
+    /// [`UploadOutcome::NotDue`] with the time of the next wake.
     pub upload: UploadOutcome,
+    /// One entry per board round, in the order they ran: the server whose last successful
+    /// upload is oldest (never uploaded first, ties by server origin) runs first.
+    pub boards: Vec<BoardReport>,
     /// Spots this device is in where a peer's record matched ("a member of the Party is
     /// here"). Never a Spot the device is not in.
     pub matched: Vec<SpotRef>,
@@ -255,16 +274,20 @@ pub struct WakeReport {
     pub notices: Vec<WakeNotice>,
     /// The delay given to `schedule_wake`.
     pub next_wake: Duration,
-    /// How it ended.
+    /// How it ended, in summary: the device part's ending if it ended early, else the first
+    /// board round's (in round order) that did not complete, else [`WakeEnding::Completed`].
+    /// Each round's own ending is in [`WakeReport::boards`].
     pub ending: WakeEnding,
 }
 
 impl WakeState {
-    /// Runs one wake: gate, presence, geofences, group logs, lease and board, knocks, mailboxes
-    /// and liveness checks, then the next geofences and wake (design E.2).
+    /// Runs one wake: gate, presence and geofences once, then one board round per server
+    /// (group logs, lease and board, knocks, mailboxes and liveness checks), then the location
+    /// mode and the next wake (design E.2).
     ///
-    /// Network failures and an exhausted budget end the network part early
-    /// ([`WakeReport::ending`]); the state stays consistent and the next wake is scheduled.
+    /// Each round gets an equal share of the budget left when it starts. A network failure or
+    /// a share running out ends only that round's network steps ([`BoardReport::ending`]); the
+    /// state stays consistent and the next wake is scheduled.
     ///
     /// # Errors
     ///
@@ -284,14 +307,17 @@ impl WakeState {
         T: Clock + Timer,
         R: CryptoRng + Send,
     {
+        let budget = Budget::start(env.time, input.budget);
         let mut run = Run {
             env,
             rng,
             trigger: input.trigger,
             settings: &input.settings,
-            budget: Budget::start(env.time, input.budget),
+            budget: budget.whole(),
+            wake_budget: budget,
             now: Clock::now(env.time),
             ending: None,
+            liveness: None,
             report: Progress::default(),
         };
         run.wake(self).await
@@ -318,14 +344,28 @@ struct ReceivedKnock {
     key: MeetupKey,
 }
 
+/// The liveness evidence of this wake: one GPS fix and the gate read again, shared by every
+/// round that has knocks to decide.
+#[derive(Clone, Copy)]
+struct Liveness {
+    fix: Option<Fix>,
+    sharing: Sharing,
+}
+
 struct Run<'run, 'env, D, P, S, M, T: Timer, R> {
     env: &'run WakeEnv<'env, D, P, S, M, T>,
     rng: &'run mut R,
     trigger: WakeTrigger,
     settings: &'run WakeSettings,
+    /// The whole wake's budget.
+    wake_budget: Budget<'env, T>,
+    /// The budget of the current part: the whole budget for the device part, a share of it
+    /// for each board round.
     budget: Budget<'env, T>,
     now: UnixSeconds,
+    /// How the current part ended early; reset for each board round.
     ending: Option<WakeEnding>,
+    liveness: Option<Liveness>,
     report: Progress,
 }
 
@@ -340,7 +380,7 @@ where
 {
     async fn wake(&mut self, state: &mut WakeState) -> Result<WakeReport, WakeError> {
         let trigger = self.trigger;
-        let parties = self.env.parties.parties();
+        let mut parties = self.env.parties.parties();
         state.reconcile(&parties, self.now);
         state.prune(self.now);
         self.expire_knocks(state);
@@ -366,22 +406,109 @@ where
             self.leave_meetups_left_behind(state).await;
         }
 
+        let device_ending = self.ending;
+        let mut wake = WakeFacts {
+            decision,
+            reads_due: self.settings.mailbox_reads == MailboxReads::EveryWake
+                || matches!(
+                    trigger,
+                    WakeTrigger::Push(PushReason::Mailbox | PushReason::Unknown)
+                ),
+            commit_push: trigger == WakeTrigger::Push(PushReason::GroupCommit),
+            new_epochs: note_epochs(state, &parties),
+        };
+        let servers = round_order(state, &parties);
+        let mut boards = Vec::with_capacity(servers.len());
+        let mut rounds_left = servers.len();
+        for server in servers {
+            // An equal share of what is left: time an earlier round does not use flows on.
+            self.budget = self.wake_budget.share(rounds_left);
+            rounds_left = rounds_left.saturating_sub(1);
+            // A device part that ended early skips every round's network steps.
+            self.ending = device_ending;
+            let mut board = state.take_board(&server);
+            let upload = self
+                .round(state, &mut board, &mut parties, &mut wake)
+                .await;
+            // Given back on every path, so an error leaves no board behind.
+            state.put_board(board);
+            boards.push(BoardReport {
+                server,
+                upload: upload?,
+                ending: self.ending.unwrap_or(WakeEnding::Completed),
+            });
+        }
+        self.budget = self.wake_budget.whole();
+        self.ending = device_ending;
+
+        let in_use = servers_of(&parties);
+        state.drop_idle_boards(&in_use);
+        let ended_early = device_ending.is_some()
+            || boards
+                .iter()
+                .any(|board| board.ending != WakeEnding::Completed);
+        let next_wake = self.finish(state, &in_use, ended_early);
+        let ending = device_ending
+            .or_else(|| {
+                boards
+                    .iter()
+                    .map(|board| board.ending)
+                    .find(|ending| *ending != WakeEnding::Completed)
+            })
+            .unwrap_or(WakeEnding::Completed);
+        let upload = boards.first().map_or_else(
+            || UploadOutcome::NotDue(self.now.checked_add(next_wake).unwrap_or(self.now)),
+            |board| board.upload,
+        );
+        Ok(WakeReport {
+            decision,
+            transitions: core::mem::take(&mut self.report.transitions),
+            upload,
+            boards,
+            matched: core::mem::take(&mut self.report.matched),
+            knocks_sent: self.report.knocks_sent,
+            knock_decisions: core::mem::take(&mut self.report.knock_decisions),
+            welcomes: self.report.welcomes,
+            notices: core::mem::take(&mut self.report.notices),
+            next_wake,
+            ending,
+        })
+    }
+
+    /// One server's board round: group logs, lease and board, knocks, mailboxes, mailbox pool.
+    /// Only that server's Parties take part: their Spots get keys and real records, the rest of
+    /// the lease is dummies, so each board sees one lease per device per bucket.
+    async fn round(
+        &mut self,
+        state: &mut WakeState,
+        board: &mut Board,
+        parties: &mut Vec<PartyInfo>,
+        wake: &mut WakeFacts,
+    ) -> Result<UploadOutcome, WakeError> {
+        let server = board.server.clone();
         let Synced {
-            parties,
-            epoch_changed,
-            upload_trigger,
-            plan,
+            plan:
+                BoardPlan {
+                    epoch_changed,
+                    upload_trigger,
+                    plan,
+                },
             network_needed,
-            reads_due,
-        } = self.sync_parties(state, parties, decision).await;
-        let active = self.derive_keys(state, &parties, decision)?;
+        } = self.sync_board(state, board, parties, wake).await;
+        let on_board: Vec<PartyInfo> = parties
+            .iter()
+            .filter(|party| party.server == server)
+            .cloned()
+            .collect();
+        let active = self.derive_keys(state, &on_board, wake.decision)?;
         let keys = Keys {
-            parties: &parties,
+            server: &server,
+            parties: &on_board,
             active: &active,
         };
-        // Knocks answer the records the server held when the wake began, including any the
+        // Knocks answer the records the server held when the round began, including any the
         // upload is about to replace.
-        let held_at_start = state.leases.clone();
+        let held_at_start = board.leases.clone();
         let upload = match plan {
             UploadPlan::NotBefore(time) => UploadOutcome::NotDue(time),
             UploadPlan::UploadNow => {
@@ -394,83 +521,89 @@ where
                     trigger: upload_trigger,
                     epoch_change,
                 };
-                self.upload(state, &keys, why).await?
+                self.upload(state, board, &keys, why).await?
             }
         };
 
-        if reads_due {
-            self.answer_knocks(state, &keys, &held_at_start).await;
-            self.read_replies(state, &keys).await;
+        if wake.reads_due {
+            self.answer_knocks(state, board, &keys, &held_at_start)
+                .await;
+            self.read_replies(state, board, &keys).await;
         }
         if network_needed {
-            let server = self.env.server;
-            self.port(WakeStep::MailboxPool, server.refill_mailbox_pool())
+            let port = self.env.server;
+            self.port(WakeStep::MailboxPool, port.refill_mailbox_pool(&server))
                 .await;
         }
-
-        let next_wake = self.finish(state);
-        Ok(WakeReport {
-            decision,
-            transitions: core::mem::take(&mut self.report.transitions),
-            upload,
-            matched: core::mem::take(&mut self.report.matched),
-            knocks_sent: self.report.knocks_sent,
-            knock_decisions: core::mem::take(&mut self.report.knock_decisions),
-            welcomes: self.report.welcomes,
-            notices: core::mem::take(&mut self.report.notices),
-            next_wake,
-            ending: self.ending.unwrap_or(WakeEnding::Completed),
-        })
+        Ok(upload)
     }
 
-    /// Decides whether this wake needs the network at all (an upload due, a Commit pushed, or
-    /// mailboxes to read); if so pulls the group logs first (design B.4.7) and decides again
-    /// with the new epochs. A quiet wake makes no request.
-    async fn sync_parties(
+    /// Decides whether this board needs the network at all (an upload due, a Commit pushed, or
+    /// mailboxes to read); if so pulls the server's group logs first (design B.4.7) and decides
+    /// again with the new epochs. A quiet round makes no request.
+    async fn sync_board(
         &mut self,
         state: &mut WakeState,
-        mut parties: Vec<PartyInfo>,
-        decision: GateDecision,
+        board: &Board,
+        parties: &mut Vec<PartyInfo>,
+        wake: &mut WakeFacts,
     ) -> Synced {
-        let reads_due = self.settings.mailbox_reads == MailboxReads::EveryWake
-            || matches!(
-                self.trigger,
-                WakeTrigger::Push(PushReason::Mailbox | PushReason::Unknown)
-            );
-        let commit_push = self.trigger == WakeTrigger::Push(PushReason::GroupCommit);
-        let mut epoch_changed = commit_push | note_epochs(state, &parties);
-        let facts = Facts {
-            decision,
-            epoch_changed,
-        };
-        let mut upload_trigger = self.upload_trigger(state, &parties, facts);
-        let mut plan = plan_upload(upload_trigger, state.last_upload, self.now);
-        // A Commit push always makes the upload due (`EpochChanged`).
-        let network_needed = plan == UploadPlan::UploadNow || reads_due;
-        let server = self.env.server;
+        let server = board.server.clone();
+        let mut plan = self.plan_board(state, board, parties, wake);
+        // A Commit push always makes the upload due (`EpochChanged`) on a board with Parties.
+        let network_needed = plan.plan == UploadPlan::UploadNow || wake.reads_due;
+        let port = self.env.server;
         if network_needed
             && self
-                .port(WakeStep::GroupLogs, server.pull_group_logs())
+                .port(WakeStep::GroupLogs, port.pull_group_logs(&server))
                 .await
                 .is_some()
         {
-            parties = self.env.parties.parties();
-            state.reconcile(&parties, self.now);
-            epoch_changed |= note_epochs(state, &parties);
-            let facts = Facts {
-                decision,
-                epoch_changed,
-            };
-            upload_trigger = self.upload_trigger(state, &parties, facts);
-            plan = plan_upload(upload_trigger, state.last_upload, self.now);
+            *parties = self.env.parties.parties();
+            state.reconcile(parties, self.now);
+            wake.new_epochs.extend(note_epochs(state, parties));
+            plan = self.plan_board(state, board, parties, wake);
         }
         Synced {
-            parties,
+            plan,
+            network_needed,
+        }
+    }
+
+    /// Whether this board's Parties moved to a new epoch, why to upload to it, and whether
+    /// the upload is due. A board with no Party left uploads only to withdraw a real record
+    /// it still holds; it gets no cover leases.
+    fn plan_board(
+        &self,
+        state: &WakeState,
+        board: &Board,
+        parties: &[PartyInfo],
+        wake: &WakeFacts,
+    ) -> BoardPlan {
+        let on_board: Vec<PartyInfo> = parties
+            .iter()
+            .filter(|party| party.server == board.server)
+            .cloned()
+            .collect();
+        let epoch_changed = !on_board.is_empty()
+            && (wake.commit_push
+                || on_board
+                    .iter()
+                    .any(|party| wake.new_epochs.contains(&party.party)));
+        let facts = Facts {
+            decision: wake.decision,
+            epoch_changed,
+        };
+        let upload_trigger = self.upload_trigger(state, board, &on_board, facts);
+        let plan = if on_board.is_empty() && upload_trigger == UploadTrigger::Wake {
+            UploadPlan::NotBefore(lease_end(board).unwrap_or(self.now))
+        } else {
+            plan_upload(upload_trigger, board.last_upload, self.now)
+        };
+        BoardPlan {
             epoch_changed,
             upload_trigger,
             plan,
-            network_needed,
-            reads_due,
         }
     }
 
@@ -700,10 +833,11 @@ where
             .collect()
     }
 
-    /// Why to upload (design B.4.5, B.4.7, B.10).
+    /// Why to upload to one board, given the Parties on it (design B.4.5, B.4.7, B.10).
     fn upload_trigger(
         &self,
         state: &WakeState,
+        board: &Board,
         parties: &[PartyInfo],
         facts: Facts,
     ) -> UploadTrigger {
@@ -713,12 +847,11 @@ where
         } = facts;
         let posting = Self::posting(state, parties, decision);
         // Only a confirmed Spot with sharing allowed can become Inside in this wake.
-        let entered = self
-            .report
-            .transitions
-            .iter()
-            .any(|change| change.transition.to == PresenceState::Inside);
-        let stale_record = state.leases.iter().any(|lease| {
+        let entered = self.report.transitions.iter().any(|change| {
+            change.transition.to == PresenceState::Inside
+                && parties.iter().any(|party| party.party == change.spot.party)
+        });
+        let stale_record = board.leases.iter().any(|lease| {
             lease.real_records().any(|(_slot, real)| {
                 !posting
                     .iter()
@@ -784,11 +917,16 @@ where
     fn real_slots<'keys>(
         &self,
         state: &WakeState,
+        board: &Board,
         keys: &Keys<'keys>,
         start: Bucket,
     ) -> Vec<RealSlot<'keys>> {
-        let Keys { parties, active } = *keys;
-        let newest = state.leases.last().copied();
+        let Keys {
+            server,
+            parties,
+            active,
+        } = *keys;
+        let newest = board.leases.last().copied();
         let held = |spot: SpotRef| {
             newest.is_some_and(|lease| lease.real_records().any(|(_slot, real)| real.spot == spot))
         };
@@ -804,7 +942,10 @@ where
         candidates.sort_by_key(|candidate| held(candidate.spot.spot()));
         let mut real = Vec::new();
         for candidate in choose_slots(candidates) {
-            let Some(knock_mailbox) = self.env.server.take_mailbox(MailboxPurpose::Knock, start)
+            let Some(knock_mailbox) =
+                self.env
+                    .server
+                    .take_mailbox(server, MailboxPurpose::Knock, start)
             else {
                 continue;
             };
@@ -827,15 +968,18 @@ where
     async fn upload(
         &mut self,
         state: &mut WakeState,
+        board: &mut Board,
         keys: &Keys<'_>,
         why: UploadReason,
     ) -> Result<UploadOutcome, WakeError> {
-        let Keys { parties, active } = *keys;
+        let Keys {
+            server, parties, ..
+        } = *keys;
         if self.ending.is_some() {
             return Ok(UploadOutcome::Interrupted(why.trigger));
         }
         let start = self.now.bucket();
-        let real = self.real_slots(state, keys, start);
+        let real = self.real_slots(state, board, keys, start);
         let real_records = real.len();
         let revoke_key = RevokeKey::generate(self.rng);
         let built = build_lease(
@@ -849,7 +993,7 @@ where
         let live = remember(start, &built.slots, parties);
         // Remembered before the upload: if the wake stops mid-request the server may still
         // hold it, so its records must be skipped and knocks on them answered.
-        state.leases.push(live);
+        board.leases.push(live);
         let board_read = read_board(
             why.trigger,
             &ReadPolicy {
@@ -859,24 +1003,24 @@ where
             },
             self.rng,
         );
-        let server = self.env.server;
+        let port = self.env.server;
         let upload = LeaseUpload {
             lease: built.lease,
             revoke_key,
             read: board_read,
         };
         let Some(first_page) = self
-            .port(WakeStep::Upload, server.upload_lease(upload))
+            .port(WakeStep::Upload, port.upload_lease(server, upload))
             .await
         else {
             return Ok(UploadOutcome::Interrupted(why.trigger));
         };
-        // The upload replaced every earlier lease.
-        state.leases = vec![live];
-        state.last_upload = Some(self.now);
+        // The upload replaced every earlier lease on this board.
+        board.leases = vec![live];
+        board.last_upload = Some(self.now);
         if let Some(page) = first_page {
-            let matches = self.read_board(state, active, page).await?;
-            self.knock(state, keys, &matches).await?;
+            let matches = self.read_board(state, board, keys, page).await?;
+            self.knock(state, board, keys, &matches).await?;
         }
         Ok(UploadOutcome::Uploaded {
             trigger: why.trigger,
@@ -890,11 +1034,13 @@ where
     async fn read_board(
         &mut self,
         state: &mut WakeState,
-        active: &[ActiveSpot],
+        board: &Board,
+        keys: &Keys<'_>,
         first: BoardPage,
     ) -> Result<Vec<BoardMatch>, PresenceError> {
+        let Keys { server, active, .. } = *keys;
         let trial = TrialMatcher::new(active, self.now.bucket());
-        let own = state.own_records();
+        let own = board.own_records();
         let mut matches = Vec::new();
         let mut page = first;
         loop {
@@ -910,9 +1056,9 @@ where
             let Some(cursor) = page.next.take() else {
                 break;
             };
-            let server = self.env.server;
+            let port = self.env.server;
             match self
-                .port(WakeStep::BoardPages, server.board_page(cursor))
+                .port(WakeStep::BoardPages, port.board_page(server, cursor))
                 .await
             {
                 Some(next) => page = next,
@@ -932,12 +1078,17 @@ where
     /// and records of Meetups this device is in.
     async fn knock(
         &mut self,
-        state: &mut WakeState,
+        state: &WakeState,
+        board: &mut Board,
         keys: &Keys<'_>,
         matches: &[BoardMatch],
     ) -> Result<(), PresenceError> {
-        let Keys { parties, active } = *keys;
-        let already_knocked: Vec<MailboxId> = state
+        let Keys {
+            server,
+            parties,
+            active,
+        } = *keys;
+        let already_knocked: Vec<MailboxId> = board
             .sent_knocks
             .iter()
             .map(|sent| sent.knock_mailbox)
@@ -964,10 +1115,10 @@ where
             let (Some(keys), Some(party)) = (keys, party) else {
                 continue;
             };
-            let Some(reply_mailbox) = self
-                .env
-                .server
-                .take_mailbox(MailboxPurpose::Reply, self.now.bucket())
+            let Some(reply_mailbox) =
+                self.env
+                    .server
+                    .take_mailbox(server, MailboxPurpose::Reply, self.now.bucket())
             else {
                 continue;
             };
@@ -978,7 +1129,7 @@ where
                 &KnockInputs {
                     matched: target,
                     spot: keys,
-                    own_record: state.own_record_for(target.spot),
+                    own_record: board.own_record_for(target.spot),
                     own_leaf: party.own_leaf,
                     key_package,
                     reply_mailbox,
@@ -989,7 +1140,7 @@ where
                 self.rng,
             )?;
             // Remembered first: a knock that may have reached the server is not repeated.
-            state.sent_knocks.push(SentKnock {
+            board.sent_knocks.push(SentKnock {
                 spot: target.spot,
                 epoch: target.epoch,
                 knock_mailbox: knock.mailbox,
@@ -999,9 +1150,9 @@ where
                 sent_at: self.now,
                 status: KnockStatus::Waiting,
             });
-            let server = self.env.server;
+            let port = self.env.server;
             if self
-                .port(WakeStep::Knock, server.post_knock(knock))
+                .port(WakeStep::Knock, port.post_knock(server, knock))
                 .await
                 .is_none()
             {
@@ -1018,30 +1169,35 @@ where
     async fn answer_knocks(
         &mut self,
         state: &mut WakeState,
+        board: &mut Board,
         keys: &Keys<'_>,
         held_at_start: &[LiveLease],
     ) {
         let mut leases = held_at_start.to_vec();
-        for lease in &state.leases {
+        for lease in &board.leases {
             if !leases.contains(lease) {
                 leases.push(*lease);
             }
         }
-        let received = self.receive_knocks(state, keys, &leases).await;
+        let received = self.receive_knocks(board, keys, &leases).await;
         if received.is_empty() {
             return;
         }
-        self.decide_knocks(state, received).await;
+        self.decide_knocks(state, board, received).await;
     }
 
     /// Every new knock that opens and verifies under one of this device's records.
     async fn receive_knocks(
         &mut self,
-        state: &WakeState,
+        board: &Board,
         keys: &Keys<'_>,
         leases: &[LiveLease],
     ) -> Vec<ReceivedKnock> {
-        let Keys { parties, active } = *keys;
+        let Keys {
+            server,
+            parties,
+            active,
+        } = *keys;
         let mut received = Vec::new();
         let records: Vec<(Bucket, RecordRandomness, RealRecord)> = leases
             .iter()
@@ -1052,9 +1208,12 @@ where
             })
             .collect();
         for (start, own_record, real) in records {
-            let server = self.env.server;
+            let port = self.env.server;
             let Some(posts) = self
-                .port(WakeStep::Mailboxes, server.read_mailbox(real.knock_mailbox))
+                .port(
+                    WakeStep::Mailboxes,
+                    port.read_mailbox(server, real.knock_mailbox),
+                )
                 .await
             else {
                 break;
@@ -1082,7 +1241,7 @@ where
                 let Ok(knock) = verify_knock(&context, opened, &roster) else {
                     continue;
                 };
-                let decided = state
+                let decided = board
                     .decided_knocks
                     .iter()
                     .any(|decided| decided.reply_mailbox == knock.knock.reply_mailbox);
@@ -1104,9 +1263,17 @@ where
     }
 
     /// The liveness check and the decision on each received knock (design B.4.4 steps 4 to 6).
-    async fn decide_knocks(&mut self, state: &mut WakeState, received: Vec<ReceivedKnock>) {
-        let (fresh, sharing) = self.liveness(state).await;
-        let waiting: Vec<RecordRandomness> = state
+    async fn decide_knocks(
+        &mut self,
+        state: &mut WakeState,
+        board: &mut Board,
+        received: Vec<ReceivedKnock>,
+    ) {
+        let Liveness {
+            fix: fresh,
+            sharing,
+        } = self.liveness(state).await;
+        let waiting: Vec<RecordRandomness> = board
             .sent_knocks
             .iter()
             .filter(|sent| sent.status == KnockStatus::Waiting)
@@ -1141,7 +1308,7 @@ where
                     current_meetup,
                 },
             );
-            state.decided_knocks.push(DecidedKnock {
+            board.decided_knocks.push(DecidedKnock {
                 reply_mailbox: received.knock.knock.reply_mailbox,
                 at: self.now,
             });
@@ -1161,9 +1328,13 @@ where
         }
     }
 
-    /// A fresh GPS fix and the gate read again, for the liveness check. The fix also moves
-    /// presence and the exclusion trail.
-    async fn liveness(&mut self, state: &mut WakeState) -> (Option<Fix>, Sharing) {
+    /// A fresh GPS fix and the gate read again, for the liveness check, taken once per wake
+    /// and shared by every round with knocks to decide. The fix also moves presence and the
+    /// exclusion trail.
+    async fn liveness(&mut self, state: &mut WakeState) -> Liveness {
+        if let Some(liveness) = self.liveness {
+            return liveness;
+        }
         let before = self.gate(state.trail.status_at(self.now));
         let fix = if before == GateDecision::Share {
             self.fix(
@@ -1185,23 +1356,28 @@ where
         } else {
             Sharing::Suppressed
         };
-        (fix, sharing)
+        let liveness = Liveness { fix, sharing };
+        self.liveness = Some(liveness);
+        liveness
     }
 
     /// Reads the reply mailbox of every knock still waiting and hands Welcomes on, with the
     /// `PSK_meet` of the record the knock answered. A device no longer Inside the Spot has no
     /// keys for it: it still reads the mailbox, like any other, but joins nothing.
-    async fn read_replies(&mut self, state: &mut WakeState, keys: &Keys<'_>) {
-        let waiting: Vec<SentKnock> = state
+    async fn read_replies(&mut self, state: &mut WakeState, board: &mut Board, keys: &Keys<'_>) {
+        let waiting: Vec<SentKnock> = board
             .sent_knocks
             .iter()
             .filter(|sent| sent.status == KnockStatus::Waiting)
             .copied()
             .collect();
         for sent in waiting {
-            let server = self.env.server;
+            let port = self.env.server;
             let Some(posts) = self
-                .port(WakeStep::Mailboxes, server.read_mailbox(sent.reply_mailbox))
+                .port(
+                    WakeStep::Mailboxes,
+                    port.read_mailbox(keys.server, sent.reply_mailbox),
+                )
                 .await
             else {
                 break;
@@ -1231,7 +1407,7 @@ where
             }
             if handed {
                 state.saw_peer(sent.spot, self.now);
-                for knock in &mut state.sent_knocks {
+                for knock in &mut board.sent_knocks {
                     if knock.reply_mailbox == sent.reply_mailbox {
                         knock.status = KnockStatus::Answered;
                     }
@@ -1243,22 +1419,25 @@ where
     /// Knocks older than a lease are forgotten; those still waiting raise a notice per Spot.
     fn expire_knocks(&mut self, state: &mut WakeState) {
         let now = self.now;
-        for sent in &state.sent_knocks {
-            let notice = WakeNotice::UnansweredKnock(sent.spot);
-            if sent.status == KnockStatus::Waiting
-                && knock_unanswered(sent.sent_at, now)
-                && !self.report.notices.contains(&notice)
-            {
-                self.report.notices.push(notice);
+        for board in &mut state.boards {
+            for sent in &board.sent_knocks {
+                let notice = WakeNotice::UnansweredKnock(sent.spot);
+                if sent.status == KnockStatus::Waiting
+                    && knock_unanswered(sent.sent_at, now)
+                    && !self.report.notices.contains(&notice)
+                {
+                    self.report.notices.push(notice);
+                }
             }
+            board
+                .sent_knocks
+                .retain(|sent| !knock_unanswered(sent.sent_at, now));
         }
-        state
-            .sent_knocks
-            .retain(|sent| !knock_unanswered(sent.sent_at, now));
     }
 
-    /// Location mode and the next wake.
-    fn finish(&self, state: &WakeState) -> Duration {
+    /// Location mode and the next wake. The cover spacing runs from the oldest last upload
+    /// among the boards with Parties, so every one of them gets its upload on time.
+    fn finish(&self, state: &WakeState, in_use: &[ServerId], ended_early: bool) -> Duration {
         if !self.any_meetup(state) {
             let mode = if state.spots.iter().any(TrackedSpot::inside) {
                 LocationMode::Dwell
@@ -1267,14 +1446,22 @@ where
             };
             self.env.device.set_location_mode(mode);
         }
-        let next = if self.ending.is_some() {
+        let next = if ended_early {
             RETRY_AFTER
         } else if awaiting_fix(state) {
             SpotPresence::ENTRY_FIX_SPACING
         } else {
-            let since = state.last_upload.map_or(Duration::ZERO, |last| {
-                self.now.saturating_duration_since(last)
-            });
+            let since = state
+                .boards
+                .iter()
+                .filter(|board| in_use.contains(&board.server))
+                .map(|board| {
+                    board.last_upload.map_or(Duration::ZERO, |last| {
+                        self.now.saturating_duration_since(last)
+                    })
+                })
+                .max()
+                .unwrap_or(Duration::ZERO);
             pingers_presence::TARGET_UPLOAD_SPACING
                 .saturating_sub(since)
                 .max(RETRY_AFTER)
@@ -1284,14 +1471,26 @@ where
     }
 }
 
-/// The Parties after the group-log sync, and what to do about the lease.
-struct Synced {
-    parties: Vec<PartyInfo>,
+/// What holds for every board round of a wake.
+struct WakeFacts {
+    decision: GateDecision,
+    reads_due: bool,
+    commit_push: bool,
+    /// Parties seen moving to a new epoch in this wake, before or after a group-log pull.
+    new_epochs: Vec<PartyId>,
+}
+
+/// What to do about one board's lease.
+struct BoardPlan {
     epoch_changed: bool,
     upload_trigger: UploadTrigger,
     plan: UploadPlan,
+}
+
+/// The plan after the board's group-log sync, and whether the round uses the network.
+struct Synced {
+    plan: BoardPlan,
     network_needed: bool,
-    reads_due: bool,
 }
 
 /// What the upload trigger depends on besides the state.
@@ -1308,11 +1507,58 @@ struct UploadReason {
     epoch_change: EpochChange,
 }
 
-/// The Parties after the group-log sync and this wake's Spot keys.
+/// One board round's server, the Parties on it after its group-log sync, and their Spot keys.
 #[derive(Clone, Copy)]
 struct Keys<'keys> {
+    server: &'keys ServerId,
     parties: &'keys [PartyInfo],
     active: &'keys [ActiveSpot],
+}
+
+/// Every server with a Party, once each, in the Parties' order.
+fn servers_of(parties: &[PartyInfo]) -> Vec<ServerId> {
+    let mut servers: Vec<ServerId> = Vec::new();
+    for party in parties {
+        if !servers.contains(&party.server) {
+            servers.push(party.server.clone());
+        }
+    }
+    servers
+}
+
+/// The servers that get a board round: every server with a Party, and every board that still
+/// holds a lease or waits for a Welcome. The board whose last successful upload is oldest goes
+/// first (never uploaded first, ties by server origin), so a server that keeps failing or
+/// hanging at the front cannot starve the others across wakes.
+fn round_order(state: &WakeState, parties: &[PartyInfo]) -> Vec<ServerId> {
+    let mut servers = servers_of(parties);
+    for board in &state.boards {
+        if board.holds_something() && !servers.contains(&board.server) {
+            servers.push(board.server.clone());
+        }
+    }
+    let last_upload = |server: &ServerId| {
+        state
+            .boards
+            .iter()
+            .find(|board| board.server == *server)
+            .and_then(|board| board.last_upload)
+    };
+    servers.sort_by(|left, right| {
+        last_upload(left)
+            .cmp(&last_upload(right))
+            .then_with(|| left.as_str().cmp(right.as_str()))
+    });
+    servers
+}
+
+/// When the board's newest lease expires, if it holds one.
+fn lease_end(board: &Board) -> Option<UnixSeconds> {
+    board
+        .leases
+        .last()
+        .and_then(|lease| lease.start.checked_add(pingers_presence::LEASE_BUCKETS))
+        .map(Bucket::start)
 }
 
 /// A Spot and the epoch a real record for it is sealed under.
@@ -1364,9 +1610,9 @@ fn awaiting_fix(state: &WakeState) -> bool {
     })
 }
 
-/// Records each Party's epoch; returns whether any known Party moved to a new one.
-fn note_epochs(state: &mut WakeState, parties: &[PartyInfo]) -> bool {
-    let mut changed = false;
+/// Records each Party's epoch; returns the known Parties that moved to a new one.
+fn note_epochs(state: &mut WakeState, parties: &[PartyInfo]) -> Vec<PartyId> {
+    let mut changed = Vec::new();
     let mut next = Vec::with_capacity(parties.len());
     for party in parties {
         let current = party.epoch.current;
@@ -1375,7 +1621,7 @@ fn note_epochs(state: &mut WakeState, parties: &[PartyInfo]) -> bool {
             .iter()
             .any(|known| known.party == party.party && known.epoch != current)
         {
-            changed = true;
+            changed.push(party.party);
         }
         next.push(KnownEpoch {
             party: party.party,
