@@ -62,16 +62,16 @@ pub(crate) fn send(config: &Path, token: &str, handle: [u8; 8]) -> Result<Sent> 
         .enable_all()
         .build()
         .context("starting the async runtime")?;
-    runtime.block_on(post(&credential, token, handle))
+    runtime.block_on(post(PUSH_RELAY, &credential, token, handle))
 }
 
-async fn post(credential: &str, token: &str, handle: [u8; 8]) -> Result<Sent> {
+async fn post(relay: &str, credential: &str, token: &str, handle: [u8; 8]) -> Result<Sent> {
     let client = reqwest::Client::builder()
         .timeout(TIMEOUT)
         .build()
         .context("building the HTTP client")?;
     let published = client
-        .get(format!("{PUSH_RELAY}/v1/config"))
+        .get(format!("{relay}/v1/config"))
         .send()
         .await
         .context("GET /v1/config from the push relay")?;
@@ -88,7 +88,7 @@ async fn post(credential: &str, token: &str, handle: [u8; 8]) -> Result<Sent> {
     }
     let body = request(&config, token, handle)?;
     let answer = client
-        .post(format!("{PUSH_RELAY}/v1/push"))
+        .post(format!("{relay}/v1/push"))
         .header(AUTHORIZATION, format!("Bearer {credential}"))
         .header(CONTENT_TYPE, "application/cbor")
         .body(body)
@@ -169,7 +169,78 @@ mod tests {
     use pingers_crypto::{PushRelayPrivateKey, PushTokenToOpen, open_push_token};
     use pingers_proto::{PushRelayKeyConfig, PushRelayKeyId, TimeToLive};
 
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
     use super::*;
+
+    /// A stand-in push relay on loopback: `/v1/config` answers `config` (status and body),
+    /// `/v1/push` answers `push`. Returns its base URL.
+    async fn fake_relay(config: (u16, Vec<u8>), push: u16) -> Result<String> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        tokio::spawn(async move {
+            while let Ok((mut stream, _peer)) = listener.accept().await {
+                let mut request = Vec::new();
+                let mut buffer = [0; 4096];
+                // Enough to see the request line; the body is not needed.
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    match stream.read(&mut buffer).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => request.extend_from_slice(buffer.get(..read).unwrap_or(&[])),
+                    }
+                }
+                let (status, body) = if request.starts_with(b"GET /v1/config ") {
+                    (config.0, config.1.clone())
+                } else {
+                    (push, Vec::new())
+                };
+                let head = format!(
+                    "HTTP/1.1 {status} X\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _sent = stream.write_all(&[head.as_bytes(), &body].concat()).await;
+                let _closed = stream.shutdown().await;
+            }
+        });
+        Ok(format!("http://{address}"))
+    }
+
+    fn relay_config(platforms: Vec<PushPlatform>) -> Result<Vec<u8>> {
+        let private_key = PushRelayPrivateKey::generate(&mut UnwrapErr(SysRng));
+        Ok(PushRelayConfig {
+            key_config: PushRelayKeyConfig {
+                key_id: PushRelayKeyId::new(1),
+                public_key: *private_key.public_key(1)?.public_key(),
+            },
+            platforms,
+            max_time_to_live: TimeToLive::new(LIFETIME)?,
+            operator: "test".to_owned(),
+        }
+        .encode()?)
+    }
+
+    #[tokio::test]
+    async fn the_relay_answer_decides_sent_gone_or_an_error() -> Result<()> {
+        let fcm = relay_config(vec![PushPlatform::Fcm])?;
+        let send = |relay: String| async move { post(&relay, "c", "token", [0; 8]).await };
+        assert_eq!(
+            send(fake_relay((200, fcm.clone()), 202).await?).await?,
+            Sent::Accepted("202 Accepted".to_owned())
+        );
+        assert_eq!(
+            send(fake_relay((200, fcm.clone()), 410).await?).await?,
+            Sent::Gone
+        );
+        assert!(
+            send(fake_relay((200, fcm.clone()), 401).await?)
+                .await
+                .is_err()
+        );
+        assert!(send(fake_relay((404, fcm), 202).await?).await.is_err());
+        let up_only = relay_config(vec![PushPlatform::UnifiedPush])?;
+        assert!(send(fake_relay((200, up_only), 202).await?).await.is_err());
+        Ok(())
+    }
 
     #[test]
     fn the_request_opens_on_the_relay_as_an_fcm_alert_for_the_token() -> Result<()> {
