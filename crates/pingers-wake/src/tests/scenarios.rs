@@ -122,11 +122,7 @@ async fn second_arrival_knocks_and_the_poster_admits_after_a_liveness_check()
     let admitted = alice.meetups.admitted();
     let admission = admitted.first().ok_or(TestError::Missing("admission"))?;
     // PSK_meet is bound to the Spot, the record's epoch and the start bucket of Alice's record.
-    let alice_start = alice
-        .board()
-        .leases
-        .last()
-        .map(|lease| lease.start);
+    let alice_start = alice.board().leases.last().map(|lease| lease.start);
     assert_eq!(
         Some(admission.key),
         alice_start.map(|bucket| MeetupKeyId {
@@ -175,11 +171,7 @@ async fn second_arrival_knocks_and_the_poster_admits_after_a_liveness_check()
     assert_eq!(welcome.key, admission.key);
     assert_eq!(welcome.psk, admission.psk);
     assert_eq!(welcome.post, b"welcome".to_vec());
-    let status = bob
-        .board()
-        .sent_knocks
-        .first()
-        .map(|sent| sent.status);
+    let status = bob.board().sent_knocks.first().map(|sent| sent.status);
     assert_eq!(status, Some(KnockStatus::Answered));
     // Answered knocks are not read again.
     let read_again = bob.wake(WakeTrigger::Push(PushReason::Mailbox)).await?;
@@ -819,11 +811,7 @@ async fn knocker_who_left_the_spot_reads_the_welcome_but_does_not_join() -> Resu
     );
     assert_eq!(woken.welcomes, 0);
     assert!(bob.meetups.welcomes().is_empty());
-    let status = bob
-        .board()
-        .sent_knocks
-        .first()
-        .map(|sent| sent.status);
+    let status = bob.board().sent_knocks.first().map(|sent| sent.status);
     assert_eq!(status, Some(KnockStatus::Waiting));
     Ok(())
 }

@@ -427,9 +427,11 @@ where
             // A device part that ended early skips every round's network steps.
             self.ending = device_ending;
             let mut board = state.take_board(&server);
-            let upload = self
-                .round(state, &mut board, &mut parties, &mut wake)
-                .await;
+            let mut memory = Memory {
+                device: state,
+                board: &mut board,
+            };
+            let upload = self.round(&mut memory, &mut parties, &mut wake).await;
             // Given back on every path, so an error leaves no board behind.
             state.put_board(board);
             boards.push(BoardReport {
@@ -480,12 +482,11 @@ where
     /// the lease is dummies, so each board sees one lease per device per bucket.
     async fn round(
         &mut self,
-        state: &mut WakeState,
-        board: &mut Board,
+        memory: &mut Memory<'_>,
         parties: &mut Vec<PartyInfo>,
         wake: &mut WakeFacts,
     ) -> Result<UploadOutcome, WakeError> {
-        let server = board.server.clone();
+        let server = memory.board.server.clone();
         let Synced {
             plan:
                 BoardPlan {
@@ -494,13 +495,13 @@ where
                     plan,
                 },
             network_needed,
-        } = self.sync_board(state, board, parties, wake).await;
+        } = self.sync_board(memory, parties, wake).await;
         let on_board: Vec<PartyInfo> = parties
             .iter()
             .filter(|party| party.server == server)
             .cloned()
             .collect();
-        let active = self.derive_keys(state, &on_board, wake.decision)?;
+        let active = self.derive_keys(memory.device, &on_board, wake.decision)?;
         let keys = Keys {
             server: &server,
             parties: &on_board,
@@ -508,7 +509,7 @@ where
         };
         // Knocks answer the records the server held when the round began, including any the
         // upload is about to replace.
-        let held_at_start = board.leases.clone();
+        let held_at_start = memory.board.leases.clone();
         let upload = match plan {
             UploadPlan::NotBefore(time) => UploadOutcome::NotDue(time),
             UploadPlan::UploadNow => {
@@ -521,14 +522,13 @@ where
                     trigger: upload_trigger,
                     epoch_change,
                 };
-                self.upload(state, board, &keys, why).await?
+                self.upload(memory, &keys, why).await?
             }
         };
 
         if wake.reads_due {
-            self.answer_knocks(state, board, &keys, &held_at_start)
-                .await;
-            self.read_replies(state, board, &keys).await;
+            self.answer_knocks(memory, &keys, &held_at_start).await;
+            self.read_replies(memory.device, memory.board, &keys).await;
         }
         if network_needed {
             let port = self.env.server;
@@ -543,13 +543,12 @@ where
     /// again with the new epochs. A quiet round makes no request.
     async fn sync_board(
         &mut self,
-        state: &mut WakeState,
-        board: &Board,
+        memory: &mut Memory<'_>,
         parties: &mut Vec<PartyInfo>,
         wake: &mut WakeFacts,
     ) -> Synced {
-        let server = board.server.clone();
-        let mut plan = self.plan_board(state, board, parties, wake);
+        let server = memory.board.server.clone();
+        let mut plan = self.plan_board(memory, parties, wake);
         // A Commit push always makes the upload due (`EpochChanged`) on a board with Parties.
         let network_needed = plan.plan == UploadPlan::UploadNow || wake.reads_due;
         let port = self.env.server;
@@ -560,9 +559,9 @@ where
                 .is_some()
         {
             *parties = self.env.parties.parties();
-            state.reconcile(parties, self.now);
-            wake.new_epochs.extend(note_epochs(state, parties));
-            plan = self.plan_board(state, board, parties, wake);
+            memory.device.reconcile(parties, self.now);
+            wake.new_epochs.extend(note_epochs(memory.device, parties));
+            plan = self.plan_board(memory, parties, wake);
         }
         Synced {
             plan,
@@ -575,11 +574,11 @@ where
     /// it still holds; it gets no cover leases.
     fn plan_board(
         &self,
-        state: &WakeState,
-        board: &Board,
+        memory: &Memory<'_>,
         parties: &[PartyInfo],
         wake: &WakeFacts,
     ) -> BoardPlan {
+        let board = &*memory.board;
         let on_board: Vec<PartyInfo> = parties
             .iter()
             .filter(|party| party.server == board.server)
@@ -594,7 +593,7 @@ where
             decision: wake.decision,
             epoch_changed,
         };
-        let upload_trigger = self.upload_trigger(state, board, &on_board, facts);
+        let upload_trigger = self.upload_trigger(memory, &on_board, facts);
         let plan = if on_board.is_empty() && upload_trigger == UploadTrigger::Wake {
             UploadPlan::NotBefore(lease_end(board).unwrap_or(self.now))
         } else {
@@ -836,8 +835,7 @@ where
     /// Why to upload to one board, given the Parties on it (design B.4.5, B.4.7, B.10).
     fn upload_trigger(
         &self,
-        state: &WakeState,
-        board: &Board,
+        memory: &Memory<'_>,
         parties: &[PartyInfo],
         facts: Facts,
     ) -> UploadTrigger {
@@ -845,7 +843,8 @@ where
             decision,
             epoch_changed,
         } = facts;
-        let posting = Self::posting(state, parties, decision);
+        let board = &*memory.board;
+        let posting = Self::posting(memory.device, parties, decision);
         // Only a confirmed Spot with sharing allowed can become Inside in this wake.
         let entered = self.report.transitions.iter().any(|change| {
             change.transition.to == PresenceState::Inside
@@ -916,8 +915,7 @@ where
     /// without a mailbox gets no record this time (design B.4.2, B.4.4).
     fn real_slots<'keys>(
         &self,
-        state: &WakeState,
-        board: &Board,
+        memory: &Memory<'_>,
         keys: &Keys<'keys>,
         start: Bucket,
     ) -> Vec<RealSlot<'keys>> {
@@ -926,7 +924,8 @@ where
             parties,
             active,
         } = *keys;
-        let newest = board.leases.last().copied();
+        let state = &*memory.device;
+        let newest = memory.board.leases.last().copied();
         let held = |spot: SpotRef| {
             newest.is_some_and(|lease| lease.real_records().any(|(_slot, real)| real.spot == spot))
         };
@@ -967,8 +966,7 @@ where
     /// board shows.
     async fn upload(
         &mut self,
-        state: &mut WakeState,
-        board: &mut Board,
+        memory: &mut Memory<'_>,
         keys: &Keys<'_>,
         why: UploadReason,
     ) -> Result<UploadOutcome, WakeError> {
@@ -979,7 +977,7 @@ where
             return Ok(UploadOutcome::Interrupted(why.trigger));
         }
         let start = self.now.bucket();
-        let real = self.real_slots(state, board, keys, start);
+        let real = self.real_slots(memory, keys, start);
         let real_records = real.len();
         let revoke_key = RevokeKey::generate(self.rng);
         let built = build_lease(
@@ -993,7 +991,7 @@ where
         let live = remember(start, &built.slots, parties);
         // Remembered before the upload: if the wake stops mid-request the server may still
         // hold it, so its records must be skipped and knocks on them answered.
-        board.leases.push(live);
+        memory.board.leases.push(live);
         let board_read = read_board(
             why.trigger,
             &ReadPolicy {
@@ -1016,11 +1014,11 @@ where
             return Ok(UploadOutcome::Interrupted(why.trigger));
         };
         // The upload replaced every earlier lease on this board.
-        board.leases = vec![live];
-        board.last_upload = Some(self.now);
+        memory.board.leases = vec![live];
+        memory.board.last_upload = Some(self.now);
         if let Some(page) = first_page {
-            let matches = self.read_board(state, board, keys, page).await?;
-            self.knock(state, board, keys, &matches).await?;
+            let matches = self.read_board(memory, keys, page).await?;
+            self.knock(memory, keys, &matches).await?;
         }
         Ok(UploadOutcome::Uploaded {
             trigger: why.trigger,
@@ -1033,14 +1031,13 @@ where
     /// or with no Spot Inside, is downloaded in full and discarded (design B.4.3).
     async fn read_board(
         &mut self,
-        state: &mut WakeState,
-        board: &Board,
+        memory: &mut Memory<'_>,
         keys: &Keys<'_>,
         first: BoardPage,
     ) -> Result<Vec<BoardMatch>, PresenceError> {
         let Keys { server, active, .. } = *keys;
         let trial = TrialMatcher::new(active, self.now.bucket());
-        let own = board.own_records();
+        let own = memory.board.own_records();
         let mut matches = Vec::new();
         let mut page = first;
         loop {
@@ -1066,7 +1063,7 @@ where
             }
         }
         for found in &matches {
-            state.saw_peer(found.spot, self.now);
+            memory.device.saw_peer(found.spot, self.now);
             if !self.report.matched.contains(&found.spot) {
                 self.report.matched.push(found.spot);
             }
@@ -1078,8 +1075,7 @@ where
     /// and records of Meetups this device is in.
     async fn knock(
         &mut self,
-        state: &WakeState,
-        board: &mut Board,
+        memory: &mut Memory<'_>,
         keys: &Keys<'_>,
         matches: &[BoardMatch],
     ) -> Result<(), PresenceError> {
@@ -1088,6 +1084,8 @@ where
             parties,
             active,
         } = *keys;
+        let state = &*memory.device;
+        let board = &mut *memory.board;
         let already_knocked: Vec<MailboxId> = board
             .sent_knocks
             .iter()
@@ -1168,22 +1166,22 @@ where
     /// Records whose Spot has no keys now are read like the others, but nothing opens.
     async fn answer_knocks(
         &mut self,
-        state: &mut WakeState,
-        board: &mut Board,
+        memory: &mut Memory<'_>,
         keys: &Keys<'_>,
         held_at_start: &[LiveLease],
     ) {
         let mut leases = held_at_start.to_vec();
-        for lease in &board.leases {
+        for lease in &memory.board.leases {
             if !leases.contains(lease) {
                 leases.push(*lease);
             }
         }
-        let received = self.receive_knocks(board, keys, &leases).await;
+        let received = self.receive_knocks(memory.board, keys, &leases).await;
         if received.is_empty() {
             return;
         }
-        self.decide_knocks(state, board, received).await;
+        self.decide_knocks(memory.device, memory.board, received)
+            .await;
     }
 
     /// Every new knock that opens and verifies under one of this device's records.
@@ -1469,6 +1467,13 @@ where
         self.env.device.schedule_wake(next);
         next
     }
+}
+
+/// One board round's memory: the device-wide state, and the server's board taken out of it
+/// for the round.
+struct Memory<'round> {
+    device: &'round mut WakeState,
+    board: &'round mut Board,
 }
 
 /// What holds for every board round of a wake.

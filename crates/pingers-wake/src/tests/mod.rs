@@ -5,6 +5,7 @@
 
 mod fakes;
 mod scenarios;
+mod servers;
 mod suppression;
 mod timing;
 
@@ -25,8 +26,8 @@ use pingers_time::{Clock, ManualClock, UnixSeconds};
 use self::fakes::{FakeMeetups, FakeParties, FakeServer, RosterMember, World};
 use crate::ports::{PartyInfo, RegionId, SpotInfo};
 use crate::{
-    BoardSnapshot, GeofenceEvent, GeofenceTransition, MailboxReads, WakeEnv, WakeError, WakeInput, WakeReport,
-    WakeSettings, WakeState, WakeTrigger,
+    BoardSnapshot, GeofenceEvent, GeofenceTransition, MailboxReads, WakeEnv, WakeError, WakeInput,
+    WakeReport, WakeSettings, WakeState, WakeTrigger,
 };
 
 /// The budget most tests give a wake (an FCM high-priority message allows about this much).

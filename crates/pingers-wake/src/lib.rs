@@ -39,11 +39,12 @@ mod tests;
 
 pub use error::{PortError, WakeError};
 pub use pipeline::{
-    BoardReport, FIX_MAX_AGE, GeofenceEvent, GeofenceTransition, KnockOutcome, LIVENESS_FIX_TIMEOUT,
-    MailboxReads, PushReason, RETRY_AFTER, ROUTINE_FIX_TIMEOUT, UploadOutcome, WakeEnding, WakeEnv,
-    WakeInput, WakeNotice, WakeReport, WakeSettings, WakeStep, WakeTrigger,
+    BoardReport, FIX_MAX_AGE, GeofenceEvent, GeofenceTransition, KnockOutcome,
+    LIVENESS_FIX_TIMEOUT, MailboxReads, PushReason, RETRY_AFTER, ROUTINE_FIX_TIMEOUT,
+    UploadOutcome, WakeEnding, WakeEnv, WakeInput, WakeNotice, WakeReport, WakeSettings, WakeStep,
+    WakeTrigger,
 };
 pub use state::{
-    BoardSnapshot, DecidedKnock, KnockStatus, KnownEpoch, LeaseSlot, LiveLease, PeerActivity, RealRecord,
-    SentKnock, SpotSnapshot, SpotTransition, WakeSnapshot, WakeState,
+    BoardSnapshot, DecidedKnock, KnockStatus, KnownEpoch, LeaseSlot, LiveLease, PeerActivity,
+    RealRecord, SentKnock, SpotSnapshot, SpotTransition, WakeSnapshot, WakeState,
 };
