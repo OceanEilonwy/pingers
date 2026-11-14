@@ -14,14 +14,14 @@ use pingers_proto::{
     LocationPlaintext, MailboxId, MailboxMessage, MailboxMessages, MailboxPush, MailboxSpec,
     MapHostUrl, MeetPoint, MeetPointLabel, MeetupMessage, MembershipIndex, MembershipLeafRequest,
     MembershipLeafResponse, MembershipLeaves, MessageAccepted, MlsMessageBytes, Padded, Params,
-    PrivacyPassIssueRequest, PrivacyPassIssueResponse, PushBind, PushClass, PushHandle,
-    PushPlatform, PushRelayConfig, PushRelayInfo, PushRelayKeyConfig, PushRelayKeyId, PushRequest,
-    PushToken, PushTokenPlaintext, ReadBoard, Record, RecordRandomness, RecordTag, Redacted,
-    RegisterRequest, RegisterResponse, RelayId, RelayRef, RelayUrl, RevokeCommitment, RlnAuth,
-    RlnScope, RootEpoch, ScheduledPushRelayConfig, SealedAsk, SealedBeacon, SealedGrant,
+    PrivacyPassAllowance, PrivacyPassIssueRequest, PrivacyPassIssueResponse, PushBind, PushClass,
+    PushHandle, PushPlatform, PushRelayConfig, PushRelayInfo, PushRelayKeyConfig, PushRelayKeyId,
+    PushRequest, PushToken, PushTokenPlaintext, ReadBoard, Record, RecordRandomness, RecordTag,
+    Redacted, RegisterRequest, RegisterResponse, RelayId, RelayRef, RelayUrl, RevokeCommitment,
+    RlnAuth, RlnScope, RootEpoch, ScheduledPushRelayConfig, SealedAsk, SealedBeacon, SealedGrant,
     SealedLocationFrame, SealedPush, SealedPushBlob, SealedSnapshot, SecretBytes, SecretText,
     SeenSegment, SegmentHash, SegmentInfo, SequenceNumber, ServerId, SizeClass, Slashing,
-    SpeedCentimetresPerSecond, Subscription, SubscriptionId, TimeToLive, Urgency,
+    SpeedCentimetresPerSecond, Subscription, SubscriptionId, TimeToLive, TokenAllowance, Urgency,
 };
 use pingers_time::{Bucket, UnixSeconds};
 use proptest::array::uniform;
@@ -193,6 +193,13 @@ pub(crate) fn scheduled_push_relay_config() -> impl Strategy<Value = ScheduledPu
 pub(crate) fn privacy_pass_issue_request() -> impl Strategy<Value = PrivacyPassIssueRequest> {
     vec(any::<u8>(), 1..200).prop_filter_map("fits a batch", |bytes| {
         PrivacyPassIssueRequest::new(bytes).ok()
+    })
+}
+
+pub(crate) fn privacy_pass_allowance() -> impl Strategy<Value = PrivacyPassAllowance> {
+    (any::<u16>(), unix_seconds()).prop_map(|(remaining, resets_at)| PrivacyPassAllowance {
+        remaining: TokenAllowance::new(remaining),
+        resets_at,
     })
 }
 
@@ -564,6 +571,7 @@ pub(crate) fn params() -> impl Strategy<Value = Params> {
         option::of(relay_url().prop_filter_map("map host", |url| {
             MapHostUrl::new(url.as_str().to_owned()).ok()
         })),
+        any::<u16>(),
     )
         .prop_map(
             |(
@@ -577,6 +585,7 @@ pub(crate) fn params() -> impl Strategy<Value = Params> {
                 operator,
                 time,
                 map_host,
+                daily_limit,
             )| {
                 Params {
                     anonymous_credentials: credentials,
@@ -589,6 +598,7 @@ pub(crate) fn params() -> impl Strategy<Value = Params> {
                     server_operator: operator,
                     server_time: time,
                     map_host,
+                    privacy_pass_daily_limit: TokenAllowance::new(daily_limit),
                 }
             },
         )

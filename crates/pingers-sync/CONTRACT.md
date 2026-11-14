@@ -119,7 +119,7 @@ the natural way to write it, the second is the style guide's secret hygiene (§8
   registration again in place (`PUT /v1/mailboxes/{id}/push`, `PUT /v1/groups/{id}/subs/{id}`),
   adds a missing group subscription, or clears pushes with **`Pushes::Off`**; with nothing stale it
   tops the pool up. **`Pushes::Unknown`** touches no seal. Answers **`Maintained`**.
-- Each mailbox and subscription row records its **`SealStamp`** (pingers-store schema v5): the
+- Each mailbox and subscription row records its **`SealStamp`** (pingers-store schema v6): the
   fingerprint of the relay key and token (pingers-crypto's `push_seal_fingerprint`) and the
   seal's `not_after`. **`RENEW_AHEAD`** (three days) is the renewal window; a renewal that would
   gain no time is not made.

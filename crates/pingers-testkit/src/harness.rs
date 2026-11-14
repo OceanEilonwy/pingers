@@ -72,6 +72,10 @@ pub struct HarnessConfig {
     /// Schedules a second push relay key (key id 2, from its own seed) to be published from
     /// this time, for rotation tests ([`Endpoints::push_relay_next_key`]). `None`: one key.
     pub push_relay_next_key_at: Option<UnixSeconds>,
+    /// Whether the server accepts RLN membership proofs (on by default; off is the operator's
+    /// kill switch, design B.4.8 fallback 3).
+    #[cfg(feature = "harness")]
+    pub membership_proofs: pingers_server::MembershipProofs,
 }
 
 impl Default for HarnessConfig {
@@ -83,6 +87,8 @@ impl Default for HarnessConfig {
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
             registration_codes: Vec::new(),
             push_relay_next_key_at: None,
+            #[cfg(feature = "harness")]
+            membership_proofs: pingers_server::MembershipProofs::On,
         }
     }
 }

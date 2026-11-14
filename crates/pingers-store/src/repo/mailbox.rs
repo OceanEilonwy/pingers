@@ -65,7 +65,7 @@ impl MailboxState {
     }
 }
 
-/// What a registered sealed push was sealed with (schema version 5): the fingerprint of the
+/// What a registered sealed push was sealed with (schema version 6): the fingerprint of the
 /// relay key and push token, and the `not_after` sealed into it. pingers-sync seals the push
 /// again when either no longer fits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

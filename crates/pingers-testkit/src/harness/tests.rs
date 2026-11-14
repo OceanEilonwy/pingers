@@ -232,6 +232,38 @@ mod running {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_proof_switch_reaches_the_server() -> TestResult {
+        use pingers_proto::{AnonymousCredential, WireDecode as _};
+
+        for (switch, expected) in [
+            (
+                crate::MembershipProofs::On,
+                vec![
+                    AnonymousCredential::MembershipProof,
+                    AnonymousCredential::PrivacyPass,
+                ],
+            ),
+            (
+                crate::MembershipProofs::Off,
+                vec![AnonymousCredential::PrivacyPass],
+            ),
+        ] {
+            let harness = InProcessHarness::start(&HarnessConfig {
+                membership_proofs: switch,
+                ..HarnessConfig::default()
+            })?;
+            let (status, body) = exchange(harness.endpoints().server, get("/v1/params")?).await?;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(
+                pingers_proto::Params::decode(&body)?.anonymous_credentials,
+                expected
+            );
+            harness.shutdown();
+        }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_parameters_advertise_the_push_relay_and_a_map_host() -> TestResult {
         use pingers_proto::WireDecode as _;
 

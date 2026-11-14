@@ -43,7 +43,9 @@ mod engine;
 mod error;
 mod group;
 mod mailbox;
+mod membership;
 mod pool;
+mod prover;
 mod queue;
 mod registrations;
 mod request;
@@ -51,7 +53,7 @@ mod server;
 mod tokens;
 
 pub use account::{BEARER_LIFETIME, CodeSource, LeafStanding, Prepared};
-pub use board::{MembershipRefresh, NewLease};
+pub use board::NewLease;
 pub use budget::{MIN_REQUEST_TIME, WakeBudget};
 pub use clock::{ClockOffset, ClockStatus, MAX_CORRECTION, MAX_SKEW};
 pub use credential::{
@@ -63,9 +65,13 @@ pub use engine::{
 pub use error::{GroupError, SyncError};
 pub use group::{CommitAttempts, CommitOwner, Committed, GroupCall, GroupLogOwner, Pulled};
 pub use mailbox::{Delivered, NewMailbox, PushSeal};
+pub use membership::MembershipRefresh;
+/// The prover self-test plan `SyncSettings::self_test` takes (pingers-anon's).
+pub use pingers_anon::SelfTestPlan;
 pub use pool::{LEASE_BUCKETS, PoolRefill, PoolTarget, WakePush};
+pub use prover::{RETEST_AFTER, SelfTestStanding, SelfTestStart};
 pub use queue::{QueueCapacity, QueuePolicy, Sending};
 pub use registrations::{GroupMembership, Maintained, Maintenance, Pushes, RENEW_AHEAD};
 pub use request::{ApiRequest, GroupLifetime, GroupSigner, GroupStart, Route};
 pub use server::{NextPushRelayKey, ScheduledPushRelay, VerifiedPushRelay};
-pub use tokens::{Refill, TokenIssuer, TokenStock};
+pub use tokens::{DEFAULT_DAILY_LIMIT, Refill, TokenIssuer, TokenStock};

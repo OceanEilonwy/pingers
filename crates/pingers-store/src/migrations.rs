@@ -40,6 +40,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 5,
         sql: include_str!("migrations/v5.sql"),
     },
+    Migration {
+        version: 6,
+        sql: include_str!("migrations/v6.sql"),
+    },
 ];
 
 /// The version a fully migrated database has.

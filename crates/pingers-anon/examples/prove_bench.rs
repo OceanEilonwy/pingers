@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use pingers_anon::{
     AcceptedRoots, AnonError, LeafPosition, LeafUpdate, MembershipTree, MessageId, ProofRequest,
-    RlnSecret, VerificationContext, prove, request_digest, verify,
+    RlnSecret, SelfTestPlan, VerificationContext, prove, prover_self_test, request_digest, verify,
 };
 use pingers_proto::{RlnScope, ServerId};
 use pingers_time::Bucket;
@@ -142,6 +142,34 @@ fn main() -> Result<(), BenchError> {
         percentile(&times, 50),
         percentile(&times, 95)
     );
+
+    // The self-test the app runs before it proves (design B.4.8), with the design's plan.
+    let wall = WallTimer(Instant::now());
+    let started = Instant::now();
+    let self_test = prover_self_test(SelfTestPlan::DESIGN, &wall, &mut rng)?;
+    println!(
+        "self-test: {:?} in {:?} (first {:?}, median {:?}, p95 {:?}, {} timed)",
+        self_test.verdict,
+        started.elapsed(),
+        self_test.first,
+        self_test.median,
+        self_test.p95,
+        self_test.timed
+    );
     report("end");
     Ok(())
+}
+
+/// Monotonic time from the process's own clock, for the self-test.
+struct WallTimer(Instant);
+
+impl pingers_time::Timer for WallTimer {
+    fn now(&self) -> pingers_time::MonotonicTime {
+        pingers_time::MonotonicTime::from_elapsed(self.0.elapsed())
+    }
+
+    fn sleep_until(&self, _deadline: pingers_time::MonotonicTime) -> pingers_time::Sleep<'_> {
+        // The self-test never sleeps.
+        Box::pin(core::future::ready(()))
+    }
 }

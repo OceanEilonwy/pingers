@@ -25,9 +25,10 @@ pub enum QuotaError {
     /// The token was already redeemed.
     #[error("token already spent")]
     DoubleSpend,
-    /// The account has been issued its daily allowance of tokens.
-    #[error("daily token allowance used up")]
-    DailyLimit,
+    /// The batch would take the account past its daily allowance of tokens; nothing was
+    /// issued. Carries what is left today and when the next day starts, for the 429 answer.
+    #[error("daily token allowance exceeded")]
+    DailyLimit(pingers_proto::PrivacyPassAllowance),
     /// A registration proof or auth challenge does not verify, or names an unknown account.
     #[error("signature does not verify")]
     BadSignature,

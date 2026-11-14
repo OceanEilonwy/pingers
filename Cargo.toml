@@ -207,3 +207,32 @@ inherits = "release"
 lto = true
 codegen-units = 1
 strip = true
+
+# Tests and debug builds make real Groth16 proofs (pingers-anon, pingers-sync, pingers-quota,
+# pingers-server). Unoptimised arkworks takes seconds per proof; optimising only the prover's
+# arithmetic keeps the rest of the debug build as it was.
+[profile.dev.package.ark-ff]
+opt-level = 3
+[profile.dev.package.ark-ec]
+opt-level = 3
+[profile.dev.package.ark-bn254]
+opt-level = 3
+[profile.dev.package.ark-groth16]
+opt-level = 3
+[profile.dev.package.ark-poly]
+opt-level = 3
+[profile.dev.package.ark-relations]
+opt-level = 3
+[profile.dev.package.ark-serialize]
+opt-level = 3
+[profile.dev.package.ark-std]
+opt-level = 3
+[profile.dev.package.rln]
+opt-level = 3
+[profile.dev.package.ruint]
+opt-level = 3
+[profile.dev.package.num-bigint]
+opt-level = 3
+# The prover's generic code is instantiated here (rln's backend over our hasher).
+[profile.dev.package.pingers-anon]
+opt-level = 3
