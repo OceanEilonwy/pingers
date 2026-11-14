@@ -150,9 +150,11 @@ host's log shows the requests arriving from the server, not from the emulator.
 
 From the emulator test (Pixel 9 Pro, 2026-11-13; the Central Melbourne pack served by
 pingers-map-host on the host), in `docs/screenshots/maps/`: the placeholder with the download
-prompt, the picker before and after downloading, "Search a place", the Spot editor and Draw
-area on the real map, and the picker with the relay setting on.
+prompt, the picker before and after downloading, "Search a place", and the Spot editor and Draw
+area on the real map (`01` to `07`).
 
-From the core-download test (2026-11-14, the local stack), in
-`/home/henry/Downloads/pingers-wt/local-stack/maps-out/` on the test machine: the Melbourne pack
-downloaded directly and through the relay, and the map drawn from it.
+From the core-download test (Pixel 9 Pro, host GPU, 2026-11-14; `cargo xtask local-stack` with
+the Central Melbourne pack), on Downloaded maps: the catalog from the core (`10`), a direct
+download in progress (`11`) and the map drawn from it after "Search a place" (`12`); with
+"Download maps through privacy relay" on, the catalog and host card (`13`), a relayed download
+in progress (`14`), the region installed (`15`) and the map drawn from the relayed pack (`16`).

@@ -105,8 +105,12 @@ class Maps(
         MapHost(BuildConfig.MAP_HOST.trimEnd('/'), MapHostSource.Publisher),
     ).distinctBy { it.url }
 
-    /** The host maps come from first. */
-    fun primaryHost(): MapHost = chain().first()
+    /**
+     * The host maps come from first: as the core's catalog named it once loaded (the core knows
+     * the server's map host first-hand), otherwise the head of [chain].
+     */
+    fun primaryHost(): MapHost =
+        (_catalog.value as? CatalogState.Loaded)?.offers?.firstOrNull()?.host ?: chain().first()
 
     fun setHostOverride(url: String?) {
         val clean = url?.trim()?.takeIf { it.isNotEmpty() }
