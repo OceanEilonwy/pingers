@@ -24,6 +24,16 @@ flate2 = { workspace = true }
 sha2 = { workspace = true }
 # dev-ca: a throwaway CA and leaf for the tier-1 local stack.
 rcgen = { workspace = true }
+# local-stack: the supervisor waits for Ctrl-C (SIGINT) or SIGTERM, and the TLS front (used
+# when Caddy is not installed) serves h2 and HTTP/1.1 and streams to h2c upstreams. All already
+# in the tree through pingers-server, pingers-map-host and pingers-transport.
+tokio = { workspace = true, features = ["net", "signal", "io-util"] }
+hyper = { workspace = true, features = ["http1"] }
+hyper-util = { workspace = true, features = ["server", "server-auto", "http1"] }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+serde_json = { workspace = true }
+http-body-util = { workspace = true }
 
 [dev-dependencies]
 # `pins` is checked against the relay's and the server's own `pins` subcommands.

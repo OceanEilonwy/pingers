@@ -316,6 +316,21 @@ fn file_sha256(path: &Path) -> Result<String> {
 const DEV_NAMES: [&str; 3] = ["localhost", "127.0.0.1", "10.0.2.2"];
 
 pub(crate) fn dev_ca(root: &Path, extra: &[String]) -> Result<Outcome> {
+    let dir = root.join("target").join("dev-ca");
+    let names = write_dev_ca(&dir, extra)?;
+    let mut stdout = io::stdout().lock();
+    writeln!(
+        stdout,
+        "dev-ca: {} (CA, for PINGERS_EXTRA_CA), leaf.pem and leaf.key for {}; the CA key was not kept",
+        dir.join("ca.pem").display(),
+        names.join(", ")
+    )?;
+    Ok(Outcome::Passed)
+}
+
+/// Writes `ca.pem`, `leaf.pem` (leaf then CA) and `leaf.key` (0600) into `dir`, for
+/// [`DEV_NAMES`] and `extra`, and returns the names the leaf covers. The CA key is dropped.
+pub(crate) fn write_dev_ca(dir: &Path, extra: &[String]) -> Result<Vec<String>> {
     use rcgen::{
         BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer,
         KeyPair, KeyUsagePurpose, date_time_ymd,
@@ -350,22 +365,13 @@ pub(crate) fn dev_ca(root: &Path, extra: &[String]) -> Result<Outcome> {
     let leaf_key = KeyPair::generate()?;
     let leaf = leaf_params.signed_by(&leaf_key, &issuer)?;
 
-    let dir = root.join("target").join("dev-ca");
-    fs::create_dir_all(&dir)?;
+    fs::create_dir_all(dir)?;
     fs::write(dir.join("ca.pem"), ca.pem())?;
     fs::write(dir.join("leaf.pem"), format!("{}{}", leaf.pem(), ca.pem()))?;
     let key_path = dir.join("leaf.key");
     fs::write(&key_path, leaf_key.serialize_pem())?;
     fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))?;
-
-    let mut stdout = io::stdout().lock();
-    writeln!(
-        stdout,
-        "dev-ca: {} (CA, for PINGERS_EXTRA_CA), leaf.pem and leaf.key for {}; the CA key was not kept",
-        dir.join("ca.pem").display(),
-        names.join(", ")
-    )?;
-    Ok(Outcome::Passed)
+    Ok(names)
 }
 
 #[cfg(test)]
