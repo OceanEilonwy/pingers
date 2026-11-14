@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Invite people (the link and where each invite got to) and Accept invite (what an opened link
-//! shows before joining).
+//! Invite people (the link and where each invite got to), the inviter's "Ben asked to join",
+//! and the joiner's three screens of join flow A: Open invite, Asked to join, You're in.
+//!
+//! The link carries nothing about the Party, so the joiner's first two screens show nothing
+//! about it; the Party's name, members and Spots appear only once the joiner is let in.
 
 use pingers_proto::{MailboxId, PartyId};
 use pingers_time::UnixSeconds;
@@ -8,7 +11,7 @@ use pingers_time::UnixSeconds;
 use crate::ScreenError;
 use crate::clock::Hours;
 use crate::common::{Initials, Me, Name, PartyColour, Person};
-use crate::snapshot::{ClientSnapshot, InviteStatus, InviteUrl, SafetyCode};
+use crate::snapshot::{ClientSnapshot, InviteStatus, InviteUrl, Joining, SafetyCode};
 
 /// One invite in the list.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,11 +25,11 @@ pub enum Invitation {
         /// How long until it expires, rounded up.
         expires_in: Hours,
     },
-    /// Opened: compare the code, then verify.
+    /// Someone asked to join through it: compare the code, then let them in.
     Opened {
-        /// The invite.
+        /// The request, for [`join_request`].
         id: MailboxId,
-        /// The name the opener gave.
+        /// The name they gave.
         name: Name,
         /// The code to compare.
         code: SafetyCode,
@@ -49,7 +52,8 @@ pub struct InviteView {
     pub link: Option<InviteUrl>,
     /// How long the link keeps working, rounded up.
     pub expires_in: Option<Hours>,
-    /// The invites, newest first. Expired pending invites are left out.
+    /// Who asked to join, oldest first, then the invites, newest first. Expired pending
+    /// invites are left out.
     pub invitations: Vec<Invitation>,
 }
 
@@ -68,7 +72,15 @@ pub fn invite(
         .invite_link
         .as_ref()
         .filter(|link| link.expires_at > now);
-    let invitations = party
+    let asked = party
+        .join_requests
+        .iter()
+        .map(|request| Invitation::Opened {
+            id: request.id,
+            name: request.name.clone(),
+            code: request.code.clone(),
+        });
+    let invites = party
         .invites
         .iter()
         .filter_map(|invite| match &invite.status {
@@ -80,11 +92,6 @@ pub fn invite(
                 shared_ago: Hours::rounding_down(now.saturating_duration_since(*shared_at)),
                 expires_in: Hours::rounding_up(expires_at.saturating_duration_since(now)),
             }),
-            InviteStatus::Opened { name, code } => Some(Invitation::Opened {
-                id: invite.id,
-                name: name.clone(),
-                code: code.clone(),
-            }),
             InviteStatus::Joined { leaf } => party
                 .members
                 .iter()
@@ -93,24 +100,100 @@ pub fn invite(
                     id: invite.id,
                     person: Person::new(member.leaf, &member.name, member.me),
                 }),
-        })
-        .collect();
+        });
     Ok(InviteView {
         party_name: party.name.clone(),
         link: live_link.map(|link| link.url.clone()),
         expires_in: live_link
             .map(|link| Hours::rounding_up(link.expires_at.saturating_duration_since(now))),
-        invitations,
+        invitations: asked.chain(invites).collect(),
     })
 }
 
-/// How many members Accept invite shows as avatars before "+2".
+/// "Ben asked to join": the inviter compares the code Ben reads out, then lets him in or not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JoinRequestView {
+    /// The request, for `decide_join`.
+    pub id: MailboxId,
+    /// The name they gave.
+    pub name: Name,
+    /// The Party's name.
+    pub party_name: Name,
+    /// How long ago the link they used was shared, rounded down.
+    pub shared_ago: Hours,
+    /// The code their phone should show.
+    pub code: SafetyCode,
+}
+
+/// The "asked to join" screen for one request.
+///
+/// # Errors
+///
+/// [`ScreenError::UnknownParty`]; [`ScreenError::UnknownJoinRequest`] once it was decided or
+/// withdrawn.
+pub fn join_request(
+    snapshot: &ClientSnapshot,
+    party: PartyId,
+    request: MailboxId,
+    now: UnixSeconds,
+) -> Result<JoinRequestView, ScreenError> {
+    let party = snapshot.party(party)?;
+    let asked = party
+        .join_requests
+        .iter()
+        .find(|asked| asked.id == request)
+        .ok_or(ScreenError::UnknownJoinRequest)?;
+    Ok(JoinRequestView {
+        id: asked.id,
+        name: asked.name.clone(),
+        party_name: party.name.clone(),
+        shared_ago: Hours::rounding_down(now.saturating_duration_since(asked.shared_at)),
+        code: asked.code.clone(),
+    })
+}
+
+/// Open invite: what the joiner sees before asking. Nothing about the Party; only the name
+/// they will go by, prefilled with the one they used last.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenInvite {
+    /// The name to prefill, once set.
+    pub name: Option<Name>,
+}
+
+/// The Open invite screen.
+#[must_use]
+pub fn open_invite(snapshot: &ClientSnapshot) -> OpenInvite {
+    OpenInvite {
+        name: snapshot.display_name.clone(),
+    }
+}
+
+/// Asked to join: the code to read to the inviter while they decide.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AskedToJoin {
+    /// The code.
+    pub code: SafetyCode,
+}
+
+/// The Asked to join screen, while this device waits to be let in.
+#[must_use]
+pub fn asked_to_join(snapshot: &ClientSnapshot) -> Option<AskedToJoin> {
+    match &snapshot.joining {
+        Some(Joining::Asked { code, .. }) => Some(AskedToJoin { code: code.clone() }),
+        Some(Joining::LetIn { .. }) | None => None,
+    }
+}
+
+/// How many members You're in shows as avatars before "+3".
 pub const PREVIEW_MEMBERS: usize = 3;
 
-/// The Accept invite screen.
+/// You're in: the Party appears now, with who let this device in and the code that was
+/// checked.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AcceptInvite {
-    /// Who invited.
+pub struct LetIn {
+    /// The Party, to open or leave.
+    pub party: PartyId,
+    /// Who let this device in.
     pub inviter: Name,
     /// The Party's name.
     pub party_name: Name,
@@ -118,39 +201,47 @@ pub struct AcceptInvite {
     pub party_initials: Initials,
     /// Its colour.
     pub colour: PartyColour,
-    /// The first few members, as avatars.
+    /// The first few other members, as avatars.
     pub preview: Vec<Person>,
     /// How many more members than the avatars show.
     pub more_members: usize,
-    /// How many members.
+    /// How many members, this device included.
     pub members: usize,
     /// How many Spots.
     pub spots: usize,
-    /// The code to compare with the inviter's screen.
-    pub safety_code: SafetyCode,
+    /// The code that was checked.
+    pub code: SafetyCode,
 }
 
-/// The Accept invite screen, if an invite link is open.
+/// The You're in screen, once this device was let in and until the user opens the Party.
 #[must_use]
-pub fn accept_invite(snapshot: &ClientSnapshot) -> Option<AcceptInvite> {
-    let preview = snapshot.join_preview.as_ref()?;
-    let members = preview.members.len();
-    let mut leaf = pingers_proto::LeafIndex::new(0);
-    let mut avatars = Vec::new();
-    for name in preview.members.iter().take(PREVIEW_MEMBERS) {
-        avatars.push(Person::new(leaf, name, Me::Other));
-        leaf = leaf.checked_next().unwrap_or(leaf);
-    }
-    Some(AcceptInvite {
-        inviter: preview.inviter.clone(),
-        party_initials: Initials::of(&preview.party_name),
-        party_name: preview.party_name.clone(),
-        colour: preview.colour,
-        preview: avatars,
-        more_members: members.saturating_sub(PREVIEW_MEMBERS),
-        members,
-        spots: preview.spot_count,
-        safety_code: preview.safety_code.clone(),
+pub fn let_in(snapshot: &ClientSnapshot) -> Option<LetIn> {
+    let Some(Joining::LetIn {
+        party,
+        inviter,
+        code,
+    }) = &snapshot.joining
+    else {
+        return None;
+    };
+    let joined = snapshot.party(*party).ok()?;
+    let others: Vec<Person> = joined
+        .members
+        .iter()
+        .filter(|member| member.me == Me::Other)
+        .map(|member| Person::new(member.leaf, &member.name, member.me))
+        .collect();
+    Some(LetIn {
+        party: *party,
+        inviter: inviter.clone(),
+        party_initials: Initials::of(&joined.name),
+        party_name: joined.name.clone(),
+        colour: joined.colour,
+        more_members: others.len().saturating_sub(PREVIEW_MEMBERS),
+        preview: others.into_iter().take(PREVIEW_MEMBERS).collect(),
+        members: joined.members.len(),
+        spots: joined.spots.len(),
+        code: code.clone(),
     })
 }
 
@@ -177,7 +268,7 @@ mod tests {
             return Err(FixtureError::Missing);
         };
         assert!(
-            matches!(opened, Invitation::Opened { name, code, .. } if name.as_str() == "Ben" && code.as_str() == "4821")
+            matches!(opened, Invitation::Opened { id, name, code } if *id == fixtures::ben_request() && name.as_str() == "Ben" && code.as_str() == "4821 0937 5512")
         );
         assert!(matches!(
             pending,
@@ -233,30 +324,81 @@ mod tests {
     }
 
     #[test]
-    fn accept_invite_previews_three_members() -> Result<(), FixtureError> {
+    fn a_join_request_shows_its_code_and_when_the_link_was_shared() -> Result<(), FixtureError> {
         let snapshot = fixtures::snapshot()?;
-        let view = accept_invite(&snapshot).ok_or(FixtureError::Missing)?;
+        let view = join_request(
+            &snapshot,
+            fixtures::climbing_crew(),
+            fixtures::ben_request(),
+            fixtures::at(19, 30),
+        )?;
+        assert_eq!(view.id, fixtures::ben_request());
+        assert_eq!(view.name.as_str(), "Ben");
+        assert_eq!(view.party_name.as_str(), "Climbing crew");
+        assert_eq!(view.shared_ago.get(), 2);
+        assert_eq!(view.code.as_str(), "4821 0937 5512");
+        assert!(matches!(
+            join_request(
+                &snapshot,
+                fixtures::climbing_crew(),
+                MailboxId::from_bytes([99; 16]),
+                fixtures::at(19, 30),
+            ),
+            Err(ScreenError::UnknownJoinRequest)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn open_invite_prefills_the_name_and_nothing_else() -> Result<(), FixtureError> {
+        let mut snapshot = fixtures::snapshot()?;
+        assert_eq!(
+            open_invite(&snapshot).name.as_ref().map(Name::as_str),
+            Some("Sam")
+        );
+        snapshot.display_name = None;
+        assert_eq!(open_invite(&snapshot), OpenInvite { name: None });
+        Ok(())
+    }
+
+    #[test]
+    fn asked_to_join_shows_the_code_until_let_in() -> Result<(), FixtureError> {
+        let mut snapshot = fixtures::snapshot()?;
+        let asked = asked_to_join(&snapshot).ok_or(FixtureError::Missing)?;
+        assert_eq!(asked.code.as_str(), "4821 0937 5512");
+        assert_eq!(let_in(&snapshot), None);
+        snapshot.joining = None;
+        assert_eq!(asked_to_join(&snapshot), None);
+        Ok(())
+    }
+
+    #[test]
+    fn let_in_shows_the_party_now_with_three_avatars() -> Result<(), FixtureError> {
+        let snapshot = fixtures::let_in_snapshot()?;
+        assert_eq!(asked_to_join(&snapshot), None);
+        let view = let_in(&snapshot).ok_or(FixtureError::Missing)?;
+        assert_eq!(view.party, fixtures::climbing_crew());
         assert_eq!(view.inviter.as_str(), "Ana");
-        assert_eq!(view.party_initials.as_str(), "CC");
+        assert_eq!(
+            (view.party_name.as_str(), view.party_initials.as_str()),
+            ("Climbing crew", "CC")
+        );
         let names: Vec<_> = view
             .preview
             .iter()
             .map(|person| person.name.as_str())
             .collect();
-        assert_eq!(names, ["Ana", "Chloé", "Dev"]);
-        let leaves: Vec<_> = view
-            .preview
-            .iter()
-            .map(|person| person.leaf.get())
-            .collect();
-        assert_eq!(leaves, [0, 1, 2]);
-        assert_eq!((view.members, view.more_members, view.spots), (5, 2, 3));
-        assert_eq!(view.safety_code.as_str(), "4821 0937 5512");
+        // Others only: Sam is this device.
+        assert_eq!(names, ["Ana", "Chloé", "Ben"]);
+        assert_eq!((view.members, view.more_members, view.spots), (6, 2, 3));
+        assert_eq!(view.code.as_str(), "4821 0937 5512");
         assert_eq!(view.colour, PartyColour::Blue);
 
-        let mut none = snapshot;
-        none.join_preview = None;
-        assert_eq!(accept_invite(&none), None);
+        // A Party left since shows nothing.
+        let mut gone = snapshot;
+        gone.parties
+            .retain(|party| party.id != fixtures::climbing_crew());
+        assert_eq!(let_in(&gone), None);
         Ok(())
     }
 }

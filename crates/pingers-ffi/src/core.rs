@@ -266,6 +266,19 @@ pub struct Core {
 }
 
 impl Core {
+    /// Lets in or turns away a join request.
+    async fn decide(
+        &self,
+        party: PartyId,
+        request: InviteId,
+        decision: ports::JoinDecision,
+    ) -> Result<(), CoreError> {
+        Ok(self
+            .client
+            .decide_join((&party).try_into()?, (&request).try_into()?, decision)
+            .await?)
+    }
+
     /// Opens the client with the L3 crates `build` makes from the database (tests).
     #[cfg(test)]
     async fn open_with(
@@ -348,8 +361,8 @@ impl Core {
         Ok(link.url.as_str().to_owned())
     }
 
-    /// Opens an invite link, giving the name this device's user goes by in that Party: the
-    /// preview then shows on Accept invite.
+    /// Asks to join through an invite link, under the name this device's user goes by in that
+    /// Party (Open invite's "Ask to join"): `Snapshot::asked_to_join` then shows the code.
     ///
     /// # Errors
     ///
@@ -360,31 +373,45 @@ impl Core {
         Ok(self.client.open_invite(link, name).await?)
     }
 
-    /// Joins the opened invite's Party once the codes matched.
+    /// Withdraws the join this device asked for (Asked to join's "Withdraw request").
     ///
     /// # Errors
     ///
-    /// [`CoreError::Network`].
-    pub async fn accept_invite(&self) -> Result<PartyId, CoreError> {
-        Ok(self.client.accept_invite().await?.into())
+    /// [`CoreError::Network`] with no join under way, or if the withdrawal cannot be stored.
+    pub async fn withdraw_join(&self) -> Result<(), CoreError> {
+        Ok(self.client.withdraw_join().await?)
     }
 
-    /// Admits the person who opened `invite`, once the inviter saw the same code on both
-    /// screens (Invite people's "Verify").
+    /// Forgets You're in once the user opened the Party (its "Open" button).
     ///
     /// # Errors
     ///
-    /// [`CoreError::Invalid`] for an id that is not one; [`CoreError::Unavailable`] until
-    /// pingers-sync delivers join requests; [`CoreError::Network`].
-    pub async fn verify_invite(&self, party: PartyId, invite: InviteId) -> Result<(), CoreError> {
-        Ok(self
-            .client
-            .decide_join(
-                (&party).try_into()?,
-                (&invite).try_into()?,
-                ports::JoinDecision::Admit,
-            )
-            .await?)
+    /// [`CoreError::Storage`].
+    pub async fn dismiss_join(&self) -> Result<(), CoreError> {
+        Ok(self.client.dismiss_join().await?)
+    }
+
+    /// Lets in the person who asked to join with `request`, once they read out the code the
+    /// screen shows ("Codes match · Let Ben in").
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Invalid`] for an id that is not one; [`CoreError::Network`] once it was
+    /// decided or withdrawn, or the invite expired.
+    pub async fn let_in(&self, party: PartyId, request: InviteId) -> Result<(), CoreError> {
+        self.decide(party, request, ports::JoinDecision::Admit)
+            .await
+    }
+
+    /// Turns away the person who asked to join with `request` ("Don't let in"); nothing is
+    /// sent to them.
+    ///
+    /// # Errors
+    ///
+    /// As [`Core::let_in`].
+    pub async fn turn_away(&self, party: PartyId, request: InviteId) -> Result<(), CoreError> {
+        self.decide(party, request, ports::JoinDecision::Refuse)
+            .await
     }
 
     /// Cancels an invite that has not been opened yet (Invite people's ✕).
@@ -778,6 +805,7 @@ mod tests {
     impl Events for App {
         fn parties_changed(&self) {}
         fn join_requested(&self, _: PartyId) {}
+        fn let_in(&self, _: PartyId) {}
         fn meetup_started(&self, _: MeetupId) {}
         fn meetup_updated(&self, _: MeetupId) {}
         fn meetup_message(&self, _: MeetupId) {}
@@ -886,7 +914,8 @@ mod tests {
     const PARTY_HEX: &str = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
 
     #[tokio::test]
-    async fn invites_are_verified_and_cancelled_through_the_client() -> Result<(), CoreError> {
+    async fn join_requests_are_decided_and_invites_cancelled_through_the_client()
+    -> Result<(), CoreError> {
         let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
         let core = open_on("invites", &fakes).await?;
         let party = PartyId {
@@ -897,7 +926,7 @@ mod tests {
         };
         let mailbox = pingers_proto::MailboxId::from_bytes([9; 16]);
         let party_id = pingers_proto::PartyId::from_bytes([0xa1; 16]);
-        core.verify_invite(party.clone(), invite.clone()).await?;
+        core.let_in(party.clone(), invite.clone()).await?;
         assert_eq!(
             fakes.calls().last(),
             Some(&CrateCall::DecideJoin(
@@ -906,6 +935,19 @@ mod tests {
                 JoinDecision::Admit
             ))
         );
+        core.turn_away(party.clone(), invite.clone()).await?;
+        assert_eq!(
+            fakes.calls().last(),
+            Some(&CrateCall::DecideJoin(
+                party_id,
+                mailbox,
+                JoinDecision::Refuse
+            ))
+        );
+        core.withdraw_join().await?;
+        assert_eq!(fakes.calls().last(), Some(&CrateCall::WithdrawJoin));
+        core.dismiss_join().await?;
+        assert_eq!(fakes.calls().last(), Some(&CrateCall::DismissJoin));
         core.cancel_invite(party.clone(), invite).await?;
         assert_eq!(
             fakes.calls().last(),
@@ -1099,9 +1141,10 @@ mod tests {
         let invite = InviteId {
             hex: "09".repeat(16),
         };
+        // Nobody asked to join, so there is nothing to let in.
         assert!(matches!(
-            core.verify_invite(party, invite).await,
-            Err(CoreError::Unavailable { .. })
+            core.let_in(party, invite).await,
+            Err(CoreError::Network { .. })
         ));
         core.set_display_name("Sam".into()).await?;
         assert_eq!(core.snapshot().your_name().name.as_deref(), Some("Sam"));
