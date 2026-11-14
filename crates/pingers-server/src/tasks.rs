@@ -17,7 +17,7 @@ use pingers_proto::{
     CommitRequest, GroupId, PushRelayConfig, RelayId, RelayRef, SubscriptionId, WireDecode as _,
     WireEncode as _,
 };
-use pingers_time::Timer;
+use pingers_time::{MonotonicTime, Timer};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use tokio::task::JoinSet;
 
@@ -394,6 +394,21 @@ impl GroupPusher {
     }
 }
 
+/// How long a push relay's key config, once fetched, is served without asking the relay
+/// again. `GET /v1/push-relays/{id}/config` is public: without the cache, every request to it
+/// would make the server send one to the relay.
+pub(crate) const RELAY_CONFIG_TTL: Duration = Duration::from_mins(5);
+
+/// How long a failed fetch is remembered, so a relay that is down is not asked once per
+/// request either.
+pub(crate) const RELAY_CONFIG_RETRY: Duration = Duration::from_secs(30);
+
+/// A push relay's key config as last fetched.
+struct CachedConfig {
+    fetched: Result<Vec<u8>, RelayUnreachable>,
+    until: MonotonicTime,
+}
+
 /// Owns the background tasks.
 pub(crate) struct Tasks {
     relay: Arc<HttpPushRelay>,
@@ -402,6 +417,9 @@ pub(crate) struct Tasks {
     pusher: GroupPusher,
     directory: ListedRelays,
     running: Mutex<JoinSet<()>>,
+    /// Held across a fetch, so concurrent requests wait for one fetch instead of each
+    /// making their own.
+    relay_configs: Arc<tokio::sync::Mutex<HashMap<RelayId, CachedConfig>>>,
 }
 
 impl Tasks {
@@ -421,6 +439,7 @@ impl Tasks {
             mailboxes,
             directory,
             running: Mutex::new(JoinSet::new()),
+            relay_configs: Arc::default(),
         }
     }
 
@@ -466,14 +485,39 @@ impl Tasks {
         });
     }
 
-    /// The key config of the listed push relay `relay`, fetched from it now: `None` if this
-    /// server lists no such relay, `Some(Err)` if it did not answer with a config.
+    /// The key config of the listed push relay `relay`: `None` if this server lists no such
+    /// relay, `Some(Err)` if it did not answer with a config. Fetched from the relay at most
+    /// once per [`RELAY_CONFIG_TTL`] (once per [`RELAY_CONFIG_RETRY`] while it fails), however
+    /// many ask.
     pub(crate) fn push_relay_config(
         &self,
         relay: RelayId,
     ) -> Option<impl Future<Output = Result<Vec<u8>, RelayUnreachable>> + Send + use<>> {
         let target = self.directory.resolve(&RelayRef::Listed(relay))?;
-        Some(self.relay.fetch_config(target.url.as_str()))
+        let fetch = self.relay.fetch_config(target.url.as_str());
+        let cache = Arc::clone(&self.relay_configs);
+        let timer = Arc::clone(&self.timer);
+        Some(async move {
+            let mut cache = cache.lock().await;
+            if let Some(cached) = cache.get(&relay)
+                && timer.now() < cached.until
+            {
+                return cached.fetched.clone();
+            }
+            let fetched = fetch.await;
+            let lasts = match fetched {
+                Ok(_) => RELAY_CONFIG_TTL,
+                Err(_) => RELAY_CONFIG_RETRY,
+            };
+            cache.insert(
+                relay,
+                CachedConfig {
+                    fetched: fetched.clone(),
+                    until: timer.now().saturating_add(lasts),
+                },
+            );
+            fetched
+        })
     }
 
     /// Runs `sweep` every `interval`.
