@@ -359,14 +359,14 @@ class FakeSection4(private val variants: Set<String>) {
         )
     }
 
-    private data class Member(val leaf: UInt, val avatar: String, val tint: uniffi.pingers.Tint, val name: String, val her: String)
+    private data class Member(val leaf: UInt, val avatar: String, val tint: uniffi.pingers.Tint, val name: String)
 
     private val members = listOf(
-        Member(1u, "AN", uniffi.pingers.Tint.PEACH, "Ana", "her"),
-        Member(2u, "BE", uniffi.pingers.Tint.BUTTER, "Ben", "him"),
-        Member(3u, "CH", uniffi.pingers.Tint.SKY, "Chloé", "her"),
-        Member(4u, "DE", uniffi.pingers.Tint.LILAC, "Dev", "them"),
-        Member(5u, "EL", uniffi.pingers.Tint.MINT, "Eli", "them"),
+        Member(1u, "AN", uniffi.pingers.Tint.PEACH, "Ana"),
+        Member(2u, "BE", uniffi.pingers.Tint.BUTTER, "Ben"),
+        Member(3u, "CH", uniffi.pingers.Tint.SKY, "Chloé"),
+        Member(4u, "DE", uniffi.pingers.Tint.LILAC, "Dev"),
+        Member(5u, "EL", uniffi.pingers.Tint.MINT, "Eli"),
     )
 
     /** Ana's code, as on the canvas; the others' are made up from it. */
@@ -383,7 +383,7 @@ class FakeSection4(private val variants: Set<String>) {
             codeHeading = "Your code with ${who.name}",
             codeGroups = anasCode.map { group -> group.map { d -> '0' + (d - '0' + shown.toInt() - 1) % 10 }.joinToString("") },
             compare = "Compare with ${who.name} in person or on a call. If every digit matches, nobody is passing messages " +
-                "between you while pretending to be ${who.her}.",
+                "between you while pretending to be ${who.name}.",
             mark = "Codes match · Mark ${who.name} as checked".takeUnless { isChecked },
             checkedNote = "${who.name} is checked".takeIf { isChecked },
             membersHeading = "Members",
