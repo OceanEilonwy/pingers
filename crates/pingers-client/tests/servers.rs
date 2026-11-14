@@ -152,6 +152,7 @@ impl World {
 struct Device {
     client: Client,
     events: Arc<RecordingEvents>,
+    platform: FakePlatform,
     database: PathBuf,
     _dir: TestDir,
 }
@@ -183,7 +184,7 @@ impl Device {
                 database: database.clone(),
                 instance: Some(instance),
             },
-            Arc::new(platform),
+            Arc::new(platform.clone()),
             {
                 let shared: Arc<RecordingEvents> = Arc::clone(&events);
                 let events: Arc<dyn pingers_client::Events> = shared;
@@ -195,6 +196,7 @@ impl Device {
         Ok(Self {
             client,
             events,
+            platform,
             database,
             _dir: dir,
         })
@@ -613,6 +615,27 @@ async fn leaving_the_party_on_b_posts_the_leave_to_b_once() -> TestResult {
         relayed_answers(world.b()?).await?,
         before.saturating_add(1),
         "one leave proposal reached B, through B's relay"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wake_pushes_go_on_for_the_servers_whose_push_relay_can_be_sealed_to() -> TestResult {
+    let world = World::start()?;
+    let (ana, _on_a, _on_b) = ana_on_both(&world).await?;
+    ana.platform
+        .set_push_registration(Some(pingers_testkit::PushRegistration {
+            platform: pingers_proto::PushPlatform::UnifiedPush,
+            token: pingers_proto::PushToken::from_bytes(b"https://push.example/up/ana".to_vec()),
+        }));
+    // This build has no pins for its push relay, so nothing is sealed for A; B's push relay
+    // key was trusted with B, so B's mailboxes wake this phone. Pushes are on.
+    ana.client
+        .set_wake_pushes(pingers_client::snapshot::WakePushes::On)
+        .await?;
+    assert_eq!(
+        ana.client.snapshot().settings.wake_pushes,
+        pingers_client::snapshot::WakePushes::On
     );
     Ok(())
 }
