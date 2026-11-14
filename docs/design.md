@@ -960,6 +960,8 @@ Welcome messages travel as mailbox posts. Invites reuse mailboxes (below). There
 
 **Wake rule.** A mailbox post forwards that mailbox's sealed push to its relay. A Commit, or an `AppMsg` with `wake` set, forwards each subscription's sealed push with the given urgency, skipping subscriptions connected to the group's live stream; `Quiet` forwards are delayed by a random 0 to 30 seconds each. If the relay answers `410 Gone` the server deletes the blob.
 
+**Removing a member's subscriptions.** A Commit's `subs_del` (the remover lists the removed member's subscription: a Party member's from its roster profile, a Meetup member's as in G.6) is applied in the same transaction as the Commit, so the Commit's own wake never reaches it. The server answers the Commit only after any push already on its way to those subscriptions has been answered, closes the live channels opened with them (the removed member receives nothing further and can send nothing more), and never forwards a later wake to them. `DELETE /v1/groups/{id}/subs/{sub_id}` waits the same way, and `DELETE /v1/groups/{id}` waits for every push to the group in flight: once the server has answered a removal, the push relay hears nothing more for what was removed.
+
 **Push relay API** (a separate service, B.4.9):
 
 ```rust

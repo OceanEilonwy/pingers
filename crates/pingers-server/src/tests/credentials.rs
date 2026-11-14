@@ -909,6 +909,40 @@ async fn live_channels_fan_out_frames_and_commits_to_the_other_members() -> Test
     server.stop().await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_removal_commit_ends_the_removed_members_live_channel() -> TestResult {
+    let server = started(DeliveryLive).await?;
+    let wallet = Wallet::fetch(&server, 1, 1).await?;
+    let creator = create_group(&server, &wallet, 31).await?;
+    let live_head = |sub: u8| {
+        creator.request(
+            "POST",
+            &format!("/live?sub={}", hex::encode([sub; 16])),
+            Vec::new(),
+        )
+    };
+    let (_removed_sender, removed_client, removed_body) =
+        open_live_with(&server, &live_head(1)?).await?;
+    let (_staying_sender, staying_client, mut staying_body) =
+        open_live_with(&server, &live_head(2)?).await?;
+    let body = CommitRequest {
+        subscriptions_removed: vec![pingers_proto::SubscriptionId::from_bytes([1; 16])],
+        ..CommitRequest::decode(&commit_body(
+            0,
+            &LogAuthKeyPair::from_bytes(Zeroizing::new([32; 32])),
+        )?)?
+    }
+    .encode()?;
+    let committed = call(&server, &creator.request("POST", "/commit", body)?).await?;
+    assert_eq!(committed.status.get(), 200);
+    // The removed member's channel ends without the commit; the other member gets it.
+    super::ends_with_nothing_but_the_final_chunk(&removed_client, removed_body).await?;
+    let mut decoder = staying_client.response_decoder();
+    let payload = next_payload(&mut staying_body, &mut decoder).await?;
+    assert_eq!(LiveFrame::decode(&payload)?.delivery, Mode::Stored);
+    server.stop().await
+}
+
 /// The next non-keep-alive payload on a live response.
 async fn next_payload(
     body: &mut axum::body::Body,

@@ -136,6 +136,29 @@ impl<T: Clone> LiveRegistry<T> {
         Ok(inner.groups.get(group).map_or(0, BTreeMap::len))
     }
 
+    /// Closes the group's channels attached to any of `subscriptions`.
+    pub(crate) fn close_subscriptions(
+        &self,
+        group: &GroupId,
+        subscriptions: &[SubscriptionId],
+    ) -> Result<(), DeliveryError> {
+        if subscriptions.is_empty() {
+            return Ok(());
+        }
+        let mut inner = self.lock()?;
+        if let Some(channels) = inner.groups.get_mut(group) {
+            channels.retain(|_, channel| {
+                channel
+                    .subscription
+                    .is_none_or(|subscription| !subscriptions.contains(&subscription))
+            });
+            if channels.is_empty() {
+                inner.groups.remove(group);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn close_group(&self, group: &GroupId) -> Result<(), DeliveryError> {
         self.lock()?.groups.remove(group);
         Ok(())

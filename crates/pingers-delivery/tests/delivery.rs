@@ -619,6 +619,41 @@ fn closed_channel_gets_nothing_and_cannot_send(store: impl DeliveryStore) -> Res
     Ok(())
 }
 
+fn a_removal_closes_the_removed_members_live_channel(
+    store: impl DeliveryStore,
+) -> Result<(), TestError> {
+    let world = World::new(store, &[1, 2])?;
+    let removed = world.delivery.open_live(&world.group, Some(sub_id(1)), 1)?;
+    let _staying = world.delivery.open_live(&world.group, Some(sub_id(2)), 2)?;
+    let _anonymous = world.delivery.open_live(&world.group, None, 3)?;
+    // A losing commit closes nothing.
+    let _won = world.commit(0, Urgency::Quiet)?;
+    let lost = world.commit_with(CommitRequest {
+        subscriptions_removed: vec![sub_id(1)],
+        ..commit_request(0, Urgency::Quiet)
+    })?;
+    assert!(accepted(lost).is_none());
+    assert_eq!(world.delivery.live_channels(&world.group)?, 3);
+    let outcome = world.commit_with(CommitRequest {
+        subscriptions_removed: vec![sub_id(1)],
+        ..commit_request(1, Urgency::Quiet)
+    })?;
+    let (_, _, targets) = accepted(outcome).ok_or(TestError::Conflict)?;
+    // The commit goes to the others only, and the removed member can send nothing more.
+    assert_eq!(targets, vec![2, 3]);
+    assert_eq!(world.delivery.live_channels(&world.group)?, 2);
+    let frame = LiveFrame {
+        epoch: Epoch::new(1),
+        body: body(1),
+        delivery: Mode::Stored,
+    };
+    assert!(matches!(
+        world.delivery.live_frame(&world.group, removed, frame),
+        Err(DeliveryError::UnknownChannel)
+    ));
+    Ok(())
+}
+
 fn live_channel_needs_an_existing_group(store: impl DeliveryStore) -> Result<(), TestError> {
     let world = World::new(store, &[])?;
     let other = GroupId::from_bytes([9; 32]);
@@ -1157,6 +1192,7 @@ for_each_store!(
     a_wake_is_due_only_while_its_subscription_stands,
     live_frame_goes_to_the_other_channels,
     closed_channel_gets_nothing_and_cannot_send,
+    a_removal_closes_the_removed_members_live_channel,
     live_channel_needs_an_existing_group,
     idle_group_expires_after_two_hours,
     writes_postpone_expiry,

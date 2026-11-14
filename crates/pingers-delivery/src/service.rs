@@ -202,7 +202,9 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
 
     /// `POST /v1/groups/{id}/commit`: accepts exactly one commit per epoch. The winner's
     /// subscription changes apply before the wake, so added members are woken and removed
-    /// ones are not.
+    /// ones are not; the live channels attached to a removed subscription are closed with it
+    /// (design G.6: the removed member gets nothing further, and can send nothing more), and
+    /// the commit is not forwarded to them.
     ///
     /// # Errors
     ///
@@ -226,6 +228,7 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
             .collect::<Result<Vec<_>, _>>()?;
         // The class never changes, so reading it before the atomic append is race-free.
         let lifetime = self.store.head(group)?.lifetime;
+        let removed = request.subscriptions_removed;
         let write = self.store.append_commit(
             group,
             NewCommit {
@@ -235,16 +238,19 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
                 next_auth_key: request.next_auth_key,
                 state: request.state,
                 subscriptions_added,
-                subscriptions_removed: request.subscriptions_removed,
+                subscriptions_removed: removed.clone(),
             },
             Self::idle_expiry(now, lifetime)?,
         )?;
         match write {
-            CommitWrite::Appended { sequence } => Ok(CommitOutcome::Accepted {
-                sequence,
-                wakes: self.wakes(group, request.wake, rng)?,
-                targets: self.live.targets(group, None)?,
-            }),
+            CommitWrite::Appended { sequence } => {
+                self.live.close_subscriptions(group, &removed)?;
+                Ok(CommitOutcome::Accepted {
+                    sequence,
+                    wakes: self.wakes(group, request.wake, rng)?,
+                    targets: self.live.targets(group, None)?,
+                })
+            }
             CommitWrite::EpochTaken { head_epoch } => Ok(CommitOutcome::Conflict { head_epoch }),
         }
     }
