@@ -5,7 +5,8 @@
 use pingers_anon::{AnonError, LeafValue, RlnSecret};
 use pingers_proto::{AnonymousCredential, RlnAuth, RlnScope};
 use pingers_store::{
-    HeldToken, RlnIdentity, RootEpoch, TokenKeyId, TreeLeaf, TreePosition, UnspentToken,
+    HeldToken, PATH_LENGTH, RlnIdentity, RootEpoch, StoredPath, TokenKeyId, TreeLeaf, TreePosition,
+    UnspentToken,
 };
 use pingers_testkit::seeded_rng;
 use pingers_time::{Bucket, UnixSeconds};
@@ -116,17 +117,119 @@ fn identity(live_from: u32) -> Result<RlnIdentity, AnonError> {
     })
 }
 
+/// A tree copy at `epoch` holding (or not) a path for leaf `position`.
+fn tree(epoch: u32, path_for: Option<u32>) -> TreeState {
+    TreeState {
+        root_epoch: RootEpoch::new(epoch),
+        root: pingers_anon::MembershipRoot::from_bytes([1; 32]),
+        leaf_count: 4,
+        path: path_for.map(|position| StoredPath {
+            position: TreePosition::new(position),
+            siblings: [[0; 32]; PATH_LENGTH],
+        }),
+    }
+}
+
+const TEN_O_CLOCK: UnixSeconds = UnixSeconds::new(10 * 3_600);
+
 #[test]
 fn a_leaf_proves_from_the_root_epoch_it_goes_live_in() -> Result<(), AnonError> {
-    let now = UnixSeconds::new(10 * 3_600);
-    assert_eq!(readiness(None, now), RlnReadiness::NoIdentity);
+    let now = TEN_O_CLOCK;
+    let fresh = tree(10, Some(0));
+    assert_eq!(readiness(None, Some(&fresh), now), RlnReadiness::NoIdentity);
     assert_eq!(
-        readiness(Some(&identity(11)?), now),
+        readiness(Some(&identity(11)?), Some(&fresh), now),
         RlnReadiness::NotLiveYet
     );
-    assert_eq!(readiness(Some(&identity(10)?), now), RlnReadiness::Ready);
-    assert_eq!(readiness(Some(&identity(9)?), now), RlnReadiness::Ready);
+    assert_eq!(
+        readiness(Some(&identity(10)?), Some(&fresh), now),
+        RlnReadiness::Ready
+    );
+    assert_eq!(
+        readiness(Some(&identity(9)?), Some(&fresh), now),
+        RlnReadiness::Ready
+    );
     Ok(())
+}
+
+#[test]
+fn a_proof_needs_the_current_or_previous_root_and_one_holding_the_leaf() -> Result<(), AnonError> {
+    let now = TEN_O_CLOCK;
+    let live = identity(5)?;
+    assert_eq!(readiness(Some(&live), None, now), RlnReadiness::TreeStale);
+    assert_eq!(
+        readiness(Some(&live), Some(&tree(9, Some(0))), now),
+        RlnReadiness::Ready,
+        "the previous root is still accepted"
+    );
+    assert_eq!(
+        readiness(Some(&live), Some(&tree(8, Some(0))), now),
+        RlnReadiness::TreeStale,
+        "two hours old: refresh first"
+    );
+    // A copy from before the leaf went live cannot hold it.
+    assert_eq!(
+        readiness(Some(&identity(10)?), Some(&tree(9, None)), now),
+        RlnReadiness::TreeStale
+    );
+    Ok(())
+}
+
+#[test]
+fn a_fresh_copy_without_the_leaf_means_it_was_removed() -> Result<(), AnonError> {
+    let now = TEN_O_CLOCK;
+    let live = identity(5)?;
+    assert_eq!(
+        readiness(Some(&live), Some(&tree(10, None)), now),
+        RlnReadiness::LeafRemoved
+    );
+    // A path for another position is an old identity's.
+    assert_eq!(
+        readiness(Some(&live), Some(&tree(10, Some(3))), now),
+        RlnReadiness::LeafRemoved
+    );
+    Ok(())
+}
+
+#[test]
+fn the_prover_is_used_only_after_a_passed_self_test() {
+    let policy = policy(&BOTH, ProverStatus::Enabled);
+    let passed = ProvingState {
+        readiness: RlnReadiness::Ready,
+        self_test: SelfTestStanding::Passed {
+            p95: Duration::from_millis(450),
+        },
+    };
+    assert_eq!(passed.effective(&policy), policy);
+    assert_eq!(passed.proof_time(), Some(Duration::from_millis(450)));
+    for self_test in [SelfTestStanding::Failed, SelfTestStanding::Due] {
+        let state = ProvingState {
+            readiness: RlnReadiness::Ready,
+            self_test,
+        };
+        assert_eq!(state.effective(&policy).prover, ProverStatus::Disabled);
+        assert_eq!(state.effective(&policy).accepted, BOTH);
+        assert_eq!(state.proof_time(), None);
+    }
+    // The app's kill switch wins over a passed test.
+    let off = policy_off();
+    assert_eq!(passed.effective(&off).prover, ProverStatus::Disabled);
+}
+
+fn policy_off() -> CredentialPolicy {
+    policy(&BOTH, ProverStatus::Disabled)
+}
+
+#[test]
+fn a_proof_is_made_only_with_time_for_it_and_the_request() {
+    let proof = Duration::from_millis(500);
+    assert!(proof_fits(None, proof), "no deadline in the foreground");
+    let just = proof.saturating_add(MIN_REQUEST_TIME);
+    assert!(proof_fits(Some(just), proof));
+    assert!(!proof_fits(
+        Some(just.saturating_sub(Duration::from_millis(1))),
+        proof
+    ));
 }
 
 fn leaf(position: u32, fill: u8) -> TreeLeaf {

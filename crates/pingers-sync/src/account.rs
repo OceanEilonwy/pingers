@@ -37,8 +37,13 @@ use pingers_store::{
 use pingers_time::UnixSeconds;
 use subtle::ConstantTimeEq as _;
 
+use crate::credential::readiness;
 use crate::engine::blocking;
-use crate::{ApiRequest, Refill, Response, Route, SyncEngine, SyncError, TokenIssuer, WakeBudget};
+use crate::tokens::{RefillPlan, bearer_lapsed, issuance_day, next_day, plan_refill};
+use crate::{
+    ApiRequest, MembershipRefresh, ProcessRole, Refill, Response, RlnReadiness, Route, SyncEngine,
+    SyncError, TokenIssuer, WakeBudget,
+};
 
 /// How long the server accepts a bearer (design D: one hour).
 pub const BEARER_LIFETIME: Duration = Duration::from_hours(1);
@@ -79,6 +84,8 @@ pub struct Prepared {
     pub tokens: Refill,
     /// The membership leaf.
     pub leaf: LeafStanding,
+    /// The membership tree refresh, if one was due (main app only).
+    pub membership: Option<MembershipRefresh>,
 }
 
 /// What a key list says to do.
@@ -177,23 +184,37 @@ impl SyncEngine {
         .await
     }
 
-    /// Makes sure every credential is in place: the account registered, its membership leaf
-    /// registered, and the Privacy Pass stock above its minimum. Each step that is already done
-    /// costs one store read and no request. Call it before credentialed requests and on wakes;
-    /// a wake runs it inside its budget.
+    /// Makes sure every credential is in place: the account registered, the Privacy Pass stock
+    /// above its minimum (within today's allowance), its membership leaf registered, and, in
+    /// the main app, the membership tree refreshed when its hourly root has passed and the
+    /// prover self-test started if it never ran. Each step that is already done costs one store
+    /// read and no request. Call it before credentialed requests and on wakes; a wake runs it
+    /// inside its budget.
     ///
     /// Not cancellation-safe in one respect only: tokens issued in a cancelled refill are lost
-    /// (they count against the day's allowance). Every other step is redone safely.
+    /// (they count against the day's allowance, and the server's next 429 says so). Every other
+    /// step is redone safely.
     ///
     /// # Errors
     ///
     /// [`SyncError::RegistrationRefused`]; [`SyncError::NoGatewayKey`]; [`SyncError::IssuerKeys`];
-    /// [`SyncError::Status`]; as [`SyncEngine::send`].
+    /// [`SyncError::TreeMismatch`]; [`SyncError::Status`]; as [`SyncEngine::send`].
     pub async fn prepare_credentials(&self, budget: WakeBudget) -> Result<Prepared, SyncError> {
         self.ensure_registered(budget).await?;
         let tokens = self.stock_tokens(budget).await?;
+        // The tree first: a fresh copy is what shows a removed leaf, which is then replaced.
+        let membership = if self.settings().role == ProcessRole::MainApp {
+            self.start_prover_self_test().await?;
+            self.ensure_membership_fresh(budget).await?
+        } else {
+            None
+        };
         let leaf = self.ensure_membership_leaf(budget).await?;
-        Ok(Prepared { tokens, leaf })
+        Ok(Prepared {
+            tokens,
+            leaf,
+            membership,
+        })
     }
 
     /// The account, made on first use: a fresh Ed25519 key for the engine's server, recorded
@@ -384,7 +405,8 @@ impl SyncEngine {
     /// Registers this device's membership leaf unless it has one (design B.4.8): a fresh RLN
     /// secret, kept only once the server has taken its commitment. A crash in between leaves no
     /// identity, and the next try registers a new leaf, which replaces the lost one at the
-    /// server.
+    /// server. A leaf a fresh tree copy no longer holds (zeroed: the server forgot the account,
+    /// or replaced the leaf) is replaced the same way; the old secret is never reused.
     ///
     /// # Errors
     ///
@@ -393,8 +415,18 @@ impl SyncEngine {
         &self,
         budget: WakeBudget,
     ) -> Result<LeafStanding, SyncError> {
-        let held = blocking(&self.database, |session| {
-            Ok(session.rln_identity().load()?.is_some())
+        let now = self.now();
+        let held = blocking(&self.database, move |session| {
+            Ok(match session.rln_identity().load()? {
+                None => false,
+                Some(identity) => {
+                    readiness(
+                        Some(&identity),
+                        session.rln_tree_state().load()?.as_ref(),
+                        now,
+                    ) != RlnReadiness::LeafRemoved
+                }
+            })
         })
         .await?;
         if held {
@@ -445,25 +477,33 @@ impl SyncEngine {
 
     /// Tops the Privacy Pass stock up if it is below its minimum: the issuer key through the
     /// relay, a bearer, and one `POST /v1/pp/issue` (once more with a fresh bearer after a 401).
-    /// A full stock costs one store read.
+    /// A full stock, or one already topped up with all of today's allowance, costs two store
+    /// reads and no request.
     ///
     /// # Errors
     ///
-    /// [`SyncError::Status`] if the issuer refuses (429 for the day's allowance); as
-    /// [`SyncEngine::issuer_key`] and [`SyncEngine::refill_tokens`].
+    /// [`SyncError::Status`] if the issuer refuses (a spent daily allowance is
+    /// [`Refill::DailyLimitReached`], not an error); as [`SyncEngine::issuer_key`] and
+    /// [`SyncEngine::refill_tokens`].
     pub async fn stock_tokens(&self, budget: WakeBudget) -> Result<Refill, SyncError> {
         let held = self.token_count().await?;
-        if self.settings().token_stock.shortfall(held).is_none() {
-            return Ok(Refill::Stocked { held });
+        let today = issuance_day(self.now());
+        let ledger = self.token_ledger().await?;
+        match plan_refill(self.settings().token_stock, held, &ledger, today) {
+            RefillPlan::Stocked => return Ok(Refill::Stocked { held }),
+            RefillPlan::DailyLimitReached => {
+                return Ok(Refill::DailyLimitReached {
+                    held,
+                    resets_at: next_day(today)?,
+                });
+            }
+            RefillPlan::Fetch(_) => {}
         }
         self.ensure_registered(budget).await?;
         let issuer = self.issuer_key(budget).await?;
         let bearer = self.bearer(budget).await?;
         match self.refill_tokens(&issuer, &bearer, budget).await {
-            Err(SyncError::Status {
-                route: Route::PrivacyPassIssue,
-                status: UNAUTHORIZED,
-            }) => {
+            Err(error) if bearer_lapsed(&error) => {
                 blocking(&self.database, |session| {
                     Ok(session.account().forget_bearer()?)
                 })

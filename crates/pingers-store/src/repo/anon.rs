@@ -401,6 +401,24 @@ impl RlnTree<'_> {
         })
     }
 
+    /// The leaf at `position`, if held.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Corrupt`] if the stored value does not decode.
+    pub fn leaf(&self, position: TreePosition) -> Result<Option<LeafValue>, StoreError> {
+        self.session.with(|connection| {
+            connection
+                .query_row(
+                    "SELECT value FROM rln_tree_leaf WHERE position = ?1",
+                    [position.get()],
+                    |row| Ok(read_array(row, 0, "rln_tree_leaf.value").map(LeafValue::from_bytes)),
+                )
+                .optional()?
+                .transpose()
+        })
+    }
+
     /// Deletes every leaf and cached node: the copy is fetched again from the start.
     ///
     /// # Errors
@@ -690,6 +708,11 @@ mod tests {
             .collect();
         tree.set_leaves(&page)?;
         assert_eq!(tree.leaf_count()?, 5);
+        assert_eq!(
+            tree.leaf(TreePosition::new(3))?,
+            Some(LeafValue::from_bytes([3; 32]))
+        );
+        assert_eq!(tree.leaf(TreePosition::new(5))?, None);
         assert_eq!(tree.leaves()?, page);
         tree.put_node(
             TreeLevel::new(1),

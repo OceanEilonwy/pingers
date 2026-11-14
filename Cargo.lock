@@ -3965,6 +3965,7 @@ dependencies = [
  "pingers-testkit",
  "pingers-time",
  "pingers-transport",
+ "proptest",
  "rand_chacha 0.10.0",
  "rand_core 0.10.1",
  "subtle",
