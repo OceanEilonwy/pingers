@@ -554,18 +554,23 @@ fn play(
         a.tap_when(&Find::tag("invite_share").enabled(), PRESENCE)
             .context("the invite link was never made (Share invite link stayed disabled)")?;
         // The share sheet previews the text it shares: the link itself.
-        let preview = a.wait_for(&Find::text(Text::Contains("pingers://join".into())), UI)?;
+        // `pingers://join#v1.…`, or `https://<server>/j#v1.…` as pingers-parties writes it.
+        let preview = a.wait_for(
+            &Find::text(Text::Contains("pingers://join".into()))
+                .or(Text::Contains("/j#v1.".into())),
+            UI,
+        )?;
         let link = preview
             .label()
             .split_whitespace()
-            .find(|word| word.starts_with("pingers://join"))
+            .find(|word| word.starts_with("pingers://join") || word.contains("/j#v1."))
             .context("no link in the share sheet's preview")?
             .to_owned();
         a.back()?;
         let length = link.len();
         scene.link = Some(link);
         Ok(format!(
-            "pingers://join#… ({length} characters) read from the share sheet"
+            "the link ({length} characters) read from the share sheet"
         ))
     })?;
 
