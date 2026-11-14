@@ -603,6 +603,11 @@ impl Net {
 impl ServerPort for Net {
     async fn pull_group_logs(&self, server: &ServerId) -> Result<(), PortError> {
         let link = self.port_link(server).await?;
+        // The account, its leaf and the token stock first: each step after this one spends a
+        // credential. Once in place this costs a few store reads.
+        link.prepare_credentials()
+            .await
+            .map_err(|error| port_error(&error))?;
         // A Party may have changed: the wake's next Party view reads it again.
         self.flush_server(&link)
             .await
