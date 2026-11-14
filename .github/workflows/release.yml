@@ -15,6 +15,10 @@
 #   PINGERS_SERVER_HOST, PINGERS_OHTTP_RELAY, PINGERS_PUSH_RELAY, PINGERS_MAP_HOST
 #                              the deployment's hosts. Unset, the app gets a .invalid host and
 #                              the run warns.
+#   PINGERS_GATEWAY_KEY_PINS, PINGERS_PUSH_RELAY_KEY_PINS
+#                              the gateway's and push relay's key config hashes (base64url
+#                              SHA-256, comma-separated: the served key and the next one), as
+#                              `cargo xtask pins` prints them. Unset, the app pins on first use.
 #
 # The key is in the same job as Gradle, so Gradle plugins and build dependencies run where the
 # key is. They are the same pinned versions every CI run builds with.
@@ -123,6 +127,8 @@ jobs:
           PINGERS_OHTTP_RELAY: ${{ vars.PINGERS_OHTTP_RELAY || secrets.PINGERS_OHTTP_RELAY }}
           PINGERS_PUSH_RELAY: ${{ vars.PINGERS_PUSH_RELAY || secrets.PINGERS_PUSH_RELAY }}
           PINGERS_MAP_HOST: ${{ vars.PINGERS_MAP_HOST || secrets.PINGERS_MAP_HOST }}
+          PINGERS_GATEWAY_KEY_PINS: ${{ vars.PINGERS_GATEWAY_KEY_PINS }}
+          PINGERS_PUSH_RELAY_KEY_PINS: ${{ vars.PINGERS_PUSH_RELAY_KEY_PINS }}
         run: cargo xtask release-android --flavour ${{ matrix.flavour }}
 
       - name: Delete the keystore and google-services.json

@@ -19,6 +19,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.pingers.app.BuildConfig
 import org.pingers.app.data.Coordinate
+import org.pingers.app.data.CoreHost
 
 /*
  * Region packs on this phone: which hosts to use, what they offer, what is installed, and
@@ -52,9 +53,9 @@ sealed interface CatalogState {
 }
 
 /**
- * The map host the user's Pingers server advertises (`map_host` in `/v1/params`). The core
- * reads `/v1/params`; until pingers-ffi exposes the field this answers null and the chain
- * goes from the user's override straight to the publisher's default.
+ * The map host the user's Pingers server advertises (`map_host` in `/v1/params`), as the core
+ * last read it ([CoreHost.serverMapHost]). Null until then: the chain goes from the user's
+ * override straight to the publisher's default.
  */
 fun interface ServerMapHost {
     fun url(): String?
@@ -230,7 +231,7 @@ class Maps(context: Context, private val serverMapHost: ServerMapHost = ServerMa
         @Volatile private var instance: Maps? = null
 
         fun get(context: Context): Maps = instance ?: synchronized(this) {
-            instance ?: Maps(context.applicationContext).also { instance = it }
+            instance ?: Maps(context.applicationContext, ServerMapHost { CoreHost.serverMapHost() }).also { instance = it }
         }
     }
 }

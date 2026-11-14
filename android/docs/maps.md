@@ -59,10 +59,10 @@ Highest priority first, per region:
 
 1. a user override (Advanced, "Map host");
 2. the host the user's Pingers server advertises: `map_host` in `/v1/params` (pingers-proto
-   `Params.map_host`). **Gap:** pingers-server still answers `/v1/params` with 501 and pingers-ffi
-   does not expose the field, so `Maps(serverMapHost = …)` answers null for now. pingers-server
-   must fill `map_host` from a `map_host = "https://…"` line in its config, and pingers-ffi must
-   pass it to the shell (a `Snapshot` field or a `Core` call);
+   `Params.map_host`). The core reads `/v1/params` through the relay once per process (on a wake
+   that goes to the network, or when push registration looks up the push relay) and keeps the
+   last value; `Snapshot.serverMapHost()` hands it to `Maps` through `CoreHost.serverMapHost()`.
+   Until the core has read it once, this link is skipped;
 3. the publisher's default, `BuildConfig.MAP_HOST`, set with `-PpingersMapHost=https://…`
    or the `PINGERS_MAP_HOST` environment variable in CI. Deployment configuration, never source;
    unset, it is `https://maps.pingers.invalid`, which never resolves.

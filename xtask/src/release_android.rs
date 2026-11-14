@@ -39,6 +39,10 @@ const HOST_VARIABLES: [&str; 4] = [
     "PINGERS_MAP_HOST",
 ];
 
+/// Build-time key pins (app/build.gradle.kts); unset, the app pins on first use, which an
+/// official build must not (proposal decision 7).
+const PIN_VARIABLES: [&str; 2] = ["PINGERS_GATEWAY_KEY_PINS", "PINGERS_PUSH_RELAY_KEY_PINS"];
+
 /// Where the gms flavour finds Firebase's configuration.
 const GOOGLE_SERVICES_VARIABLE: &str = "PINGERS_GOOGLE_SERVICES_JSON";
 
@@ -114,6 +118,7 @@ struct Environment {
     password_set: PasswordState,
     google_services_set: GoogleServices,
     unset_hosts: Vec<&'static str>,
+    unset_pins: Vec<&'static str>,
     java_home: Option<PathBuf>,
     android_home: Option<PathBuf>,
 }
@@ -156,6 +161,10 @@ impl Environment {
                 .into_iter()
                 .filter(|name| variable(name).is_none())
                 .collect(),
+            unset_pins: PIN_VARIABLES
+                .into_iter()
+                .filter(|name| variable(name).is_none())
+                .collect(),
             java_home: variable("JAVA_HOME").map(PathBuf::from),
             android_home: variable("ANDROID_HOME")
                 .or_else(|| variable("ANDROID_SDK_ROOT"))
@@ -189,6 +198,12 @@ pub(crate) fn run(root: &Path, choice: &FlavourChoice) -> Result<Outcome> {
         writeln!(
             stdout,
             "release-android: warning: {host} is unset; the app gets its .invalid default"
+        )?;
+    }
+    for pins in &environment.unset_pins {
+        writeln!(
+            stdout,
+            "release-android: warning: {pins} is unset; the app pins that key on first use"
         )?;
     }
     let flavours = choose_flavours(choice, environment.google_services_set, &mut stdout)?;
@@ -607,6 +622,7 @@ mod tests {
             password_set: PasswordState::Unset,
             google_services_set: GoogleServices::Absent,
             unset_hosts: Vec::new(),
+            unset_pins: Vec::new(),
             java_home: None,
             android_home: None,
         };

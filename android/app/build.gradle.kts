@@ -26,6 +26,27 @@ val googleServicesJson: Provider<RegularFile> = providers.gradleProperty("pinger
     .map { layout.projectDirectory.file(File(it).absolutePath) }
 val firebasePackage = "org.pingers.app"
 
+// A test CA for a local stack (PINGERS_EXTRA_CA, or -PpingersExtraCa): a PEM file's path
+// (relative to the repository, as `cargo xtask dev-ca` writes target/dev-ca/ca.pem) or the PEM
+// itself. Debug builds only: the core then trusts that CA instead of Mozilla's roots. Release
+// builds never read it (see buildTypes), so a CI variable left set cannot reach a release.
+val extraCaPem: String = providers.gradleProperty("pingersExtraCa")
+    .orElse(providers.environmentVariable("PINGERS_EXTRA_CA"))
+    .map { value ->
+        if (value.trimStart().startsWith("-----BEGIN")) {
+            value
+        } else {
+            val file = File(value).let { if (it.isAbsolute) it else File(repo, value) }
+            if (!file.isFile) throw GradleException("PINGERS_EXTRA_CA does not name a file: $value")
+            file.readText()
+        }
+    }
+    .getOrElse("")
+
+/** A Kotlin string literal for BuildConfig. */
+fun literal(text: String): String =
+    "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "\\n") + "\""
+
 // Release (upload) signing, from the environment only: never a file in the repository, never a
 // Gradle property that could sit in a checked-in gradle.properties. PINGERS_KEYSTORE_PATH is a
 // PKCS12 keystore (CI decodes PINGERS_KEYSTORE_BASE64 into a temporary file and points this at
@@ -173,6 +194,32 @@ android {
         deployment("pingersServerHost", "PINGERS_SERVER_HOST", "https://pingers.invalid")
         deployment("pingersOhttpRelay", "PINGERS_OHTTP_RELAY", "https://ohttp.pingers.invalid")
         deployment("pingersPushRelay", "PINGERS_PUSH_RELAY", "https://push.pingers.invalid")
+        // The key config hashes the gateway and the push relay may have: for each, the key
+        // served now and the next one (two-slot rotation), base64url SHA-256, comma-separated,
+        // as `cargo xtask pins` prints them. CI sets PINGERS_GATEWAY_KEY_PINS and
+        // PINGERS_PUSH_RELAY_KEY_PINS (or pass -PpingersGatewayKeyPins=...,
+        // -PpingersPushRelayKeyPins=...). With pins set, the core never pins on first use;
+        // unset (a local build), it does. A malformed pin fails the build here rather than the
+        // app at start.
+        fun pins(property: String, variable: String) {
+            val value = providers.gradleProperty(property)
+                .orElse(providers.environmentVariable(variable))
+                .getOrElse("")
+                .trim()
+            if (value.isNotEmpty()) {
+                val pin = Regex("[A-Za-z0-9_-]{43}=?")
+                val bad = value.split(',').map { it.trim() }.filterNot { pin.matches(it) }
+                if (bad.isNotEmpty()) {
+                    throw GradleException(
+                        "$variable must be base64url SHA-256 hashes separated by commas " +
+                            "(${bad.size} entr${if (bad.size == 1) "y is" else "ies are"} not)",
+                    )
+                }
+            }
+            buildConfigField("String", variable.removePrefix("PINGERS_"), "\"$value\"")
+        }
+        pins("pingersGatewayKeyPins", "PINGERS_GATEWAY_KEY_PINS")
+        pins("pingersPushRelayKeyPins", "PINGERS_PUSH_RELAY_KEY_PINS")
     }
 
     testOptions {
@@ -234,8 +281,11 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
+            buildConfigField("String", "EXTRA_CA", literal(extraCaPem))
         }
         release {
+            // Never a test CA in a release, whatever the environment says.
+            buildConfigField("String", "EXTRA_CA", "\"\"")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

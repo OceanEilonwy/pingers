@@ -115,12 +115,25 @@ object CoreHost {
         }
     }
 
-    /** The instance from the build configuration (see app/build.gradle.kts). */
+    /**
+     * The instance from the build configuration (see app/build.gradle.kts). Blank pins mean a
+     * build without them (the core pins on first use). The test CA is passed in debug builds
+     * only; a release build's EXTRA_CA is always empty as well.
+     */
     private fun instance() = InstanceConfig(
         server = BuildConfig.SERVER_HOST.trimEnd('/'),
         ohttpRelay = BuildConfig.OHTTP_RELAY.trimEnd('/'),
         pushRelay = BuildConfig.PUSH_RELAY.trimEnd('/'),
+        gatewayKeyPins = BuildConfig.GATEWAY_KEY_PINS.ifBlank { null },
+        pushRelayKeyPins = BuildConfig.PUSH_RELAY_KEY_PINS.ifBlank { null },
+        extraCaPem = BuildConfig.EXTRA_CA.takeIf { BuildConfig.DEBUG && it.isNotBlank() },
     )
+
+    /**
+     * The map host the user's Pingers server advertises (`map_host` in `/v1/params`), for the
+     * map host chain; null until the core is open and has read it.
+     */
+    fun serverMapHost(): String? = core?.snapshot()?.serverMapHost()
 
     private fun fail(why: String): Core? {
         Log.w(TAG, why)
