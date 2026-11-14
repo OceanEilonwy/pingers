@@ -16,8 +16,8 @@ use pingers_proto::{
     PushRelayConfig, PushRelayKeyConfig, PushRelayKeyId, PushRequest, PushToken,
     PushTokenPlaintext, Record, RecordRandomness, RecordTag, RelayId, RelayRef, RelayUrl,
     RevokeCommitment, RlnAuth, RlnScope, SealedBeacon, SealedLocationFrame, SealedPush,
-    SealedPushBlob, SecretBytes, SeenSegment, SegmentHash, SegmentInfo, ServerId, Subscription,
-    SubscriptionId, TimeToLive, Urgency, WireDecode, WireEncode,
+    SealedPushBlob, SecretBytes, SecretText, SeenSegment, SegmentHash, SegmentInfo, ServerId,
+    Subscription, SubscriptionId, TimeToLive, Urgency, WireDecode, WireEncode,
 };
 use pingers_testkit::{Vector, VectorError, load_vectors};
 use pingers_time::{Bucket, UnixSeconds};
@@ -503,6 +503,11 @@ fn invite_payload_vectors() -> Result<(), TestError> {
                     "multiple" => InviteUses::Multiple,
                     _ => return Err(field_error(vector, "uses")),
                 },
+                registration_code: vector
+                    .inputs
+                    .get("registration_code")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|code| SecretText::new(code.to_owned())),
             })
         },
         encode: InvitePayload::encode,

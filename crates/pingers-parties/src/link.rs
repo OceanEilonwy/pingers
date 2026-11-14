@@ -185,6 +185,7 @@ mod tests {
             inviter_fingerprint: InviterFingerprint::from_bytes([5; 8]),
             expires: UnixSeconds::new(1_000_000),
             uses: InviteUses::Single,
+            registration_code: None,
         })
     }
 

@@ -15,7 +15,7 @@ Parties as long-lived things (client, L3). Sans network: every request for the s
   `safety_code`, `verify_member`, `log_auth_key`, `remove_member`, `commit_pending_proposals`,
   `self_update` (each `-> OutgoingCommit`), `commit_accepted -> CommitApplied`,
   `commit_rejected`, `process_group_message(&GroupId, &MlsMessageBytes) -> Incoming`.
-- Invites (inviter): `create_invite(&PartyId, InviteUses, rng) -> CreatedInvite { invite,
+- Invites (inviter): `create_invite(&PartyId, NewInvite { uses, registration_code }, rng) -> CreatedInvite { invite,
   link, expires }`, `invite_status`, `invites`, `revoke_invite -> DeleteMailbox`,
   `receive_join_request(InviteId, &Padded, rng) -> JoinRequestOutcome::{Admitted,
   AwaitingApproval, Refused(Refusal)}`, `pending_joins`, `approve_join`, `decline_join`.

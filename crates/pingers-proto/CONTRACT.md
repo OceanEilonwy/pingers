@@ -160,7 +160,9 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
 
 - **`InvitePayload`**, the link fragment (`https://<host>/j#v1.<base64url(encoding)>`):
   `[server (ServerId text), invite mailbox (16), invite secret (32, SecretBytes), inviter
-  fingerprint (8), expires (UnixSeconds), uses]`. `InviteUses` replaces the design's
+  fingerprint (8), expires (UnixSeconds), uses]`, plus a seventh element, the operator's
+  registration code (`Option<SecretText>`, never empty), only when present (added 2026-11-14,
+  r-accounts), so six-element links decode unchanged. `InviteUses` replaces the design's
   `single_use: bool` (0 `Multiple`, 1 `Single`). `InviterFingerprint` is an 8-byte newtype with
   a redacted `Debug`. The `v1.` prefix and base64url are left to pingers-parties, so this crate
   needs no base64 dependency; the CBOR carries its own version.

@@ -12,9 +12,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use async_trait::async_trait;
 use pingers_geo::Fence;
 use pingers_parties::{
-    INVITE_LIFETIME, InviteId, InviteStatus as PartiesInviteStatus, Myself, NewParty, NewSpot,
-    Outbound, PartiesError, PartyLifecycle, PartySettings, PostQuantum as PartiesPostQuantum,
-    RelayChoice, SpotEdit, SpotShape,
+    INVITE_LIFETIME, InviteId, InviteStatus as PartiesInviteStatus, Myself, NewInvite, NewParty,
+    NewSpot, Outbound, PartiesError, PartyLifecycle, PartySettings,
+    PostQuantum as PartiesPostQuantum, RelayChoice, SpotEdit, SpotShape,
 };
 use pingers_proto::{InviteUses, LeafIndex, MailboxId, PartyId, ServerId, SpotId};
 use pingers_store::{MemberName, Party as StoredParty, PartyName, Session, SpotName};
@@ -106,7 +106,10 @@ impl PartiesPort for Parties {
             .store(move |session, clock, rng| {
                 Ok(PartyLifecycle::new(session, clock).create_invite(
                     &party,
-                    InviteUses::Multiple,
+                    NewInvite {
+                        uses: InviteUses::Multiple,
+                        registration_code: None,
+                    },
                     rng,
                 )?)
             })

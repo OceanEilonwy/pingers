@@ -1,6 +1,6 @@
 {
   "name": "invite-payload-encoding",
-  "description": "Invite link fragment payload (https://<host>/j#v1.<base64url(this)>) as canonical CBOR: [server, invite mailbox, invite secret, inviter fingerprint, expires, uses (0 multiple, 1 single)] (design D, invite flow)",
+  "description": "Invite link fragment payload (https://<host>/j#v1.<base64url(this)>) as canonical CBOR: [server, invite mailbox, invite secret, inviter fingerprint, expires, uses (0 multiple, 1 single), registration code (text; present only when the inviter passes one on, so the array has 6 elements without it and 7 with it)] (design D, invite flow; design B.1 registration codes). An empty registration code is refused.",
   "vectors": [
     {
       "name": "single-use",
@@ -28,6 +28,39 @@
       },
       "expected": {
         "encoding": "8201867768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b49d20000"
+      }
+    },
+    {
+      "name": "single-use-with-registration-code",
+      "inputs": {
+        "server": "https://pingers.example",
+        "invite_mailbox": "2122232425262728292a2b2c2d2e2f30",
+        "invite_secret": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "inviter_fingerprint": "08090a0b0c0d0e0f",
+        "expires": 1800604800,
+        "uses": "single",
+        "registration_code": "friends-2026"
+      },
+      "expected": {
+        "encoding": "8201877768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c80016c667269656e64732d32303236"
+      }
+    },
+    {
+      "name": "empty-registration-code",
+      "inputs": {
+        "encoding": "8201877768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c800160"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    },
+    {
+      "name": "eight-elements",
+      "inputs": {
+        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c80016c667269656e64732d3230323600"
+      },
+      "expected": {
+        "error": "Cbor"
       }
     },
     {

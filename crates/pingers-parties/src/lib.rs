@@ -49,8 +49,8 @@ pub use invite::{
     INVITE_LIFETIME, InviteId, InviteStatus, InviteSummary, JoinId, PendingJoin, Refusal,
 };
 pub use joining::{
-    ArrivedWelcome, CreatedInvite, JoinDetails, JoinRequestOutcome, Joined, PreparedJoin,
-    WelcomeAccess,
+    ArrivedWelcome, CreatedInvite, JoinDetails, JoinRequestOutcome, Joined, NewInvite,
+    PreparedJoin, WelcomeAccess,
 };
 pub use lifecycle::{CommitApplied, CreatedParty, Incoming, NewParty, PartyLifecycle};
 pub use link::InviteLink;
