@@ -38,3 +38,43 @@ reason = "caught as a timeout, not missed: every connection is then closed as so
 [[mutant]]
 name = "crates/pingers-wake/src/state.rs: replace < with <= in Board::prune"
 reason = "equivalent: a knock is decided after its record's lease started, so exactly one lease after the decision that lease has expired and its knock mailbox is no longer read; keeping or dropping the decision at that instant cannot be observed (the comment at the call says so)"
+
+[[mutant]]
+name = "crates/pingers-client/src/real/sync.rs: replace Net::post_welcome -> Result<(), PortError> with Ok(())"
+reason = "equivalent in the client tests: a Meetup Welcome is posted only after a knock is accepted, and no knock is ever built while Lens::key_package answers Unavailable (WAITING(contracts) in wake_ports.rs). Remove when knocks run between two harness devices."
+
+[[mutant]]
+name = "crates/pingers-client/src/real/sync.rs: replace <impl ServerPort for Net>::post_knock -> Result<(), PortError> with Ok(())"
+reason = "equivalent in the client tests: no knock is ever built while Lens::key_package answers Unavailable (WAITING(contracts) in wake_ports.rs), so post_knock is never called. Remove when knocks run between two harness devices."
+
+[[mutant]]
+name = "crates/pingers-client/src/real/sync.rs: replace <impl ServerPort for Net>::read_mailbox -> Result<Vec<Vec<u8>>, PortError> with Ok(vec![])"
+reason = "equivalent in the client tests: knock and reply mailboxes stay empty while no knock can be built (Lens::key_package, WAITING(contracts)); reading none and reading nothing are the same. Remove when knocks run between two harness devices."
+
+[[mutant]]
+name = "crates/pingers-client/src/real/sync.rs: replace <impl ServerPort for Net>::read_mailbox -> Result<Vec<Vec<u8>>, PortError> with Ok(vec![vec![]])"
+reason = "equivalent in the client tests: a post that does not open as a knock or a Welcome is skipped, and no real post can arrive while no knock can be built (Lens::key_package, WAITING(contracts)). Remove when knocks run between two harness devices."
+
+[[mutant]]
+name = "crates/pingers-client/src/real/sync.rs: replace <impl ServerPort for Net>::read_mailbox -> Result<Vec<Vec<u8>>, PortError> with Ok(vec![vec![0]])"
+reason = "equivalent in the client tests: a post that does not open as a knock or a Welcome is skipped, and no real post can arrive while no knock can be built (Lens::key_package, WAITING(contracts)). Remove when knocks run between two harness devices."
+
+[[mutant]]
+name = "crates/pingers-client/src/real/sync.rs: replace <impl ServerPort for Net>::read_mailbox -> Result<Vec<Vec<u8>>, PortError> with Ok(vec![vec![1]])"
+reason = "equivalent in the client tests: a post that does not open as a knock or a Welcome is skipped, and no real post can arrive while no knock can be built (Lens::key_package, WAITING(contracts)). Remove when knocks run between two harness devices."
+
+[[mutant]]
+name = "crates/pingers-client/src/real/sync.rs: replace <impl GroupNetwork for GroupLogs>::create_group -> Result<(), NetworkError> with Ok(())"
+reason = "equivalent in the client tests, as Meetups::runtime above: no Meetup is created without an accepted knock. Remove when a client test runs a Meetup against the harness server."
+
+[[mutant]]
+name = "crates/pingers-client/src/real/sync.rs: replace <impl GroupNetwork for GroupLogs>::post_message -> Result<(), NetworkError> with Ok(())"
+reason = "equivalent in the client tests, as Meetups::runtime above: no Meetup goes live, so no Meetup message is posted. Remove when a client test runs a Meetup against the harness server."
+
+[[mutant]]
+name = "crates/pingers-client/src/real/sync.rs: replace <impl GroupNetwork for GroupLogs>::fetch_log -> Result<Vec<GroupLogEntry>, NetworkError> with Ok(vec![])"
+reason = "equivalent in the client tests, as Meetups::runtime above: no Meetup goes live, so no Meetup log is read. Remove when a client test runs a Meetup against the harness server."
+
+[[mutant]]
+name = "crates/pingers-client/src/real/sync.rs: replace <impl GroupNetwork for GroupLogs>::delete_group -> Result<(), NetworkError> with Ok(())"
+reason = "equivalent in the client tests, as Meetups::runtime above: no Meetup goes live, so none is deleted. Remove when a client test runs a Meetup against the harness server."

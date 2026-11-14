@@ -767,7 +767,7 @@ impl SyncPort for Sync {
     /// is sent and the answer is `Unreachable`.
     async fn check_reachability(&self) -> Result<RelayStatus, ClientError> {
         let links = self.0.servers.all().await?;
-        let mut answer = None;
+        let mut statuses = Vec::new();
         for link in &links {
             let result = link.engine.check_relay(WakeBudget::UNLIMITED).await;
             link.observe(&result);
@@ -785,11 +785,14 @@ impl SyncPort for Sync {
                 Err(SyncError::RelayKeyMismatch) => RelayStatus::KeyMismatch,
                 Err(error) => return Err(error.into()),
             };
-            if self.0.servers.built_in() == Some(&link.server) || answer.is_none() {
-                answer = Some(status);
-            }
+            statuses.push((link.server.clone(), status));
         }
-        Ok(answer.unwrap_or(RelayStatus::Unreachable))
+        let built_in = self.0.servers.built_in();
+        Ok(statuses
+            .iter()
+            .find(|(server, _status)| Some(server) == built_in)
+            .or_else(|| statuses.first())
+            .map_or(RelayStatus::Unreachable, |(_server, status)| *status))
     }
 
     async fn probe_server(&self, address: String) -> Result<ServerProbe, ClientError> {
