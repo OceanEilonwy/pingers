@@ -302,22 +302,32 @@ async fn party_of_two(ana: &Phone, ben: &Phone) -> Result<PartyId, TestError> {
             post_quantum: PostQuantum::Off,
         })
         .await?;
-    let link = ana.client.create_invite(party).await?;
-    ben.client.open_invite(link.url, Name::new("Ben")?).await?;
-    ana.wake().await?;
-    let snapshot = ana.client.snapshot();
+    let_in(ana, ben, party, "Ben").await?;
+    Ok(party)
+}
+
+/// `inviter` lets `joiner` (going by `name`) into `party` through an invite.
+async fn let_in(inviter: &Phone, joiner: &Phone, party: PartyId, name: &str) -> TestResult {
+    let link = inviter.client.create_invite(party).await?;
+    joiner
+        .client
+        .open_invite(link.url, Name::new(name)?)
+        .await?;
+    inviter.wake().await?;
+    let snapshot = inviter.client.snapshot();
     let request = snapshot
         .party(party)?
         .join_requests
         .first()
-        .ok_or(TestError::Missing("Ben's join request"))?
+        .ok_or(TestError::Missing("the join request"))?
         .id;
-    ana.client
+    inviter
+        .client
         .decide_join(party, request, JoinDecision::Admit)
         .await?;
-    ben.wake().await?;
-    ben.client.snapshot().party(party)?;
-    Ok(party)
+    joiner.wake().await?;
+    joiner.client.snapshot().party(party)?;
+    Ok(())
 }
 
 /// Ana adds a Spot to the Party; Ben learns of it from the Party log on his next wake.
@@ -942,4 +952,105 @@ async fn focus_leaves_every_meetup() -> TestResult {
     })
     .await?;
     Ok(())
+}
+
+/// Each phone reports a fix in the Spot and wakes, half a minute apart, `rounds` times.
+async fn dwell(phones: &[&Phone], rounds: usize) -> TestResult {
+    for _round in 0..rounds {
+        if let Some(first) = phones.first() {
+            first.clock.advance(Duration::from_secs(30));
+        }
+        for phone in phones {
+            phone.at_the_spot().await?;
+            phone.wake().await?;
+        }
+    }
+    Ok(())
+}
+
+/// `phone` reports `fixes` fixes in the Spot, half a minute apart; each runs a wake.
+async fn walk_in(phone: &Phone, fixes: usize) -> TestResult {
+    for _fix in 0..fixes {
+        phone.clock.advance(Duration::from_secs(30));
+        phone.at_the_spot().await?;
+    }
+    Ok(())
+}
+
+/// The distinct Meetups a phone's shell heard start.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "every other event, and any added later, is not a start"
+)]
+fn started_meetups(phone: &Phone) -> Vec<GroupId> {
+    let mut started: Vec<GroupId> = phone
+        .events
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            RecordedEvent::MeetupStarted { meetup } => Some(meetup),
+            _ => None,
+        })
+        .collect();
+    started.sort_unstable();
+    started.dedup();
+    started
+}
+
+/// Ana and Cat are in the Spot without having met (neither could knock yet) when Ben
+/// arrives and knocks both: each starts a Meetup with him, so two form at one Spot. A phone in
+/// both keeps the one with the smaller group id and leaves the other (design B.5), and in the
+/// end Ana and Ben are in one Meetup, the same one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_meetups_at_one_spot_come_down_to_one() -> TestResult {
+    let config = HarnessConfig::default();
+    let harness = InProcessHarness::start(&config)?;
+    let off = |seed| Who {
+        seed,
+        pushes: Pushes::Off,
+    };
+    let ana = Phone::new(&harness, &config, off(9)).await?;
+    let ben = Phone::new(&harness, &config, off(10)).await?;
+    let cat = Phone::new(&harness, &config, off(11)).await?;
+    let party = party_of_two(&ana, &ben).await?;
+    let_in(&ana, &cat, party, "Cat").await?;
+    ben.wake().await?;
+    spot(&ana, party).await?;
+    // Cat walks in to an empty Spot and stops waking; Ana walks in after her and knocks her,
+    // but Cat does not wake to answer. Each fix is a wake of its own.
+    walk_in(&cat, 3).await?;
+    walk_in(&ana, 3).await?;
+    // Ben fills his mailbox pools first (one mailbox a wake), so he can knock both at once
+    // when he comes in.
+    for _wake in 0..8 {
+        ben.clock.advance(Duration::from_secs(30));
+        ben.wake().await?;
+    }
+    walk_in(&ben, 3).await?;
+    // Ana answers Ben (a Meetup of two), then Cat answers both knocks (a second Meetup, of
+    // three): Ana and Ben are each in two at one Spot.
+    walk_in(&ana, 1).await?;
+    walk_in(&cat, 1).await?;
+    // Everyone wakes until no phone is in two Meetups and Ana and Ben share one.
+    for _round in 0..20 {
+        dwell(&[&ana, &cat, &ben], 1).await?;
+        let ana_in: Vec<GroupId> = ana.client.snapshot().meetups.iter().map(|m| m.id).collect();
+        let ben_in: Vec<GroupId> = ben.client.snapshot().meetups.iter().map(|m| m.id).collect();
+        let duplicates_seen = started_meetups(&ana).len() > 1 || started_meetups(&ben).len() > 1;
+        if duplicates_seen && ana_in.len() == 1 && ana_in == ben_in {
+            let kept = ana_in
+                .first()
+                .copied()
+                .ok_or(TestError::Missing("the Meetup"))?;
+            // The kept one is the smallest of those that formed.
+            for phone in [&ana, &ben] {
+                assert_eq!(started_meetups(phone).first(), Some(&kept));
+            }
+            assert!(cat.client.snapshot().meetups.len() <= 1);
+            return Ok(());
+        }
+    }
+    Err(TestError::Missing(
+        "one Meetup for Ana and Ben after two formed",
+    ))
 }
