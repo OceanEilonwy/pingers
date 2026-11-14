@@ -166,6 +166,15 @@ impl Device {
         // A field tapped a moment ago may not have focus yet; the first letters would be lost.
         pause(Duration::from_millis(600));
         self.shell(&format!("input text '{}'", text.replace(' ', "%s")))?;
+        // The keyboard stays up over the bottom of the screen, where the screens' main buttons
+        // are: a later tap there would land on a key. Back closes it (and only it while shown).
+        pause(Duration::from_millis(300));
+        if self
+            .shell("dumpsys input_method")?
+            .contains("mInputShown=true")
+        {
+            self.back()?;
+        }
         Ok(())
     }
 
