@@ -14,7 +14,8 @@
 //!
 //! Operators: the configuration file and the FCM service-account setup (a dedicated account
 //! with only "Firebase Cloud Messaging API Admin", its JSON key at mode 600) are documented in
-//! [`config`]. Access tokens are minted and renewed by [`fcm_auth`].
+//! [`config`]. Access tokens are minted and renewed by [`fcm_auth`]. The operator subcommands
+//! (`pins`, `keygen`, `credential-hash`) are in [`command`].
 #![forbid(unsafe_code)]
 
 pub mod address;
