@@ -7,7 +7,6 @@ use pingers_meetup::{
     AllowListChoice, AskBack, CadenceMode, ExactLocation, GrantScope, LocationAnswer,
     MeetPointDraft, MeetupAction, MeetupEvent,
 };
-use pingers_mls::CipherSuitePolicy;
 use pingers_proto::{ChatBody, Delivery, LeafIndex, MeetPoint};
 
 use super::{GROUP, Leftovers, TestError, TestResult, World, fix, subscription_of};
@@ -129,6 +128,8 @@ async fn members_exchange_frames_then_leaving_deletes_everything() -> TestResult
         vec![subscription_of(0)]
     );
     assert!(world.server.deleted().is_empty());
+    // Bob's commit of her proposal names it too, read from her leaf, in case it was lost.
+    assert_eq!(world.server.removed_by_commits(), vec![subscription_of(0)]);
 
     // Bob, alone, leaves last: the group goes on the server and on his phone.
     assert_eq!(bob.handle.leave().await?, Ended::Left);
@@ -274,6 +275,8 @@ async fn a_silent_member_is_removed() -> TestResult {
         .await?;
     assert!(view.peer(BOB).is_none());
     assert_eq!(world.server.commits(&GROUP), 2);
+    // The silent member never deleted its subscription; the removal drops it.
+    assert_eq!(world.server.removed_by_commits(), vec![subscription_of(1)]);
 
     // Alone for 30 minutes: the Meetup ends, on the server too.
     world.clock.advance(Duration::from_mins(31));
@@ -395,7 +398,7 @@ async fn a_late_joiner_gets_the_snapshot_but_no_history() -> TestResult {
     // Chloé knocks; Alice adds her and hands back the Welcome.
     let knock = knock_key_package(
         world.device(2)?.database(),
-        CipherSuitePolicy::Classical,
+        super::knocking(2),
         Box::new(pingers_testkit::seeded_rng(3)),
     )
     .await?;

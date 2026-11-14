@@ -749,6 +749,8 @@ impl Device {
             let key_package = MlsContext::new(&self.storage, &self.key).create_key_package(
                 KeyPackagePurpose::Meetup {
                     grant_key: &grant.public,
+                    // This device tracks members' subscriptions itself (`member_subscriptions`).
+                    subscription: None,
                 },
                 SUITE,
                 &mut self.rng,
@@ -958,6 +960,7 @@ impl Device {
                     party_roster: &roster,
                     first_member: &answer.knock.knock.key_package,
                     own_grant_key: &grant.public,
+                    own_subscription: None,
                     suite: SUITE,
                 },
                 &mut self.rng,

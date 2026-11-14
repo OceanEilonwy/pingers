@@ -33,7 +33,7 @@ async fn a_meetup_forms_grows_and_ends_without_the_server_learning_psk_meet_or_t
     // Bob knocked; Alice, inside the Spot, creates the group bound to her PSK_meet(b).
     let bob_knock = knock_key_package(
         world.device(1)?.database(),
-        CipherSuitePolicy::Classical,
+        super::knocking(1),
         Box::new(pingers_testkit::seeded_rng(2)),
     )
     .await?;
@@ -70,7 +70,7 @@ async fn a_meetup_forms_grows_and_ends_without_the_server_learning_psk_meet_or_t
     // Chloé enters later and knocks; Alice adds her to the same Meetup.
     let chloe_knock = knock_key_package(
         world.device(2)?.database(),
-        CipherSuitePolicy::Classical,
+        super::knocking(2),
         Box::new(pingers_testkit::seeded_rng(3)),
     )
     .await?;
@@ -132,7 +132,7 @@ async fn a_welcome_joins_only_under_the_psk_of_its_spot_bucket_and_epoch() -> Te
     let world = World::new(2)?;
     let knock = knock_key_package(
         world.device(1)?.database(),
-        CipherSuitePolicy::Classical,
+        super::knocking(1),
         Box::new(pingers_testkit::seeded_rng(2)),
     )
     .await?;

@@ -2,7 +2,7 @@
 //! Meetup groups: external PSK, roster check, grant keys, leaving, end.
 
 use pingers_crypto::GrantPublicKey;
-use pingers_proto::{Epoch, LeafIndex, WelcomeBytes};
+use pingers_proto::{Epoch, LeafIndex, SubscriptionId, WelcomeBytes};
 use rand_chacha::ChaCha20Rng;
 
 use super::{
@@ -10,8 +10,8 @@ use super::{
     padded, psk_id, rng, roster_of,
 };
 use crate::{
-    CipherSuitePolicy, Group, MeetupCreation, MeetupPskBinding, MemberGrantKey, MemoryStorage,
-    MlsError, MlsStorage as _, ProcessedMessage, Roster, SelfRemoval,
+    CipherSuitePolicy, Group, MeetupCreation, MeetupPskBinding, MemberGrantKey, MemberSubscription,
+    MemoryStorage, MlsError, MlsStorage as _, ProcessedMessage, Roster, SelfRemoval,
 };
 
 type MeetupGroup<'device> = Group<'device, MemoryStorage, crate::Meetup>;
@@ -63,6 +63,7 @@ fn create_with_id<'device>(
             party_roster,
             first_member: &first_member,
             own_grant_key: &grant_key(1),
+            own_subscription: None,
             suite: CipherSuitePolicy::Classical,
         },
         rng,
@@ -160,6 +161,7 @@ fn party_key_package_without_grant_key_is_refused() -> TestResult {
             party_roster: &party,
             first_member: &first_member,
             own_grant_key: &grant_key(1),
+            own_subscription: None,
             suite: CipherSuitePolicy::Classical,
         },
         &mut rng,
@@ -562,4 +564,70 @@ fn party_keeps_the_default_five_generations() -> TestResult {
     )?;
     reordering_window(&mut party_a, &mut party_b, 6, &mut rng)?;
     reordering_window(&mut party_b, &mut party_a, 6, &mut rng)
+}
+
+#[test]
+fn every_member_reads_the_subscriptions_and_who_a_proposal_removes() -> TestResult {
+    let mut rng = rng(48);
+    let (a, b, c) = (
+        Device::new(&mut rng),
+        Device::new(&mut rng),
+        Device::new(&mut rng),
+    );
+    let party = roster_of(&[&a, &b, &c]);
+    let sub_a = SubscriptionId::from_bytes([0xa0; 16]);
+    let sub_b = SubscriptionId::from_bytes([0xb0; 16]);
+    let first_member = b.meetup_key_package_with(&grant_key(2), Some(&sub_b), &mut rng)?;
+    let psk = meetup_psk(7);
+    let created = a.context().create_meetup_group(
+        &MeetupCreation {
+            group_id: group_id(0xA0),
+            psk: MeetupPskBinding {
+                id: psk_id(4)?,
+                value: &psk,
+            },
+            party_roster: &party,
+            first_member: &first_member,
+            own_grant_key: &grant_key(1),
+            own_subscription: Some(&sub_a),
+            suite: CipherSuitePolicy::Classical,
+        },
+        &mut rng,
+    )?;
+    let mut group_a = created.group;
+    group_a.merge_pending_commit()?;
+    let welcome = created
+        .commit
+        .welcome
+        .ok_or(TestError::Missing("a Welcome"))?;
+    let mut group_b = join(&b, &welcome, &party)?;
+    // C knocked with wake-up pushes off: no subscription in its leaf.
+    let add_c = group_a.add_members(
+        &[c.meetup_key_package(&grant_key(3), &mut rng)?],
+        &party,
+        &mut rng,
+    )?;
+    group_a.merge_pending_commit()?;
+    group_b.process(&add_c.commit)?;
+    let welcome_c = add_c.welcome.ok_or(TestError::Missing("a Welcome"))?;
+    let mut group_c = join(&c, &welcome_c, &party)?;
+    let expected = vec![
+        MemberSubscription {
+            leaf: LeafIndex::new(0),
+            subscription: sub_a,
+        },
+        MemberSubscription {
+            leaf: LeafIndex::new(1),
+            subscription: sub_b,
+        },
+    ];
+    // The newest member reads them from the tree, as do the others.
+    for group in [&group_a, &group_b, &group_c] {
+        assert_eq!(group.member_subscriptions(), expected);
+        assert!(group.pending_removals().is_empty());
+    }
+    let leave = group_b.propose_leave(&mut rng)?;
+    group_c.process(&leave)?;
+    assert_eq!(group_c.pending_removals(), vec![LeafIndex::new(1)]);
+    Ok(())
 }

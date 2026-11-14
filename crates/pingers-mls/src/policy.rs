@@ -7,13 +7,20 @@ use openmls::prelude::{
     SenderRatchetConfiguration, UnknownExtension,
 };
 use pingers_crypto::{AccountPublicKey, GrantPublicKey};
-use pingers_proto::{GroupId, LeafIndex};
+use pingers_proto::{GroupId, LeafIndex, SubscriptionId};
 
 use crate::{CipherSuitePolicy, MeetupPskId, MlsError, MlsStorage, Roster, RosterEntry};
 
 /// The `pingers_grant_key` leaf-node extension type (design B.6.1): a private-use code point
 /// (RFC 9420 §17.3 reserves 0xF000-0xFFFF), chosen so it is not a GREASE value.
 pub(crate) const GRANT_KEY_EXTENSION: u16 = 0xF0A1;
+
+/// The `pingers_meetup_subscription` leaf-node extension type: the member's sealed-push
+/// subscription id in the Meetup group (16 bytes), present when it has one. Every member reads
+/// it from the leaf, so whoever commits a member's removal lists that subscription in
+/// `subscriptions_removed` (design D, G.6). The id is the server's already; members learn
+/// nothing new about each other from it.
+pub(crate) const SUBSCRIPTION_EXTENSION: u16 = 0xF0A2;
 
 /// How many generations back a Meetup member can still decrypt (design B.6).
 const MEETUP_OUT_OF_ORDER_TOLERANCE: u32 = 50;
@@ -54,7 +61,10 @@ pub(crate) fn is_supported_suite_code(code: &[u8]) -> bool {
 /// Leaf capabilities: the group's suite, basic credentials and, in Meetups, the grant-key
 /// extension.
 pub(crate) fn capabilities(kind: KindTag, suite: Ciphersuite) -> Capabilities {
-    let grant = [ExtensionType::Unknown(GRANT_KEY_EXTENSION)];
+    let grant = [
+        ExtensionType::Unknown(GRANT_KEY_EXTENSION),
+        ExtensionType::Unknown(SUBSCRIPTION_EXTENSION),
+    ];
     let extensions: &[ExtensionType] = match kind {
         KindTag::Party => &[],
         KindTag::Meetup => &grant,
@@ -91,15 +101,32 @@ pub(crate) fn is_meetup(context_extensions: &Extensions<openmls::prelude::GroupC
         })
 }
 
-/// The leaf-node extensions carrying a grant key.
-pub(crate) fn grant_key_extensions(
+/// The leaf-node extensions of a Meetup member: its grant key and, if it has one, its
+/// subscription id.
+pub(crate) fn meetup_leaf_extensions(
     grant_key: &GrantPublicKey,
+    subscription: Option<&SubscriptionId>,
 ) -> Result<Extensions<LeafNode>, MlsError> {
-    Extensions::single(Extension::Unknown(
+    let grant = Extension::Unknown(
         GRANT_KEY_EXTENSION,
         UnknownExtension(grant_key.as_bytes().to_vec()),
-    ))
-    .map_err(|_| MlsError::Internal)
+    );
+    let subscription = subscription.map(|subscription| {
+        Extension::Unknown(
+            SUBSCRIPTION_EXTENSION,
+            UnknownExtension(subscription.as_bytes().to_vec()),
+        )
+    });
+    Extensions::from_vec(core::iter::once(grant).chain(subscription).collect())
+        .map_err(|_| MlsError::Internal)
+}
+
+/// The subscription id in a leaf, if it carries a well-formed one.
+pub(crate) fn leaf_subscription(leaf: &LeafNode) -> Option<SubscriptionId> {
+    let bytes = leaf.extensions().unknown(SUBSCRIPTION_EXTENSION)?;
+    <[u8; SubscriptionId::LENGTH]>::try_from(bytes.0.as_slice())
+        .ok()
+        .map(SubscriptionId::from_bytes)
 }
 
 /// The grant key in a leaf, if it carries the extension.

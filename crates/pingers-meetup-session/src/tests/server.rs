@@ -57,6 +57,8 @@ struct State {
     uplinks: Vec<Uplink>,
     deleted: Vec<GroupId>,
     deleted_subscriptions: Vec<SubscriptionId>,
+    /// Subscriptions accepted commits removed, in order.
+    removed_by_commits: Vec<SubscriptionId>,
     /// Every byte string a device sent the server, as it arrived: requests, paths and frames.
     seen: Vec<Vec<u8>>,
 }
@@ -280,6 +282,10 @@ impl FakeServer {
         })
     }
 
+    pub(crate) fn removed_by_commits(&self) -> Vec<SubscriptionId> {
+        self.lock().removed_by_commits.clone()
+    }
+
     pub(crate) fn deleted_subscriptions(&self) -> Vec<SubscriptionId> {
         self.lock().deleted_subscriptions.clone()
     }
@@ -407,6 +413,9 @@ impl GroupNetwork for FakeNetwork {
         }
         log.head = log.head.saturating_add(1);
         let sequence = SequenceNumber::new(u64::try_from(log.entries.len()).unwrap_or(0));
+        state
+            .removed_by_commits
+            .extend(request.subscriptions_removed.iter().copied());
         let frame = LiveFrame {
             epoch: request.epoch,
             body: request.commit,

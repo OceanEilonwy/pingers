@@ -734,7 +734,10 @@ async fn an_admission_the_client_cannot_carry_out_is_reported() -> TestResult {
     let meetups = Meetups::new(Arc::clone(&store.backend), offline(&store), Arc::new(Quiet));
     let key_package = knock_key_package(
         &store.backend.database,
-        CipherSuitePolicy::Classical,
+        pingers_meetup_session::Knocking {
+            suite: CipherSuitePolicy::Classical,
+            subscription: None,
+        },
         Box::new(ChaCha20Rng::seed_from_u64(4)),
     )
     .await?

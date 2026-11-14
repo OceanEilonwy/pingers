@@ -150,6 +150,16 @@ pub struct Joined {
     pub events: mpsc::UnboundedReceiver<MeetupEvent>,
 }
 
+/// What a knock's KeyPackage is made for.
+#[derive(Clone, Copy, Debug)]
+pub struct Knocking {
+    /// The Party's ciphersuite.
+    pub suite: CipherSuitePolicy,
+    /// The Meetup subscription the knock carries, if any: its id goes in the KeyPackage's leaf
+    /// so whoever later removes this device from the Meetup drops it on the server too.
+    pub subscription: Option<SubscriptionId>,
+}
+
 /// A fresh Meetup KeyPackage and grant key pair for a knock (design B.6.1).
 ///
 /// # Errors
@@ -158,14 +168,19 @@ pub struct Joined {
 /// [`SessionError::Mls`], [`SessionError::Store`].
 pub async fn knock_key_package(
     database: &Arc<Database>,
-    suite: CipherSuitePolicy,
+    knocking: Knocking,
     mut rng: SessionRng,
 ) -> Result<KnockKeyPackage, SessionError> {
+    let Knocking {
+        suite,
+        subscription,
+    } = knocking;
     run_blocking(database, move |local| {
         let grant = GrantKeyPair::generate(&mut rng)?;
         let key_package = local.mls().create_key_package(
             KeyPackagePurpose::Meetup {
                 grant_key: &grant.public,
+                subscription: subscription.as_ref(),
             },
             suite,
             &mut rng,
@@ -210,6 +225,7 @@ pub async fn create(
                 party_roster: &roster,
                 first_member: &knocker,
                 own_grant_key: &grant.public,
+                own_subscription: own_subscription.as_ref(),
                 suite,
             },
             &mut rng,

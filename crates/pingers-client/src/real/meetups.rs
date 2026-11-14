@@ -33,7 +33,7 @@ use pingers_meetup::{
     coordinate_from_wire,
 };
 use pingers_meetup_session::{
-    AddMember, CreateMeetup, JoinMeetup, MeetupHandle, MeetupScreen, MeetupView, Runtime,
+    AddMember, CreateMeetup, JoinMeetup, Knocking, MeetupHandle, MeetupScreen, MeetupView, Runtime,
     SessionError, create, discard_stale, join, knock_key_package,
 };
 use pingers_mls::CipherSuitePolicy;
@@ -759,14 +759,17 @@ impl MeetupPort for Meetups {
             .suite(party)
             .await
             .map_err(|_failed| PortError::Unavailable)?;
+        let subscription = self.meetup_subscription().await;
         let made = knock_key_package(
             &self.backend().database,
-            suite,
+            Knocking {
+                suite,
+                subscription: subscription.as_ref().map(|subscription| subscription.id),
+            },
             (self.backend().outside.rng)(),
         )
         .await
         .map_err(|_failed| PortError::Unavailable)?;
-        let subscription = self.meetup_subscription().await;
         let kept = KnockKey {
             reply_mailbox,
             party,

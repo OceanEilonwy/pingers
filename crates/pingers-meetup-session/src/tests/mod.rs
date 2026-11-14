@@ -273,7 +273,7 @@ impl World {
         let bob = self.device(1)?;
         let knock = knock_key_package(
             bob.database(),
-            CipherSuitePolicy::Classical,
+            knocking(1),
             Box::new(pingers_testkit::seeded_rng(2)),
         )
         .await?;
@@ -337,6 +337,14 @@ impl World {
             handle: joined.handle,
             events: joined.events,
         })
+    }
+}
+
+/// What device `index` knocks with: the classical suite and its own subscription.
+pub(crate) fn knocking(index: usize) -> crate::Knocking {
+    crate::Knocking {
+        suite: CipherSuitePolicy::Classical,
+        subscription: Some(subscription_of(index)),
     }
 }
 

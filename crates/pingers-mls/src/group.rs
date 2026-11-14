@@ -18,7 +18,7 @@ use pingers_crypto::{
 };
 use pingers_proto::{
     Epoch, GroupId, KeyPackageBytes, LeafIndex, MlsMessageBytes, Padded, PartyId, SpotId,
-    WelcomeBytes,
+    SubscriptionId, WelcomeBytes,
 };
 use pingers_time::Bucket;
 use rand_core::CryptoRng;
@@ -102,6 +102,9 @@ pub enum KeyPackagePurpose<'key> {
     Meetup {
         /// The member's fresh grant public key.
         grant_key: &'key GrantPublicKey,
+        /// The member's subscription in the Meetup, if it has one, in the
+        /// `pingers_meetup_subscription` leaf extension, so whoever removes it can drop it.
+        subscription: Option<&'key SubscriptionId>,
     },
 }
 
@@ -139,6 +142,8 @@ pub struct MeetupCreation<'creation> {
     pub first_member: &'creation KeyPackageBytes,
     /// The creator's own grant key, for its leaf extension.
     pub own_grant_key: &'creation GrantPublicKey,
+    /// The creator's own subscription in the Meetup, if it has one, for its leaf extension.
+    pub own_subscription: Option<&'creation SubscriptionId>,
     /// The Party's ciphersuite.
     pub suite: CipherSuitePolicy,
 }
@@ -206,6 +211,15 @@ pub struct MemberGrantKey {
     pub grant_key: GrantPublicKey,
 }
 
+/// A member's subscription in the Meetup group, read from its leaf extension.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemberSubscription {
+    /// The member.
+    pub leaf: LeafIndex,
+    /// Its subscription id on the server.
+    pub subscription: SubscriptionId,
+}
+
 /// A newly created Meetup group and the commit (with the knocker's Welcome) to post.
 pub struct CreatedMeetup<'context, S: MlsStorage> {
     /// The group, with the commit pending.
@@ -247,9 +261,12 @@ impl<'context, S: MlsStorage> MlsContext<'context, S> {
             KeyPackagePurpose::Party => {
                 builder.leaf_node_capabilities(policy::capabilities(KindTag::Party, suite))
             }
-            KeyPackagePurpose::Meetup { grant_key } => builder
+            KeyPackagePurpose::Meetup {
+                grant_key,
+                subscription,
+            } => builder
                 .leaf_node_capabilities(policy::capabilities(KindTag::Meetup, suite))
-                .leaf_node_extensions(policy::grant_key_extensions(grant_key)?),
+                .leaf_node_extensions(policy::meetup_leaf_extensions(grant_key, subscription)?),
         };
         let bundle = builder
             .build(
@@ -393,7 +410,10 @@ impl<'context, S: MlsStorage> MlsContext<'context, S> {
             .max_past_epochs(0)
             .sender_ratchet_configuration(policy::sender_ratchet(KindTag::Meetup))
             .with_capabilities(policy::capabilities(KindTag::Meetup, suite))
-            .with_leaf_node_extensions(policy::grant_key_extensions(creation.own_grant_key)?)
+            .with_leaf_node_extensions(policy::meetup_leaf_extensions(
+                creation.own_grant_key,
+                creation.own_subscription,
+            )?)
             .map_err(|_| MlsError::Internal)?
             .with_group_context_extensions(policy::meetup_context_extensions()?)
             .build(&provider, &signer, credential(self.signer))
@@ -961,6 +981,53 @@ impl<S: MlsStorage> Group<'_, S, Meetup> {
                         grant_key,
                     })
                     .ok_or(MlsError::InvalidMessage)
+            })
+            .collect()
+    }
+
+    /// The subscription ids of the members whose leaves carry one.
+    #[must_use]
+    pub fn member_subscriptions(&self) -> Vec<MemberSubscription> {
+        self.inner
+            .members()
+            .filter_map(|member| {
+                self.inner
+                    .public_group()
+                    .leaf(member.index)
+                    .and_then(policy::leaf_subscription)
+                    .map(|subscription| MemberSubscription {
+                        leaf: LeafIndex::new(member.index.u32()),
+                        subscription,
+                    })
+            })
+            .collect()
+    }
+
+    /// The leaves the stored proposals remove (leavers' self-removals): committing them takes
+    /// these out of the group.
+    #[must_use]
+    pub fn pending_removals(&self) -> Vec<LeafIndex> {
+        self.inner
+            .pending_proposals()
+            .filter_map(|queued| {
+                use openmls::prelude::{Proposal, Sender};
+                match (queued.proposal(), queued.sender()) {
+                    (Proposal::Remove(remove), _) => Some(LeafIndex::new(remove.removed().u32())),
+                    (Proposal::SelfRemove, Sender::Member(leaf)) => {
+                        Some(LeafIndex::new(leaf.u32()))
+                    }
+                    (
+                        Proposal::SelfRemove
+                        | Proposal::Add(_)
+                        | Proposal::Update(_)
+                        | Proposal::PreSharedKey(_)
+                        | Proposal::ReInit(_)
+                        | Proposal::ExternalInit(_)
+                        | Proposal::GroupContextExtensions(_)
+                        | Proposal::Custom(_),
+                        _,
+                    ) => None,
+                }
             })
             .collect()
     }

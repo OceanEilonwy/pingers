@@ -4,6 +4,7 @@
 //! Spot; a Meetup forms through the board, a knock and a Welcome; they chat over the live
 //! channel; one approves the other's request for its exact location and its position frames
 //! arrive; both leave, the Meetup ends and its keys are deleted on both phones.
+#![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
 use core::future::Future;
 use core::time::Duration;
@@ -18,11 +19,13 @@ use pingers_client::snapshot::{
 use pingers_client::{Client, ClientConfig, ClientError, Crates, Instance, Outside, Trust};
 use pingers_geo::{Circle, Coordinate, Fence, Fix, Meters};
 use pingers_meetup::{AllowListChoice, AskBack, GrantScope, LocationAnswer};
-use pingers_proto::{ChatBody, GroupId, LeafIndex, PartyId, ProtoError, ServerId};
+use pingers_proto::{
+    ChatBody, GroupId, LeafIndex, PartyId, ProtoError, PushPlatform, PushToken, ServerId,
+};
 use pingers_store::{Database, DatabaseKey, StoreError};
 use pingers_testkit::{
-    EventKind, FakePlatform, HarnessConfig, InProcessHarness, LocationMode, RecordedEvent,
-    RecordingEvents,
+    EventKind, FakePlatform, HarnessConfig, InProcessHarness, LocationMode, PushRegistration,
+    RecordedEvent, RecordingEvents,
 };
 use pingers_time::{Clock as _, ManualClock};
 use rand_chacha::ChaCha20Rng;
@@ -92,15 +95,31 @@ struct Phone {
     events: RecordingEvents,
     database: PathBuf,
     clock: ManualClock,
+    pushes: Pushes,
     _dir: TestDir,
+}
+
+/// Whether a phone turns wake-up pushes on, and its UnifiedPush endpoint if so.
+#[derive(Clone, Copy)]
+enum Pushes {
+    Off,
+    On(&'static str),
+}
+
+/// One phone of the scenario: its random streams come from `seed`.
+#[derive(Clone, Copy)]
+struct Who {
+    seed: u64,
+    pushes: Pushes,
 }
 
 impl Phone {
     async fn new(
         harness: &InProcessHarness,
         config: &HarnessConfig,
-        seed: u64,
+        who: Who,
     ) -> Result<Self, TestError> {
+        let Who { seed, pushes } = who;
         let dir = TestDir::new()?;
         let endpoints = harness.endpoints();
         let database = dir.0.join("pingers.db");
@@ -144,16 +163,41 @@ impl Phone {
             move |database| Crates::real(database, crates_platform, outside, Some(&opened)),
         )
         .await?;
-        // Wake-up pushes off: every wake reads the mailboxes a step waits on.
-        client.set_wake_pushes(WakePushes::NoWakePushes).await?;
+        match pushes {
+            // Every wake reads the mailboxes a step waits on either way.
+            Pushes::Off => client.set_wake_pushes(WakePushes::NoWakePushes).await?,
+            Pushes::On(endpoint) => {
+                platform.set_push_registration(Some(PushRegistration {
+                    platform: PushPlatform::UnifiedPush,
+                    token: PushToken::from_bytes(endpoint.as_bytes().to_vec()),
+                }));
+                client.set_wake_pushes(WakePushes::On).await?;
+            }
+        }
         Ok(Self {
             client,
             platform,
             events,
             database,
             clock,
+            pushes,
             _dir: dir,
         })
+    }
+
+    /// A wake that reads the mailboxes: a scheduled one with wake-up pushes off; with them
+    /// on, the push the harness relay sent (its handle is not captured, so the client reads
+    /// it as one that does not say what it is for, and reads every mailbox).
+    async fn wake(&self) -> TestResult {
+        match self.pushes {
+            Pushes::Off => self.client.on_wake().await?,
+            Pushes::On(_) => {
+                self.client
+                    .on_push(pingers_proto::PushHandle::from_bytes([0; 8]))
+                    .await?;
+            }
+        }
+        Ok(())
     }
 
     /// A fix in the Spot, taken now.
@@ -224,7 +268,7 @@ async fn party_of_two(ana: &Phone, ben: &Phone) -> Result<PartyId, TestError> {
         .await?;
     let link = ana.client.create_invite(party).await?;
     ben.client.open_invite(link.url, Name::new("Ben")?).await?;
-    ana.client.on_wake().await?;
+    ana.wake().await?;
     let snapshot = ana.client.snapshot();
     let request = snapshot
         .party(party)?
@@ -235,7 +279,7 @@ async fn party_of_two(ana: &Phone, ben: &Phone) -> Result<PartyId, TestError> {
     ana.client
         .decide_join(party, request, JoinDecision::Admit)
         .await?;
-    ben.client.on_wake().await?;
+    ben.wake().await?;
     ben.client.snapshot().party(party)?;
     Ok(party)
 }
@@ -287,7 +331,7 @@ async fn meet<'phones>(
         ana.clock.advance(Duration::from_secs(30));
         for phone in [ana, ben] {
             phone.at_the_spot().await?;
-            phone.client.on_wake().await?;
+            phone.wake().await?;
         }
         let ana_in = ana.client.snapshot().meetups.first().cloned();
         let ben_in = ben.client.snapshot().meetups.first().cloned();
@@ -465,8 +509,24 @@ impl Meeting<'_> {
 async fn two_clients_meet_chat_share_a_location_and_end_the_meetup() -> TestResult {
     let config = HarnessConfig::default();
     let harness = InProcessHarness::start(&config)?;
-    let ana = Phone::new(&harness, &config, 3).await?;
-    let ben = Phone::new(&harness, &config, 4).await?;
+    let ana = Phone::new(
+        &harness,
+        &config,
+        Who {
+            seed: 3,
+            pushes: Pushes::Off,
+        },
+    )
+    .await?;
+    let ben = Phone::new(
+        &harness,
+        &config,
+        Who {
+            seed: 4,
+            pushes: Pushes::Off,
+        },
+    )
+    .await?;
     let party = party_of_two(&ana, &ben).await?;
     spot(&ana, party).await?;
     let meeting = meet(&ana, &ben).await?;
@@ -475,4 +535,116 @@ async fn two_clients_meet_chat_share_a_location_and_end_the_meetup() -> TestResu
     meeting.ask_and_allow().await?;
     meeting.frames().await?;
     meeting.both_leave().await
+}
+
+const ANA_PUSH: &str = "https://push.harness.invalid/up/ana";
+const BEN_PUSH: &str = "https://push.harness.invalid/up/ben";
+
+/// Whether the harness's push relay sent `endpoint` a push within `window` of real time.
+async fn pushed_within(
+    harness: &InProcessHarness,
+    endpoint: &str,
+    already: usize,
+    window: Duration,
+) -> bool {
+    let token = PushToken::from_bytes(endpoint.as_bytes().to_vec());
+    let count = || {
+        harness
+            .pushes()
+            .iter()
+            .filter(|push| push.token == token)
+            .count()
+    };
+    let mut ticks = tokio::time::interval(Duration::from_millis(50));
+    tokio::time::timeout(window, async {
+        loop {
+            ticks.tick().await;
+            if count() > already {
+                return;
+            }
+        }
+    })
+    .await
+    .is_ok()
+}
+
+/// How many pushes `endpoint` has had.
+fn pushes_to(harness: &InProcessHarness, endpoint: &str) -> usize {
+    let token = PushToken::from_bytes(endpoint.as_bytes().to_vec());
+    harness
+        .pushes()
+        .iter()
+        .filter(|push| push.token == token)
+        .count()
+}
+
+/// Ben's phone dies in the Meetup. While he is a member, Ana's chat wakes him through his
+/// subscription; once her phone removes him as silent, its commit names his subscription
+/// (read from his leaf) and the real server stops waking him at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_removed_as_silent_is_no_longer_woken() -> TestResult {
+    let config = HarnessConfig::default();
+    let harness = InProcessHarness::start(&config)?;
+    let ana = Phone::new(
+        &harness,
+        &config,
+        Who {
+            seed: 5,
+            pushes: Pushes::On(ANA_PUSH),
+        },
+    )
+    .await?;
+    let ben = Phone::new(
+        &harness,
+        &config,
+        Who {
+            seed: 6,
+            pushes: Pushes::On(BEN_PUSH),
+        },
+    )
+    .await?;
+    let party = party_of_two(&ana, &ben).await?;
+    spot(&ana, party).await?;
+    let meetup = meet(&ana, &ben).await?.meetup;
+    drop(ben);
+
+    // Still a member: Ana's message wakes Ben's phone.
+    let before = pushes_to(&harness, BEN_PUSH);
+    ana.client
+        .send_chat(meetup, ChatBody::new("Still there?".to_owned())?, None)
+        .await?;
+    assert!(pushed_within(&harness, BEN_PUSH, before, PATIENCE).await);
+
+    // Ten minutes without a frame from him: Ana's phone removes him.
+    for _minute in 0..15 {
+        if ana
+            .client
+            .snapshot()
+            .meetup(meetup)
+            .is_ok_and(|shown| shown.others.is_empty())
+        {
+            break;
+        }
+        ana.clock.advance(Duration::from_secs(60));
+        ana.at_the_spot().await?;
+        let _settled = tokio::time::timeout(
+            Duration::from_secs(1),
+            ana.until("Ben removed", |snapshot| {
+                snapshot
+                    .meetup(meetup)
+                    .is_ok_and(|shown| shown.others.is_empty())
+            }),
+        )
+        .await;
+    }
+    let shown = ana.client.snapshot();
+    assert!(shown.meetup(meetup)?.others.is_empty());
+
+    // No longer a member: the server dropped his subscription with the removal.
+    let before = pushes_to(&harness, BEN_PUSH);
+    ana.client
+        .send_chat(meetup, ChatBody::new("Gone, then".to_owned())?, None)
+        .await?;
+    assert!(!pushed_within(&harness, BEN_PUSH, before, Duration::from_secs(3)).await);
+    Ok(())
 }
