@@ -78,6 +78,8 @@ import androidx.compose.ui.unit.sp
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import org.pingers.app.Navigator
+import androidx.compose.ui.platform.testTag
+import org.pingers.app.ui.E2eTags
 import org.pingers.app.R
 import org.pingers.app.Route
 import org.pingers.app.data.ChatItem
@@ -283,9 +285,9 @@ fun MeetupScreen(state: MeetupState, repo: PingersRepository, nav: Navigator) {
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Tile(PIcons.Chat, stringResource(R.string.meetup_chat, state.chatCount), Modifier.weight(1f)) { nav.go(Route.Chat) }
+                Tile(PIcons.Chat, stringResource(R.string.meetup_chat, state.chatCount), Modifier.weight(1f).testTag(E2eTags.MEETUP_CHAT)) { nav.go(Route.Chat) }
                 Tile(PIcons.Flag, stringResource(R.string.meetup_meet_point), Modifier.weight(1f)) { nav.go(Route.MeetPoint) }
-                Tile(PIcons.Compass, stringResource(R.string.meetup_compass), Modifier.weight(1f)) { nav.go(Route.Compass) }
+                Tile(PIcons.Compass, stringResource(R.string.meetup_compass), Modifier.weight(1f).testTag(E2eTags.MEETUP_COMPASS)) { nav.go(Route.Compass) }
             }
             Footnote(state, nav)
         }
@@ -325,7 +327,7 @@ private fun MemberRow(m: MeetupMember, direction: String?, repo: PingersReposito
             )
             PeerLocation.Private -> IconAction(
                 PIcons.Eye, stringResource(R.string.cd_ask_location, m.person.name),
-                { repo.askLocation(m.person.id) }, background = Pc.Chip, iconSize = 20.dp,
+                { repo.askLocation(m.person.id) }, Modifier.testTag(E2eTags.MEETUP_ASK_LOCATION), background = Pc.Chip, iconSize = 20.dp,
             )
             PeerLocation.Asked -> Unit
         }
@@ -440,7 +442,7 @@ fun ChatScreen(state: ChatState, repo: PingersRepository, nav: Navigator) {
                     modifier = Modifier.weight(1f),
                 )
                 IconAction(
-                    PIcons.Send, stringResource(R.string.cd_send), { repo.sendChat(draft); draft = "" },
+                    PIcons.Send, stringResource(R.string.cd_send), { repo.sendChat(draft); draft = "" }, Modifier.testTag(E2eTags.CHAT_SEND),
                     tint = Color.White, background = Pc.Blue, iconSize = 20.dp,
                 )
             }
@@ -647,7 +649,7 @@ fun CompassScreen(state: CompassState, repo: PingersRepository, nav: Navigator) 
         val dialLabel = reading?.let { stringResource(R.string.cd_compass_arrow, dir, it.bearingDeg.toInt(), state.targetLabel) }
             ?: stringResource(R.string.compass_waiting, state.targetLabel)
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Canvas(Modifier.size(320.dp).semantics { contentDescription = dialLabel }) {
+            Canvas(Modifier.size(320.dp).testTag(E2eTags.COMPASS_DIAL).semantics { contentDescription = dialLabel }) {
                 val s = size.width / 320f
                 val c = Offset(size.width / 2, size.height / 2)
                 drawCircle(Color(0xFF1E2129), 150f * s, c)
@@ -770,7 +772,7 @@ fun LocationRequestScreen(state: LocationRequestState, repo: PingersRepository, 
                     stringResource(R.string.lr_not_now), { repo.answerLocationRequest(false); nav.go(Route.Meetup) },
                     Modifier.weight(1f), background = Pc.Chip, content = Pc.Ink,
                 )
-                PillButton(stringResource(R.string.lr_allow), { repo.answerLocationRequest(true); nav.go(Route.Meetup) }, Modifier.weight(1f))
+                PillButton(stringResource(R.string.lr_allow), { repo.answerLocationRequest(true); nav.go(Route.Meetup) }, Modifier.weight(1f).testTag(E2eTags.LOCATION_ALLOW))
             }
             Text(
                 stringResource(R.string.lr_silent, name),
@@ -819,7 +821,7 @@ private fun CheckRow(text: String, checked: Boolean, onChange: (Boolean) -> Unit
 fun MeetupEndedScreen(state: MeetupEndedState, nav: Navigator) {
     Page(
         top = { Spacer(Modifier.statusBarsPadding().height(76.dp)) },
-        bottom = { PillButton(stringResource(R.string.done), { nav.reset(Route.Home) }) },
+        bottom = { PillButton(stringResource(R.string.done), { nav.reset(Route.Home) }, Modifier.testTag(E2eTags.ENDED_DONE)) },
         bodyPadding = PaddingValues(horizontal = 24.dp),
         spacing = 24,
     ) {

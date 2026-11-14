@@ -21,12 +21,25 @@
 //! - `cargo xtask nodo-dist [<commit>] [--nodo <checkout>]`: the vendored source tarball and
 //!   filled-in xbps recipes for monokulo-nodo's builder; `cargo xtask dev-ca`: a throwaway CA
 //!   for the tier-1 local stack. See [`nodo`].
+//! - `cargo xtask local-stack`: the tier-1 stack (four services, ntfy, a TLS front) with fresh
+//!   keys outside the repository, until Ctrl-C. See [`stack`] and [`tls_front`].
+//! - `cargo xtask local-app`: the foss debug APK built against it. See [`local_app`].
+//! - `cargo xtask e2e-emulators`: the two-emulator scenario from invite to the end of a Meetup.
+//!   See [`scenario`].
 #![forbid(unsafe_code)]
 
+mod device;
+mod emulator;
 mod full;
+mod local_app;
 mod nodo;
 mod pins;
 mod release_android;
+mod scenario;
+mod stack;
+mod supervise;
+mod tls_front;
+mod wait;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -99,7 +112,18 @@ const USAGE: &str = "usage: cargo xtask <command>\n\n\
                      vendored source tarball (prints its SHA-256) and filled-in xbps\n          \
                      recipes in target/nodo/ (docs/deploy-nodo.md)\n  \
                      dev-ca [--san <name>]...\n          \
-                     throwaway CA and server certificate in target/dev-ca/";
+                     throwaway CA and server certificate in target/dev-ca/\n  \
+                     local-stack [--dir <dir>] [--packs <dir>] [--ntfy <bin>] [--caddy <bin>]\n          \
+                     [--fresh] [--prepare-only]\n          \
+                     the tier-1 stack with fresh keys in <dir> (default $PINGERS_LOCAL_STACK),\n          \
+                     behind Caddy or the built-in TLS front, until Ctrl-C\n  \
+                     local-app [<local-stack options>]\n          \
+                     the foss debug APK built against that stack (its app.env)\n  \
+                     e2e-emulators [<local-stack options>] [--avd <name>] [--leases <dir>]\n          \
+                     [--apk <file>] [--ntfy-apk <file>] [--keep-going]\n          \
+                     the two-emulator scenario (invite to Meetup end) against that stack\n  \
+                     tls-front <caddy.json>\n          \
+                     serve a caddy.json of the dev shape (local-stack runs it without Caddy)";
 
 fn run() -> Result<Outcome> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -144,6 +168,22 @@ fn run() -> Result<Outcome> {
         Some("dev-ca") => match nodo::parse_ca_options(options) {
             Some(names) => nodo::dev_ca(&workspace_root()?, &names),
             None => usage(),
+        },
+        Some("local-stack") => match stack::StackOptions::parse(options) {
+            Some(stack) => stack::run(&workspace_root()?, &stack),
+            None => usage(),
+        },
+        Some("local-app") => match stack::StackOptions::parse(options) {
+            Some(stack) => local_app::run(&workspace_root()?, &stack),
+            None => usage(),
+        },
+        Some("e2e-emulators") => match scenario::ScenarioOptions::parse(options) {
+            Some(scenario) => scenario::run(&workspace_root()?, &scenario),
+            None => usage(),
+        },
+        Some("tls-front") => match options {
+            [config] => tls_front::run(Path::new(config)),
+            _ => usage(),
         },
         _ => usage(),
     }
