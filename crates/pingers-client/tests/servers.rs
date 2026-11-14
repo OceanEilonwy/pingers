@@ -435,9 +435,28 @@ async fn a_server_that_is_gone_does_not_stop_the_other_server_s_upload() -> Test
     let (ana, _on_a, _on_b) = ana_on_both(&world).await?;
     let a = ServerId::new(world.a.endpoints().server_id.clone())?;
     let b = world.b_server()?;
+    assert_eq!(
+        ana.client.check_reachability().await?,
+        pingers_client::snapshot::RelayStatus::Reachable
+    );
     if let Some(gone) = world.b.take() {
         gone.shutdown();
     }
+    // The check sees B's relay gone, and B's Party says so; A still answers.
+    assert_eq!(
+        ana.client.check_reachability().await?,
+        pingers_client::snapshot::RelayStatus::Reachable
+    );
+    let snapshot = ana.client.snapshot();
+    let on_b_status = snapshot
+        .parties
+        .iter()
+        .find(|party| party.config.origin == b)
+        .map(|party| party.config.relay_status);
+    assert_eq!(
+        on_b_status,
+        Some(pingers_client::snapshot::RelayStatus::Unreachable)
+    );
     tokio::time::timeout(STEP, ana.client.on_wake())
         .await
         .map_err(|_elapsed| TestError::Setup("the wake did not finish"))??;

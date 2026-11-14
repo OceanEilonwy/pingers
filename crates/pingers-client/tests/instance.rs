@@ -100,6 +100,7 @@ impl Drop for TestDir {
 
 struct Rig {
     client: Client,
+    events: Arc<RecordingEvents>,
     platform: FakePlatform,
     database: PathBuf,
     _dir: TestDir,
@@ -175,6 +176,7 @@ async fn rig(
             ))
         }),
     };
+    let events = Arc::new(RecordingEvents::new());
     let crates_platform: Arc<dyn pingers_client::Platform> = Arc::new(platform.clone());
     let opened = instance.clone();
     let client = Client::open_with(
@@ -183,12 +185,17 @@ async fn rig(
             instance: Some(instance),
         },
         Arc::new(platform.clone()),
-        Arc::new(RecordingEvents::new()),
+        {
+            let recorder: Arc<RecordingEvents> = Arc::clone(&events);
+            let shared: Arc<dyn pingers_client::Events> = recorder;
+            shared
+        },
         move |database| Crates::real(database, crates_platform, outside, Some(&opened)),
     )
     .await?;
     Ok(Rig {
         client,
+        events,
         platform,
         database: database_path,
         _dir: dir,
@@ -282,6 +289,19 @@ async fn unpinned_keys_are_refused_with_first_use_off() -> Result<(), TestError>
     assert_eq!(
         gateway_wrong.client.snapshot().relay,
         RelayStatus::KeyMismatch
+    );
+    // The user is told, once, after the next wake.
+    gateway_wrong.client.on_wake().await?;
+    assert_eq!(
+        gateway_wrong
+            .events
+            .events()
+            .iter()
+            .filter(
+                |event| event.notice_kind() == Some(pingers_testkit::NoticeKind::RelayKeyMismatch)
+            )
+            .count(),
+        1
     );
     Ok(())
 }
