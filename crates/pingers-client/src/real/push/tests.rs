@@ -194,7 +194,7 @@ fn first_use_pins_grow_by_the_published_and_next_key_and_are_kept_when_complete(
 }
 
 #[test]
-fn seals_are_made_again_for_a_new_token_a_new_key_or_near_their_end() -> TestResult<()> {
+fn seals_are_made_again_for_a_new_token_a_new_key_or_near_their_end() {
     let key = PushRelayPublicKey::new(1, [1; 32]);
     let sealed = Sealed {
         tokens: tokens(),
@@ -212,5 +212,4 @@ fn seals_are_made_again_for_a_new_token_a_new_key_or_near_their_end() -> TestRes
     // Renewed once fewer than three days are left, not before.
     assert!(sealed.still_good(&tokens(), &key, UnixSeconds::new(NOW + 27 * DAY - 1)));
     assert!(!sealed.still_good(&tokens(), &key, UnixSeconds::new(NOW + 27 * DAY)));
-    Ok(())
 }
