@@ -4,6 +4,7 @@
 pub(crate) mod account;
 pub(crate) mod anon;
 pub(crate) mod board;
+pub(crate) mod knock;
 pub(crate) mod mailbox;
 pub(crate) mod meetup;
 pub(crate) mod mls;

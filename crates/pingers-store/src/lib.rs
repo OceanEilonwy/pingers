@@ -83,6 +83,10 @@
 //!   passes them. Queued requests and own positions carry their group, and triggers delete
 //!   them when that Meetup ends or that Party is deleted (a cascade included), so no group
 //!   request outlives its group (style guide §8). None of these tables is in design C.2.
+//! - **A knock's grant secret waits in `knock_key`** (schema version 5), keyed by the knock's
+//!   reply mailbox, with the Meetup subscription the knock carried: the Welcome arrives in
+//!   that mailbox, and joining takes the row ([`KnockKeys`]). Rows of unanswered knocks are
+//!   deleted once no Welcome can come; leaving the Party cascades. Not in design C.2.
 //! - **Unsigned values past `i64::MAX`** are refused ([`StoreError::OutOfRange`]), never
 //!   wrapped.
 //!
@@ -120,6 +124,7 @@ pub use repo::board::{
     BoardSeen, KnockState, KnocksOut, LeaseSlot, Leases, OutgoingKnock, SEEN_SEGMENTS_KEPT,
     StoredLease,
 };
+pub use repo::knock::{KnockKey, KnockKeys};
 pub use repo::mailbox::{
     Mailbox, MailboxPurpose, MailboxState, Mailboxes, StoredSubscription, Subscriptions,
 };
