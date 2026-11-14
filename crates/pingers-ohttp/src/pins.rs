@@ -4,20 +4,12 @@
 //! A build pins both slots of a key: the one served now and the next one, published before it
 //! is served. The app then never meets an unpinned key when the operator rotates. The text form
 //! is the one deployment tooling prints (`cargo xtask pins`, the `pins` subcommands) and CI
-//! stores: each hash as base64url (RFC 4648 §5, padding optional), comma-separated.
+//! stores: each hash as [`KeyConfigHash::to_pin`] writes it (43 characters of unpadded
+//! base64url), comma-separated.
 
-use base64::Engine as _;
-use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
-use base64::engine::{DecodePaddingMode, general_purpose};
 use pingers_proto::KeyConfigHash;
 
 use crate::{KeyConfig, OhttpError};
-
-/// base64url that accepts a pin with or without its one `=`.
-const PIN_TEXT: GeneralPurpose = GeneralPurpose::new(
-    &base64::alphabet::URL_SAFE,
-    GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
-);
 
 /// One or more pinned key config hashes, without repeats.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,7 +53,7 @@ impl KeyPins {
     pub fn to_text(&self) -> String {
         self.0
             .iter()
-            .map(|hash| general_purpose::URL_SAFE_NO_PAD.encode(hash.as_bytes()))
+            .map(KeyConfigHash::to_pin)
             .collect::<Vec<_>>()
             .join(",")
     }
@@ -86,13 +78,7 @@ impl From<KeyConfigHash> for KeyPins {
 }
 
 fn parse_one(entry: &str) -> Result<KeyConfigHash, OhttpError> {
-    let bytes = PIN_TEXT
-        .decode(entry)
-        .map_err(|_not_base64url| OhttpError::InvalidPin)?;
-    let bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_wrong_length| OhttpError::InvalidPin)?;
-    Ok(KeyConfigHash::from_bytes(bytes))
+    KeyConfigHash::from_pin(entry).map_err(|_not_a_pin| OhttpError::InvalidPin)
 }
 
 /// Checks a fetched config against a pin set.
@@ -133,8 +119,8 @@ mod tests {
     }
 
     #[test]
-    fn padding_and_spaces_are_accepted() -> Result<(), OhttpError> {
-        let text = " -_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_s= , \
+    fn spaces_around_pins_are_accepted() -> Result<(), OhttpError> {
+        let text = " -_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_s , \
                     __________________________________________8";
         assert_eq!(
             KeyPins::parse(text)?,
@@ -158,6 +144,8 @@ mod tests {
             "AAAA",
             // Standard base64, not base64url.
             "+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/s",
+            // Padded: each hash has exactly one pin.
+            "-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_s=",
             // 33 bytes.
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         ] {

@@ -207,7 +207,7 @@ android {
                 .getOrElse("")
                 .trim()
             if (value.isNotEmpty()) {
-                val pin = Regex("[A-Za-z0-9_-]{43}=?")
+                val pin = Regex("[A-Za-z0-9_-]{43}")
                 val bad = value.split(',').map { it.trim() }.filterNot { pin.matches(it) }
                 if (bad.isNotEmpty()) {
                     throw GradleException(
