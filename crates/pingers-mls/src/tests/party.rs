@@ -397,7 +397,7 @@ fn public_message_commit_is_rejected() -> TestResult {
         a.context()
             .create_party_group(group_id(1), CipherSuitePolicy::Classical, &mut rng)?;
     // A client that sends handshakes in the clear (as an external commit would be).
-    let provider = Provider::new(&member.storage, InjectedRand::new(&mut rng));
+    let provider = Provider::new(&member.storage, InjectedRand::new(&mut rng))?;
     let mut plaintext_group = MlsGroup::builder()
         .with_group_id(openmls::prelude::GroupId::from_slice(
             group_id(1).as_bytes(),
@@ -442,7 +442,7 @@ fn proposal_other_than_leaving_is_rejected() -> TestResult {
         ..
     } = party_of_three(&a, &b, &c, &mut rng)?;
     // B proposes to remove C, which Pingers never does with a standalone proposal.
-    let provider = Provider::new(b.storage, InjectedRand::new(&mut rng));
+    let provider = Provider::new(b.storage, InjectedRand::new(&mut rng))?;
     let (proposal, _) = b
         .inner
         .propose_remove_member_by_value(
@@ -671,6 +671,7 @@ fn unknown_leaf_and_unknown_group_are_not_members() -> TestResult {
 }
 
 #[test]
+#[cfg(not(feature = "x-wing"))]
 fn quantum_resistant_suite_needs_the_x_wing_feature() {
     let mut rng = rng(17);
     let a = Device::new(&mut rng);
