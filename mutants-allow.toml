@@ -26,3 +26,7 @@ reason = "equivalent in the client tests: they run without an instance, so there
 name = "crates/pingers-client/src/real/meetups.rs: replace <impl MeetupPort for Meetups>::leave -> Result<(), PortError> with Ok(())"
 reason = "equivalent in the client tests: without a harness server no Meetup goes live, so leave always finds none and answers Ok(()). Remove when a client test runs a Meetup against the harness server."
 
+
+[[mutant]]
+name = "crates/pingers-anon/src/circuit.rs: replace ceremony::matches_ceremony -> bool with true"
+reason = "equivalent for every build: the only key compiled in is the ceremony's, so the check is true either way. The comparator it calls (ceremony::matches) is tested with each field altered, and the self-test's handling of a false answer is tested with an injected check."

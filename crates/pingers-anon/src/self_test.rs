@@ -17,14 +17,14 @@
 use core::num::NonZeroU8;
 use core::time::Duration;
 
-use pingers_proto::{RlnScope, ServerId};
+use pingers_proto::{RlnAuth, RlnScope, ServerId};
 use pingers_time::{Bucket, Timer};
 use rand_core::CryptoRng;
 
 use crate::circuit::ceremony::matches_ceremony;
 use crate::{
-    AcceptedRoots, AnonError, LeafPosition, LeafUpdate, MESSAGE_LIMIT, MembershipTree, MessageId,
-    ProofRequest, RlnSecret, VerificationContext, prove, request_digest, verify,
+    AcceptedRoots, AnonError, LeafPosition, LeafUpdate, MembershipTree, MessageId, ProofRequest,
+    RlnSecret, VerificationContext, VerifiedProof, prove, request_digest, verify,
 };
 
 /// How many timed proofs, and the 95th percentile they must stay under.
@@ -120,6 +120,30 @@ pub fn prover_self_test(
     timer: &dyn Timer,
     rng: &mut impl CryptoRng,
 ) -> Result<SelfTestReport, AnonError> {
+    run(plan, timer, rng, &REAL)
+}
+
+/// A verifier: pingers-anon's [`verify`], or in the tests a broken one.
+type Verifier = fn(&RlnAuth, &VerificationContext<'_>) -> Result<VerifiedProof, AnonError>;
+
+/// What the self-test checks the build with. Production uses [`REAL`]; the tests substitute a
+/// wrong key or a broken verifier, which no correct build can produce, to show each is caught.
+struct Checks {
+    ceremony: fn() -> bool,
+    verify: Verifier,
+}
+
+const REAL: Checks = Checks {
+    ceremony: matches_ceremony,
+    verify,
+};
+
+fn run(
+    plan: SelfTestPlan,
+    timer: &dyn Timer,
+    rng: &mut impl CryptoRng,
+    checks: &Checks,
+) -> Result<SelfTestReport, AnonError> {
     let mut report = SelfTestReport {
         verdict: SelfTestVerdict::WrongParameters,
         first: Duration::ZERO,
@@ -127,10 +151,10 @@ pub fn prover_self_test(
         p95: Duration::ZERO,
         timed: 0,
     };
-    if !matches_ceremony() {
+    if !(checks.ceremony)() {
         return Ok(report);
     }
-    let fixture = Fixture::new(rng)?;
+    let fixture = Fixture::new(rng, checks.verify)?;
 
     let started = timer.now();
     let warm_up = fixture.prove(0, rng)?;
@@ -213,10 +237,11 @@ struct Fixture {
     position: LeafPosition,
     server: ServerId,
     bucket: Bucket,
+    verify: Verifier,
 }
 
 impl Fixture {
-    fn new(rng: &mut impl CryptoRng) -> Result<Self, AnonError> {
+    fn new(rng: &mut impl CryptoRng, verify: Verifier) -> Result<Self, AnonError> {
         let secret = RlnSecret::generate(rng)?;
         let mut updates = Vec::new();
         for _ in 0..NEIGHBOURS {
@@ -233,6 +258,7 @@ impl Fixture {
             position: LeafPosition::new(1),
             server: ServerId::new(SELF_TEST_SERVER.to_owned()).map_err(|_| AnonError::Internal)?,
             bucket: Bucket::from_index(0).map_err(|_| AnonError::Internal)?,
+            verify,
         })
     }
 
@@ -241,11 +267,7 @@ impl Fixture {
         request_digest("POST", "/v1/board/sync", &[round; 424])
     }
 
-    fn prove(
-        &self,
-        round: u8,
-        rng: &mut impl CryptoRng,
-    ) -> Result<pingers_proto::RlnAuth, AnonError> {
+    fn prove(&self, round: u8, rng: &mut impl CryptoRng) -> Result<RlnAuth, AnonError> {
         let path = self.tree.path(self.position)?;
         prove(
             &ProofRequest {
@@ -255,7 +277,8 @@ impl Fixture {
                 server: &self.server,
                 scope: RlnScope::Board,
                 bucket: self.bucket,
-                message_id: MessageId::new(round % MESSAGE_LIMIT)?,
+                // One slot throughout: these proofs are never spent anywhere.
+                message_id: MessageId::new(0)?,
                 digest: Self::digest(round)?,
             },
             rng,
@@ -271,8 +294,8 @@ impl Fixture {
     }
 
     /// Whether `proof` (made in `round`) verifies.
-    fn verifies(&self, proof: &pingers_proto::RlnAuth, round: u8) -> Result<bool, AnonError> {
-        match verify(proof, &self.context(round)?) {
+    fn verifies(&self, proof: &RlnAuth, round: u8) -> Result<bool, AnonError> {
+        match (self.verify)(proof, &self.context(round)?) {
             Ok(_) => Ok(true),
             Err(AnonError::BadProof | AnonError::WrongRequest | AnonError::StaleRoot) => Ok(false),
             Err(other) => Err(other),
@@ -281,15 +304,15 @@ impl Fixture {
 
     /// Whether the verifier refuses `proof` presented for another request, and with its share
     /// `y` changed (which only the pairing check can catch).
-    fn refuses_tampering(&self, proof: &pingers_proto::RlnAuth) -> Result<bool, AnonError> {
+    fn refuses_tampering(&self, proof: &RlnAuth) -> Result<bool, AnonError> {
         let other_request = matches!(
-            verify(proof, &self.context(1)?),
+            (self.verify)(proof, &self.context(1)?),
             Err(AnonError::WrongRequest)
         );
         let mut changed = *proof;
         changed.y = proof.nullifier;
         let changed_share = matches!(
-            verify(&changed, &self.context(0)?),
+            (self.verify)(&changed, &self.context(0)?),
             Err(AnonError::BadProof)
         );
         Ok(other_request && changed_share)
@@ -396,6 +419,89 @@ mod tests {
         assert_eq!(report.verdict, SelfTestVerdict::TooSlow);
         assert_eq!(report.timed, 4);
         assert_eq!(report.p95, Duration::from_millis(2_000));
+        Ok(())
+    }
+
+    /// A verifier that accepts whatever it is shown.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "it stands in for a verifier, which returns a Result"
+    )]
+    fn accept_all(
+        proof: &RlnAuth,
+        context: &VerificationContext<'_>,
+    ) -> Result<VerifiedProof, AnonError> {
+        Ok(VerifiedProof {
+            scope: proof.scope,
+            bucket: proof.bucket,
+            nullifier: crate::Nullifier::from_bytes(proof.nullifier),
+            record: crate::NullifierRecord {
+                x: context.expected,
+                y: proof.y,
+            },
+        })
+    }
+
+    fn reject_all(_: &RlnAuth, _: &VerificationContext<'_>) -> Result<VerifiedProof, AnonError> {
+        Err(AnonError::BadProof)
+    }
+
+    /// Checks the request binding but not the pairing: a changed share gets through.
+    fn request_only(
+        proof: &RlnAuth,
+        context: &VerificationContext<'_>,
+    ) -> Result<VerifiedProof, AnonError> {
+        if proof.x == *context.expected.as_bytes() {
+            accept_all(proof, context)
+        } else {
+            Err(AnonError::WrongRequest)
+        }
+    }
+
+    /// The real verifier, except that it refuses every proof after the warm-up's.
+    fn only_the_warm_up(
+        proof: &RlnAuth,
+        context: &VerificationContext<'_>,
+    ) -> Result<VerifiedProof, AnonError> {
+        let verified = verify(proof, context)?;
+        if proof.x == *Fixture::digest(0)?.as_bytes() {
+            Ok(verified)
+        } else {
+            Err(AnonError::BadProof)
+        }
+    }
+
+    fn not_the_ceremony_key() -> bool {
+        false
+    }
+
+    fn run_with(checks: &Checks) -> Result<SelfTestReport, AnonError> {
+        let timer = ScriptedTimer::new(&millis(&[100, 100]));
+        run(plan(2)?, &timer, &mut ChaCha20Rng::seed_from_u64(3), checks)
+    }
+
+    #[test]
+    fn a_key_other_than_the_ceremonys_fails_before_any_proof() -> Result<(), AnonError> {
+        let report = run_with(&Checks {
+            ceremony: not_the_ceremony_key,
+            verify,
+        })?;
+        assert_eq!(report.verdict, SelfTestVerdict::WrongParameters);
+        assert_eq!(report.first, Duration::ZERO, "nothing was proved");
+        Ok(())
+    }
+
+    #[test]
+    fn a_verifier_that_refuses_good_proofs_or_takes_bad_ones_fails() -> Result<(), AnonError> {
+        let verifiers: [Verifier; 4] = [reject_all, accept_all, request_only, only_the_warm_up];
+        for verifier in verifiers {
+            let report = run_with(&Checks {
+                ceremony: matches_ceremony,
+                verify: verifier,
+            })?;
+            assert_eq!(report.verdict, SelfTestVerdict::ProofRejected);
+            assert_eq!(report.timed, 0);
+        }
         Ok(())
     }
 
