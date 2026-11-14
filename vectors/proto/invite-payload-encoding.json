@@ -1,6 +1,6 @@
 {
   "name": "invite-payload-encoding",
-  "description": "Invite link fragment payload (https://<host>/j#v1.<base64url(this)>) as canonical CBOR: [server, invite mailbox, invite secret, inviter fingerprint, expires, uses (0 multiple, 1 single), registration code (text; present only when the inviter passes one on, so the array has 6 elements without it and 7 with it)] (design D, invite flow; design B.1 registration codes). An empty registration code is refused.",
+  "description": "Invite link fragment payload (https://<host>/j#v1.<base64url(this)>) as canonical CBOR: [server, invite mailbox, invite secret, inviter fingerprint, expires, uses (0 multiple, 1 single), gateway pins (array of 1 to 4 SHA-256 key config hashes of the server's OHTTP gateway), push relay pins (array of 0 to 4 hashes of its push relay's key config), registration code (text; present only when the inviter passes one on, so the array has 8 elements without it and 9 with it)] (design D, invite flow; design B.1 registration codes; B.12 key pinning: a joiner new to the server pins the inviter's hashes, never the first key it sees). An empty registration code is refused.",
   "vectors": [
     {
       "name": "single-use",
@@ -10,10 +10,17 @@
         "invite_secret": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
         "inviter_fingerprint": "08090a0b0c0d0e0f",
         "expires": 1800604800,
-        "uses": "single"
+        "uses": "single",
+        "gateway_pins": [
+          "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+          "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+        ],
+        "push_relay_pins": [
+          "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
+        ]
       },
       "expected": {
-        "encoding": "8201867768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c8001"
+        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c8001825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
       }
     },
     {
@@ -24,10 +31,17 @@
         "invite_secret": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
         "inviter_fingerprint": "08090a0b0c0d0e0f",
         "expires": 1800000000,
-        "uses": "multiple"
+        "uses": "multiple",
+        "gateway_pins": [
+          "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+          "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+        ],
+        "push_relay_pins": [
+          "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
+        ]
       },
       "expected": {
-        "encoding": "8201867768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b49d20000"
+        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b49d20000825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
       }
     },
     {
@@ -39,25 +53,69 @@
         "inviter_fingerprint": "08090a0b0c0d0e0f",
         "expires": 1800604800,
         "uses": "single",
+        "gateway_pins": [
+          "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+          "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+        ],
+        "push_relay_pins": [
+          "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
+        ],
         "registration_code": "friends-2026"
       },
       "expected": {
-        "encoding": "8201877768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c80016c667269656e64732d32303236"
+        "encoding": "8201897768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c8001825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f6c667269656e64732d32303236"
       }
     },
     {
       "name": "empty-registration-code",
       "inputs": {
-        "encoding": "8201877768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c800160"
+        "encoding": "8201897768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c8001825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f60"
       },
       "expected": {
         "error": "OutOfRange"
       }
     },
     {
-      "name": "eight-elements",
+      "name": "multiple-use-without-push-relay-pins",
       "inputs": {
-        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c80016c667269656e64732d3230323600"
+        "server": "https://pingers.example",
+        "invite_mailbox": "2122232425262728292a2b2c2d2e2f30",
+        "invite_secret": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "inviter_fingerprint": "08090a0b0c0d0e0f",
+        "expires": 1800000000,
+        "uses": "multiple",
+        "gateway_pins": [
+          "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+          "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+        ],
+        "push_relay_pins": []
+      },
+      "expected": {
+        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b49d20000825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff80"
+      }
+    },
+    {
+      "name": "no-gateway-pins",
+      "inputs": {
+        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c800180815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    },
+    {
+      "name": "five-gateway-pins",
+      "inputs": {
+        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c8001855820000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f58200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20582002030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20215820030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212258200405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    },
+    {
+      "name": "ten-elements",
+      "inputs": {
+        "encoding": "82018a7768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c8001825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f6c667269656e64732d3230323600"
       },
       "expected": {
         "error": "Cbor"
@@ -66,7 +124,7 @@
     {
       "name": "http-server",
       "inputs": {
-        "encoding": "82018676687474703a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f0100"
+        "encoding": "82018876687474703a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f0100825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
       },
       "expected": {
         "error": "OutOfRange"
@@ -75,7 +133,7 @@
     {
       "name": "short-secret",
       "inputs": {
-        "encoding": "8201867768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f30581fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbe4808090a0b0c0d0e0f0100"
+        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f30581fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbe4808090a0b0c0d0e0f0100825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
       },
       "expected": {
         "error": "WrongLength"
@@ -84,7 +142,7 @@
     {
       "name": "unknown-uses",
       "inputs": {
-        "encoding": "8201867768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f0102"
+        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f0102825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
       },
       "expected": {
         "error": "OutOfRange"

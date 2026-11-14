@@ -153,8 +153,17 @@ impl PartyLifecycle<'_> {
             records::write(session, &Key::Invite(party, &id), &record.encode())?;
             records::write(session, &Key::InviteIndex(&id), party.as_bytes())?;
             records::add_to_list(session, &Key::Invites(party), id)?;
+            // The keys this device trusts for the Party's server go with the link, so a joiner
+            // new to the server pins them rather than whatever it is first shown.
+            let pins = session
+                .servers()
+                .get(&settings.server)?
+                .filter(|record| !record.gateway_pins.is_empty())
+                .ok_or(PartiesError::NoServerPins)?;
             let link = InviteLink::new(&InvitePayload {
                 server: settings.server,
+                gateway_pins: pins.gateway_pins,
+                push_relay_pins: pins.push_relay_pins,
                 invite_mailbox: id,
                 invite_secret: SecretBytes::new(*secret.expose_bytes()),
                 inviter_fingerprint: inviter_fingerprint(&identity.signing_key.public_key()),

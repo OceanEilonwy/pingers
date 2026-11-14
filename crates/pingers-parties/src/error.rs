@@ -33,6 +33,10 @@ pub enum PartiesError {
     /// No account exists on this device yet.
     #[error("no account on this device")]
     NoAccount,
+    /// The Party's server has no key pins on this device, so an invite could not tell a
+    /// joiner which keys to expect.
+    #[error("the Party's server has no key pins")]
+    NoServerPins,
     /// No such Party on this device.
     #[error("unknown Party")]
     UnknownParty,

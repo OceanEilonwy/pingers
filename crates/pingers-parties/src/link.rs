@@ -185,6 +185,8 @@ mod tests {
             inviter_fingerprint: InviterFingerprint::from_bytes([5; 8]),
             expires: UnixSeconds::new(1_000_000),
             uses: InviteUses::Single,
+            gateway_pins: vec![pingers_proto::KeyConfigHash::from_bytes([6; 32])],
+            push_relay_pins: Vec::new(),
             registration_code: None,
         })
     }

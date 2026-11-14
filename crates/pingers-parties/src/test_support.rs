@@ -92,7 +92,7 @@ impl Device {
             server: ServerId::new(SERVER.into())?,
             ohttp_relays: Vec::new(),
             push_relay: None,
-            gateway_pins: Vec::new(),
+            gateway_pins: vec![pingers_proto::KeyConfigHash::from_bytes([8; 32])],
             push_relay_pins: Vec::new(),
             trust: ServerTrust::BuiltIn,
         })?;

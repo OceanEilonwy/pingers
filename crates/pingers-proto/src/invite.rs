@@ -15,7 +15,8 @@ use subtle::ConstantTimeEq as _;
 
 use crate::secret::option_ct_eq;
 use crate::{
-    KeyPackageBytes, MailboxId, ProtoError, SecretBytes, SecretText, ServerId, Subscription,
+    KeyConfigHash, KeyPackageBytes, MailboxId, ProtoError, SecretBytes, SecretText, ServerId,
+    Subscription,
 };
 
 /// The first 8 bytes of the inviter's MLS leaf signature key hash: the joiner checks that the
@@ -92,6 +93,14 @@ pub struct InvitePayload {
     pub expires: UnixSeconds,
     /// Single or multiple use.
     pub uses: InviteUses,
+    /// The gateway key config hashes of the Party's server, as the inviter pins them (the key
+    /// served now and the next one). A joiner that does not know the server pins these and
+    /// refuses a server whose key does not match; nothing is pinned on first use. At least one,
+    /// at most [`InvitePayload::MAX_PINS`].
+    pub gateway_pins: Vec<KeyConfigHash>,
+    /// The key config hashes of the push relay the inviter's server uses, as the inviter pins
+    /// them; empty when the inviter has none. At most [`InvitePayload::MAX_PINS`].
+    pub push_relay_pins: Vec<KeyConfigHash>,
     /// The operator's registration code (design B.1), passed on by an inviter who registered
     /// with one, so the joiner's first `POST /v1/accounts` on that server needs no typing.
     /// Like the link itself it is a bearer capability. Never empty.
@@ -106,6 +115,8 @@ impl PartialEq for InvitePayload {
             && self.inviter_fingerprint == other.inviter_fingerprint
             && self.expires == other.expires
             && self.uses == other.uses
+            && self.gateway_pins == other.gateway_pins
+            && self.push_relay_pins == other.push_relay_pins
             && option_ct_eq(
                 self.registration_code.as_ref(),
                 other.registration_code.as_ref(),
@@ -115,20 +126,33 @@ impl PartialEq for InvitePayload {
 
 impl Eq for InvitePayload {}
 
+impl InvitePayload {
+    /// The most pins of either kind a link carries (two-slot rotation needs two).
+    pub const MAX_PINS: usize = 4;
+}
+
 /// Layout: `[server (text), invite mailbox (16 bytes), invite secret (32 bytes), inviter
-/// fingerprint (8 bytes), expires (seconds), uses (0 multiple, 1 single), registration code
-/// (text, only when present)]`. Without a code the array has six elements, as before the field
-/// existed, so older links still decode and links without a code are unchanged.
+/// fingerprint (8 bytes), expires (seconds), uses (0 multiple, 1 single), gateway pins (array of
+/// 32-byte hashes, 1 to 4), push relay pins (array of 32-byte hashes, 0 to 4), registration
+/// code (text, only when present)]`. Without a code the array has eight elements.
 impl CborBody for InvitePayload {
     fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
         let code = registration_code(self.registration_code.as_ref())?;
-        writer.array(if code.is_some() { 7 } else { 6 })?;
+        check_pins(&self.gateway_pins, 1, "gateway pins")?;
+        check_pins(&self.push_relay_pins, 0, "push relay pins")?;
+        writer.array(if code.is_some() { 9 } else { 8 })?;
         writer.text(self.server.as_str())?;
         writer.bytes(self.invite_mailbox.as_bytes())?;
         writer.bytes(self.invite_secret.expose())?;
         writer.bytes(self.inviter_fingerprint.as_bytes())?;
         writer.unsigned(self.expires.get());
         self.uses.encode_cbor(writer);
+        for pins in [&self.gateway_pins, &self.push_relay_pins] {
+            writer.array(pins.len())?;
+            for pin in pins {
+                writer.bytes(pin.as_bytes())?;
+            }
+        }
         if let Some(code) = code {
             writer.text(code)?;
         }
@@ -137,8 +161,8 @@ impl CborBody for InvitePayload {
 
     fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
         let elements = cbor::array(decoder)?;
-        if elements != 7 {
-            cbor::expect_length(elements, 6)?;
+        if elements != 9 {
+            cbor::expect_length(elements, 8)?;
         }
         Ok(Self {
             server: ServerId::new(decoder.str()?.to_owned())?,
@@ -147,7 +171,9 @@ impl CborBody for InvitePayload {
             inviter_fingerprint: InviterFingerprint::from_bytes(cbor::fixed_bytes(decoder)?),
             expires: UnixSeconds::new(decoder.u64()?),
             uses: InviteUses::decode_cbor(decoder)?,
-            registration_code: if elements == 7 {
+            gateway_pins: decode_pins(decoder, 1, "gateway pins")?,
+            push_relay_pins: decode_pins(decoder, 0, "push relay pins")?,
+            registration_code: if elements == 9 {
                 let code = SecretText::new(decoder.str()?.to_owned());
                 registration_code(Some(&code))?;
                 Some(code)
@@ -156,6 +182,34 @@ impl CborBody for InvitePayload {
             },
         })
     }
+}
+
+/// Pins within `minimum..=MAX_PINS`.
+fn check_pins(
+    pins: &[KeyConfigHash],
+    minimum: usize,
+    field: &'static str,
+) -> Result<(), ProtoError> {
+    if (minimum..=InvitePayload::MAX_PINS).contains(&pins.len()) {
+        Ok(())
+    } else {
+        Err(ProtoError::OutOfRange { field })
+    }
+}
+
+fn decode_pins(
+    decoder: &mut Decoder<'_>,
+    minimum: usize,
+    field: &'static str,
+) -> Result<Vec<KeyConfigHash>, ProtoError> {
+    let count =
+        usize::try_from(cbor::array(decoder)?).map_err(|_huge| ProtoError::OutOfRange { field })?;
+    if !(minimum..=InvitePayload::MAX_PINS).contains(&count) {
+        return Err(ProtoError::OutOfRange { field });
+    }
+    (0..count)
+        .map(|_| Ok(KeyConfigHash::from_bytes(cbor::fixed_bytes(decoder)?)))
+        .collect()
 }
 
 /// The code's text if there is one; an empty code is refused (it would mean "no code").
