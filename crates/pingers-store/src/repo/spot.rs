@@ -102,8 +102,14 @@ impl Spots<'_> {
         self.session.with(|connection| {
             connection.execute(
                 &format!(
-                    "INSERT OR REPLACE INTO spot ({SPOT_COLUMNS}) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+                    // An upsert, not REPLACE: REPLACE deletes the row first, and the delete
+                    // would cascade to the Spot's presence state on every edit.
+                    "INSERT INTO spot ({SPOT_COLUMNS}) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+                     ON CONFLICT (spot_id) DO UPDATE SET party_id = excluded.party_id, \
+                     name = excluded.name, geometry = excluded.geometry, \
+                     created_by = excluded.created_by, lamport = excluded.lamport, \
+                     deleted = excluded.deleted"
                 ),
                 params![
                     spot.id.as_bytes(),
@@ -462,6 +468,12 @@ mod tests {
         }
         session.presence().save(&home.id, &inside)?;
         assert_eq!(session.presence().load(&home.id)?, Some(inside));
+        // Editing the Spot keeps its presence state.
+        let mut edited = home.clone();
+        edited.lamport = Lamport::new(home.lamport.get().saturating_add(1));
+        session.spots().put(&edited)?;
+        assert_eq!(session.presence().load(&home.id)?, Some(inside));
+        assert_eq!(session.spots().get(&home.id)?, Some(edited));
         assert_eq!(session.presence().list()?.len(), 2);
         session.presence().clear(&work.id)?;
         assert_eq!(session.presence().load(&work.id)?, None);

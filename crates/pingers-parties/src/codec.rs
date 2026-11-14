@@ -131,5 +131,7 @@ mod tests {
     fn short_and_unknown_input_is_malformed() {
         assert!(Reader::new(&[0, 0, 0, 5, 1], "test").variable().is_err());
         assert!(Reader::new(&[0, 0, 0], "test").u32().is_err());
+        assert!(Reader::new(&[1], "test").end().is_err());
+        assert!(Reader::new(&[], "test").end().is_ok());
     }
 }

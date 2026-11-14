@@ -1603,6 +1603,21 @@ fn a_deleted_spot_drops_its_presence_state_on_every_device() -> Result<(), TestE
     for device in [&alice, &bob] {
         device.session.presence().save(&created.spot, &inside)?;
     }
+    // An edit keeps the presence state; only a tombstone drops it.
+    let edited = alice.parties().edit_spot(
+        &party,
+        SpotEdit {
+            spot: created.spot,
+            name: Some(SpotName::new("Pub upstairs".into())?),
+            shape: None,
+        },
+        &mut rng,
+    )?;
+    bob.parties()
+        .process_group_message(&group, &group_message(edited.outbound)?)?;
+    for device in [&alice, &bob] {
+        assert!(device.session.presence().load(&created.spot)?.is_some());
+    }
     let deleted = alice
         .parties()
         .delete_spot(&party, &created.spot, &mut rng)?;
@@ -1611,5 +1626,42 @@ fn a_deleted_spot_drops_its_presence_state_on_every_device() -> Result<(), TestE
     bob.parties()
         .process_group_message(&group, &group_message(deleted.outbound)?)?;
     assert_eq!(bob.session.presence().load(&created.spot)?, None);
+    Ok(())
+}
+
+#[test]
+fn the_inviter_names_the_added_leaf_before_the_joiners_profile_arrives() -> Result<(), TestError> {
+    let mut rng = rng(23);
+    let alice = Device::new(1)?;
+    let bob = Device::new(2)?;
+    let party = create_party(&alice, &mut rng)?.party;
+    let created = invite(&alice, &party, InviteUses::Single, &mut rng)?;
+    let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
+    admitted(
+        alice
+            .parties()
+            .receive_join_request(created.invite, &posted.body, &mut rng)?,
+    )?;
+    alice.parties().commit_accepted(&party)?;
+    // From the join request, matched to the leaf by the KeyPackage's signature key.
+    assert_eq!(names(&alice.parties(), &party)?, ["Alice", "Bob"]);
+    Ok(())
+}
+
+#[test]
+fn leaving_one_party_keeps_the_other_partys_invites() -> Result<(), TestError> {
+    let mut rng = rng(24);
+    let alice = Device::new(1)?;
+    let first = create_party(&alice, &mut rng)?.party;
+    let second = create_party(&alice, &mut rng)?.party;
+    let gone = invite(&alice, &first, InviteUses::Single, &mut rng)?;
+    let kept = invite(&alice, &second, InviteUses::Single, &mut rng)?;
+    alice.parties().leave_party(&first, &mut rng)?;
+    assert!(alice.parties().invite_status(gone.invite).is_err());
+    assert_eq!(
+        alice.parties().invite_status(kept.invite)?,
+        InviteStatus::Open
+    );
+    assert_eq!(alice.parties().invites(&second)?.len(), 1);
     Ok(())
 }

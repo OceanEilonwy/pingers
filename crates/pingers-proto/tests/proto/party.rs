@@ -354,3 +354,11 @@ fn party_operation_vectors() -> Result<(), TestError> {
 fn party_snapshot_vectors() -> Result<(), TestError> {
     check("party-snapshot-encoding", snapshot_from)
 }
+
+#[test]
+fn a_fence_point_gives_back_its_coordinates() -> Result<(), TestError> {
+    let point = FencePoint::new(51.5, -0.1)?;
+    assert!((point.latitude() - 51.5).abs() < f64::EPSILON);
+    assert!((point.longitude() + 0.1).abs() < f64::EPSILON);
+    Ok(())
+}
