@@ -336,6 +336,7 @@ pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started,
         )]),
         push_relay_ca: Some(CertificateSource::Pem(tls.ca_pem.clone().into_bytes())),
         registration_codes: registration_codes(config),
+        membership_proofs: config.membership_proofs,
         ..ServerConfig::new(Required {
             listen: server,
             server_id: ServerId::new(server_id).map_err(|_| HarnessError::Keys {

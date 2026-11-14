@@ -114,7 +114,7 @@ pooled `Reply` one; with none, `NoPooledMailbox`.
   carry an X-Wing key package as well (request 4).
 - **Clock injected**; `now` is read once per operation.
 - **Per-Party state in store tables** (2026-11-14): settings, roster history, members' subscription
-  ids, the in-flight commit and a waiting profile live in pingers-store's schema-v5 tables
+  ids, the in-flight commit and a waiting profile live in pingers-store's schema-v6 tables
   (`party_configs`, `rosters`, `member_subscriptions`, `pending_commits`, `profiles_waiting`),
   which cascade with the Party; invites, waiting join requests and joins in progress stay records
   while join flow A settles. `upgrade_records` moves the old records of those five kinds into the
@@ -126,7 +126,7 @@ pooled `Reply` one; with none, `NoPooledMailbox`.
 1. **pingers-proto** wire types for Party operations and the snapshot: done (2026-11-14,
    `PartyOperation`, `PartySnapshot`, with vectors and fuzz targets).
 2. **pingers-store** tables: done for settings, roster history, subscriptions, the in-flight
-   commit and the waiting profile (schema v5); a Spot tombstone clears its presence row
+   commit and the waiting profile (schema v6); a Spot tombstone clears its presence row
    (`Presence::clear`). Invites, waiting join requests and joins in progress move once join
    flow A has landed on main.
 3. **pingers-crypto** `safety_number` and `inviter_fingerprint`: done (2026-11-14).

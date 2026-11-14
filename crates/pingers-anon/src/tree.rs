@@ -12,8 +12,10 @@ use rln::circuit::Fr;
 
 use crate::{AnonError, LeafValue, MembershipRoot, field};
 
-/// Tree depth: room for 2^20 devices. Fixed by the circuit.
-pub(crate) const DEPTH: usize = 20;
+/// Tree depth: room for 2^20 devices, and the number of siblings in a path. Fixed by the circuit.
+pub const TREE_DEPTH: usize = 20;
+
+const DEPTH: usize = TREE_DEPTH;
 
 /// The number of leaf positions.
 const CAPACITY: usize = 1 << DEPTH;
@@ -48,6 +50,35 @@ impl MerklePath {
     #[must_use]
     pub const fn position(&self) -> LeafPosition {
         self.position
+    }
+
+    /// The siblings as encoded field elements, leaf level first: for keeping the path in the
+    /// store, so a proof does not rebuild the tree.
+    #[must_use]
+    pub fn sibling_bytes(&self) -> [[u8; 32]; TREE_DEPTH] {
+        let mut out = [[0_u8; 32]; TREE_DEPTH];
+        for (slot, sibling) in out.iter_mut().zip(&self.siblings) {
+            *slot = field::encode(*sibling);
+        }
+        out
+    }
+
+    /// A path from stored siblings ([`MerklePath::sibling_bytes`]).
+    ///
+    /// # Errors
+    ///
+    /// [`AnonError::NotAFieldElement`] if a sibling is not a canonical field element.
+    pub fn from_sibling_bytes(
+        position: LeafPosition,
+        siblings: &[[u8; 32]; TREE_DEPTH],
+    ) -> Result<Self, AnonError> {
+        Ok(Self {
+            siblings: siblings
+                .iter()
+                .map(field::decode)
+                .collect::<Result<_, _>>()?,
+            position,
+        })
     }
 
     /// The sibling hashes, leaf level first.
@@ -359,6 +390,25 @@ mod tests {
         assert!(matches!(
             tree.path(LeafPosition::new(2)),
             Err(AnonError::NoSuchLeaf)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn a_path_survives_its_stored_form() -> Result<(), AnonError> {
+        let mut tree = MembershipTree::empty()?;
+        tree.apply(&(1..=5).map(leaf).collect::<Vec<_>>())?;
+        let path = tree.path(LeafPosition::new(3))?;
+        let stored = path.sibling_bytes();
+        assert_eq!(
+            MerklePath::from_sibling_bytes(LeafPosition::new(3), &stored)?,
+            path
+        );
+        let mut broken = stored;
+        broken[4] = [0xff; 32];
+        assert!(matches!(
+            MerklePath::from_sibling_bytes(LeafPosition::new(3), &broken),
+            Err(AnonError::NotAFieldElement)
         ));
         Ok(())
     }

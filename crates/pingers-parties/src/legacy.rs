@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Moves per-Party state this crate kept as key-value records (under `pingers-parties/v1/`)
-//! into pingers-store's tables (schema version 5): settings, roster history, members'
+//! into pingers-store's tables (schema version 6): settings, roster history, members'
 //! subscriptions, the in-flight commit and a waiting profile. Invite and join records stay
 //! records. The decoders here exist only to read those old records.
 

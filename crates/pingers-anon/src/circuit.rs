@@ -4,8 +4,9 @@
 //! The proving key is the one compiled into `rln` 3.1.0 (`resources/tree_depth_20/rln_single`):
 //! `RLN(20, 16)` from circom-rln, 5,820 constraints, five public inputs. Its verifying key is
 //! identical, point for point, to the output of PSE's RLN Trusted Setup Ceremony (rln-20,
-//! 60 contributions and a beacon, finalised 2023-09-04); the test below pins it. The bytes
-//! are embedded in the binary, so nothing is read from the file system.
+//! 60 contributions and a beacon, finalised 2023-09-04); [`ceremony::matches_ceremony`] checks
+//! it, at run time in the prover self-test and in the test below. The bytes are embedded in the
+//! binary, so nothing is read from the file system.
 
 use std::sync::LazyLock;
 
@@ -21,8 +22,14 @@ pub(crate) static BACKEND: LazyLock<ArkGroth16Backend<PoseidonHash>> = LazyLock:
     )
 });
 
-#[cfg(test)]
-mod tests {
+/// Names the parameters the prover uses: a self-test result recorded under another name is
+/// void, so a release that changes them tests the prover again.
+#[cfg(all(feature = "prover", feature = "verifier"))]
+pub const PARAMETERS_ID: &str = "rln-3.1.0/rln-20/pse-ceremony-2023-09-04";
+
+/// The check that the embedded key is the ceremony's, for the self-test and the tests.
+#[cfg(any(all(feature = "prover", feature = "verifier"), test))]
+pub(crate) mod ceremony {
     use rln::circuit::default_zkey_single;
 
     /// `vk_delta_2` of PSE's RLN ceremony output (`rln-20_vkey.json`, sha256
@@ -36,18 +43,79 @@ mod tests {
         "1838524899938769516485895655063198583192139511330418290063560641219523306282",
     ];
 
-    #[test]
-    fn embedded_key_is_the_pse_ceremony_key() {
+    /// Five public inputs plus the constant term.
+    const PUBLIC_INPUT_TERMS: usize = 6;
+
+    /// The circuit's size.
+    const CONSTRAINTS: usize = 5_820;
+
+    /// Whether the embedded key is the PSE ceremony's key for this circuit (design B.4.8, H.1
+    /// blocker 4): delta matches the ceremony's final contribution, with five public inputs and
+    /// the circuit's constraint count.
+    pub(crate) fn matches_ceremony() -> bool {
         let zkey = default_zkey_single();
         let delta = zkey.0.vk.delta_g2;
-        let actual = [
-            delta.x.c0.to_string(),
-            delta.x.c1.to_string(),
-            delta.y.c0.to_string(),
-            delta.y.c1.to_string(),
-        ];
-        assert_eq!(actual, CEREMONY_DELTA);
-        assert_eq!(zkey.0.vk.gamma_abc_g1.len(), 6, "five public inputs");
-        assert_eq!(zkey.1.num_constraints, 5820);
+        matches(&KeyShape {
+            delta: [
+                delta.x.c0.to_string(),
+                delta.x.c1.to_string(),
+                delta.y.c0.to_string(),
+                delta.y.c1.to_string(),
+            ],
+            public_input_terms: zkey.0.vk.gamma_abc_g1.len(),
+            constraints: zkey.1.num_constraints,
+        })
+    }
+
+    /// What identifies a key: its delta, input count and circuit size.
+    pub(super) struct KeyShape {
+        pub(super) delta: [String; 4],
+        pub(super) public_input_terms: usize,
+        pub(super) constraints: usize,
+    }
+
+    /// Whether `shape` is the ceremony key's.
+    pub(super) fn matches(shape: &KeyShape) -> bool {
+        shape.delta == CEREMONY_DELTA
+            && shape.public_input_terms == PUBLIC_INPUT_TERMS
+            && shape.constraints == CONSTRAINTS
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ceremony::{KeyShape, matches, matches_ceremony};
+
+    #[test]
+    fn embedded_key_is_the_pse_ceremony_key() {
+        assert!(matches_ceremony());
+    }
+
+    fn ceremony_shape() -> KeyShape {
+        KeyShape {
+            delta: [
+                "17077735495685170943380938230836408503627170115414840315502244846025577589191",
+                "14030085636943255545683322474441991939484590437387381169642530788494152024614",
+                "11568745146423307387256571230823432454624378106569286849514884592874522611163",
+                "1838524899938769516485895655063198583192139511330418290063560641219523306282",
+            ]
+            .map(str::to_owned),
+            public_input_terms: 6,
+            constraints: 5_820,
+        }
+    }
+
+    #[test]
+    fn any_difference_from_the_ceremony_key_is_caught() {
+        assert!(matches(&ceremony_shape()));
+        let mut other_delta = ceremony_shape();
+        other_delta.delta[3] = "1".to_owned();
+        assert!(!matches(&other_delta));
+        let mut other_inputs = ceremony_shape();
+        other_inputs.public_input_terms = 5;
+        assert!(!matches(&other_inputs));
+        let mut other_circuit = ceremony_shape();
+        other_circuit.constraints = 5_821;
+        assert!(!matches(&other_circuit));
     }
 }

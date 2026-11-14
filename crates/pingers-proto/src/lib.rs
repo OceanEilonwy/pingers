@@ -71,8 +71,8 @@ pub use party::{
     SpotFence, SpotLife, SpotState, SpotTitle,
 };
 pub use privacy_pass::{
-    MAX_TOKENS_PER_ISSUANCE, PrivacyPassIssueRequest, PrivacyPassIssueResponse, PrivacyPassKey,
-    PrivacyPassKeys,
+    MAX_TOKENS_PER_ISSUANCE, PrivacyPassAllowance, PrivacyPassIssueRequest,
+    PrivacyPassIssueResponse, PrivacyPassKey, PrivacyPassKeys, TokenAllowance,
 };
 pub use push::{
     KeyConfigHash, MailboxSpec, PushBind, PushClass, PushPlatform, PushToken, PushTokenPlaintext,
