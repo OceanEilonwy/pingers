@@ -166,8 +166,8 @@ async fn a_server_that_forgot_the_account_gets_it_again_once() -> TestResult {
         .engine
         .prepare_credentials(WakeBudget::UNLIMITED)
         .await?;
-    // The server forgets the account and its bearers (as an in-memory account table does
-    // when the server restarts); the device still holds a bearer it believes in.
+    // The server forgets the account and its bearers (as one whose quota store is in memory
+    // does when it restarts); the device still holds a bearer it believes in.
     let bearer = device
         .session()?
         .account()

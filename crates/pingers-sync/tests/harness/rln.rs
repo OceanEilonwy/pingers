@@ -21,7 +21,7 @@ use pingers_testkit::{HarnessConfig, seeded_rng};
 use pingers_time::{Clock as _, UnixSeconds};
 
 use crate::mailbox::knock_mailbox;
-use crate::support::{Device, STEP, TestError, TestResult, World, real_pause};
+use crate::support::{Device, TestError, TestResult, World, real_pause};
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
@@ -55,9 +55,13 @@ fn next_hour(world: &World) {
         .advance(Duration::from_secs(next.saturating_sub(now)));
 }
 
+/// How long the background self-test may take in real time: its two proofs share the CPU with
+/// every other harness test proving at the same time.
+const SELF_TEST_WAIT: Duration = Duration::from_secs(180);
+
 /// Waits (in real time) for the background prover self-test to record its result.
 async fn tested(device: &Device) -> Result<SelfTestStanding, TestError> {
-    tokio::time::timeout(STEP, async {
+    tokio::time::timeout(SELF_TEST_WAIT, async {
         loop {
             let standing = device.engine.prover_standing().await?;
             if standing != SelfTestStanding::Due {

@@ -183,6 +183,12 @@ Configuration:
 
 **Server access control without membership knowledge**: each epoch all members derive an Ed25519 keypair from `MLS-Exporter("pingers/v1/log-auth", group_id, 32)`. The committer sends the next epoch's public key with the Commit; the server stores it and requires a signature by it on reads and writes of that group log. Removed members cannot derive the new key.
 
+**Reading with an earlier epoch's key** (decided 2026-11-14). The server keeps every earlier epoch's key, because a member that missed commits can only sign with the key it still has. Writes, subscription changes, deletes and the live channel take only the current key; a commit signed with an older key is answered `409` with the head epoch. Reads follow one rule: **a key of epoch `e` reads the log up to and including the commit that ended `e`, and nothing after it, whatever position it asks to read after.**
+
+- A lagging member reads with its old key, gets everything up to the commit that ended its epoch, applies it, and reads on from that position with the next epoch's key. Each key reads everything before its own boundary, so it misses nothing, including late messages a slower member wrote in an older epoch.
+- A removed member keeps only the key of the epoch it was removed in. It reads up to the commit that removed it (so it learns it was removed) and nothing written after, not even a late message in its old epoch that it could still open.
+- Such a reader is told the head epoch as at most one past its own (it learns its epoch ended, not how many followed), cannot fetch a snapshot of a later epoch (`GET /state` answers `403`), and its reads do not count as activity, so a removed member polling cannot keep a group from expiring.
+
 ### B.3 Private co-presence detection: options
 
 | Option | Server learns | Rounds / battery | Fit |
@@ -776,7 +782,8 @@ A `Router` holds one transport per class. Anonymous and stream requests are neve
 Everything in **bold** is opaque ciphertext or random to the server.
 
 ```sql
-account      (account_id BLOB PK, sig_pk BLOB, created_at, disabled)    -- used only for registration, the membership leaf and token issuance
+account      (account_id BLOB PK, sig_pk BLOB, created_at)              -- used only for registration, the membership leaf and token issuance; created_at for the sign-up limit
+account_bearer (digest BLOB PK /*SHA-256("pingers/v1/bearer" || bearer)*/, account_id FK, expires_at)  -- at most 4 per account; never the bearer itself
 mailbox      (mailbox_id BLOB PK /*random*/, sealed_push BLOB NULL /*bold; NULL = no wake*/, relay_id, urgency, handle, expires_at)
 mailbox_msg  (mailbox_id FK, seq, body BLOB /*bold*/, expires_at)
 grp          (group_id BLOB PK /*random*/, auth_pk BLOB, head_epoch, lifetime /*meetup|party*/, created_at, idle_expires_at)
@@ -872,7 +879,7 @@ HTTP/2 over TLS 1.3, bodies in CBOR unless noted, MLS objects TLS-serialised ins
 - **Anon**: no account. Privacy class `Anonymous`; sent via OHTTP at `POST /ohttp`. One of:
   - **Rln**: `Authorization: PingersRln <base64url(RlnAuth)>`. Main app.
   - **PP**: `Authorization: PrivateToken token=...` (RFC 9577). App extensions, and devices in fallback (B.4.8).
-- **Grp**: Ed25519 signature by the group's current log-auth key over `(method, path, body hash, timestamp)`, plus Anon. One Anon credential per group per bucket buys a session cookie for that group.
+- **Grp**: Ed25519 signature by the group's current log-auth key over `(method, path, body hash, timestamp)`, plus Anon. One Anon credential per group per bucket buys a session cookie for that group, good for at most 64 writes.
 - **Cap**: no credential; a secret in the request is the capability (a mailbox's `read_key`, a server-MACed board cursor). Sent via OHTTP.
 
 ```rust
@@ -900,12 +907,16 @@ GET  /v1/params            -> Params { anon_auth: Vec<Rln|PP>, rln_slashing: boo
 
 // --- accounts (Acct) ---
 POST /v1/accounts          RegisterReq  { sig_pk: [u8;32], proof: Sig, reg_code: Option<String> } -> { account_id }
+                           // reg_code only for a new key; a known key re-registers on its proof alone.
+                           // At most signups_per_hour new accounts an hour (429 beyond). Accounts and bearer
+                           // digests persist, so a restart changes nothing for a device.
 POST /v1/auth              AuthReq      { account_id, nonce_sig: Sig }                             -> { bearer, server_time }
 DELETE /v1/accounts/me
 GET  /v1/ohttp/config                                                      -> KeyConfig
 
 // --- membership tree ---
 POST /v1/rln/leaf          (Acct) { id_commitment: [u8;32] }              -> { idx, live_from_root_epoch }
+                           // at most 4 per account per 24 root epochs (429 beyond): each takes a tree position
 GET  /v1/rln/leaves?after=n (no auth, cacheable)
                            -> { leaves: Vec<[u8;32]>, zeroed: Vec<u32>, roots: Vec<(u32 /*root_epoch*/, [u8;32])>, next: u32 }
 
@@ -949,6 +960,7 @@ PUT  /v1/groups/{id}/subs/{sub_id} (Grp) Subscription                      // a 
 DELETE /v1/groups/{id}/subs/{sub_id} (Grp)
 POST /v1/groups/{id}/msgs  (Grp) AppMsg { epoch: u64, body: Bytes, ephemeral: bool, wake: None|Quiet|Alert } -> { seq }
 GET  /v1/groups/{id}/msgs?after=seq (Grp) -> { msgs: Vec<GrpMsg>, head_epoch }
+                           // signed with an earlier epoch's key: only up to the commit that ended it (B.2)
 GET  /v1/groups/{id}/state (Grp) -> { epoch, blob }
 DELETE /v1/groups/{id}     (Grp)
 POST /v1/groups/{id}/live?sub=<sub_id>  (Grp) chunked OHTTP exchange: request and response bodies are streams of Frame { epoch, body, ephemeral }   // privacy class Stream; reached only via POST /ohttp with message/ohttp-chunked-req
@@ -957,6 +969,27 @@ POST /v1/groups/{id}/live?sub=<sub_id>  (Grp) chunked OHTTP exchange: request an
 Welcome messages travel as mailbox posts. Invites reuse mailboxes (below). There is deliberately no KeyPackage endpoint, no user lookup endpoint, and no endpoint that takes a raw push token.
 
 **Wake rule.** A mailbox post forwards that mailbox's sealed push to its relay. A Commit, or an `AppMsg` with `wake` set, forwards each subscription's sealed push with the given urgency, skipping subscriptions connected to the group's live stream; `Quiet` forwards are delayed by a random 0 to 30 seconds each. If the relay answers `410 Gone` the server deletes the blob.
+
+**Removing a member's subscriptions.** A Commit's `subs_del` (the remover lists the removed member's subscription: a Party member's from its roster profile, a Meetup member's as in G.6) is applied in the same transaction as the Commit, so the Commit's own wake never reaches it. The server answers the Commit only after any push already on its way to those subscriptions has been answered, closes the live channels opened with them (the removed member receives nothing further and can send nothing more), and never forwards a later wake to them. `DELETE /v1/groups/{id}/subs/{sub_id}` waits the same way, and `DELETE /v1/groups/{id}` waits for every push to the group in flight: once the server has answered a removal, the push relay hears nothing more for what was removed.
+
+**Limits** (decided 2026-11-14). Every limit is enforced by the server, so no client has to be trusted to keep it:
+
+| What | Limit | Answer |
+|---|---|---|
+| Connections | 4096 on the public listener, 256 on the gateway (`max_connections`, `[ohttp] max_connections`); one more is closed on arrival | close |
+| Idle or slow connections | closed after `idle_timeout_s` (120 s) with no request in progress, including one that never completes a request head; a live channel is a request in progress; a public connection whose oldest request has taken three request timeouts (a client that stopped reading its answer) is dropped | GOAWAY, drop |
+| Request head | 16 KiB of header fields; 64 concurrent requests per public connection, 4096 per gateway connection | refused |
+| Request body | 64 KiB, complete within `request_timeout_s` (30 s); a chunked live channel's preamble 20 KiB | 413, 408 |
+| New accounts | `signups_per_hour` (60), counted in `quota_db`; plus the registration code, if set | 429 |
+| Bearers | 4 live per account | oldest dropped |
+| Membership leaves | 4 per account per 24 root epochs | 429 |
+| Privacy Pass | 300 tokens per account per day | 429 |
+| RLN proofs | 8 per identity per scope per bucket (the circuit's message limit) | 403 |
+| Group sessions | one credential buys 64 writes to one group, until the bucket ends | 401 |
+| Subscriptions | 1024 per group | 422 |
+| Live channels | 256 per group; 240 stored frames per channel per bucket (ephemeral frames are not stored or counted) | 429 |
+| Mailbox posts | `mailbox_posts_per_bucket` (60) per mailbox | 429 |
+| Push relay key configs | fetched from the relay at most once per 5 minutes (30 s after a failure), however many ask | cached |
 
 **Push relay API** (a separate service, B.4.9):
 

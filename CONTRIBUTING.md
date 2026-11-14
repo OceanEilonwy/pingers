@@ -63,7 +63,8 @@ The first line of every `.rs` file is the SPDX header:
 
 Run `cargo xtask ci` before pushing. It runs, in order: `cargo fmt --check`,
 `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test`,
-`cargo xtask layers` and `cargo deny check`. It stays quick enough to run on every change.
+`cargo xtask layers`, `cargo xtask no-python` and `cargo deny check`. It stays quick enough to
+run on every change.
 
 Before asking for review, run `cargo xtask ci --full`. It runs everything `ci` does, then:
 
@@ -77,6 +78,18 @@ Before asking for review, run `cargo xtask ci --full`. It runs everything `ci` d
 Options: `--base <ref>` measures changes against another branch or commit, and
 `--fuzz-seconds <n>` changes the time box. It needs `cargo-mutants`, `cargo-fuzz` and a nightly
 toolchain. Mutating a large crate takes a while; results land in `target/xtask-mutants/`.
+
+## Tools and test vectors
+
+Tools are written in Rust, as `cargo xtask` commands; there is no Python in the repository, and
+`cargo xtask no-python` (a `ci` step) fails on any `.py` file or Python shebang.
+
+`vectors/proto/*.json` and `vectors/meetup/*.json` are generated: edit the generator in
+`xtask/src/vectors/` and run `cargo xtask vectors`, never the JSON by hand. The generator uses
+its own CBOR writer and formulas, not pingers-proto or pingers-meetup, so each vector is
+computed twice. `cargo test` (and `cargo xtask vectors --check`) fails if a committed file
+differs from what the generator writes. The other vector directories are written by hand; see
+[`vectors/README.md`](vectors/README.md).
 
 Changing anything listed as fixed in a crate's `CONTRACT.md` changes an interface other crates
 build against: say so in the pull request and update the contract in the same change.

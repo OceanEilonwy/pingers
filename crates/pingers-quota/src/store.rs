@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! The storage traits the quota service owns (design C.1: `rln_leaf`, `rln_root`, `pp_key`,
-//! `pp_spent`, `pp_quota`), and the rows they hold.
+//! The storage traits the quota service owns (design C.1: `account`, `account_bearer`,
+//! `rln_leaf`, `rln_root`, `pp_key`, `pp_spent`, `pp_quota`), and the rows they hold.
 //!
 //! The nullifier set has no trait: design C.1 keeps it in memory only.
 
 use std::sync::Arc;
 
 use pingers_anon::{IssuerKey, LeafValue};
+use pingers_crypto::{AccountPublicKey, BearerDigest};
 use pingers_proto::{AccountId, HourlyRoot, MembershipIndex, RootEpoch};
 use pingers_time::UnixSeconds;
 
@@ -268,5 +269,138 @@ impl<S: PrivacyPassStore + ?Sized> PrivacyPassStore for Arc<S> {
 
     fn prune(&self, now: UnixSeconds) -> Result<(), QuotaError> {
         (**self).prune(now)
+    }
+}
+
+/// A new account (design C.1 `account`): only its public key and when it was made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NewAccount {
+    /// `SHA-256(pk)[..16]`.
+    pub id: AccountId,
+    /// The Ed25519 key that signs its auth challenges.
+    pub key: AccountPublicKey,
+    /// When it registered, for the sign-up limit.
+    pub created_at: UnixSeconds,
+}
+
+/// At most `max` accounts may have been created at or after `since` (the sign-up limit).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SignupWindow {
+    /// The start of the window.
+    pub since: UnixSeconds,
+    /// How many accounts the window allows.
+    pub max: u32,
+}
+
+/// What [`AccountStore::insert_account`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+pub enum AccountInsert {
+    /// The account is new and was stored.
+    Created,
+    /// The account was already stored; nothing changed.
+    Existing,
+    /// The window is full; nothing was stored.
+    WindowFull,
+}
+
+/// A bearer as stored: its digest, never the bearer itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StoredBearer {
+    /// `bearer_digest(bearer)`.
+    pub digest: BearerDigest,
+    /// Whose it is.
+    pub account: AccountId,
+    /// When it stops being accepted.
+    pub expires_at: UnixSeconds,
+}
+
+/// Durable accounts and their bearers, so a restart neither forgets a device nor ends its
+/// bearer early.
+pub trait AccountStore: Send + Sync {
+    /// Stores `account` unless it exists, and only if `window` still has room.
+    ///
+    /// # Errors
+    ///
+    /// Storage errors.
+    fn insert_account(
+        &self,
+        account: &NewAccount,
+        window: SignupWindow,
+    ) -> Result<AccountInsert, QuotaError>;
+
+    /// The key of a stored account.
+    ///
+    /// # Errors
+    ///
+    /// Storage errors.
+    fn account_key(&self, account: &AccountId) -> Result<Option<AccountPublicKey>, QuotaError>;
+
+    /// Deletes an account and every bearer of it. Deleting an unknown account does nothing.
+    ///
+    /// # Errors
+    ///
+    /// Storage errors.
+    fn delete_account(&self, account: &AccountId) -> Result<(), QuotaError>;
+
+    /// Stores a bearer and keeps at most `keep` of the account's bearers: the new one, and of
+    /// the others those that expire last.
+    ///
+    /// # Errors
+    ///
+    /// Storage errors.
+    fn insert_bearer(&self, bearer: &StoredBearer, keep: usize) -> Result<(), QuotaError>;
+
+    /// The account a bearer digest belongs to, if the bearer is unexpired at `now` and the
+    /// account still exists.
+    ///
+    /// # Errors
+    ///
+    /// Storage errors.
+    fn bearer_account(
+        &self,
+        digest: &BearerDigest,
+        now: UnixSeconds,
+    ) -> Result<Option<AccountId>, QuotaError>;
+
+    /// Forgets bearers expired at `now`.
+    ///
+    /// # Errors
+    ///
+    /// Storage errors.
+    fn prune_bearers(&self, now: UnixSeconds) -> Result<(), QuotaError>;
+}
+
+impl<S: AccountStore + ?Sized> AccountStore for Arc<S> {
+    fn insert_account(
+        &self,
+        account: &NewAccount,
+        window: SignupWindow,
+    ) -> Result<AccountInsert, QuotaError> {
+        (**self).insert_account(account, window)
+    }
+
+    fn account_key(&self, account: &AccountId) -> Result<Option<AccountPublicKey>, QuotaError> {
+        (**self).account_key(account)
+    }
+
+    fn delete_account(&self, account: &AccountId) -> Result<(), QuotaError> {
+        (**self).delete_account(account)
+    }
+
+    fn insert_bearer(&self, bearer: &StoredBearer, keep: usize) -> Result<(), QuotaError> {
+        (**self).insert_bearer(bearer, keep)
+    }
+
+    fn bearer_account(
+        &self,
+        digest: &BearerDigest,
+        now: UnixSeconds,
+    ) -> Result<Option<AccountId>, QuotaError> {
+        (**self).bearer_account(digest, now)
+    }
+
+    fn prune_bearers(&self, now: UnixSeconds) -> Result<(), QuotaError> {
+        (**self).prune_bearers(now)
     }
 }

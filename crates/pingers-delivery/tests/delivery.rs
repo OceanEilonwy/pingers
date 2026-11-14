@@ -9,8 +9,9 @@ use std::sync::{Arc, Barrier};
 use pingers_crypto::push_bind_for_subscription;
 use pingers_delivery::{
     CommitOutcome, Delivery, DeliveryError, DeliveryStore, GroupLifetime, GroupStart,
-    MAX_QUIET_DELAY, MAX_SUBSCRIPTION_LIFETIME, MEETUP_IDLE_LIFETIME, MemoryDeliveryStore,
-    PAGE_ENTRIES, PARTY_IDLE_LIFETIME, Wake,
+    MAX_LIVE_CHANNELS_PER_GROUP, MAX_QUIET_DELAY, MAX_SUBSCRIPTION_LIFETIME,
+    MAX_SUBSCRIPTIONS_PER_GROUP, MEETUP_IDLE_LIFETIME, MemoryDeliveryStore, PAGE_ENTRIES,
+    PARTY_IDLE_LIFETIME, PastAuthKey, Reader, STORED_LIVE_FRAMES_PER_BUCKET, Wake,
 };
 use pingers_proto::{
     AppMessage, CommitRequest, CommitResponse, ContentType, CreateGroup, Delivery as Mode, Epoch,
@@ -134,7 +135,7 @@ impl<S: DeliveryStore> World<S> {
     fn log(&self) -> Result<Vec<(u64, u64, ContentType)>, TestError> {
         Ok(self
             .delivery
-            .messages(&self.group, SequenceNumber::new(0))?
+            .messages(&self.group, SequenceNumber::new(0), Reader::Current)?
             .messages
             .iter()
             .map(|entry| (entry.sequence.get(), entry.epoch.get(), entry.content_type))
@@ -184,7 +185,7 @@ fn commit_in_head_epoch_is_accepted_and_moves_the_epoch(
     );
     let read = world
         .delivery
-        .messages(&world.group, SequenceNumber::new(0))?;
+        .messages(&world.group, SequenceNumber::new(0), Reader::Current)?;
     assert_eq!(read.head_epoch, Epoch::new(1));
     assert_eq!(world.delivery.auth_key(&world.group)?, auth_key(0xA0));
     Ok(())
@@ -207,7 +208,7 @@ fn second_commit_for_an_epoch_conflicts_and_changes_nothing(
     );
     assert_eq!(world.log()?, vec![(1, 0, ContentType::Commit)]);
     assert_eq!(world.delivery.auth_key(&world.group)?, auth_key(0xA0));
-    let state = world.delivery.state(&world.group)?;
+    let state = world.delivery.state(&world.group, Reader::Current)?;
     assert_eq!(
         state.map(|state| state.state),
         Some(SealedSnapshot::from_bytes(vec![0xE0]))
@@ -284,9 +285,10 @@ fn log_keeps_arrival_order_and_reads_after_a_position(
             (3, 1, ContentType::Application)
         ]
     );
-    let after_first = world
-        .delivery
-        .messages(&world.group, SequenceNumber::new(1))?;
+    let after_first =
+        world
+            .delivery
+            .messages(&world.group, SequenceNumber::new(1), Reader::Current)?;
     let positions: Vec<u64> = after_first
         .messages
         .iter()
@@ -307,12 +309,14 @@ fn a_read_returns_at_most_one_page(store: impl DeliveryStore) -> Result<(), Test
     }
     let first = world
         .delivery
-        .messages(&world.group, SequenceNumber::new(0))?;
+        .messages(&world.group, SequenceNumber::new(0), Reader::Current)?;
     assert_eq!(first.messages.len(), PAGE_ENTRIES);
     let last = first.messages.last().map(|entry| entry.sequence);
-    let rest = world
-        .delivery
-        .messages(&world.group, last.unwrap_or(SequenceNumber::new(0)))?;
+    let rest = world.delivery.messages(
+        &world.group,
+        last.unwrap_or(SequenceNumber::new(0)),
+        Reader::Current,
+    )?;
     assert_eq!(rest.messages.len(), 1);
     Ok(())
 }
@@ -616,6 +620,165 @@ fn closed_channel_gets_nothing_and_cannot_send(store: impl DeliveryStore) -> Res
     Ok(())
 }
 
+fn a_removal_closes_the_removed_members_live_channel(
+    store: impl DeliveryStore,
+) -> Result<(), TestError> {
+    let world = World::new(store, &[1, 2])?;
+    let removed = world.delivery.open_live(&world.group, Some(sub_id(1)), 1)?;
+    let _staying = world.delivery.open_live(&world.group, Some(sub_id(2)), 2)?;
+    let _anonymous = world.delivery.open_live(&world.group, None, 3)?;
+    // A losing commit closes nothing.
+    let _won = world.commit(0, Urgency::Quiet)?;
+    let lost = world.commit_with(CommitRequest {
+        subscriptions_removed: vec![sub_id(1)],
+        ..commit_request(0, Urgency::Quiet)
+    })?;
+    assert!(accepted(lost).is_none());
+    assert_eq!(world.delivery.live_channels(&world.group)?, 3);
+    let outcome = world.commit_with(CommitRequest {
+        subscriptions_removed: vec![sub_id(1)],
+        ..commit_request(1, Urgency::Quiet)
+    })?;
+    let (_, _, targets) = accepted(outcome).ok_or(TestError::Conflict)?;
+    // The commit goes to the others only, and the removed member can send nothing more.
+    assert_eq!(targets, vec![2, 3]);
+    assert_eq!(world.delivery.live_channels(&world.group)?, 2);
+    let frame = LiveFrame {
+        epoch: Epoch::new(1),
+        body: body(1),
+        delivery: Mode::Stored,
+    };
+    assert!(matches!(
+        world.delivery.live_frame(&world.group, removed, frame),
+        Err(DeliveryError::UnknownChannel)
+    ));
+    Ok(())
+}
+
+// --- limits ---
+
+/// A subscription whose id is `index` big-endian, for groups with more than 256.
+fn numbered(index: u16) -> Result<Subscription, TestError> {
+    let mut id = [0_u8; 16];
+    for (target, source) in id.iter_mut().zip(index.to_be_bytes()) {
+        *target = source;
+    }
+    Ok(Subscription {
+        id: SubscriptionId::from_bytes(id),
+        ..subscription(1, SUBSCRIPTION_LIFETIME)?
+    })
+}
+
+fn numbered_range(range: core::ops::Range<u16>) -> Result<Vec<Subscription>, TestError> {
+    range.map(numbered).collect()
+}
+
+fn a_group_holds_a_bounded_number_of_subscriptions(
+    store: impl DeliveryStore,
+) -> Result<(), TestError> {
+    let max = u16::try_from(MAX_SUBSCRIPTIONS_PER_GROUP).map_err(|_| TestError::Thread)?;
+    let clock = test_clock();
+    let delivery: Delivery<_, Live> = Delivery::new(store, Arc::new(clock));
+    let create = |id: u8, subscriptions| {
+        delivery.create_group(
+            CreateGroup {
+                group_id: GroupId::from_bytes([id; 32]),
+                auth_key: auth_key(0),
+                subscriptions,
+                state: None,
+            },
+            at_zero(GroupLifetime::Party),
+        )
+    };
+    assert!(matches!(
+        create(1, numbered_range(0..max.saturating_add(1))?),
+        Err(DeliveryError::TooManySubscriptions)
+    ));
+    create(2, numbered_range(0..max)?)?;
+    let group = GroupId::from_bytes([2; 32]);
+    assert!(matches!(
+        delivery.put_subscription(&group, numbered(max)?),
+        Err(DeliveryError::TooManySubscriptions)
+    ));
+    // Renewing one already there is not a new one.
+    delivery.put_subscription(&group, numbered(0)?)?;
+    // A commit that adds one more is refused whole; one that also removes one is not.
+    let adding = CommitRequest {
+        subscriptions_added: vec![numbered(max)?],
+        ..commit_request(0, Urgency::Quiet)
+    };
+    assert!(matches!(
+        delivery.commit(&group, adding.clone(), &mut seeded_rng(1)),
+        Err(DeliveryError::TooManySubscriptions)
+    ));
+    assert_eq!(delivery.head_epoch(&group, Reader::Current)?, Epoch::new(0));
+    let swapping = CommitRequest {
+        subscriptions_removed: vec![numbered(0)?.id],
+        ..adding
+    };
+    let outcome = delivery.commit(&group, swapping, &mut seeded_rng(1))?;
+    assert!(matches!(outcome, CommitOutcome::Accepted { .. }));
+    Ok(())
+}
+
+fn a_group_has_a_bounded_number_of_live_channels(
+    store: impl DeliveryStore,
+) -> Result<(), TestError> {
+    let world = World::new(store, &[])?;
+    let mut channels = Vec::new();
+    for handle in 0..MAX_LIVE_CHANNELS_PER_GROUP {
+        let handle = u32::try_from(handle).map_err(|_| TestError::Thread)?;
+        channels.push(world.delivery.open_live(&world.group, None, handle)?);
+    }
+    assert!(matches!(
+        world.delivery.open_live(&world.group, None, 9_999),
+        Err(DeliveryError::TooManyChannels)
+    ));
+    let closed = channels.pop().ok_or(TestError::Thread)?;
+    world.delivery.close_live(&world.group, closed)?;
+    world.delivery.open_live(&world.group, None, 9_999)?;
+    Ok(())
+}
+
+fn a_live_channel_stores_a_bounded_number_of_frames_per_bucket(
+    store: impl DeliveryStore,
+) -> Result<(), TestError> {
+    let world = World::new(store, &[])?;
+    let channel = world.delivery.open_live(&world.group, None, 1)?;
+    let frame = |delivery| LiveFrame {
+        epoch: Epoch::new(0),
+        body: body(1),
+        delivery,
+    };
+    // Start at a bucket boundary, so the whole allowance falls in one bucket.
+    let next = world_now(&world).bucket().next().ok_or(TestError::Thread)?;
+    world
+        .clock
+        .advance(next.start().saturating_duration_since(world_now(&world)));
+    for _ in 0..STORED_LIVE_FRAMES_PER_BUCKET {
+        let _ = world
+            .delivery
+            .live_frame(&world.group, channel, frame(Mode::Stored))?;
+    }
+    let before = world.log()?.len();
+    assert!(matches!(
+        world
+            .delivery
+            .live_frame(&world.group, channel, frame(Mode::Stored)),
+        Err(DeliveryError::LiveRateLimited)
+    ));
+    assert_eq!(world.log()?.len(), before);
+    // Ephemeral frames are not counted; the next bucket starts afresh.
+    let _ = world
+        .delivery
+        .live_frame(&world.group, channel, frame(Mode::Ephemeral))?;
+    world.clock.advance(pingers_time::Bucket::LENGTH);
+    let _ = world
+        .delivery
+        .live_frame(&world.group, channel, frame(Mode::Stored))?;
+    Ok(())
+}
+
 fn live_channel_needs_an_existing_group(store: impl DeliveryStore) -> Result<(), TestError> {
     let world = World::new(store, &[])?;
     let other = GroupId::from_bytes([9; 32]);
@@ -641,7 +804,7 @@ fn idle_group_expires_after_two_hours(store: impl DeliveryStore) -> Result<(), T
     assert!(matches!(
         world
             .delivery
-            .messages(&world.group, SequenceNumber::new(0)),
+            .messages(&world.group, SequenceNumber::new(0), Reader::Current),
         Err(DeliveryError::UnknownGroup)
     ));
     Ok(())
@@ -673,9 +836,9 @@ fn reads_and_live_channels_postpone_expiry(store: impl DeliveryStore) -> Result<
     world.clock.advance(Duration::from_hours(1));
     let _read = world
         .delivery
-        .messages(&world.group, SequenceNumber::new(0))?;
+        .messages(&world.group, SequenceNumber::new(0), Reader::Current)?;
     world.clock.advance(Duration::from_hours(1));
-    let _state = world.delivery.state(&world.group)?;
+    let _state = world.delivery.state(&world.group, Reader::Current)?;
     world.clock.advance(Duration::from_hours(1));
     let channel = world.delivery.open_live(&world.group, None, 1)?;
     world.clock.advance(Duration::from_hours(1));
@@ -717,10 +880,10 @@ fn party_groups_stay_idle_for_half_a_year(store: impl DeliveryStore) -> Result<(
         &|| {
             Ok(world
                 .delivery
-                .messages(&party, SequenceNumber::new(0))
+                .messages(&party, SequenceNumber::new(0), Reader::Current)
                 .map(drop)?)
         },
-        &|| Ok(world.delivery.state(&party).map(drop)?),
+        &|| Ok(world.delivery.state(&party, Reader::Current).map(drop)?),
         &|| {
             Ok(world
                 .delivery
@@ -779,7 +942,10 @@ fn a_group_uploaded_after_its_first_commit_starts_at_that_epoch(
         },
     )?;
     assert_eq!(
-        world.delivery.state(&meetup)?.map(|state| state.epoch),
+        world
+            .delivery
+            .state(&meetup, Reader::Current)?
+            .map(|state| state.epoch),
         Some(Epoch::new(1))
     );
     let stale = world.delivery.commit(
@@ -800,10 +966,129 @@ fn a_group_uploaded_after_its_first_commit_starts_at_that_epoch(
     assert_eq!(
         world
             .delivery
-            .messages(&meetup, SequenceNumber::new(0))?
+            .messages(&meetup, SequenceNumber::new(0), Reader::Current)?
             .head_epoch,
         Epoch::new(2)
     );
+    Ok(())
+}
+
+// --- who reads the log ---
+
+/// Positions and epochs of what `reader` reads after `after`, and the head epoch it is told.
+fn read_as(
+    world: &World<impl DeliveryStore>,
+    after: u64,
+    reader: Reader,
+) -> Result<(Vec<(u64, u64)>, u64), TestError> {
+    let page = world
+        .delivery
+        .messages(&world.group, SequenceNumber::new(after), reader)?;
+    Ok((
+        page.messages
+            .iter()
+            .map(|entry| (entry.sequence.get(), entry.epoch.get()))
+            .collect(),
+        page.head_epoch.get(),
+    ))
+}
+
+/// The log: 1 post (epoch 0), 2 commit (0 to 1), 3 a late post still in epoch 0, 4 post
+/// (epoch 1), 5 commit (1 to 2), 6 post (epoch 2), 7 a late post in epoch 0 again.
+fn three_epochs(store: impl DeliveryStore) -> Result<World<impl DeliveryStore>, TestError> {
+    let world = World::new(store, &[])?;
+    let _ = world.post(0, Mode::Stored, None)?;
+    let _ = world.commit(0, Urgency::Quiet)?;
+    let _ = world.post(0, Mode::Stored, None)?;
+    let _ = world.post(1, Mode::Stored, None)?;
+    let _ = world.commit(1, Urgency::Quiet)?;
+    let _ = world.post(2, Mode::Stored, None)?;
+    let _ = world.post(0, Mode::Stored, None)?;
+    Ok(world)
+}
+
+fn a_lagging_member_catches_up_one_commit_at_a_time(
+    store: impl DeliveryStore,
+) -> Result<(), TestError> {
+    let world = three_epochs(store)?;
+    // With epoch 0's key: up to the commit that ended epoch 0.
+    assert_eq!(
+        read_as(&world, 0, Reader::Behind(Epoch::new(0)))?,
+        (vec![(1, 0), (2, 0)], 1)
+    );
+    // Having applied that commit, with epoch 1's key from where it stopped: the late epoch-0
+    // post is not lost.
+    assert_eq!(
+        read_as(&world, 2, Reader::Behind(Epoch::new(1)))?,
+        (vec![(3, 0), (4, 1), (5, 1)], 2)
+    );
+    // And with the current key, the rest.
+    assert_eq!(
+        read_as(&world, 5, Reader::Current)?,
+        (vec![(6, 2), (7, 0)], 2)
+    );
+    Ok(())
+}
+
+fn a_removed_member_reads_nothing_written_after_its_removal(
+    store: impl DeliveryStore,
+) -> Result<(), TestError> {
+    // Removed by the commit that ended epoch 0, it keeps only epoch 0's key.
+    let world = three_epochs(store)?;
+    let removed = Reader::Behind(Epoch::new(0));
+    // It reads the commit that removed it, and nothing after: not the late epoch-0 posts (3
+    // and 7) it could open, whatever position it asks from.
+    assert_eq!(read_as(&world, 1, removed)?, (vec![(2, 0)], 1));
+    for after in 2..=7 {
+        assert_eq!(read_as(&world, after, removed)?, (vec![], 1));
+    }
+    assert_eq!(
+        world.delivery.head_epoch(&world.group, removed)?,
+        Epoch::new(1)
+    );
+    // The head is not overstated for a reader one epoch behind.
+    assert_eq!(
+        world
+            .delivery
+            .head_epoch(&world.group, Reader::Behind(Epoch::new(1)))?,
+        Epoch::new(2)
+    );
+    // Nor is a later snapshot shown to it.
+    let _ = world.commit_with(CommitRequest {
+        state: Some(SealedSnapshot::from_bytes(vec![0xE3])),
+        ..commit_request(2, Urgency::Quiet)
+    })?;
+    assert!(matches!(
+        world.delivery.state(&world.group, removed),
+        Err(DeliveryError::LaterEpoch)
+    ));
+    assert!(matches!(
+        world
+            .delivery
+            .state(&world.group, Reader::Behind(Epoch::new(3))),
+        Ok(Some(_))
+    ));
+    assert!(
+        world
+            .delivery
+            .state(&world.group, Reader::Current)?
+            .is_some()
+    );
+    Ok(())
+}
+
+fn reads_from_behind_do_not_keep_a_group_alive(store: impl DeliveryStore) -> Result<(), TestError> {
+    let world = World::new(store, &[])?;
+    let _ = world.commit(0, Urgency::Quiet)?;
+    world
+        .clock
+        .advance(MEETUP_IDLE_LIFETIME.saturating_sub(Duration::from_secs(1)));
+    let _ = read_as(&world, 0, Reader::Behind(Epoch::new(0)))?;
+    let _ = world
+        .delivery
+        .state(&world.group, Reader::Behind(Epoch::new(1)))?;
+    world.clock.advance(Duration::from_secs(1));
+    assert_eq!(world.delivery.expire_idle()?, vec![world.group]);
     Ok(())
 }
 
@@ -816,9 +1101,21 @@ fn earlier_epochs_keys_are_kept_newest_first(store: impl DeliveryStore) -> Resul
     let _lost = world.commit(0, Urgency::Quiet)?;
     assert_eq!(
         world.delivery.past_auth_keys(&world.group)?,
-        vec![commit_request(0, Urgency::Quiet).next_auth_key, auth_key(0)]
+        vec![
+            PastAuthKey {
+                epoch: Epoch::new(1),
+                key: commit_request(0, Urgency::Quiet).next_auth_key,
+            },
+            PastAuthKey {
+                epoch: Epoch::new(0),
+                key: auth_key(0),
+            },
+        ]
     );
-    assert_eq!(world.delivery.head_epoch(&world.group)?, Epoch::new(2));
+    assert_eq!(
+        world.delivery.head_epoch(&world.group, Reader::Current)?,
+        Epoch::new(2)
+    );
     world.delivery.delete_group(&world.group)?;
     assert!(matches!(
         world.delivery.past_auth_keys(&world.group),
@@ -835,7 +1132,7 @@ fn delete_removes_the_group_and_closes_its_channels(
     world.delivery.delete_group(&world.group)?;
     assert_eq!(world.delivery.live_channels(&world.group)?, 0);
     assert!(matches!(
-        world.delivery.state(&world.group),
+        world.delivery.state(&world.group, Reader::Current),
         Err(DeliveryError::UnknownGroup)
     ));
     assert!(matches!(
@@ -853,7 +1150,7 @@ fn delete_removes_the_group_and_closes_its_channels(
         at_zero(GroupLifetime::Meetup),
     )?;
     assert_eq!(world.log()?, vec![]);
-    assert_eq!(world.delivery.state(&world.group)?, None);
+    assert_eq!(world.delivery.state(&world.group, Reader::Current)?, None);
     let posted = world.post(0, Mode::Stored, Some(Urgency::Alert))?;
     assert!(posted.wakes.is_empty());
     Ok(())
@@ -909,15 +1206,15 @@ fn commit_snapshot_replaces_the_state_for_the_next_epoch(
     store: impl DeliveryStore,
 ) -> Result<(), TestError> {
     let world = World::new(store, &[])?;
-    let first = world.delivery.state(&world.group)?;
+    let first = world.delivery.state(&world.group, Reader::Current)?;
     assert_eq!(first.as_ref().map(|state| state.epoch), Some(Epoch::new(0)));
     let _without = world.commit(0, Urgency::Quiet)?;
-    let kept = world.delivery.state(&world.group)?;
+    let kept = world.delivery.state(&world.group, Reader::Current)?;
     assert_eq!(kept, first, "a commit without a snapshot keeps the old one");
     let mut request = commit_request(1, Urgency::Quiet);
     request.state = Some(SealedSnapshot::from_bytes(vec![0xE2]));
     let _with = world.commit_with(request)?;
-    let replaced = world.delivery.state(&world.group)?;
+    let replaced = world.delivery.state(&world.group, Reader::Current)?;
     assert_eq!(
         replaced.as_ref().map(|state| state.epoch),
         Some(Epoch::new(2))
@@ -936,9 +1233,11 @@ fn unknown_group_is_reported_everywhere(store: impl DeliveryStore) -> Result<(),
         |result: Result<(), DeliveryError>| matches!(result, Err(DeliveryError::UnknownGroup));
     let delivery = &world.delivery;
     assert!(unknown(delivery.auth_key(&other).map(drop)));
-    assert!(unknown(delivery.state(&other).map(drop)));
+    assert!(unknown(delivery.state(&other, Reader::Current).map(drop)));
     assert!(unknown(
-        delivery.messages(&other, SequenceNumber::new(0)).map(drop)
+        delivery
+            .messages(&other, SequenceNumber::new(0), Reader::Current)
+            .map(drop)
     ));
     assert!(unknown(
         delivery
@@ -1018,11 +1317,18 @@ for_each_store!(
     a_wake_is_due_only_while_its_subscription_stands,
     live_frame_goes_to_the_other_channels,
     closed_channel_gets_nothing_and_cannot_send,
+    a_removal_closes_the_removed_members_live_channel,
+    a_group_holds_a_bounded_number_of_subscriptions,
+    a_group_has_a_bounded_number_of_live_channels,
+    a_live_channel_stores_a_bounded_number_of_frames_per_bucket,
     live_channel_needs_an_existing_group,
     idle_group_expires_after_two_hours,
     writes_postpone_expiry,
     reads_and_live_channels_postpone_expiry,
     party_groups_stay_idle_for_half_a_year,
+    a_lagging_member_catches_up_one_commit_at_a_time,
+    a_removed_member_reads_nothing_written_after_its_removal,
+    reads_from_behind_do_not_keep_a_group_alive,
     earlier_epochs_keys_are_kept_newest_first,
     a_group_uploaded_after_its_first_commit_starts_at_that_epoch,
     delete_removes_the_group_and_closes_its_channels,
@@ -1091,7 +1397,7 @@ fn sqlite_store_survives_reopening() -> Result<(), TestError> {
     let reopened: Delivery<_, Live> =
         Delivery::new(SqliteDeliveryStore::open(&path)?, Arc::new(clock));
     let group = GroupId::from_bytes([7; 32]);
-    let read = reopened.messages(&group, SequenceNumber::new(0))?;
+    let read = reopened.messages(&group, SequenceNumber::new(0), Reader::Current)?;
     assert_eq!(read.head_epoch, Epoch::new(1));
     assert_eq!(read.messages.len(), 1);
     let posted = reopened.post(

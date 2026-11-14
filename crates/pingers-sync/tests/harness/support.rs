@@ -208,7 +208,11 @@ impl GroupStandIn {
                     .unwrap_or(0);
                 let messages = self
                     .delivery
-                    .messages(&group(id)?, SequenceNumber::new(after))
+                    .messages(
+                        &group(id)?,
+                        SequenceNumber::new(after),
+                        pingers_delivery::Reader::Current,
+                    )
                     .ok()?;
                 encoded(200, &messages)
             }
@@ -241,7 +245,10 @@ impl GroupStandIn {
                     Err(_) => response(404, Vec::new()),
                 }
             }
-            ("GET", ["groups", id, "state"]) => match self.delivery.state(&group(id)?) {
+            ("GET", ["groups", id, "state"]) => match self
+                .delivery
+                .state(&group(id)?, pingers_delivery::Reader::Current)
+            {
                 Ok(Some(state)) => encoded(200, &state),
                 Ok(None) | Err(_) => response(404, Vec::new()),
             },

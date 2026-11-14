@@ -797,6 +797,112 @@ async fn group_logs_take_one_commit_per_epoch_and_rotate_the_key() -> TestResult
     server.stop().await
 }
 
+/// Positions read with the creator's current key after `after`, and the head epoch told.
+async fn read_log(
+    server: &Running,
+    creator: &Creator,
+    after: u64,
+) -> Result<(Vec<u64>, Epoch), TestError> {
+    let answer = call(
+        server,
+        &creator.request("GET", &format!("/msgs?after={after}"), Vec::new())?,
+    )
+    .await?;
+    assert_eq!(answer.status.get(), 200);
+    let page = GroupMessages::decode(&answer.body)?;
+    Ok((
+        page.messages
+            .iter()
+            .map(|entry| entry.sequence.get())
+            .collect(),
+        page.head_epoch,
+    ))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_old_key_reads_up_to_the_commit_that_ended_its_epoch() -> TestResult {
+    let server = started(DeliveryLive).await?;
+    let wallet = Wallet::fetch(&server, 1, 1).await?;
+    let mut creator = create_group(&server, &wallet, 21).await?;
+    let keys: Vec<LogAuthKeyPair> = (0..3_u8)
+        .map(|fill| LogAuthKeyPair::from_bytes(Zeroizing::new([fill.saturating_add(21); 32])))
+        .collect();
+    let post = |epoch: u64| {
+        AppMessage {
+            epoch: Epoch::new(epoch),
+            body: MlsMessageBytes::from_bytes(vec![0xA0; 3]),
+            delivery: Mode::Stored,
+            wake: None,
+        }
+        .encode()
+    };
+    // 1 post, 2 commit to epoch 1 (removing someone), 3 post, 4 commit to epoch 2 with a new
+    // snapshot, 5 post.
+    for (epoch, next) in [(0_u64, 1_usize), (1, 2)] {
+        let posted = call(&server, &creator.request("POST", "/msgs", post(epoch)?)?).await?;
+        assert_eq!(posted.status.get(), 200);
+        let next_key = keys.get(next).ok_or("key")?;
+        let body = CommitRequest {
+            state: (next == 2).then(|| SealedSnapshot::from_bytes(vec![0xE2])),
+            ..CommitRequest::decode(&commit_body(epoch, next_key)?)?
+        }
+        .encode()?;
+        let committed = call(&server, &creator.request("POST", "/commit", body)?).await?;
+        assert_eq!(committed.status.get(), 200);
+        creator.key = LogAuthKeyPair::from_bytes(Zeroizing::new(
+            [u8::try_from(next).map_err(|_| "key")?.saturating_add(21); 32],
+        ));
+    }
+    let posted = call(&server, &creator.request("POST", "/msgs", post(2)?)?).await?;
+    assert_eq!(posted.status.get(), 200);
+
+    // The member removed at the end of epoch 0 still has that key: it reads up to the commit
+    // that removed it and nothing after, from wherever it asks, and is not shown the snapshot
+    // of a later epoch.
+    let current = core::mem::replace(
+        &mut creator.key,
+        LogAuthKeyPair::from_bytes(Zeroizing::new([21; 32])),
+    );
+    assert_eq!(
+        read_log(&server, &creator, 0).await?,
+        (vec![1, 2], Epoch::new(1))
+    );
+    for after in [2, 3, 4] {
+        assert_eq!(
+            read_log(&server, &creator, after).await?,
+            (vec![], Epoch::new(1))
+        );
+    }
+    let state = call(&server, &creator.request("GET", "/state", Vec::new())?).await?;
+    assert_eq!(state.status.get(), 403);
+    let late = call(
+        &server,
+        &creator.request("POST", "/commit", commit_body(0, &current)?)?,
+    )
+    .await?;
+    assert_eq!(
+        CommitResponse::decode(&late.body)?,
+        CommitResponse::Conflict {
+            head_epoch: Epoch::new(1)
+        }
+    );
+    // A member that lagged with epoch 1's key catches up from the same point.
+    creator.key = LogAuthKeyPair::from_bytes(Zeroizing::new([22; 32]));
+    assert_eq!(
+        read_log(&server, &creator, 2).await?,
+        (vec![3, 4], Epoch::new(2))
+    );
+    // The current key reads everything.
+    creator.key = current;
+    assert_eq!(
+        read_log(&server, &creator, 0).await?,
+        (vec![1, 2, 3, 4, 5], Epoch::new(2))
+    );
+    let state = call(&server, &creator.request("GET", "/state", Vec::new())?).await?;
+    assert_eq!(GroupState::decode(&state.body)?.epoch, Epoch::new(2));
+    server.stop().await
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn subscriptions_are_put_and_deleted_by_their_own_id() -> TestResult {
     use pingers_proto::{
@@ -896,6 +1002,40 @@ async fn live_channels_fan_out_frames_and_commits_to_the_other_members() -> Test
     let unknown = call(&server, &creator.request("POST", &path(9), uplink)?).await?;
     assert_eq!(unknown.status.get(), 404);
     drop(a_sender);
+    server.stop().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_removal_commit_ends_the_removed_members_live_channel() -> TestResult {
+    let server = started(DeliveryLive).await?;
+    let wallet = Wallet::fetch(&server, 1, 1).await?;
+    let creator = create_group(&server, &wallet, 31).await?;
+    let live_head = |sub: u8| {
+        creator.request(
+            "POST",
+            &format!("/live?sub={}", hex::encode([sub; 16])),
+            Vec::new(),
+        )
+    };
+    let (_removed_sender, removed_client, removed_body) =
+        open_live_with(&server, &live_head(1)?).await?;
+    let (_staying_sender, staying_client, mut staying_body) =
+        open_live_with(&server, &live_head(2)?).await?;
+    let body = CommitRequest {
+        subscriptions_removed: vec![pingers_proto::SubscriptionId::from_bytes([1; 16])],
+        ..CommitRequest::decode(&commit_body(
+            0,
+            &LogAuthKeyPair::from_bytes(Zeroizing::new([32; 32])),
+        )?)?
+    }
+    .encode()?;
+    let committed = call(&server, &creator.request("POST", "/commit", body)?).await?;
+    assert_eq!(committed.status.get(), 200);
+    // The removed member's channel ends without the commit; the other member gets it.
+    super::ends_with_nothing_but_the_final_chunk(&removed_client, removed_body).await?;
+    let mut decoder = staying_client.response_decoder();
+    let payload = next_payload(&mut staying_body, &mut decoder).await?;
+    assert_eq!(LiveFrame::decode(&payload)?.delivery, Mode::Stored);
     server.stop().await
 }
 
