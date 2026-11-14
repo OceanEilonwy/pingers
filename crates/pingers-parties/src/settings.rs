@@ -19,7 +19,9 @@ pub enum PostQuantum {
 }
 
 impl PostQuantum {
-    pub(crate) const fn suite(self) -> CipherSuitePolicy {
+    /// The pingers-mls ciphersuite policy for this setting, for the Party group and its Meetups.
+    #[must_use]
+    pub const fn suite(self) -> CipherSuitePolicy {
         match self {
             Self::Classical => CipherSuitePolicy::Classical,
             Self::QuantumResistant => CipherSuitePolicy::QuantumResistant,

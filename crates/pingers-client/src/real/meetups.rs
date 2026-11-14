@@ -25,8 +25,7 @@ use pingers_meetup::{
 use pingers_meetup_session::{
     AddMember, CreateMeetup, MeetupHandle, MeetupScreen, MeetupView, Runtime, create, discard_stale,
 };
-use pingers_mls::CipherSuitePolicy;
-use pingers_parties::{PartyLifecycle, PostQuantum};
+use pingers_parties::PartyLifecycle;
 use pingers_presence::{Admission, MeetupKey, SpotRef};
 use pingers_proto::{ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, WelcomeBytes};
 use pingers_store::{LocationRequestState, RequestDirection, Session};
@@ -133,13 +132,10 @@ impl Meetups {
         let (group, suite) = self
             .backend
             .store(move |session, clock, rng| {
-                let suite = match PartyLifecycle::new(session, clock)
+                let suite = PartyLifecycle::new(session, clock)
                     .settings(&spot.party)?
                     .post_quantum
-                {
-                    PostQuantum::Classical => CipherSuitePolicy::Classical,
-                    PostQuantum::QuantumResistant => CipherSuitePolicy::QuantumResistant,
-                };
+                    .suite();
                 let mut group = [0_u8; GroupId::LENGTH];
                 rng.fill_bytes(&mut group);
                 Ok((GroupId::from_bytes(group), suite))
