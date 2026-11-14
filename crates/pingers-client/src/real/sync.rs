@@ -407,10 +407,10 @@ impl Net {
     /// [`Unavailable::Sync`] without a built-in server; [`ClientError::Sync`]; a store failure.
     pub(crate) async fn built_in_params(&self) -> Result<(), ClientError> {
         let link = self.servers.built_in_link().await?;
-        if link.known_params().is_some() {
+        let Some(fetched) = link.fetch_params_once().await? else {
             return Ok(());
-        }
-        let map_host = link.server_params().await?.map_host;
+        };
+        let map_host = fetched.map_host;
         self.backend
             .store(move |session, _clock, _rng| match &map_host {
                 Some(url) => records::write(session, &Key::ServerMapHost, |writer| {
@@ -436,18 +436,13 @@ impl Net {
         }
     }
 
-    /// The map host the built-in server advertises: from this process's `/v1/params`, or as
-    /// last recorded.
+    /// The map host the built-in server advertises, as last recorded (each process records it
+    /// when it first reads the parameters).
     ///
     /// # Errors
     ///
     /// A storage failure, or a corrupt record.
     pub(crate) async fn map_host(&self) -> Result<Option<MapHostUrl>, ClientError> {
-        if let Ok(link) = self.servers.built_in_link().await
-            && let Some(params) = link.known_params()
-        {
-            return Ok(params.map_host);
-        }
         self.backend
             .store(|session, _clock, _rng| {
                 records::read(session, &Key::ServerMapHost, |reader| {

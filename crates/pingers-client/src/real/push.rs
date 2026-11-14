@@ -98,9 +98,17 @@ impl Link {
         *lock(&self.learned.params) = Some(params);
     }
 
-    /// The parameters this process already read, if any.
-    pub(crate) fn known_params(&self) -> Option<Params> {
-        lock(&self.learned.params).clone()
+    /// The server's parameters if this call is the one that fetched them for this process;
+    /// `None` when they were already known.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Sync`].
+    pub(crate) async fn fetch_params_once(&self) -> Result<Option<Params>, ClientError> {
+        if lock(&self.learned.params).is_some() {
+            return Ok(None);
+        }
+        self.server_params().await.map(Some)
     }
 
     /// Who runs the server and its push relay, from the parameters this process read; `None`
