@@ -34,7 +34,7 @@ impl HttpPushRelay {
     /// A client that never follows redirects: a relay that redirects is misconfigured, and
     /// following would send the credential elsewhere. `roots` are trusted besides the
     /// system's (a self-hosted relay's CA, or the in-process harness's test CA); relay URLs
-    /// are `https://` by construction (`RelayUrl`).
+    /// are `https://`, or plain `http://` only to a loopback address (`PushRelayUrl`).
     pub(crate) fn new(
         timer: Arc<dyn Timer>,
         timeout: Duration,

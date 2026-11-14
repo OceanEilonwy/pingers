@@ -17,8 +17,8 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use pingers_ohttp::{BinaryRequest, ChunkPosition, ChunkedClient, GatewayKey, OpenedChunk};
 use pingers_proto::ServerId;
 use pingers_server::{
-    LiveChannel, LiveFrame, LiveRefused, OhttpKeys, Outside, RelayAllowList, Required, RngSeed,
-    ServerConfig, serve_with,
+    Listeners, LiveChannel, LiveFrame, LiveRefused, OhttpKeys, Outside, RelayAllowList, Required,
+    RngSeed, ServerConfig, serve_with,
 };
 use pingers_testkit::{HarnessConfig, InProcessHarness, seeded_rng, test_clock};
 use tokio::sync::{mpsc, watch};
@@ -91,19 +91,32 @@ struct Stack {
     relay_task: tokio::task::JoinHandle<()>,
 }
 
-async fn start_behind_relay() -> Result<Stack, TestError> {
+/// Which of the server's listeners the relay forwards to.
+#[derive(Clone, Copy)]
+enum RelayTarget {
+    /// `[ohttp] listen`, as deployed.
+    Gateway,
+    /// `listen`: a misconfigured relay, or a public reverse proxy, trying the public API.
+    Public,
+}
+
+async fn start_behind_relay(target: RelayTarget) -> Result<Stack, TestError> {
     let key = GatewayKey::generate(1, &mut seeded_rng(1))?;
     let key_config = key.config();
-    let server_listener = tokio::net::TcpListener::bind(SocketAddr::new(LOOPBACK, 0)).await?;
-    let server = server_listener.local_addr()?;
     let relay_listener = tokio::net::TcpListener::bind(SocketAddr::new(LOOPBACK, 0)).await?;
     let relay = relay_listener.local_addr()?;
     let config = ServerConfig::new(Required {
-        listen: server,
+        listen: SocketAddr::new(LOOPBACK, 0),
         server_id: ServerId::new("https://pingers.test".to_owned())?,
         ohttp_keys: OhttpKeys::new(vec![key])?,
+        gateway_listen: SocketAddr::new(LOOPBACK, 0),
         relays: RelayAllowList::new(vec![LOOPBACK])?,
     });
+    let listeners = Listeners::bind(&config).await?;
+    let server = match target {
+        RelayTarget::Gateway => listeners.gateway.local_addr()?,
+        RelayTarget::Public => listeners.public.local_addr()?,
+    };
     let clock = test_clock();
     let outside = Outside {
         clock: clock.clone(),
@@ -114,7 +127,7 @@ async fn start_behind_relay() -> Result<Stack, TestError> {
     let (stop, stopped) = watch::channel(());
     let mut server_stopped = stopped.clone();
     let mut relay_stopped = stopped;
-    let server_task = tokio::spawn(serve_with(config, outside, server_listener, async move {
+    let server_task = tokio::spawn(serve_with(config, outside, listeners, async move {
         let _ = server_stopped.changed().await;
     }));
     let relay_task = tokio::spawn(pingers_testkit::harness::run_ohttp_relay(
@@ -141,7 +154,7 @@ async fn a_live_channel_echoes_through_the_relay_frame_by_frame() -> TestResult 
         stop,
         server_task,
         relay_task,
-    } = start_behind_relay().await?;
+    } = start_behind_relay(RelayTarget::Gateway).await?;
     let stream = tokio::net::TcpStream::connect(relay).await?;
     let (mut client, connection) =
         hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(stream)).await?;
@@ -216,15 +229,86 @@ async fn a_live_channel_echoes_through_the_relay_frame_by_frame() -> TestResult 
     Ok(())
 }
 
+/// What the relay answered to a key config fetch and to a one-shot request for it.
+struct RelayAnswers {
+    key_status: StatusCode,
+    key_config: Vec<u8>,
+    one_shot: StatusCode,
+}
+
+/// Fetches the key config through the relay, then sends one sealed request through it.
+async fn ask_through_relay(stack: Stack) -> Result<RelayAnswers, TestError> {
+    let stream = tokio::net::TcpStream::connect(stack.relay).await?;
+    let (mut client, connection) =
+        hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(stream)).await?;
+    let connection = tokio::spawn(connection);
+    let fetch = Request::builder()
+        .method(Method::GET)
+        .uri("http://relay/v1/ohttp/config")
+        .body(Body::empty())?;
+    let response = tokio::time::timeout(STEP, client.send_request(fetch)).await??;
+    let key_status = response.status();
+    let mut body = Body::new(response.into_body());
+    let mut key_config = Vec::new();
+    while let Some(bytes) = next_data(&mut body).await? {
+        key_config.extend_from_slice(&bytes);
+    }
+    let head = BinaryRequest {
+        method: "GET".to_owned(),
+        path: "/v1/ohttp/config".to_owned(),
+        headers: Vec::new(),
+        body: Vec::new(),
+    };
+    let sealed = pingers_ohttp::encapsulate_request(&stack.key_config, &head, &mut seeded_rng(4))?;
+    let post = Request::builder()
+        .method(Method::POST)
+        .uri("http://relay/ohttp")
+        .header(CONTENT_TYPE, "message/ohttp-req")
+        .body(Body::from(sealed.message))?;
+    let one_shot = tokio::time::timeout(STEP, client.send_request(post))
+        .await??
+        .status();
+    drop(client);
+    stack.stop.send(())?;
+    tokio::time::timeout(STEP, stack.server_task).await???;
+    tokio::time::timeout(STEP, stack.relay_task).await??;
+    connection.abort();
+    Ok(RelayAnswers {
+        key_status,
+        key_config,
+        one_shot,
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_relay_reaches_the_gateway_only_on_its_own_listener() -> TestResult {
+    let deployed = start_behind_relay(RelayTarget::Gateway).await?;
+    let expected_config = deployed.key_config.encoded().to_vec();
+    let answers = ask_through_relay(deployed).await?;
+    assert_eq!(answers.key_status, StatusCode::OK);
+    assert_eq!(answers.key_config, expected_config);
+    assert_eq!(answers.one_shot, StatusCode::OK);
+
+    // Pointed at the public listener (as a public reverse proxy would be), the key config is
+    // there, but the gateway is not.
+    let misrouted = ask_through_relay(start_behind_relay(RelayTarget::Public).await?).await?;
+    assert_eq!(misrouted.key_status, StatusCode::OK);
+    assert_eq!(misrouted.key_config, expected_config);
+    assert_eq!(misrouted.one_shot, StatusCode::NOT_FOUND);
+    Ok(())
+}
+
 #[test]
 fn the_harness_starts_and_stops_cleanly() -> TestResult {
     let harness = InProcessHarness::start(&HarnessConfig::default())?;
     let endpoints = harness.endpoints().clone();
     assert_ne!(endpoints.server, endpoints.ohttp_relay);
     assert!(std::net::TcpStream::connect(endpoints.server).is_ok());
+    assert!(std::net::TcpStream::connect(endpoints.gateway).is_ok());
     harness.shutdown();
     for address in [
         endpoints.server,
+        endpoints.gateway,
         endpoints.ohttp_relay,
         endpoints.push_relay,
     ] {

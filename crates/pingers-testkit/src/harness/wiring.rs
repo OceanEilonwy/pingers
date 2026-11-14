@@ -274,6 +274,7 @@ fn map_host() -> Result<pingers_proto::MapHostUrl, HarnessError> {
 /// Binds, generates keys, and starts the three services on their own runtime thread.
 pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started, HarnessError> {
     let server_listener = bind(config, Service::Server)?;
+    let gateway_listener = bind(config, Service::Server)?;
     let relay_listener = bind(config, Service::OhttpRelay)?;
     let push_listener = bind(config, Service::PushRelay)?;
     let server = address(&server_listener, Service::Server)?;
@@ -298,6 +299,7 @@ pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started,
     let server_id = format!("https://{server}");
     let endpoints = Endpoints {
         server,
+        gateway: address(&gateway_listener, Service::Server)?,
         ohttp_relay: address(&relay_listener, Service::OhttpRelay)?,
         push_relay: push_address,
         push_relay_ca: tls.ca_pem.clone(),
@@ -316,9 +318,10 @@ pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started,
         String::from_utf8(PUSH_CREDENTIAL.to_vec()).map_err(|_| HarnessError::Keys {
             service: Service::PushRelay,
         })?;
-    // On loopback the relay's connections come from the bind address, which is also where
-    // test clients come from: the relay-only rule cannot tell them apart here. The push relay
-    // is HTTPS with the test CA's certificate, which the server is told to trust.
+    // The relay forwards to the gateway's own listener, which test clients have no reason to
+    // reach; on loopback the relay's connections come from the bind address, so the address
+    // allow-list cannot tell it from a client there. The push relay is HTTPS with the test
+    // CA's certificate, which the server is told to trust.
     let server_config = ServerConfig {
         request_timeout: REQUEST_TIMEOUT,
         metrics: AddressList::new(vec![config.bind]),
@@ -327,7 +330,7 @@ pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started,
         push_relays: ListedRelays::new([(
             HARNESS_PUSH_RELAY_ID,
             RelayTarget {
-                url: push_url,
+                url: push_url.into(),
                 credential: RelayCredential::new(credential),
             },
         )]),
@@ -338,6 +341,7 @@ pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started,
                 service: Service::Server,
             })?,
             ohttp_keys: OhttpKeys::new(vec![gateway_key]).map_err(keys_error)?,
+            gateway_listen: address(&gateway_listener, Service::Server)?,
             relays: RelayAllowList::new(vec![config.bind]).map_err(keys_error)?,
         })
     };
@@ -359,6 +363,7 @@ pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started,
     let running = spawn(
         Listeners {
             server: server_listener,
+            gateway: gateway_listener,
             relay: relay_listener,
             push: push_listener,
         },
@@ -372,9 +377,10 @@ pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started,
     Ok(Started { endpoints, running })
 }
 
-/// The three bound listeners.
+/// The bound listeners: the server's two, the relay's and the push relay's.
 struct Listeners {
     server: TcpListener,
+    gateway: TcpListener,
     relay: TcpListener,
     push: TcpListener,
 }
@@ -395,9 +401,10 @@ fn spawn(
     outside: HarnessOutside,
     push: PushService,
 ) -> Result<Running, HarnessError> {
-    let server = address(&listeners.server, Service::Server)?;
+    let gateway = address(&listeners.gateway, Service::Server)?;
     let Listeners {
         server: server_listener,
+        gateway: gateway_listener,
         relay: relay_listener,
         push: push_listener,
     } = listeners;
@@ -407,14 +414,17 @@ fn spawn(
         .enable_all()
         .build()
         .map_err(|source| HarnessError::Runtime { source })?;
-    let (server_listener, relay_listener, push_listener) = {
+    let (server_listeners, relay_listener, push_listener) = {
         let _entered = runtime.enter();
         let tokio_listener = |listener, service| {
             tokio::net::TcpListener::from_std(listener)
                 .map_err(|source| HarnessError::Bind { service, source })
         };
         (
-            tokio_listener(server_listener, Service::Server)?,
+            pingers_server::Listeners {
+                public: tokio_listener(server_listener, Service::Server)?,
+                gateway: tokio_listener(gateway_listener, Service::Server)?,
+            },
             tokio_listener(relay_listener, Service::OhttpRelay)?,
             tokio_listener(push_listener, Service::PushRelay)?,
         )
@@ -438,10 +448,10 @@ fn spawn(
                 let server_task = pingers_server::serve_with(
                     server_config,
                     outside,
-                    server_listener,
+                    server_listeners,
                     server_done,
                 );
-                let relay = super::relay::serve(relay_listener, server, relay_done);
+                let relay = super::relay::serve(relay_listener, gateway, relay_done);
                 let push = async move {
                     let router = pingers_push_relay::http::router(Arc::new(push.relay));
                     super::tls::serve(push_listener, push.tls, router, push_done).await;

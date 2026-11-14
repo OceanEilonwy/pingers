@@ -85,6 +85,9 @@ impl Default for HarnessConfig {
 pub struct Endpoints {
     /// pingers-server: identified endpoints directly, anonymous ones only via the relay.
     pub server: SocketAddr,
+    /// pingers-server's gateway listener (`POST /ohttp`, `GET /v1/ohttp/config`), which only
+    /// the relay forwards to.
+    pub gateway: SocketAddr,
     /// The OHTTP relay clients send anonymous requests to (`POST /ohttp`, and
     /// `GET /v1/ohttp/config` for the key config).
     pub ohttp_relay: SocketAddr,

@@ -9,7 +9,10 @@ use pingers_ohttp::GatewayKey;
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng as _;
 
-use super::{AddressList, ConfigError, Logging, OhttpKeys, RelayAllowList, ServerConfig};
+use super::{
+    AddressList, ConfigError, Logging, OhttpKeys, RelayAllowList, ServedKey, ServerConfig,
+    TrustedProxies,
+};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 type Expected = fn(&ConfigError) -> bool;
@@ -20,7 +23,7 @@ const SECRET_B: &str = "02020202020202020202020202020202020202020202020202020202
 fn minimal(keys: &str) -> String {
     format!(
         "listen = \"127.0.0.1:8080\"\nserver_id = \"https://pingers.test\"\n\
-         [ohttp]\nrelays = [\"10.0.0.5\"]\n{keys}"
+         [ohttp]\nlisten = \"127.0.0.1:9471\"\nrelays = [\"10.0.0.5\"]\n{keys}"
     )
 }
 
@@ -50,7 +53,7 @@ fn every_field_is_read() -> TestResult {
          counts_interval_s = 60\n\
          request_timeout_s = 5\n\
          [metrics]\nallow = [\"127.0.0.1\"]\n\
-         [ohttp]\nrelays = [\"fd00::5\"]\n{}{}",
+         [ohttp]\nlisten = \"[::1]:9001\"\nrelays = [\"fd00::5\"]\ntrusted_proxies = [\"::1\", \"127.0.0.1\"]\nserved_key_id = 3\n{}{}",
         key(7, SECRET_A),
         key(3, SECRET_B)
     ))?;
@@ -63,9 +66,39 @@ fn every_field_is_read() -> TestResult {
     assert_eq!(config.request_timeout, Duration::from_secs(5));
     assert!(config.metrics.contains(IpAddr::V4(Ipv4Addr::LOCALHOST)));
     assert!(config.relays.allows("fd00::5".parse()?));
-    // The first key listed is the one served; the second still opens requests.
-    assert_eq!(config.ohttp_keys.served().key_id(), 7);
+    assert_eq!(config.gateway_listen, "[::1]:9001".parse()?);
+    assert_eq!(
+        config.trusted_proxies,
+        TrustedProxies::new(vec![
+            IpAddr::V6(Ipv6Addr::LOCALHOST),
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        ])
+    );
+    // served_key_id picks the second key listed; the first still opens requests.
+    assert_eq!(config.ohttp_keys.served().key_id(), 3);
+    assert_eq!(
+        config
+            .ohttp_keys
+            .configs()
+            .iter()
+            .map(pingers_ohttp::KeyConfig::key_id)
+            .collect::<Vec<_>>(),
+        [7, 3]
+    );
     assert_eq!(config.ohttp_keys.into_keys().len(), 2);
+    Ok(())
+}
+
+#[test]
+fn without_served_key_id_the_first_key_is_served_and_no_proxy_is_trusted() -> TestResult {
+    let config = ServerConfig::parse(&minimal(&format!(
+        "{}{}",
+        key(7, SECRET_A),
+        key(3, SECRET_B)
+    )))?;
+    assert_eq!(config.ohttp_keys.served().key_id(), 7);
+    assert_eq!(config.trusted_proxies, TrustedProxies::default());
+    assert_eq!(config.gateway_listen, "127.0.0.1:9471".parse()?);
     Ok(())
 }
 
@@ -82,10 +115,22 @@ fn the_same_secret_gives_the_same_served_config() -> TestResult {
 #[test]
 fn bad_files_are_refused_with_the_rule_they_break() {
     let with_key = minimal(&key(1, SECRET_A));
-    let cases: [(String, Expected); 8] = [
+    let cases: [(String, Expected); 11] = [
         (minimal(""), |error| {
             matches!(error, ConfigError::NoOhttpKey)
         }),
+        (minimal("served_key_id = 1\n"), |error| {
+            matches!(error, ConfigError::NoOhttpKey)
+        }),
+        (
+            minimal(&format!("served_key_id = 2\n{}", key(1, SECRET_A))),
+            |error| matches!(error, ConfigError::UnknownServedKey { key_id: 2 }),
+        ),
+        // The gateway's own listener is required: there is no way to put it on the public one.
+        (
+            with_key.replace("listen = \"127.0.0.1:9471\"\n", ""),
+            |error| matches!(error, ConfigError::Syntax { .. }),
+        ),
         (
             minimal(&format!("{}{}", key(1, SECRET_A), key(1, SECRET_B))),
             |error| matches!(error, ConfigError::DuplicateKeyId { key_id: 1 }),
@@ -95,7 +140,7 @@ fn bad_files_are_refused_with_the_rule_they_break() {
         }),
         (
             format!(
-                "listen = \"127.0.0.1:1\"\nserver_id = \"https://p.test\"\n[ohttp]\nrelays = []\n{}",
+                "listen = \"127.0.0.1:1\"\nserver_id = \"https://p.test\"\n[ohttp]\nlisten = \"127.0.0.1:2\"\nrelays = []\n{}",
                 key(1, SECRET_A)
             ),
             |error| matches!(error, ConfigError::NoRelays),
@@ -124,7 +169,7 @@ fn bad_files_are_refused_with_the_rule_they_break() {
         }),
         (
             format!(
-                "server_id = \"https://p.test\"\nlisten = \"127.0.0.1:1\"\n\n[ohttp]\nrelays = [\"not an address\"]\n{}",
+                "server_id = \"https://p.test\"\nlisten = \"127.0.0.1:1\"\n\n[ohttp]\nrelays = [\"not an address\"]\nlisten = \"127.0.0.1:2\"\n{}",
                 key(1, SECRET_A)
             ),
             |error| matches!(error, ConfigError::Syntax { line: 5 }),
@@ -188,11 +233,43 @@ fn keys_built_in_code_follow_the_same_rules() -> TestResult {
         ]),
         Err(ConfigError::DuplicateKeyId { key_id: 4 })
     ));
+    // A duplicate is refused even when the served id names a key that exists.
+    assert!(matches!(
+        OhttpKeys::serving(
+            vec![
+                GatewayKey::generate(4, &mut rng)?,
+                GatewayKey::generate(5, &mut rng)?,
+                GatewayKey::generate(4, &mut rng)?
+            ],
+            ServedKey::Id(5)
+        ),
+        Err(ConfigError::DuplicateKeyId { key_id: 4 })
+    ));
+    let second = OhttpKeys::serving(
+        vec![
+            GatewayKey::generate(4, &mut rng)?,
+            GatewayKey::generate(5, &mut rng)?,
+        ],
+        ServedKey::Id(5),
+    )?;
+    assert_eq!(second.served().key_id(), 5);
+    assert!(matches!(
+        OhttpKeys::serving(Vec::new(), ServedKey::Id(5)),
+        Err(ConfigError::NoOhttpKey)
+    ));
     Ok(())
 }
 
 fn relay(relay_id: u16, url: &str) -> String {
-    format!("[[push_relays]]\nrelay_id = {relay_id}\nurl = \"{url}\"\ncredential = \"c\"\n")
+    relay_at(relay_id, url, "https://public.example")
+}
+
+/// A push relay called at `url` that devices reach at `public_url`.
+fn relay_at(relay_id: u16, url: &str, public_url: &str) -> String {
+    format!(
+        "[[push_relays]]\nrelay_id = {relay_id}\nurl = \"{url}\"\npublic_url = \"{public_url}\"\n\
+         credential = \"c\"\n"
+    )
 }
 
 #[test]
@@ -287,6 +364,61 @@ fn bad_wiring_fields_are_refused() {
 }
 
 #[test]
+fn a_push_relay_on_this_machine_is_called_over_loopback_and_advertised_by_its_public_url()
+-> TestResult {
+    use pingers_mailbox::RelayDirectory as _;
+    use pingers_proto::{RelayId, RelayRef};
+
+    let advertised = format!(
+        "key_config_hash = \"{}\"\noperator = \"Me\"\n",
+        pingers_proto::KeyConfigHash::from_bytes([0xcd; 32]).to_pin()
+    );
+    let config = ServerConfig::parse(&format!(
+        "{}{}{advertised}",
+        minimal(&key(1, SECRET_A)),
+        relay_at(2, "http://127.0.0.1:9472", "https://push.example"),
+    ))?;
+    let target = config
+        .push_relays
+        .resolve(&RelayRef::Listed(RelayId::new(2)))
+        .ok_or("relay 2 not listed")?;
+    assert_eq!(target.url.as_str(), "http://127.0.0.1:9472");
+    let listed = config.advertised_push_relays.first().ok_or("advertised")?;
+    assert_eq!(listed.url.as_str(), "https://push.example");
+
+    let with_key = minimal(&key(1, SECRET_A));
+    let cases: [(String, Expected); 3] = [
+        // Devices cannot be told a loopback URL: every relay names its public one.
+        (
+            format!(
+                "{with_key}[[push_relays]]\nrelay_id = 2\nurl = \"http://127.0.0.1:9472\"\n\
+                 credential = \"c\"\n{advertised}"
+            ),
+            |error| matches!(error, ConfigError::Syntax { .. }),
+        ),
+        (
+            format!(
+                "{with_key}{}{advertised}",
+                relay_at(2, "https://push.example", "http://push.example")
+            ),
+            |error| matches!(error, ConfigError::PublicRelayUrl),
+        ),
+        (
+            format!("{with_key}{}", relay(2, "http://192.168.1.10:9472")),
+            |error| matches!(error, ConfigError::RelayUrl),
+        ),
+    ];
+    for (text, expected) in cases {
+        let refused = ServerConfig::parse(&text).err();
+        assert!(
+            refused.as_ref().is_some_and(expected),
+            "{text}\n{refused:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn server_identity_and_published_fields_are_read() -> TestResult {
     let defaults = ServerConfig::parse(&minimal(&key(1, SECRET_A)))?;
     assert_eq!(defaults.server_id.as_str(), "https://pingers.test");
@@ -307,7 +439,7 @@ fn server_identity_and_published_fields_are_read() -> TestResult {
          push_relay_ca = \"/tmp/ca.pem\"\n{}{}key_config_hash = \"{}\"\noperator = \"Relay Ltd\"\n{}",
         minimal(&key(1, SECRET_A)),
         relay(3, "https://push.example"),
-        "ab".repeat(32),
+        pingers_proto::KeyConfigHash::from_bytes([0xab; 32]).to_pin(),
         relay(4, "https://other.example"),
     ))?;
     assert_eq!(config.server_operator, "Example Ltd");
@@ -343,7 +475,8 @@ fn server_identity_and_published_fields_are_read() -> TestResult {
     assert_eq!(config.advertised_push_relays.len(), 1);
     let advertised = config.advertised_push_relays.first().ok_or("advertised")?;
     assert_eq!(advertised.relay_id, pingers_proto::RelayId::new(3));
-    assert_eq!(advertised.url.as_str(), "https://push.example");
+    // Devices are told the public URL, not the one this server calls.
+    assert_eq!(advertised.url.as_str(), "https://public.example");
     assert_eq!(advertised.key_config_hash.as_bytes(), &[0xab; 32]);
     assert_eq!(advertised.operator, "Relay Ltd");
     assert_eq!(
@@ -360,7 +493,7 @@ fn server_identity_and_published_fields_are_read() -> TestResult {
 fn bad_identity_fields_are_refused() {
     let with_key = minimal(&key(1, SECRET_A));
     let http_server = with_key.replace("https://pingers.test", "http://pingers.test");
-    let cases: [(String, Expected); 6] = [
+    let cases: [(String, Expected); 7] = [
         (http_server, |error| matches!(error, ConfigError::ServerId)),
         (
             format!("map_host = \"http://maps.example\"\n{with_key}"),
@@ -382,6 +515,15 @@ fn bad_identity_fields_are_refused() {
             format!(
                 "{with_key}{}key_config_hash = \"zz\"\noperator = \"x\"\n",
                 relay(1, "https://a")
+            ),
+            |error| matches!(error, ConfigError::RelayInfo),
+        ),
+        // The hash as hex is not a pin: there is one text form.
+        (
+            format!(
+                "{with_key}{}key_config_hash = \"{}\"\noperator = \"x\"\n",
+                relay(1, "https://a"),
+                "ab".repeat(32)
             ),
             |error| matches!(error, ConfigError::RelayInfo),
         ),

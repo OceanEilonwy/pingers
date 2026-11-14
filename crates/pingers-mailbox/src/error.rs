@@ -32,6 +32,9 @@ pub enum MailboxError {
     /// The storage failed.
     #[error("mailbox storage failed")]
     Storage(#[from] StorageError),
+    /// A push relay URL is neither `https://` nor `http://` to a loopback address.
+    #[error("push relay URL must be https://, or http:// to a loopback address")]
+    RelayUrl,
     /// A time did not fit its type; the types should rule this out (style guide §5).
     #[error("internal mailbox error")]
     Internal,

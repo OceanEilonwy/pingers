@@ -2,7 +2,8 @@
 //! The server's configuration file, read once at start.
 //!
 //! ```toml
-//! listen = "0.0.0.0:8080"
+//! listen = "0.0.0.0:8080"          # the public API (identified and public routes); it does
+//!                                  # not serve POST /ohttp, which it answers with 404
 //! server_id = "https://pingers.example"   # this server's origin: RLN proofs and account
 //!                                  # registrations are bound to it
 //! server_operator = "Example Ltd"  # optional, shown in /v1/params (default: server_id)
@@ -22,10 +23,20 @@
 //! expire_interval_s = 60           # how often expired board segments and mailboxes go
 //!
 //! [ohttp]
+//! listen = "127.0.0.1:9471"        # the gateway's own listener: POST /ohttp and
+//!                                  # GET /v1/ohttp/config only
 //! relays = ["10.0.0.5", "fd00::5"] # the only addresses POST /ohttp is accepted from
+//! trusted_proxies = ["127.0.0.1"]  # optional: proxies whose X-Forwarded-For is believed
+//!                                  # on the gateway listener (default: none, header ignored)
+//! served_key_id = 1                # optional: the key served at GET /v1/ohttp/config
+//!                                  # (default: the first [[ohttp.keys]] entry)
 //!
-//! [[ohttp.keys]]                   # the first is served at GET /v1/ohttp/config; the others
-//! key_id = 1                       # still open requests while clients move to it (rotation)
+//! [[ohttp.keys]]                   # every key opens requests; the one not served is the
+//! key_id = 1                       # other rotation slot (1 to 255, distinct)
+//! secret = "<64 hex>"              # `pingers-server keygen ohttp` prints a new one
+//!
+//! [[ohttp.keys]]
+//! key_id = 2
 //! secret = "<64 hex>"
 //!
 //! [metrics]
@@ -33,28 +44,56 @@
 //!
 //! [[push_relays]]                  # the relays mailbox wakes are forwarded to
 //! relay_id = 1                     # what devices name in RelayRef::Listed
-//! url = "https://push.example"
+//! url = "https://push.example"     # where this server sends wakes: https://, or http:// to
+//!                                  # a loopback address literal only, such as
+//!                                  # "http://127.0.0.1:9472" for a relay on this machine
+//! public_url = "https://push.example"   # where devices reach the relay, as /v1/params lists
+//!                                  # it: https:// only (the same as url unless url is local)
 //! credential = "<the bearer credential this relay issued to this server>"
-//! key_config_hash = "<64 hex>"     # optional, with operator: listed in /v1/params
+//! key_config_hash = "<pin>"        # optional, with operator: listed in /v1/params. The relay
+//!                                  # key's pin as `pingers-push-relay pins` prints it: 43
+//!                                  # base64url characters (KeyConfigHash::to_pin)
 //! operator = "Push Relay Ltd"
 //! ```
 //!
-//! The relay-only rule (design B.12) is an address allow-list: the relay leg runs on a private
-//! network or tunnel, as the reference relay's documentation says. The file holds the gateway's
-//! private keys: keep it readable by the server only.
+//! Every field above `[ohttp]` other than `listen` and `server_id` is optional; so are those
+//! marked optional below it. Unknown fields are refused.
+//!
+//! **The relay-only rule** (design B.12). Only the OHTTP relay may reach `POST /ohttp`, or the
+//! gateway would see clients' addresses. Two checks enforce it:
+//!
+//! 1. The gateway has its own listener (`[ohttp] listen`). Bind it where only the relay can
+//!    connect (loopback when the relay runs on the same machine, a private network or tunnel
+//!    otherwise) and never expose it through the public reverse proxy. A reverse proxy in
+//!    front of `listen` then cannot reach the gateway at all, whatever it forwards.
+//! 2. `[ohttp] relays` is an address allow-list of connections to the gateway listener. If a
+//!    reverse proxy must stand in front of the gateway too (a relay on another host), list it
+//!    in `trusted_proxies`: the client address is then read from the `X-Forwarded-For` it
+//!    writes (the rightmost entry that is not a trusted proxy), and `relays` names the relay's
+//!    own addresses. With no trusted proxies the header is ignored.
+//!
+//! **Key rotation** (two slots). Configure two keys and serve one. Pin both key config hashes in
+//! the app (`pingers-server pins <config.toml>` prints them). To rotate, change
+//! `served_key_id` to the other slot; requests sealed to either key still open. Once no
+//! supported app build still uses the old key, replace its secret, and ship the new pin set
+//! with the next app release.
+//!
+//! The file holds the gateway's private keys: keep it readable by the server only.
 
 use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use pingers_mailbox::{ListedRelays, RelayCredential, RelayTarget};
+use pingers_mailbox::{ListedRelays, PushRelayUrl, RelayCredential, RelayTarget};
 use pingers_ohttp::{GatewayKey, KeyConfig, OhttpError};
 use pingers_proto::{
     KeyConfigHash, MapHostUrl, PushRelayInfo, RelayId, RelayUrl, SecretText, ServerId,
 };
 use serde::Deserialize;
 use zeroize::{Zeroize as _, Zeroizing};
+
+use crate::forwarded::TrustedProxies;
 
 /// Why a configuration was refused. Never carries key material.
 #[derive(Debug, thiserror::Error)]
@@ -91,9 +130,18 @@ pub enum ConfigError {
         /// The repeated id.
         relay_id: u16,
     },
-    /// A push relay URL is not `https://`.
-    #[error("configuration: push_relays.url must start with https://")]
+    /// A push relay URL is neither `https://` nor `http://` to a loopback address literal.
+    #[error("configuration: push_relays.url must be https://, or http:// to a loopback address")]
     RelayUrl,
+    /// A push relay's `public_url`, where devices reach it, is not `https://`.
+    #[error("configuration: push_relays.public_url must start with https://")]
+    PublicRelayUrl,
+    /// `served_key_id` names no configured key.
+    #[error("configuration: ohttp.served_key_id {key_id} is not an [[ohttp.keys]] key_id")]
+    UnknownServedKey {
+        /// The id asked for.
+        key_id: u8,
+    },
     /// `server_id` is not an `https://` origin.
     #[error("configuration: server_id must be an https:// origin")]
     ServerId,
@@ -103,10 +151,12 @@ pub enum ConfigError {
     /// `map_host` was not an `https://` URL.
     #[error("configuration: map_host must start with https://")]
     MapHostUrl,
-    /// A push relay's `key_config_hash` is not 64 hex digits, or only one of
-    /// `key_config_hash` and `operator` is given.
+    /// A push relay's `key_config_hash` is not a pin (43 base64url characters, as
+    /// `pingers-push-relay pins` prints), or only one of `key_config_hash` and `operator` is
+    /// given.
     #[error(
-        "configuration: push_relays.key_config_hash must be 64 hex digits, given with operator"
+        "configuration: push_relays.key_config_hash must be a 43-character base64url pin, \
+         given with operator"
     )]
     RelayInfo,
     /// A duration or count is zero.
@@ -183,22 +233,39 @@ impl RelayAllowList {
     }
 }
 
-/// The gateway's keys: at least one, with distinct ids. The first is the one served.
+/// Which configured key `GET /v1/ohttp/config` serves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServedKey {
+    /// The first key listed.
+    First,
+    /// The key with this id (`[ohttp] served_key_id`).
+    Id(u8),
+}
+
+/// The gateway's keys: at least one, with distinct ids, one of them served.
 pub struct OhttpKeys {
     keys: Vec<GatewayKey>,
     served: KeyConfig,
 }
 
 impl OhttpKeys {
-    /// Checks the keys. The first is served at `GET /v1/ohttp/config`; the rest still open
-    /// requests during a rotation.
+    /// Checks the keys, serving the first at `GET /v1/ohttp/config`. Every key opens requests,
+    /// so the others still work during a rotation.
+    ///
+    /// # Errors
+    ///
+    /// As [`OhttpKeys::serving`].
+    pub fn new(keys: Vec<GatewayKey>) -> Result<Self, ConfigError> {
+        Self::serving(keys, ServedKey::First)
+    }
+
+    /// Checks the keys, serving the one `served` names.
     ///
     /// # Errors
     ///
     /// [`ConfigError::NoOhttpKey`] if `keys` is empty, [`ConfigError::DuplicateKeyId`] if two
-    /// share an id.
-    pub fn new(keys: Vec<GatewayKey>) -> Result<Self, ConfigError> {
-        let served = keys.first().ok_or(ConfigError::NoOhttpKey)?.config();
+    /// share an id, [`ConfigError::UnknownServedKey`] if no key has the id `served` names.
+    pub fn serving(keys: Vec<GatewayKey>, served: ServedKey) -> Result<Self, ConfigError> {
         let mut seen = Vec::with_capacity(keys.len());
         for key in &keys {
             let key_id = key.config().key_id();
@@ -207,6 +274,18 @@ impl OhttpKeys {
             }
             seen.push(key_id);
         }
+        let served = match served {
+            ServedKey::First => keys.first().ok_or(ConfigError::NoOhttpKey)?.config(),
+            ServedKey::Id(key_id) => keys
+                .iter()
+                .map(GatewayKey::config)
+                .find(|config| config.key_id() == key_id)
+                .ok_or(if keys.is_empty() {
+                    ConfigError::NoOhttpKey
+                } else {
+                    ConfigError::UnknownServedKey { key_id }
+                })?,
+        };
         Ok(Self { keys, served })
     }
 
@@ -214,6 +293,13 @@ impl OhttpKeys {
     #[must_use]
     pub fn served(&self) -> &KeyConfig {
         &self.served
+    }
+
+    /// Every key's public config, in the order configured: what the app pins, so that
+    /// switching the served key never shows it an unpinned one.
+    #[must_use]
+    pub fn configs(&self) -> Vec<KeyConfig> {
+        self.keys.iter().map(GatewayKey::config).collect()
     }
 
     pub(crate) fn into_keys(self) -> Vec<GatewayKey> {
@@ -262,8 +348,13 @@ pub struct ServerConfig {
     pub request_timeout: Duration,
     /// The gateway's keys.
     pub ohttp_keys: OhttpKeys,
+    /// Where the binary binds the gateway's own listener, which serves only `POST /ohttp` and
+    /// `GET /v1/ohttp/config`.
+    pub gateway_listen: SocketAddr,
     /// Who may `POST /ohttp`.
     pub relays: RelayAllowList,
+    /// The proxies whose `X-Forwarded-For` is believed on the gateway listener.
+    pub trusted_proxies: TrustedProxies,
     /// Who may `GET /metrics`; empty means the route does not exist.
     pub metrics: AddressList,
     /// Where mailboxes are kept.
@@ -305,19 +396,23 @@ pub struct Required {
     pub server_id: ServerId,
     /// The gateway's keys.
     pub ohttp_keys: OhttpKeys,
+    /// Where the binary binds the gateway's listener.
+    pub gateway_listen: SocketAddr,
     /// Who may `POST /ohttp`.
     pub relays: RelayAllowList,
 }
 
 impl ServerConfig {
-    /// A configuration with the required fields, logging off, no metrics, every store in
-    /// memory, open registration, no push relays, and the file defaults for everything else.
+    /// A configuration with the required fields, logging off, no metrics, no trusted proxies,
+    /// every store in memory, open registration, no push relays, and the file defaults for
+    /// everything else.
     #[must_use]
     pub fn new(required: Required) -> Self {
         let Required {
             listen,
             server_id,
             ohttp_keys,
+            gateway_listen,
             relays,
         } = required;
         Self {
@@ -334,7 +429,9 @@ impl ServerConfig {
             logging: Logging::Off,
             request_timeout: Duration::from_secs(default_request_timeout()),
             ohttp_keys,
+            gateway_listen,
             relays,
+            trusted_proxies: TrustedProxies::default(),
             metrics: AddressList::default(),
             mailbox_store: Database::Memory,
             mailbox_posts_per_bucket: DEFAULT_POSTS_PER_BUCKET,
@@ -392,6 +489,7 @@ struct FilePushRelay {
     credential: String,
     key_config_hash: Option<String>,
     operator: Option<String>,
+    public_url: String,
 }
 
 const fn default_push_timeout() -> u64 {
@@ -419,15 +517,16 @@ fn push_relays(relays: Vec<FilePushRelay>) -> Result<PushRelays, ConfigError> {
             });
         }
         seen.push(relay.relay_id);
-        let url = RelayUrl::new(relay.url).map_err(|_| ConfigError::RelayUrl)?;
+        let url = PushRelayUrl::new(relay.url).map_err(|_| ConfigError::RelayUrl)?;
+        let public_url =
+            RelayUrl::new(relay.public_url).map_err(|_| ConfigError::PublicRelayUrl)?;
         match (relay.key_config_hash, relay.operator) {
             (None, None) => {}
             (Some(hash), Some(operator)) => advertised.push(PushRelayInfo {
                 relay_id: RelayId::new(relay.relay_id),
-                url: url.clone(),
-                key_config_hash: KeyConfigHash::from_bytes(
-                    crate::wire::hex_array(&hash).ok_or(ConfigError::RelayInfo)?,
-                ),
+                url: public_url,
+                key_config_hash: KeyConfigHash::from_pin(&hash)
+                    .map_err(|_| ConfigError::RelayInfo)?,
                 operator,
             }),
             (Some(_), None) | (None, Some(_)) => return Err(ConfigError::RelayInfo),
@@ -457,7 +556,11 @@ enum FileLogging {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileOhttp {
+    listen: SocketAddr,
     relays: Vec<IpAddr>,
+    #[serde(default)]
+    trusted_proxies: Vec<IpAddr>,
+    served_key_id: Option<u8>,
     #[serde(default)]
     keys: Vec<FileKey>,
 }
@@ -535,8 +638,15 @@ impl ServerConfig {
             quota_store: file.quota_db.map_or(Database::Memory, Database::File),
             logging,
             request_timeout: positive_seconds("request_timeout_s", file.request_timeout_s)?,
-            ohttp_keys: OhttpKeys::new(keys)?,
+            ohttp_keys: OhttpKeys::serving(
+                keys,
+                file.ohttp
+                    .served_key_id
+                    .map_or(ServedKey::First, ServedKey::Id),
+            )?,
+            gateway_listen: file.ohttp.listen,
             relays: RelayAllowList::new(file.ohttp.relays)?,
+            trusted_proxies: TrustedProxies::new(file.ohttp.trusted_proxies),
             metrics: AddressList::new(file.metrics.allow),
             mailbox_store: file.mailbox_db.map_or(Database::Memory, Database::File),
             mailbox_posts_per_bucket: match file.mailbox_posts_per_bucket {

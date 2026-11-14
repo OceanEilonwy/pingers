@@ -1,15 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Server binary: routes to the crates above, nothing else.
 //!
-//! Usage: `pingers-server <config.toml>` (format in the library's `config.rs`). Runs until
-//! interrupted. Writes nothing unless the configuration turns counts logging on; a startup
-//! error is printed, with its causes, and the process exits with a failure status.
+//! Usage (configuration format in the library's `config.rs`):
+//!
+//! - `pingers-server <config.toml>` runs the server until SIGTERM or Ctrl-C, then stops
+//!   gracefully. It writes nothing unless the configuration turns counts logging on.
+//! - `pingers-server pins <config.toml>` prints the pin of every configured gateway key, one
+//!   per line (`KeyConfigHash::to_pin`); joined with commas they are the app build's
+//!   `PINGERS_GATEWAY_KEY_PINS`.
+//! - `pingers-server keygen ohttp` prints a new gateway key secret (64 hex digits) for an
+//!   `[[ohttp.keys]] secret`.
+//!
+//! An error is printed, with its causes, and the process exits with a failure status.
 #![forbid(unsafe_code)]
 
 use std::error::Error as _;
 use std::process::ExitCode;
 
-use pingers_server::ServerError;
+use pingers_server::{Command, Listeners, ServerError, StopSignals};
 
 fn main() -> ExitCode {
     match run() {
@@ -22,29 +30,49 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), ServerError> {
-    let path = std::env::args_os().nth(1).ok_or(ServerError::Usage)?;
-    let config = pingers_server::load_config(path.as_ref())?;
+    match Command::parse(std::env::args_os().skip(1))? {
+        Command::Pins { config } => {
+            let config = pingers_server::load_config(&config)?;
+            print(&pingers_server::pins_output(&config.ohttp_keys));
+            Ok(())
+        }
+        Command::KeygenOhttp => {
+            let secret = pingers_server::os_ohttp_secret()?;
+            print(&format!("{}\n", secret.expose()));
+            Ok(())
+        }
+        Command::Serve { config } => serve(&config),
+    }
+}
+
+fn serve(path: &std::path::Path) -> Result<(), ServerError> {
+    let config = pingers_server::load_config(path)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(ServerError::Runtime)?;
     runtime.block_on(async move {
-        let listener = tokio::net::TcpListener::bind(config.listen)
-            .await
-            .map_err(ServerError::Listen)?;
-        pingers_server::serve(config, listener, pingers_time::SystemClock, async {
-            // If signals cannot be watched, run until killed.
-            if tokio::signal::ctrl_c().await.is_err() {
-                std::future::pending::<()>().await;
-            }
+        // Watched before anything is bound, so a supervisor's SIGTERM always stops gracefully.
+        let mut signals = StopSignals::install();
+        let listeners = Listeners::bind(&config).await?;
+        pingers_server::serve(config, listeners, pingers_time::SystemClock, async move {
+            signals.received().await;
         })
         .await
     })
 }
 
 #[expect(
+    clippy::print_stdout,
+    reason = "pins and keygen print their result for the operator to copy"
+)]
+fn print(text: &str) {
+    print!("{text}");
+}
+
+#[expect(
     clippy::print_stderr,
-    reason = "a startup error is the binary's only output besides opt-in counts"
+    reason = "an error is the binary's only output besides opt-in counts and its commands' results"
 )]
 fn report(error: &ServerError) {
     eprintln!("pingers-server: {error}");

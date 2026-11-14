@@ -40,7 +40,7 @@ fn inner(method: &str, path: String, headers: Vec<Header>, body: Vec<u8>) -> Bin
 
 /// Sends `request` through OHTTP and returns the inner response.
 async fn call(server: &Running, request: &BinaryRequest) -> Result<BinaryResponse, TestError> {
-    let mut client = connect(server.address, super::LOOPBACK).await?;
+    let mut client = connect(server.gateway, super::LOOPBACK).await?;
     let (status, opened) = oblivious(&mut client, &server.config, request).await?;
     assert_eq!(status, StatusCode::OK);
     opened.ok_or_else(|| "no inner response".into())
@@ -281,7 +281,7 @@ async fn a_post_answers_at_once_and_its_wake_goes_to_the_relay() -> TestResult {
     let relays = ListedRelays::new([(
         RelayId::new(1),
         RelayTarget {
-            url: RelayUrl::new(format!("https://{}", relay_socket.local_addr()?))?,
+            url: RelayUrl::new(format!("https://{}", relay_socket.local_addr()?))?.into(),
             credential: RelayCredential::new("credential".to_owned()),
         },
     )]);
@@ -506,6 +506,29 @@ async fn a_push_relay_config_is_passed_on_only_when_it_is_one() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_relay_on_this_machine_is_reached_over_plain_http_on_loopback() -> TestResult {
+    let (address, received) = fake_relay(StatusCode::ACCEPTED).await?;
+    let target = RelayTarget {
+        url: pingers_mailbox::PushRelayUrl::new(format!("http://{address}"))?,
+        credential: RelayCredential::new("credential".to_owned()),
+    };
+    let clock = ManualClock::new(UnixSeconds::new(1));
+    let relay = HttpPushRelay::new(Arc::new(clock), Duration::from_secs(10), Vec::new())?;
+    assert_eq!(
+        relay.push(&target, &push_request()).await,
+        Ok(RelayAnswer::Accepted)
+    );
+    let received = received.lock().map_err(|_| "lock")?.clone();
+    assert_eq!(
+        received
+            .first()
+            .and_then(|only| only.authorization.as_deref()),
+        Some("Bearer credential")
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unreachable_or_silent_relay_is_unreachable() -> TestResult {
     let clock = ManualClock::new(UnixSeconds::new(1));
     let relay = HttpPushRelay::new(Arc::new(clock.clone()), Duration::from_secs(10), Vec::new())?;
@@ -551,7 +574,7 @@ async fn push_urls_join_the_relay_and_the_push_path() -> TestResult {
         ),
     ] {
         let target = RelayTarget {
-            url: RelayUrl::new(url.to_owned())?,
+            url: RelayUrl::new(url.to_owned())?.into(),
             credential: RelayCredential::new("credential".to_owned()),
         };
         assert_eq!(push_url(&target), expected);
@@ -560,7 +583,7 @@ async fn push_urls_join_the_relay_and_the_push_path() -> TestResult {
     let clock = ManualClock::new(UnixSeconds::new(1));
     let relay = HttpPushRelay::new(Arc::new(clock), Duration::from_secs(10), Vec::new())?;
     let target = RelayTarget {
-        url: RelayUrl::new("https://127.0.0.1:1".to_owned())?,
+        url: RelayUrl::new("https://127.0.0.1:1".to_owned())?.into(),
         credential: RelayCredential::new("credential".to_owned()),
     };
     assert_eq!(

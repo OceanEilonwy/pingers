@@ -7,8 +7,11 @@ use crate::config::ConfigError;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ServerError {
-    /// The binary was started without a configuration path.
-    #[error("usage: pingers-server <config.toml>")]
+    /// The binary's arguments are not one of its commands.
+    #[error(
+        "usage: pingers-server <config.toml> | pingers-server pins <config.toml> | \
+         pingers-server keygen ohttp"
+    )]
     Usage,
     /// The configuration file cannot be read.
     #[error("cannot read the configuration file")]
@@ -40,4 +43,10 @@ pub enum ServerError {
     /// The listen address cannot be bound.
     #[error("cannot bind the listen address")]
     Listen(#[source] std::io::Error),
+    /// The gateway's listen address (`[ohttp] listen`) cannot be bound.
+    #[error("cannot bind the gateway listen address (ohttp.listen)")]
+    ListenGateway(#[source] std::io::Error),
+    /// A new OHTTP gateway key cannot be made.
+    #[error("cannot make an OHTTP gateway key")]
+    OhttpKey(#[source] pingers_ohttp::OhttpError),
 }

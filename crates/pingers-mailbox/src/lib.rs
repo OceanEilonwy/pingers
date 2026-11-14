@@ -43,8 +43,8 @@ pub use limit::{Admission, NoPostLimit, PostLimit, PostsPerBucket};
 /// The body of `POST /v1/push`, re-exported from pingers-proto.
 pub use pingers_proto::PushRequest;
 pub use relay::{
-    ListedRelays, PUSH_CONTENT_TYPE, PUSH_PATH, PushRelay, RelayAnswer, RelayCredential,
-    RelayDirectory, RelayTarget, RelayUnreachable,
+    ListedRelays, PUSH_CONTENT_TYPE, PUSH_PATH, PushRelay, PushRelayUrl, RelayAnswer,
+    RelayCredential, RelayDirectory, RelayTarget, RelayUnreachable,
 };
 pub use service::{MailboxParts, MailboxRules, Mailboxes, Posted};
 #[cfg(feature = "sqlite")]

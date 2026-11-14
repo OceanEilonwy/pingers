@@ -1,0 +1,7 @@
+# pingers-ohttp-relay's configuration, rendered by nodo: change its settings in nodo-tui, not
+# here. The format is crates/pingers-ohttp-relay/src/config.rs. The gateway is pingers-server's
+# separate loopback listener.
+listen = "127.0.0.1:9473"
+gateway = "$(pingers-server.gateway-url)"
+gateway_key_config = "$(pingers-server.gateway-key-config-url)"
+response_timeout_seconds = "$(pingers-ohttp-relay.response_timeout_seconds)"

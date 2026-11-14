@@ -183,6 +183,33 @@ mod tests {
     }
 
     #[test]
+    fn gateway_pins_match_the_servers_own_pins_subcommand() -> Result<()> {
+        // Two slots, the second served: every key is pinned, in file order, either way.
+        let text = format!(
+            "listen = \"127.0.0.1:0\"\nserver_id = \"https://pingers.test\"\n\
+             [ohttp]\nlisten = \"127.0.0.1:0\"\nrelays = [\"127.0.0.1\"]\nserved_key_id = 1\n\
+             [[ohttp.keys]]\nkey_id = 2\nsecret = \"{OTHER}\"\n\
+             [[ohttp.keys]]\nkey_id = 1\nsecret = \"{ALICE}\"\n"
+        );
+        let config = pingers_server::ServerConfig::parse(&text)?;
+        let expected = pingers_server::pin_set(&config.ohttp_keys);
+        assert_eq!(gateway_pins(&text)?, expected);
+        assert_eq!(expected.len(), 2);
+        // `pingers-server pins` lines, joined with commas, are the variable's value.
+        let server_lines: Vec<String> = pingers_server::pins_output(&config.ohttp_keys)
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        let output = variables(&gateway_pins(&text)?, &[]);
+        let gateway_line = output.lines().next().unwrap_or_default();
+        assert_eq!(
+            gateway_line,
+            format!("{GATEWAY_VARIABLE}={}", server_lines.join(","))
+        );
+        Ok(())
+    }
+
+    #[test]
     fn push_relay_pins_match_the_relays_own_pins_subcommand() -> Result<()> {
         // Listed out of activation order: both must sort by activated_at.
         let text = relay_file(4_102_444_800, 1000);

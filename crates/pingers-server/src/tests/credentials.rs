@@ -34,7 +34,7 @@ use crate::{DeliveryLive, LiveChannel};
 
 /// Sends `request` through OHTTP and returns the inner response.
 async fn call(server: &Running, request: &BinaryRequest) -> Result<BinaryResponse, TestError> {
-    let mut client = connect(server.address, LOOPBACK).await?;
+    let mut client = connect(server.gateway, LOOPBACK).await?;
     let (status, opened) = oblivious(&mut client, &server.config, request).await?;
     assert_eq!(status, StatusCode::OK);
     opened.ok_or_else(|| "no inner response".into())
