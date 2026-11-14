@@ -206,6 +206,11 @@ async fn the_gateway_answers_as_the_host_does_padded_to_one_size() -> TestResult
     let mut post = get("/catalog.json", &[]);
     post.method = "POST".to_owned();
     let refused = through_gateway(&client, &host, &post, 6).await?;
+    let mut head = get("/oceania.pmtiles", &[]);
+    head.method = "HEAD".to_owned();
+    let headed = through_gateway(&client, &host, &head, 7).await?;
+    assert_eq!(headed.answer.status.get(), 200);
+    assert!(headed.answer.body.is_empty());
     assert_eq!(refused.answer.status.get(), 405);
     Ok(())
 }
@@ -245,5 +250,24 @@ async fn the_gateway_refuses_what_it_cannot_open() -> TestResult {
         client.get(host.url("/ohttp")).send().await?.status(),
         StatusCode::METHOD_NOT_ALLOWED
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_binarys_serve_reports_a_directory_it_cannot_use() -> TestResult {
+    let directory = TempDir::new("serve-missing")?;
+    let missing = directory.path().join("not-there");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let served = pingers_map_host::serve(
+        config(&missing, &["oceania"], 1 << 30),
+        listener,
+        clock(),
+        std::future::pending(),
+    )
+    .await;
+    assert!(matches!(
+        served,
+        Err(pingers_map_host::error::MapHostError::Directory { .. })
+    ));
     Ok(())
 }

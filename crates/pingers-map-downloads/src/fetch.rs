@@ -269,7 +269,51 @@ pub fn padded_count(count: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
     use super::*;
+
+    #[test]
+    fn a_relayed_piece_fits_its_padding_with_little_to_spare() -> Result<(), MapsError> {
+        let header = |name: &str, value: &str| Header {
+            name: name.to_owned(),
+            value: value.as_bytes().to_vec(),
+        };
+        let piece = BinaryResponse {
+            status: pingers_ohttp::StatusCode::new(206)?,
+            headers: vec![
+                header("content-type", "application/vnd.pmtiles"),
+                header("content-range", "bytes 9999738880-9999999999/10000000000"),
+                header("etag", &format!("\"{}\"", "ab".repeat(32))),
+                header("accept-ranges", "bytes"),
+            ],
+            body: vec![0; usize::try_from(RELAY_PIECE).map_err(|_| MapsError::Internal)?],
+        };
+        let encoded = piece.encode()?.len();
+        assert!(encoded <= RELAY_PADDED, "{encoded}");
+        assert!(RELAY_PADDED - encoded < 2048, "pieces waste the padding");
+        // The map host's largest padded answer holds a relayed piece.
+        const { assert!(RELAY_PADDED < 1_044_480) };
+        Ok(())
+    }
+
+    #[test]
+    fn direct_pieces_are_four_mebibytes_unpadded() -> Result<(), MapsError> {
+        let client = PublicClient::new(
+            &pingers_transport::PublicConfig::new(pingers_transport::TlsRoots::from_der(&[])?, 1),
+            Arc::new(pingers_time::ManualClock::new(
+                pingers_time::UnixSeconds::EPOCH,
+            )),
+        )?;
+        assert_eq!(
+            DirectFetch::new(client).piece(),
+            PieceSize {
+                bytes: 4_194_304,
+                padding: Padding::Off
+            }
+        );
+        Ok(())
+    }
 
     #[test]
     fn request_counts_round_up_to_size_classes() {

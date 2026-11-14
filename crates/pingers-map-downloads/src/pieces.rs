@@ -14,8 +14,6 @@ use crate::{MapHost, MapsError, PackFile};
 
 /// How long to wait when a preparing host gives no usable `Retry-After`.
 const DEFAULT_RETRY_AFTER: Duration = Duration::from_secs(30);
-/// How often a small file is fetched again from the start when it changed between pieces.
-const RESTARTS: u32 = 3;
 
 /// Files from one host over one route, counting the requests, so a relayed download can be
 /// padded to a size class.
@@ -138,39 +136,29 @@ fn read_piece(answer: BinaryResponse, start: u64) -> Result<Answer, MapsError> {
 }
 
 /// A small file (a catalog, a manifest) whole, at most `limit` bytes, in pieces pinned to
-/// one version; fetched again from the start if it changed between pieces.
+/// one version with `If-Range`. If it changed between pieces the host sends the new version
+/// whole (200), and that is the answer.
 pub(crate) async fn fetch_small(
     fetching: &mut Fetching<'_>,
     path: &str,
     limit: u64,
 ) -> Result<Vec<u8>, MapsError> {
-    let mut restarts = 0_u32;
-    'whole: loop {
-        let mut body: Vec<u8> = Vec::new();
-        let mut etag: Option<Vec<u8>> = None;
-        loop {
-            let have = u64::try_from(body.len()).map_err(|_| MapsError::BadAnswer)?;
-            let answer = fetching.piece(path, have, etag.as_deref()).await?;
-            if answer.total > limit {
-                return Err(MapsError::BadAnswer);
-            }
-            if answer.start != have {
-                // A new version: start again, a bounded number of times.
-                restarts = restarts.saturating_add(1);
-                if restarts > RESTARTS {
-                    return Err(MapsError::BadAnswer);
-                }
-                if answer.start == 0 && u64::try_from(answer.body.len()).ok() == Some(answer.total)
-                {
-                    return Ok(answer.body);
-                }
-                continue 'whole;
-            }
-            body.extend_from_slice(&answer.body);
-            etag = answer.etag.or(etag);
-            if u64::try_from(body.len()).ok() >= Some(answer.total) {
-                return Ok(body);
-            }
+    let mut body: Vec<u8> = Vec::new();
+    let mut etag: Option<Vec<u8>> = None;
+    loop {
+        let have = u64::try_from(body.len()).map_err(|_| MapsError::BadAnswer)?;
+        let answer = fetching.piece(path, have, etag.as_deref()).await?;
+        if answer.total > limit {
+            return Err(MapsError::BadAnswer);
+        }
+        if answer.start != have {
+            // Only a whole answer starts elsewhere: a new version, complete.
+            return Ok(answer.body);
+        }
+        body.extend_from_slice(&answer.body);
+        etag = answer.etag.or(etag);
+        if u64::try_from(body.len()).ok() >= Some(answer.total) {
+            return Ok(body);
         }
     }
 }
@@ -218,10 +206,7 @@ pub(crate) async fn fetch_file(
             return Err(MapsError::Checksum);
         }
         if answer.start != have {
-            if answer.start != 0 {
-                return Err(MapsError::BadAnswer);
-            }
-            // The whole file came back: start the partial over with it.
+            // Only a whole answer (200) starts elsewhere: start the partial over with it.
             out.set_len(0).await?;
             hasher = ContentHasher::new();
             have = 0;

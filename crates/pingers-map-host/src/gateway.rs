@@ -303,6 +303,9 @@ mod tests {
         assert_eq!(padded_length(600_000, 0), Some(MAX_PADDED));
         assert_eq!(padded_length(MAX_PADDED, usize::MAX), Some(MAX_PADDED));
         assert_eq!(padded_length(MAX_PADDED + 1, 0), None);
+        // Just under 1 MiB, so a sealed answer and its encapsulation fit a 1 MiB response.
+        assert_eq!(padded_length(1_044_480, 0), Some(1_044_480));
+        assert_eq!(padded_length(1_044_481, 0), None);
     }
 
     #[test]

@@ -22,6 +22,17 @@ use crate::{CatalogEntry, HostChain, MapHost, MapHostSource, MapsError, RegionMa
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+/// How a scripted host gets a ranged answer wrong.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lie {
+    /// The piece starts one byte later than asked.
+    WrongStart,
+    /// The body is one byte shorter than its Content-Range says.
+    ShortBody,
+    /// The range ends at the file's length, past its last byte.
+    EndPastTotal,
+}
+
 /// A map host in memory, answering ranges like pingers-map-host.
 struct ScriptedHost {
     files: Mutex<HashMap<String, Vec<u8>>>,
@@ -29,6 +40,9 @@ struct ScriptedHost {
     preparing: AtomicUsize,
     piece: PieceSize,
     requests: Mutex<Vec<String>>,
+    lie: Mutex<Option<Lie>>,
+    /// After this many requests, this file takes these bytes (a new version).
+    change: Mutex<Option<(usize, String, Vec<u8>)>>,
 }
 
 impl ScriptedHost {
@@ -41,7 +55,18 @@ impl ScriptedHost {
                 padding,
             },
             requests: Mutex::new(Vec::new()),
+            lie: Mutex::new(None),
+            change: Mutex::new(None),
         }
+    }
+
+    fn lie(&self, lie: Lie) {
+        *self.lie.lock().unwrap_or_else(PoisonError::into_inner) = Some(lie);
+    }
+
+    fn change_after(&self, requests: usize, name: &str, bytes: &[u8]) {
+        *self.change.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some((requests, format!("/{name}"), bytes.to_vec()));
     }
 
     fn put(&self, name: &str, bytes: &[u8]) {
@@ -89,10 +114,26 @@ impl MapFetch for ScriptedHost {
             .iter()
             .find(|header| header.name == "range")
             .and_then(|header| String::from_utf8(header.value.clone()).ok());
-        self.requests
+        let made = {
+            let mut requests = self.requests.lock().unwrap_or_else(PoisonError::into_inner);
+            requests.push(format!("{path} {}", range.clone().unwrap_or_default()));
+            requests.len()
+        };
+        let due = self
+            .change
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(format!("{path} {}", range.clone().unwrap_or_default()));
+            .take_if(|(after, _, _)| made > *after);
+        if let Some((_, name, bytes)) = due {
+            self.files
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(name, bytes);
+        }
+        let if_range = headers
+            .iter()
+            .find(|header| header.name == "if-range")
+            .map(|header| header.value.clone());
         if self
             .preparing
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
@@ -112,21 +153,41 @@ impl MapFetch for ScriptedHost {
             return answer(404, Vec::new(), Vec::new());
         };
         let etag = format!("\"{}\"", pingers_crypto::content_digest(&file).to_hex());
+        let stale = if_range.is_some_and(|tag| tag != etag.as_bytes());
         let Some((start, end)) = range.as_deref().and_then(|range| {
             let (start, end) = range.strip_prefix("bytes=")?.split_once('-')?;
             Some((start.parse::<usize>().ok()?, end.parse::<usize>().ok()?))
         }) else {
             return answer(200, vec![("etag", etag)], file);
         };
+        if stale {
+            // If-Range names another version: the whole current one, as RFC 9110 says.
+            return answer(200, vec![("etag", etag)], file);
+        }
         let end = end.min(file.len().saturating_sub(1));
-        let body = file.get(start..=end).unwrap_or_default().to_vec();
+        let mut body = file.get(start..=end).unwrap_or_default().to_vec();
+        let (mut first, mut last) = (start, end);
+        match *self.lie.lock().unwrap_or_else(PoisonError::into_inner) {
+            Some(Lie::WrongStart) => {
+                first = first.saturating_add(1);
+                last = last.saturating_add(1);
+            }
+            Some(Lie::ShortBody) => {
+                body.pop();
+            }
+            Some(Lie::EndPastTotal) => {
+                last = file.len();
+                body.push(0);
+            }
+            None => {}
+        }
         answer(
             206,
             vec![
                 ("etag", etag),
                 (
                     "content-range",
-                    format!("bytes {start}-{end}/{}", file.len()),
+                    format!("bytes {first}-{last}/{}", file.len()),
                 ),
             ],
             body,
@@ -533,3 +594,5 @@ async fn catalogs_come_through_in_pieces_from_each_host() -> TestResult {
     assert_eq!(result.failed.len(), 1);
     Ok(())
 }
+
+mod limits;

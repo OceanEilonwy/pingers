@@ -187,3 +187,38 @@ async fn a_gateway_answering_garbage_keys_is_not_passed_on() -> TestResult {
     assert_eq!(inner_status(refused.as_ref()), Some(502));
     server.stop().await
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn answers_up_to_the_map_hosts_largest_are_forwarded() -> TestResult {
+    // The fake gateway answers with as many bytes as the request's body names.
+    let app = Router::new().route(
+        "/ohttp",
+        post(|body: Bytes| async move {
+            let length = std::str::from_utf8(&body)
+                .ok()
+                .and_then(|text| text.parse::<usize>().ok())
+                .unwrap_or(0);
+            vec![7_u8; length]
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind((LOOPBACK, 0)).await?;
+    let address = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let mut config = configured(Setup::default())?;
+    config.map_host_gateway = MapHostGateway::from_settings(
+        Some("https://maps.example"),
+        Some(format!("http://{address}")),
+    )?;
+    let server = run(config, Echo).await?;
+    let mut relay = connect(server.gateway, LOOPBACK).await?;
+    // 1 MiB and 4 KiB: the map host's largest padded answer and its encapsulation, with room.
+    let (_, largest) = oblivious(&mut relay, &server.config, &map_request(b"1052672")).await?;
+    let largest = largest.ok_or("no answer")?;
+    assert_eq!(largest.status.get(), 200);
+    assert_eq!(largest.body.len(), 1_052_672);
+    let (_, over) = oblivious(&mut relay, &server.config, &map_request(b"1052673")).await?;
+    assert_eq!(inner_status(over.as_ref()), Some(502));
+    server.stop().await
+}

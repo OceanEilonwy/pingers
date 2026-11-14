@@ -241,51 +241,67 @@ async fn a_region_downloads_directly_over_https() -> TestResult {
     Ok(())
 }
 
-/// The harness, with its server forwarding map requests to `host`'s gateway, and a relayed
-/// route through its OHTTP relay.
-fn relayed(
-    host: &MapHost,
-    pins: Arc<Pins>,
-) -> Result<(InProcessHarness, RelayFetch, ManualClock), Box<dyn std::error::Error>> {
-    let config = HarnessConfig {
-        map_host_gateway: Some(format!("http://{}", host.address)),
-        ..HarnessConfig::default()
-    };
-    let clock = config.clock.clone();
-    let harness = InProcessHarness::start(&config)?;
-    let relay = harness.endpoints().ohttp_relay;
-    let transport = OhttpTransport::new(
-        OhttpConfig::new(
-            vec![Relay::new(
-                &format!("http://{relay}/ohttp"),
-                &format!("http://{relay}/v1/ohttp/config"),
-            )?],
-            KeyPin::FirstUse,
-            TlsRoots::from_der(&[])?,
-        ),
-        Arc::new(clock.clone()),
-        Box::new(pingers_testkit::seeded_rng(11)),
-    )?;
-    let fetch = RelayFetch::new(RelayParts {
-        transport: Arc::new(transport),
-        server_host: Some(MapHostUrl::new(HARNESS_MAP_HOST.to_owned())?),
-        pins,
-        rng: Box::new(pingers_testkit::seeded_rng(12)),
-    });
-    Ok((harness, fetch, clock))
+/// The harness and a relayed route through its OHTTP relay.
+struct Relayed {
+    harness: InProcessHarness,
+    transport: Arc<OhttpTransport>,
+    clock: ManualClock,
+}
+
+impl Relayed {
+    /// The harness, with its server forwarding map requests to `host`'s gateway (or, with
+    /// none, to the harness's map host name, which never resolves).
+    fn start(host: Option<&MapHost>) -> Result<Self, Box<dyn std::error::Error>> {
+        let config = HarnessConfig {
+            map_host_gateway: host.map(|host| format!("http://{}", host.address)),
+            ..HarnessConfig::default()
+        };
+        let clock = config.clock.clone();
+        let harness = InProcessHarness::start(&config)?;
+        let relay = harness.endpoints().ohttp_relay;
+        let transport = Arc::new(OhttpTransport::new(
+            OhttpConfig::new(
+                vec![Relay::new(
+                    &format!("http://{relay}/ohttp"),
+                    &format!("http://{relay}/v1/ohttp/config"),
+                )?],
+                KeyPin::FirstUse,
+                TlsRoots::from_der(&[])?,
+            ),
+            Arc::new(clock.clone()),
+            Box::new(pingers_testkit::seeded_rng(11)),
+        )?);
+        Ok(Self {
+            harness,
+            transport,
+            clock,
+        })
+    }
+
+    /// A relayed route to the server's map host, pinning keys in `pins`.
+    fn fetch(&self, pins: Arc<Pins>, seed: u64) -> Result<RelayFetch, Box<dyn std::error::Error>> {
+        let transport: Arc<dyn pingers_transport::Transport> = self.transport.clone();
+        Ok(RelayFetch::new(RelayParts {
+            transport,
+            server_host: Some(MapHostUrl::new(HARNESS_MAP_HOST.to_owned())?),
+            pins,
+            rng: Box::new(pingers_testkit::seeded_rng(seed)),
+        }))
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_region_downloads_through_the_relay_and_the_server() -> TestResult {
     let host = map_host().await?;
     let pins = Arc::new(Pins::default());
-    let (harness, fetch, clock) = relayed(&host, Arc::clone(&pins))?;
+    let relayed = Relayed::start(Some(&host))?;
+    let fetch = relayed.fetch(Arc::clone(&pins), 12)?;
     let server_host = MapHostUrl::new(HARNESS_MAP_HOST.to_owned())?;
     let elsewhere = MapHostUrl::new("https://maps.elsewhere.invalid".to_owned())?;
     let catalog = catalog_and_download(
         &fetch,
         &HostChain::new(Some(&elsewhere), Some(&server_host), None),
-        &clock,
+        &relayed.clock,
     )
     .await?;
     // Only the server's own map host can be reached this way; the other is skipped unasked.
@@ -294,12 +310,21 @@ async fn a_region_downloads_through_the_relay_and_the_server() -> TestResult {
         catalog.failed.first().map(|failed| failed.reason),
         Some(HostFailure::NotThroughRelay)
     );
-    // The gateway key was pinned on first use.
+    // The gateway key was pinned on first use...
     assert_eq!(
         pins.0.lock().unwrap_or_else(PoisonError::into_inner).len(),
         1
     );
-    harness.shutdown();
+    // ...and a later route (a new process) that finds the same key pinned goes on.
+    let later = relayed.fetch(Arc::clone(&pins), 13)?;
+    let again = fetch_catalog(&later, &HostChain::new(None, Some(&server_host), None)).await;
+    assert_eq!(again.offers.len(), 1);
+    assert!(again.failed.is_empty());
+    assert_eq!(
+        pins.0.lock().unwrap_or_else(PoisonError::into_inner).len(),
+        1
+    );
+    relayed.harness.shutdown();
     Ok(())
 }
 
@@ -310,13 +335,31 @@ async fn a_changed_map_host_key_stops_relayed_downloads() -> TestResult {
     let server_host = MapHostUrl::new(HARNESS_MAP_HOST.to_owned())?;
     pins.pin(&server_host, KeyConfigHash::from_bytes([7; 32]))
         .await?;
-    let (harness, fetch, _clock) = relayed(&host, pins)?;
+    let relayed = Relayed::start(Some(&host))?;
+    let fetch = relayed.fetch(pins, 12)?;
     let catalog = fetch_catalog(&fetch, &HostChain::new(None, Some(&server_host), None)).await;
     assert!(catalog.offers.is_empty());
     assert_eq!(
         catalog.failed.first().map(|failed| failed.reason),
         Some(HostFailure::KeyChanged)
     );
-    harness.shutdown();
+    relayed.harness.shutdown();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_whose_map_host_does_not_answer_says_so() -> TestResult {
+    let relayed = Relayed::start(None)?;
+    let fetch = relayed.fetch(Arc::new(Pins::default()), 12)?;
+    let host = pingers_map_downloads::MapHost::new(
+        &MapHostUrl::new(HARNESS_MAP_HOST.to_owned())?,
+        pingers_map_downloads::MapHostSource::Server,
+    );
+    // The server's own answer (502: its map host's gateway did not answer), not a sealed one.
+    assert!(matches!(
+        fetch.get(&host, "/catalog.json", Vec::new()).await,
+        Err(MapsError::Status { status: 502 })
+    ));
+    relayed.harness.shutdown();
     Ok(())
 }
