@@ -275,3 +275,23 @@ impl Reader<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod rest_tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use super::*;
+
+    #[test]
+    fn the_rest_is_everything_after_what_was_read() -> Result<(), ClientError> {
+        let mut writer = Writer(Vec::new());
+        writer.fixed(&[1, 2]);
+        writer.fixed(&[3, 4, 5]);
+        let mut reader = Reader { bytes: &writer.0 };
+        assert_eq!(reader.fixed::<2>()?, [1, 2]);
+        assert_eq!(reader.rest(), [3, 4, 5]);
+        // Taken: the record then ends cleanly.
+        reader.end()?;
+        Ok(())
+    }
+}

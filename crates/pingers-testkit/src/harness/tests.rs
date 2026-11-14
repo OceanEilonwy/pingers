@@ -160,6 +160,44 @@ mod running {
         Ok(())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_parameters_advertise_the_push_relay_and_a_map_host() -> TestResult {
+        use pingers_proto::WireDecode as _;
+
+        let harness = InProcessHarness::start(&HarnessConfig::default())?;
+        let endpoints = harness.endpoints().clone();
+        // Public: the server answers it directly too.
+        let (status, body) = exchange(endpoints.server, get("/v1/params")?).await?;
+        assert_eq!(status, StatusCode::OK);
+        let params = pingers_proto::Params::decode(&body)?;
+        let public_key: [u8; 32] = endpoints.push_relay_key.as_slice().try_into()?;
+        let hash = pingers_crypto::key_config_hash(
+            &pingers_proto::PushRelayKeyConfig {
+                key_id: pingers_proto::PushRelayKeyId::new(1),
+                public_key,
+            }
+            .to_bytes(),
+        );
+        let [listed] = params.push_relays.as_slice() else {
+            return Err("one push relay".into());
+        };
+        assert_eq!(listed.relay_id, super::super::HARNESS_PUSH_RELAY_ID);
+        assert_eq!(
+            listed.url.as_str(),
+            format!("https://{}", endpoints.push_relay)
+        );
+        assert_eq!(listed.key_config_hash, hash);
+        assert_eq!(
+            params
+                .map_host
+                .as_ref()
+                .map(pingers_proto::MapHostUrl::as_str),
+            Some(super::super::HARNESS_MAP_HOST)
+        );
+        harness.shutdown();
+        Ok(())
+    }
+
     #[test]
     fn keys_follow_the_seed() -> TestResult {
         let start = |seed| {

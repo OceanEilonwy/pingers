@@ -26,8 +26,9 @@ use super::sync::Net;
 use crate::snapshot::{InviteUrl, Name};
 use crate::{ClientError, Unavailable};
 
-/// A Party subscription lives 30 days and is renewed by the member (design B.4.9).
-const PARTY_SUBSCRIPTION: Duration = Duration::from_hours(30 * 24);
+/// A Party subscription lives as long as a sealed token: 30 days, renewed by the member
+/// (design B.4.9).
+const PARTY_SUBSCRIPTION: Duration = super::push::TOKEN_LIFETIME;
 
 /// A reply mailbox lives a day: long enough for the inviter to see the request.
 const REPLY_LIFETIME: Duration = Duration::from_hours(24);

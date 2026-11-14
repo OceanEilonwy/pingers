@@ -438,6 +438,73 @@ async fn the_push_client_sends_the_credential_and_body_and_maps_the_status() -> 
     Ok(())
 }
 
+/// A push relay on loopback whose `GET /v1/config` answers `status` with `body`.
+async fn config_relay(status: StatusCode, body: Vec<u8>) -> Result<SocketAddr, TestError> {
+    let router = Router::new().route(
+        "/v1/config",
+        axum::routing::get(move || {
+            let body = body.clone();
+            async move { (status, body) }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    Ok(address)
+}
+
+/// A relay config whose encoding is exactly `length` bytes.
+fn config_of_length(length: usize) -> Result<Vec<u8>, TestError> {
+    let max_time_to_live = TimeToLive::new(Duration::from_hours(24))?;
+    let config = |operator: String| pingers_proto::PushRelayConfig {
+        key_config: pingers_proto::PushRelayKeyConfig {
+            key_id: pingers_proto::PushRelayKeyId::new(1),
+            public_key: [5; 32],
+        },
+        platforms: vec![pingers_proto::PushPlatform::Fcm],
+        max_time_to_live,
+        operator,
+    };
+    // The operator's length header grows by two bytes past 255 characters; aim past it.
+    let base = config("x".repeat(300)).encode()?.len();
+    let extra = length.checked_sub(base).ok_or("too short")?;
+    let operator = "x".repeat(extra.saturating_add(300));
+    let encoded = config(operator).encode()?;
+    if encoded.len() != length {
+        return Err("length not reached".into());
+    }
+    Ok(encoded)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_push_relay_config_is_passed_on_only_when_it_is_one() -> TestResult {
+    let clock = ManualClock::new(UnixSeconds::new(1));
+    let relay = HttpPushRelay::new(Arc::new(clock), Duration::from_secs(10), Vec::new())?;
+    let largest = config_of_length(crate::tasks::MAX_RELAY_CONFIG_BYTES)?;
+    let too_large = crate::tasks::MAX_RELAY_CONFIG_BYTES
+        .checked_add(1)
+        .ok_or("overflow")?;
+    let small = config_of_length(400)?;
+    for (status, body, expected) in [
+        (StatusCode::OK, small.clone(), Ok(small.clone())),
+        (StatusCode::OK, largest.clone(), Ok(largest)),
+        (
+            StatusCode::OK,
+            config_of_length(too_large)?,
+            Err(RelayUnreachable),
+        ),
+        (StatusCode::OK, b"not cbor".to_vec(), Err(RelayUnreachable)),
+        (StatusCode::NOT_FOUND, small, Err(RelayUnreachable)),
+    ] {
+        let address = config_relay(status, body).await?;
+        let fetched = relay.fetch_config(&format!("http://{address}/")).await;
+        assert_eq!(fetched, expected, "{status}");
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unreachable_or_silent_relay_is_unreachable() -> TestResult {
     let clock = ManualClock::new(UnixSeconds::new(1));

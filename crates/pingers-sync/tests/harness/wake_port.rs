@@ -99,6 +99,7 @@ async fn a_knock_carries_an_alert_subscription_only_with_wake_pushes_on() -> Tes
     let device = world.device()?;
     let lifetime = TimeToLive::new(Duration::from_hours(1))?;
     assert!(device.engine.knock_subscription(lifetime)?.is_none());
+    assert!(device.engine.party_subscription(lifetime)?.is_none());
 
     let knock_relay = PushRelayPrivateKey::generate(&mut seeded_rng(3));
     let alert_relay = PushRelayPrivateKey::generate(&mut seeded_rng(4));
@@ -122,6 +123,14 @@ async fn a_knock_carries_an_alert_subscription_only_with_wake_pushes_on() -> Tes
             blob: &subscription.push.blob,
         },
     )?;
+    // A joiner's Party subscription is sealed the same way, fresh each time.
+    let party = device
+        .engine
+        .party_subscription(lifetime)?
+        .ok_or(TestError::Unexpected("no Party subscription"))?;
+    assert_eq!(party.push.key_id.get(), 2);
+    assert_eq!(party.time_to_live, lifetime);
+    assert_ne!(party.id, subscription.id);
 
     // Knock mailboxes are sealed with the knock push: the harness does not list its relay, so the
     // server refuses it, which shows the push was attached.

@@ -87,9 +87,9 @@ impl HttpPushRelay {
     /// with it: the route is public at the relay.
     pub(crate) fn fetch_config(
         &self,
-        target: &RelayTarget,
+        relay_url: &str,
     ) -> impl Future<Output = Result<Vec<u8>, RelayUnreachable>> + Send + use<> {
-        let url = format!("{}{CONFIG_PATH}", target.url.as_str().trim_end_matches('/'));
+        let url = format!("{}{CONFIG_PATH}", relay_url.trim_end_matches('/'));
         let sent = self.client.get(url).send();
         let timer = Arc::clone(&self.timer);
         let timeout = self.timeout;
@@ -117,7 +117,7 @@ impl HttpPushRelay {
 const CONFIG_PATH: &str = "/v1/config";
 
 /// The most a push relay's config may hold: 41 bytes of key, a few platforms, an operator.
-const MAX_RELAY_CONFIG_BYTES: usize = 4096;
+pub(crate) const MAX_RELAY_CONFIG_BYTES: usize = 4096;
 
 /// `{url}/v1/push`, without doubling a trailing slash.
 pub(crate) fn push_url(target: &RelayTarget) -> String {
@@ -236,7 +236,7 @@ impl Tasks {
         relay: RelayId,
     ) -> Option<impl Future<Output = Result<Vec<u8>, RelayUnreachable>> + Send + use<>> {
         let target = self.directory.resolve(&RelayRef::Listed(relay))?;
-        Some(self.relay.fetch_config(&target))
+        Some(self.relay.fetch_config(target.url.as_str()))
     }
 
     /// Runs `sweep` every `interval`.

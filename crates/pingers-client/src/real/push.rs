@@ -25,7 +25,7 @@ use crate::{ClientError, Platform, PushTokens, Unavailable};
 
 /// The longest a sealed token is good for: a Party subscription lives 30 days (design B.4.9),
 /// unless the relay allows less.
-const TOKEN_LIFETIME: core::time::Duration = core::time::Duration::from_hours(30 * 24);
+pub(super) const TOKEN_LIFETIME: core::time::Duration = core::time::Duration::from_hours(30 * 24);
 
 /// The instance's push relay and the pins its key must match.
 #[derive(Clone, Debug)]
@@ -254,4 +254,67 @@ fn wake_push(
         knock: seal(PushClass::Location, Urgency::Alert),
         alert: seal(PushClass::Standard, Urgency::Alert),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use core::time::Duration;
+
+    use pingers_crypto::PushRelayPublicKey;
+    use pingers_proto::{
+        PushPlatform, PushRelayConfig, PushRelayKeyConfig, PushRelayKeyId, PushToken, RelayId,
+    };
+    use pingers_time::UnixSeconds;
+
+    use super::*;
+
+    type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
+
+    fn relay(max_days: u64) -> TestResult<VerifiedPushRelay> {
+        Ok(VerifiedPushRelay {
+            relay: RelayId::new(7),
+            key: PushRelayPublicKey::new(3, [9; 32]),
+            config: PushRelayConfig {
+                key_config: PushRelayKeyConfig {
+                    key_id: PushRelayKeyId::new(3),
+                    public_key: [9; 32],
+                },
+                platforms: vec![PushPlatform::UnifiedPush],
+                max_time_to_live: TimeToLive::new(Duration::from_hours(
+                    max_days.saturating_mul(24),
+                ))?,
+                operator: "relay.invalid".to_owned(),
+            },
+        })
+    }
+
+    #[test]
+    fn tokens_are_sealed_for_30_days_or_the_relay_s_limit() -> TestResult<()> {
+        let tokens = PushTokens {
+            platform: PushPlatform::UnifiedPush,
+            token: PushToken::from_bytes(b"endpoint".to_vec()),
+        };
+        let now = UnixSeconds::new(1_000_000);
+        let long = wake_push(&relay(60)?, &tokens, now)?;
+        assert_eq!(long.alert.token.not_after.get(), 1_000_000 + 30 * 86_400);
+        assert_eq!(long.knock.token.class, PushClass::Location);
+        assert_eq!(long.alert.token.class, PushClass::Standard);
+        assert_eq!(long.alert.relay, RelayRef::Listed(RelayId::new(7)));
+        assert_eq!(long.alert.relay_key.key_id(), 3);
+        let short = wake_push(&relay(2)?, &tokens, now)?;
+        assert_eq!(short.knock.token.not_after.get(), 1_000_000 + 2 * 86_400);
+        Ok(())
+    }
+
+    #[test]
+    fn origins_match_with_or_without_a_trailing_slash() {
+        assert!(same_origin("https://push.invalid/", "https://push.invalid"));
+        assert!(same_origin("https://push.invalid", "https://push.invalid"));
+        assert!(!same_origin(
+            "https://push.invalid",
+            "https://other.invalid"
+        ));
+    }
 }
