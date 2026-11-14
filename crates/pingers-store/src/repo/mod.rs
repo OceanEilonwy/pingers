@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Typed repositories, one per table (or per small family of tables that change together).
 
+pub(crate) mod account;
 pub(crate) mod anon;
 pub(crate) mod board;
 pub(crate) mod mailbox;

@@ -112,6 +112,7 @@ pub use pingers_proto::RootEpoch;
 pub use database::{Database, Session};
 pub use error::StoreError;
 pub use key::DatabaseKey;
+pub use repo::account::{AccountBearer, AccountRegistration, Accounts};
 pub use repo::anon::{
     HeldToken, PrivacyPassTokens, RlnCounters, RlnIdentities, RlnIdentity, RlnTree, TreeLeaf,
 };
