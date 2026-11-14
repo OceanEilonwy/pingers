@@ -364,6 +364,10 @@ impl Transport for OhttpTransport {
         self.shared.check_key_config().await
     }
 
+    fn gateway_key_hash(&self) -> Option<KeyConfigHash> {
+        self.key_config_hash()
+    }
+
     fn kind(&self) -> TransportKind {
         TransportKind::Ohttp
     }

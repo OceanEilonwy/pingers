@@ -191,6 +191,13 @@ pub trait Transport: Send + Sync {
         Err(TransportError::ClassNotAllowed)
     }
 
+    /// The hash of the gateway key config this transport verified (after a request or
+    /// [`Transport::check_gateway_key`]), for the account record (`identity.server_pin`) and
+    /// Party state. `None` before one was verified, and for a transport without a gateway key.
+    fn gateway_key_hash(&self) -> Option<pingers_proto::KeyConfigHash> {
+        None
+    }
+
     /// What this transport is.
     fn kind(&self) -> TransportKind;
 }

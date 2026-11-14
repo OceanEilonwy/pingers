@@ -79,6 +79,11 @@ impl Transport for Router {
         self.routes.anonymous.check_gateway_key().await
     }
 
+    /// The anonymous route's gateway key, as for the check.
+    fn gateway_key_hash(&self) -> Option<pingers_proto::KeyConfigHash> {
+        self.routes.anonymous.gateway_key_hash()
+    }
+
     /// The anonymous route's kind; [`Router::kind_for`] answers per class.
     fn kind(&self) -> TransportKind {
         self.routes.anonymous.kind()
@@ -158,6 +163,11 @@ mod tests {
             })
         }
 
+        fn gateway_key_hash(&self) -> Option<pingers_proto::KeyConfigHash> {
+            let fill = u8::try_from(self.status % 256).ok()?;
+            Some(pingers_proto::KeyConfigHash::from_bytes([fill; 32]))
+        }
+
         fn kind(&self) -> TransportKind {
             self.kind
         }
@@ -215,6 +225,10 @@ mod tests {
             router.check_gateway_key().await,
             Err(TransportError::Status { status: 201 })
         ));
+        assert_eq!(
+            router.gateway_key_hash(),
+            Some(pingers_proto::KeyConfigHash::from_bytes([201; 32]))
+        );
 
         assert_eq!(anonymous.seen(), [PrivacyClass::Anonymous]);
         assert_eq!(identified.seen(), [PrivacyClass::Identified]);

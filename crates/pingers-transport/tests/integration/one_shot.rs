@@ -207,6 +207,9 @@ async fn first_use_pins_the_config_fetched_through_the_relay() -> Result<(), Tes
     )
     .await??;
     assert_eq!(client.key_config_hash(), Some(world.gateway.config.hash()));
+    // The trait answers the same, for callers that hold only a `dyn Transport`.
+    let shared: &dyn Transport = &client;
+    assert_eq!(shared.gateway_key_hash(), Some(world.gateway.config.hash()));
     Ok(())
 }
 
