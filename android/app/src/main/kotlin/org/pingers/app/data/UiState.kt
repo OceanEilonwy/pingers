@@ -172,16 +172,64 @@ data class InviteState(
     val invitations: List<Invitation>,
 )
 
-data class AcceptInviteState(
-    val inviter: String,
-    val partyName: String,
-    val partyInitials: String,
+/** Open invite (canvas JoinA1): nothing about the Party yet, only the name to go by. */
+data class OpenInviteState(
+    val title: String,
+    val subtitle: String,
+    val whatJoiningMeans: String,
+    val points: List<String>,
+    val nameLabel: String,
+    /** The name to prefill. */
+    val name: String,
+    val ask: String,
+    val notNow: String,
+    /** Why the last "Ask to join" failed, if it did. */
+    val error: String? = null,
+)
+
+/** Asked to join (canvas JoinA2): the code to read to the inviter. */
+data class AskedToJoinState(
+    val title: String,
+    val subtitle: String,
+    val readCode: String,
+    val code: String,
+    val warning: String,
+    val leaveNote: String,
+    val done: String,
+    val withdraw: String,
+)
+
+/** You're in (canvas JoinA3), once the inviter let this phone in. */
+data class LetInState(
+    val party: PartyId,
     val colour: PartyColour,
+    val partyInitials: String,
+    val letInBy: String,
+    val partyName: String,
     val preview: List<Person>,
-    val moreMembers: Int,
-    val members: Int,
-    val spots: Int,
-    val safetyCode: String,
+    /** "+2", when there are more members than avatars. */
+    val more: String?,
+    val counts: String,
+    val checked: String,
+    val open: String,
+    val leave: String,
+    val notificationTitle: String,
+    val notificationBody: String,
+)
+
+/** "Ben asked to join" (canvas InviteApprove), on the inviter's phone. */
+data class JoinRequestState(
+    val id: InviteId,
+    val avatar: String,
+    val title: String,
+    val subtitle: String,
+    val ask: String,
+    val code: String,
+    val warning: String,
+    val whenHeading: String,
+    val whenBody: String,
+    val letIn: String,
+    val turnAway: String,
 )
 
 sealed interface SpotShape {

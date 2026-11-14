@@ -56,7 +56,10 @@ pub use identity::{
     bearer_digest, sign_auth_challenge, sign_registration, verify_auth_challenge,
     verify_registration,
 };
-pub use invite::{InviteSecret, open_join_request, seal_join_request, seal_join_request_in_class};
+pub use invite::{
+    InviteSecret, JoinCode, join_code, open_join_request, seal_join_request,
+    seal_join_request_in_class,
+};
 pub use keyed_hash::{KeyedHash, KeyedHashKey, KeyedHashPurpose, keyed_hash};
 pub use labels::ExporterLabel;
 pub use location::{

@@ -28,7 +28,8 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
 - **Location**: `GrantKeyPair::generate`, `seal_location`, `open_location`, `dummy_location`
   (implemented), `seal_location_grant`, `open_location_grant`, `seal_location_ask`,
   `open_location_ask`.
-- **Invites**: `seal_join_request`, `open_join_request` (padded), `seal_join_request_in_class`.
+- **Invites**: `seal_join_request`, `open_join_request` (padded), `seal_join_request_in_class`,
+  `join_code(&InviteSecret, key_package) -> JoinCode` (12 digits, `Display` in groups of four).
 - Every fallible function returns `CryptoError`; unreachable primitive errors map to
   `CryptoError::Internal`, never a panic.
 
@@ -109,6 +110,11 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
   an X-Wing key package 4 KiB), so the post reveals only the class. Added
   `seal_join_request_in_class(secret, request, SizeClass, rng)` for callers that want a fixed
   class. `open_join_request` strips the padding and refuses non-zero padding.
+- **Join code** (join flow A, 2026-11-14): `be64(HMAC-SHA256(HKDF-Expand(invite_secret,
+  "pingers/v1/join-code", 32), key_package)[..8]) mod 10^12`, 12 digits. Over the whole key
+  package (it carries and is signed by the joiner's signature key) so neither side needs MLS to
+  compute it and the code names exactly the leaf that would be added. The modulo bias is below
+  10^-7. Vectors in `vectors/crypto/join-code.json` (HKDF and HMAC steps checked with openssl).
 - **Join key** is `HKDF-Expand(invite_secret, "join", 32)` without an Extract step: the invite
   secret is already 32 uniform bytes, as `PR_e` is for the Spot keys.
 - **Group request signature input** uses `be32` length prefixes for method and path.

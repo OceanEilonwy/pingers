@@ -71,6 +71,8 @@ object PIcons {
         "servers", 2f, rect(3f, 4f, 18f, 7f, 2f), rect(3f, 13f, 18f, 7f, 2f), "M7 7.5h.01M7 16.5h.01",
     )
     val Bell = icon("bell", 2.2f, "M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9", "M13.7 21a2 2 0 0 1-3.4 0")
+    val Mail = icon("mail", 2f, "M4 7h16v12H4z", "M4 7l8 6 8-6")
+    val Clock = icon("clock", 2f, circle(12f, 12f, 9f), "M12 7v5l3 2")
     val Globe = icon("globe", 2.2f, circle(12f, 12f, 9f), "M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18")
     val Trash = icon("trash", 2f, "M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14")
     val Signal = icon(
