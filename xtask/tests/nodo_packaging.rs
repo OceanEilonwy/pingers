@@ -28,7 +28,7 @@ const APPS: [(&str, &str); 4] = [
 ];
 
 /// A version of the form `cargo xtask nodo-dist` writes.
-const VERSION: &str = "0.1.0pre202611131930";
+const VERSION: &str = "0.1.0pre20261113.1930";
 
 fn packaging() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

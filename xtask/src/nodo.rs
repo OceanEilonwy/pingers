@@ -14,7 +14,7 @@
 //!   append them to `$GITHUB_OUTPUT`). With `--nodo`, it also copies the tarball to
 //!   `<checkout>/build/hostdir/sources/pingers-server-<version>/`, where xbps-src looks before
 //!   fetching. The version is the workspace version, `pre`, and the commit time in UTC
-//!   (`0.1.0pre202611131930`), so later commits sort later.
+//!   (`0.1.0pre20261113.1930`), so later commits sort later.
 //! - `cargo xtask dev-ca [--san <name or address>]...`: a throwaway CA and a server certificate
 //!   for `localhost`, `127.0.0.1` and `10.0.2.2` (the emulator's view of this machine), in
 //!   `target/dev-ca/`: `ca.pem` (for `PINGERS_EXTRA_CA`), `leaf.pem` and `leaf.key` (for the dev
@@ -85,7 +85,9 @@ impl Recipe<'_> {
     }
 }
 
-/// The xbps version for a workspace version and a commit time (`YYYYMMDDHHMM`, UTC).
+/// The xbps version for a workspace version and a commit time (`YYYYMMDDHHMM`, UTC):
+/// `<version>pre<YYYYMMDD>.<HHMM>`. The date and time are separate components because nodo-feed,
+/// like xbps, compares each as a 32-bit number and refuses a version it cannot compare.
 fn package_version(workspace_version: &str, commit_time: &str) -> Result<String> {
     let plain = |text: &str| {
         !text.is_empty()
@@ -93,10 +95,16 @@ fn package_version(workspace_version: &str, commit_time: &str) -> Result<String>
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.')
     };
-    if !plain(workspace_version) || commit_time.len() != 12 || !plain(commit_time) {
+    let (Some(date), Some(time)) = (commit_time.get(..8), commit_time.get(8..)) else {
+        bail!("cannot make an xbps version from the commit time {commit_time:?}");
+    };
+    if !plain(workspace_version)
+        || time.len() != 4
+        || !commit_time.bytes().all(|byte| byte.is_ascii_digit())
+    {
         bail!("cannot make an xbps version from {workspace_version:?} and {commit_time:?}");
     }
-    Ok(format!("{workspace_version}pre{commit_time}"))
+    Ok(format!("{workspace_version}pre{date}.{time}"))
 }
 
 /// Rewrites `cargo vendor`'s printed configuration to name the vendor directory relative to the
@@ -399,7 +407,7 @@ mod tests {
     fn versions_sort_by_commit_time_and_stay_valid_for_xbps() -> Result<()> {
         assert_eq!(
             package_version("0.1.0", "202611131930")?,
-            "0.1.0pre202611131930"
+            "0.1.0pre20261113.1930"
         );
         // xbps versions cannot hold '-' or '_', and the time must be the full minute stamp.
         assert!(package_version("0.1.0-rc1", "202611131930").is_err());
@@ -426,7 +434,7 @@ mod tests {
                 .join("../packaging/nodo/srcpkgs/pingers-server/template"),
         )?;
         let filled = Recipe {
-            version: "0.1.0pre202611131930",
+            version: "0.1.0pre20261113.1930",
             commit: "c0ffee",
             sha256: "ab",
         }
@@ -434,7 +442,7 @@ mod tests {
         for placeholder in ["@VERSION@", "@COMMIT@", "@SOURCE_SHA256@"] {
             assert!(!filled.contains(placeholder), "{placeholder} is left");
         }
-        assert!(filled.contains("version=0.1.0pre202611131930\n"));
+        assert!(filled.contains("version=0.1.0pre20261113.1930\n"));
         assert!(filled.contains("_commit=c0ffee\n"));
         assert!(filled.contains("checksum=\"ab\n"));
         Ok(())
