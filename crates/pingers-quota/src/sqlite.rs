@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Both quota stores in one SQLite file (design C.1: `rln_leaf`, `rln_root`, `pp_key`,
-//! `pp_spent`, `pp_quota`).
+//! Every quota store in one SQLite file (design C.1: `account`, `account_bearer`, `rln_leaf`,
+//! `rln_root`, `pp_key`, `pp_spent`, `pp_quota`).
 
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 use pingers_anon::{IssuerKey, LeafValue};
+use pingers_crypto::{AccountPublicKey, BearerDigest};
 use pingers_proto::{AccountId, HourlyRoot, MembershipIndex, RootEpoch};
 use pingers_time::UnixSeconds;
 use rusqlite::{Connection, OptionalExtension as _, Transaction, TransactionBehavior, params};
@@ -13,11 +14,24 @@ use zeroize::Zeroizing;
 
 use crate::QuotaError;
 use crate::store::{
-    Allowance, Issuance, IssuanceDay, IssuerKeyRecord, MembershipStore, PrivacyPassStore, Spend,
-    StoredLeaf, TokenNonce, Zeroing,
+    AccountInsert, AccountStore, Allowance, Issuance, IssuanceDay, IssuerKeyRecord,
+    MembershipStore, NewAccount, PrivacyPassStore, SignupWindow, Spend, StoredBearer, StoredLeaf,
+    TokenNonce, Zeroing,
 };
 
 const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS account (
+    account_id BLOB PRIMARY KEY,
+    sig_pk     BLOB NOT NULL,
+    created_at INTEGER NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS account_created ON account (created_at);
+CREATE TABLE IF NOT EXISTS account_bearer (
+    digest     BLOB PRIMARY KEY,
+    account_id BLOB NOT NULL,
+    expires_at INTEGER NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS account_bearer_account ON account_bearer (account_id);
 CREATE TABLE IF NOT EXISTS rln_leaf (
     idx         INTEGER PRIMARY KEY,
     leaf        BLOB NOT NULL,
@@ -76,10 +90,22 @@ impl SqliteQuotaStore {
     }
 
     fn with_connection(connection: Connection) -> Result<Self, QuotaError> {
+        // A deleted account's key and bearer digests, and pruned issuer keys, are overwritten
+        // rather than left in free pages of the file.
+        connection.pragma_update(None, "secure_delete", "ON")?;
         connection.execute_batch(SCHEMA)?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
+    }
+
+    /// Copies the write-ahead log into the database and empties it, so deleted rows (already
+    /// overwritten there by `secure_delete`) do not survive in the log file either. A no-op
+    /// for an in-memory database.
+    fn truncate_wal(&self) -> Result<(), QuotaError> {
+        let connection = self.lock()?;
+        connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        Ok(())
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, QuotaError> {
@@ -292,6 +318,128 @@ impl PrivacyPassStore for SqliteQuotaStore {
             transaction.execute(
                 "DELETE FROM pp_quota WHERE day < ?1",
                 [IssuanceDay::containing(now).get()],
+            )?;
+            Ok(())
+        })?;
+        // Retired issuer secret keys must not survive in the log file.
+        self.truncate_wal()
+    }
+}
+
+fn account_id_column(bytes: Vec<u8>) -> Result<AccountId, QuotaError> {
+    Ok(AccountId::from_bytes(fixed(bytes, "account_id")?))
+}
+
+impl AccountStore for SqliteQuotaStore {
+    fn insert_account(
+        &self,
+        account: &NewAccount,
+        window: SignupWindow,
+    ) -> Result<AccountInsert, QuotaError> {
+        self.transact(|transaction| {
+            let id = account.id.as_bytes().as_slice();
+            let exists = transaction
+                .query_row("SELECT 1 FROM account WHERE account_id = ?1", [id], |_| {
+                    Ok(())
+                })
+                .optional()?
+                .is_some();
+            if exists {
+                return Ok(AccountInsert::Existing);
+            }
+            let recent: u64 = transaction.query_row(
+                "SELECT COUNT(*) FROM account WHERE created_at >= ?1",
+                [window.since.get()],
+                |row| row.get(0),
+            )?;
+            if recent >= u64::from(window.max) {
+                return Ok(AccountInsert::WindowFull);
+            }
+            transaction.execute(
+                "INSERT INTO account (account_id, sig_pk, created_at) VALUES (?1, ?2, ?3)",
+                params![
+                    id,
+                    account.key.as_bytes().as_slice(),
+                    account.created_at.get()
+                ],
+            )?;
+            Ok(AccountInsert::Created)
+        })
+    }
+
+    fn account_key(&self, account: &AccountId) -> Result<Option<AccountPublicKey>, QuotaError> {
+        self.transact(|transaction| {
+            transaction
+                .query_row(
+                    "SELECT sig_pk FROM account WHERE account_id = ?1",
+                    [account.as_bytes().as_slice()],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .optional()?
+                .map(|key| Ok(AccountPublicKey::from_bytes(fixed(key, "sig_pk")?)))
+                .transpose()
+        })
+    }
+
+    fn delete_account(&self, account: &AccountId) -> Result<(), QuotaError> {
+        self.transact(|transaction| {
+            let id = account.as_bytes().as_slice();
+            transaction.execute("DELETE FROM account_bearer WHERE account_id = ?1", [id])?;
+            transaction.execute("DELETE FROM account WHERE account_id = ?1", [id])?;
+            Ok(())
+        })?;
+        self.truncate_wal()
+    }
+
+    fn insert_bearer(&self, bearer: &StoredBearer, keep: usize) -> Result<(), QuotaError> {
+        self.transact(|transaction| {
+            let digest = bearer.digest.as_bytes().as_slice();
+            let account = bearer.account.as_bytes().as_slice();
+            transaction.execute(
+                "INSERT OR REPLACE INTO account_bearer (digest, account_id, expires_at)
+                 VALUES (?1, ?2, ?3)",
+                params![digest, account, bearer.expires_at.get()],
+            )?;
+            // The new bearer always stays; of the others, those that expire last.
+            let others = u64::try_from(keep.saturating_sub(1)).unwrap_or(u64::MAX);
+            transaction.execute(
+                "DELETE FROM account_bearer
+                 WHERE account_id = ?1 AND digest != ?2 AND digest NOT IN (
+                     SELECT digest FROM account_bearer
+                     WHERE account_id = ?1 AND digest != ?2
+                     ORDER BY expires_at DESC, digest DESC LIMIT ?3
+                 )",
+                params![account, digest, others],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn bearer_account(
+        &self,
+        digest: &BearerDigest,
+        now: UnixSeconds,
+    ) -> Result<Option<AccountId>, QuotaError> {
+        self.transact(|transaction| {
+            transaction
+                .query_row(
+                    "SELECT b.account_id FROM account_bearer b
+                     JOIN account a ON a.account_id = b.account_id
+                     WHERE b.digest = ?1 AND b.expires_at > ?2",
+                    params![digest.as_bytes().as_slice(), now.get()],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .optional()?
+                .map(account_id_column)
+                .transpose()
+        })
+    }
+
+    fn prune_bearers(&self, now: UnixSeconds) -> Result<(), QuotaError> {
+        self.transact(|transaction| {
+            transaction.execute(
+                "DELETE FROM account_bearer WHERE expires_at <= ?1",
+                [now.get()],
             )?;
             Ok(())
         })
