@@ -9,7 +9,9 @@
 
 use std::collections::HashSet;
 
-use pingers_proto::{ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId};
+use pingers_proto::{
+    ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, PartyId,
+};
 
 use crate::common::Name;
 use crate::home::{CoPresenceAlert, meetup_names};
@@ -23,6 +25,8 @@ pub enum Notification {
     MeetupStarted(CoPresenceAlert),
     /// Someone opened this device's invite and waits to be let in.
     JoinRequest {
+        /// The Party.
+        party: PartyId,
         /// The invite.
         invite: MailboxId,
         /// The Party.
@@ -53,6 +57,8 @@ pub enum Notification {
         spot_name: Name,
         /// Who asks.
         from: Name,
+        /// Their leaf in the Meetup.
+        asker: LeafIndex,
     },
 }
 
@@ -67,6 +73,26 @@ pub enum NotificationKey {
     Invite(MailboxId),
     /// A location request.
     LocationRequest(LocationRequestId),
+}
+
+impl NotificationKey {
+    /// A number for the platform's notification id, the same for the same key: a tag for
+    /// the kind in the top byte over the first three bytes of the id. Two keys of one kind
+    /// collide only if their random ids share three bytes.
+    #[must_use]
+    pub fn stable_id(self) -> u32 {
+        let (tag, bytes): (u8, &[u8]) = match &self {
+            Self::Meetup(group) => (1, group.as_bytes()),
+            Self::Chat(group) => (2, group.as_bytes()),
+            Self::Invite(invite) => (3, invite.as_bytes()),
+            Self::LocationRequest(request) => (4, request.as_bytes()),
+        };
+        let mut id = [tag, 0, 0, 0];
+        for (target, source) in id.iter_mut().skip(1).zip(bytes) {
+            *target = *source;
+        }
+        u32::from_be_bytes(id)
+    }
 }
 
 impl Notification {
@@ -134,6 +160,7 @@ pub fn notifications(before: &ClientSnapshot, after: &ClientSnapshot) -> Vec<Not
             request: request.id,
             spot_name: names.spot,
             from: member_name(meetup, request.from),
+            asker: request.from,
         });
     }
     let opened: HashSet<MailboxId> = before
@@ -149,6 +176,7 @@ pub fn notifications(before: &ClientSnapshot, after: &ClientSnapshot) -> Vec<Not
                 && !opened.contains(&invite.id)
             {
                 found.push(Notification::JoinRequest {
+                    party: party.id,
                     invite: invite.id,
                     party_name: party.name.clone(),
                     name: name.clone(),
@@ -157,6 +185,33 @@ pub fn notifications(before: &ClientSnapshot, after: &ClientSnapshot) -> Vec<Not
         }
     }
     found
+}
+
+/// Everything a wake changed that the app is told about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Changes {
+    /// What to show outside the app.
+    pub notifications: Vec<Notification>,
+    /// Meetups that ended (their content is gone).
+    pub meetups_ended: Vec<GroupId>,
+    /// Whether Parties, rosters, Spots or invites changed.
+    pub parties_changed: bool,
+}
+
+/// What changed from `before` to `after`.
+#[must_use]
+pub fn changes(before: &ClientSnapshot, after: &ClientSnapshot) -> Changes {
+    let live: HashSet<GroupId> = after.meetups.iter().map(|meetup| meetup.id).collect();
+    Changes {
+        notifications: notifications(before, after),
+        meetups_ended: before
+            .meetups
+            .iter()
+            .map(|meetup| meetup.id)
+            .filter(|meetup| !live.contains(meetup))
+            .collect(),
+        parties_changed: before.parties != after.parties,
+    }
 }
 
 /// Every message and reply in a Meetup's chat, in order.

@@ -32,6 +32,7 @@ pub mod snapshot;
 pub use client::{Client, ClientConfig};
 pub use error::{ClientError, Unavailable};
 pub use pingers_ohttp::KeyPins;
+pub use pingers_wake::PushPriority;
 pub use ports::Crates;
 pub use real::{Instance, Outside, Trust};
 

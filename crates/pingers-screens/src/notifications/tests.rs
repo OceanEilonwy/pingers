@@ -5,6 +5,7 @@ use pingers_proto::{ChatMessageId, MailboxId};
 
 use super::*;
 use crate::fixtures::{self, FixtureError, chloe, location_request_id, meetup_id, sam};
+use crate::snapshot::Party;
 use crate::snapshot::{ChatMessage, SafetyCode};
 
 fn names(texts: &[&str]) -> Result<Vec<Name>, FixtureError> {
@@ -100,6 +101,11 @@ fn an_invite_opened_since_shows_a_join_request() -> Result<(), FixtureError> {
     assert_eq!(
         found,
         [Notification::JoinRequest {
+            party: after
+                .parties
+                .first()
+                .map(|party: &Party| party.id)
+                .ok_or(FixtureError::Missing)?,
             invite: MailboxId::from_bytes([50; 16]),
             party_name: Name::new("Climbing crew").map_err(|_| FixtureError::Missing)?,
             name: Name::new("Ben").map_err(|_| FixtureError::Missing)?,
@@ -139,5 +145,36 @@ fn a_new_location_request_shows_who_asks() -> Result<(), FixtureError> {
         found.first(),
         Some(Notification::LocationRequest { meetup, .. }) if *meetup == meetup_id()
     ));
+    Ok(())
+}
+
+#[test]
+fn the_stable_id_is_per_kind_and_per_thing() {
+    let meetup = NotificationKey::Meetup(meetup_id());
+    let chat = NotificationKey::Chat(meetup_id());
+    assert_eq!(meetup.stable_id(), 0x0114_1414);
+    assert_eq!(chat.stable_id(), 0x0214_1414);
+    assert_eq!(
+        NotificationKey::Invite(MailboxId::from_bytes([50; 16])).stable_id(),
+        0x0332_3232
+    );
+    assert_eq!(
+        NotificationKey::LocationRequest(location_request_id()).stable_id(),
+        0x041e_1e1e
+    );
+}
+
+#[test]
+fn ended_meetups_and_party_changes_are_reported() -> Result<(), FixtureError> {
+    let before = fixtures::snapshot()?;
+    let mut after = before.clone();
+    after.meetups.clear();
+    let ended = changes(&before, &after);
+    assert_eq!(ended.meetups_ended, [meetup_id()]);
+    assert!(!ended.parties_changed);
+    assert!(ended.notifications.is_empty());
+    after.parties.pop();
+    assert!(changes(&before, &after).parties_changed);
+    assert_eq!(changes(&before, &before).meetups_ended, []);
     Ok(())
 }

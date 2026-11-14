@@ -17,7 +17,7 @@ use pingers_client::{Client, ClientConfig, ClientError};
 use pingers_screens as screens;
 
 use crate::CoreError;
-use crate::callbacks::{Events, EventsAdapter, Platform, PlatformAdapter};
+use crate::callbacks::{Events, EventsAdapter, Platform, PlatformAdapter, PushPriority};
 use crate::geo::{Coordinate, Fence, Fix};
 use crate::ids::{
     InviteId, LocationRequestId, MeetupId, MemberId, MessageId, PartyId, SpotId, ZoneId,
@@ -271,6 +271,8 @@ impl TryFrom<InstanceConfig> for pingers_client::Instance {
 #[derive(uniffi::Object)]
 pub struct Core {
     client: Client,
+    /// The app's events, also told what each wake changed (`notifications.rs`).
+    events: Arc<dyn Events>,
 }
 
 impl Core {
@@ -288,11 +290,29 @@ impl Core {
                 instance: None,
             },
             Arc::new(PlatformAdapter(platform)),
-            Arc::new(EventsAdapter(events)),
+            Arc::new(EventsAdapter(Arc::clone(&events))),
             build,
         )
         .await?;
-        Ok(Arc::new(Self { client }))
+        Ok(Arc::new(Self { client, events }))
+    }
+}
+
+impl Core {
+    /// Runs a wake (a push, a fix, a geofence, a scheduled wake...) and tells the app what it
+    /// changed: notifications to post and the events the screens follow.
+    async fn woke(
+        &self,
+        wake: impl core::future::Future<Output = Result<(), ClientError>>,
+    ) -> Result<(), CoreError> {
+        let before = self.client.snapshot();
+        let result = wake.await;
+        let after = self.client.snapshot();
+        crate::notifications::tell(
+            self.events.as_ref(),
+            &pingers_screens::notifications::changes(&before, &after),
+        );
+        Ok(result?)
     }
 }
 
@@ -325,10 +345,10 @@ impl Core {
                 instance: Some(instance.try_into()?),
             },
             Arc::new(PlatformAdapter(platform)),
-            Arc::new(EventsAdapter(events)),
+            Arc::new(EventsAdapter(Arc::clone(&events))),
         )
         .await?;
-        Ok(Arc::new(Self { client }))
+        Ok(Arc::new(Self { client, events }))
     }
 
     /// The latest published state, for the screens.
@@ -666,7 +686,8 @@ impl Core {
     ///
     /// [`CoreError::Invalid`] for an impossible fix.
     pub async fn on_location(&self, fix: Fix) -> Result<(), CoreError> {
-        Ok(self.client.on_location(fix.try_into()?).await?)
+        let fix = fix.try_into()?;
+        self.woke(self.client.on_location(fix)).await
     }
 
     /// An OS geofence transition.
@@ -679,10 +700,8 @@ impl Core {
         region_id: String,
         transition: GeofenceEvent,
     ) -> Result<(), CoreError> {
-        Ok(self
-            .client
-            .on_os_geofence(region_id, transition.into())
-            .await?)
+        self.woke(self.client.on_os_geofence(region_id, transition.into()))
+            .await
     }
 
     /// A background wake.
@@ -691,7 +710,7 @@ impl Core {
     ///
     /// [`CoreError::Network`].
     pub async fn on_wake(&self) -> Result<(), CoreError> {
-        Ok(self.client.on_wake().await?)
+        self.woke(self.client.on_wake()).await
     }
 
     /// A push arrived carrying `handle` (8 bytes).
@@ -702,9 +721,25 @@ impl Core {
     pub async fn on_push(&self, handle: Vec<u8>) -> Result<(), CoreError> {
         let handle = <[u8; pingers_proto::PushHandle::LENGTH]>::try_from(handle)
             .map_err(|_| CoreError::invalid("a push handle is 8 bytes"))?;
+        let handle = pingers_proto::PushHandle::from_bytes(handle);
+        self.woke(self.client.on_push(handle)).await
+    }
+
+    /// The priority FCM delivered a message at, against the one it was sent with: the core
+    /// counts downgrades and marks wake-up pushes downgraded when they become frequent
+    /// (design B.4.9).
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Storage`] if the count cannot be stored.
+    pub async fn report_push_priority(
+        &self,
+        original: PushPriority,
+        delivered: PushPriority,
+    ) -> Result<(), CoreError> {
         Ok(self
             .client
-            .on_push(pingers_proto::PushHandle::from_bytes(handle))
+            .report_push_priority(original.into(), delivered.into())
             .await?)
     }
 
@@ -714,7 +749,7 @@ impl Core {
     ///
     /// [`CoreError::Network`].
     pub async fn on_dnd_changed(&self) -> Result<(), CoreError> {
-        Ok(self.client.on_dnd_changed().await?)
+        self.woke(self.client.on_dnd_changed()).await
     }
 
     /// The app came on screen (`true`) or left it.
@@ -728,7 +763,7 @@ impl Core {
         } else {
             Foreground::Hidden
         };
-        Ok(self.client.on_foreground(foreground).await?)
+        self.woke(self.client.on_foreground(foreground)).await
     }
 }
 
@@ -752,8 +787,26 @@ mod tests {
     use crate::views::{PartyColour, RelayStatus, TimeOfDay, ZoneDays, ZoneTimes};
 
     /// The app's side, as Kotlin would implement it: a secure store holding a database key.
+    /// The app: a secure store, and what it was told (events by name, notifications by title
+    /// and text).
     #[derive(Default)]
-    struct App(Mutex<HashMap<String, Vec<u8>>>);
+    struct App(Mutex<HashMap<String, Vec<u8>>>, Mutex<Vec<String>>);
+
+    impl App {
+        fn note(&self, told: String) {
+            self.1
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(told);
+        }
+
+        fn told(&self) -> Vec<String> {
+            self.1
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        }
+    }
 
     impl Platform for App {
         fn secure_store_get(&self, key: String) -> Result<Option<Vec<u8>>, PlatformError> {
@@ -784,17 +837,35 @@ mod tests {
     }
 
     impl Events for App {
-        fn parties_changed(&self) {}
-        fn join_requested(&self, _: PartyId) {}
-        fn meetup_started(&self, _: MeetupId) {}
+        fn parties_changed(&self) {
+            self.note("parties changed".into());
+        }
+        fn join_requested(&self, _: PartyId) {
+            self.note("join requested".into());
+        }
+        fn meetup_started(&self, _: MeetupId) {
+            self.note("meetup started".into());
+        }
         fn meetup_updated(&self, _: MeetupId) {}
-        fn meetup_message(&self, _: MeetupId) {}
+        fn meetup_message(&self, _: MeetupId) {
+            self.note("meetup message".into());
+        }
         fn peer_location(&self, _: MeetupId, _: MemberId) {}
-        fn location_request(&self, _: MeetupId, _: MemberId, _: LocationRequestId) {}
+        fn location_request(&self, _: MeetupId, from: MemberId, _: LocationRequestId) {
+            self.note(format!("location request from {}", from.leaf));
+        }
         fn location_access_changed(&self, _: MeetupId, _: MemberId) {}
-        fn meetup_ended(&self, _: MeetupId) {}
+        fn meetup_ended(&self, _: MeetupId) {
+            self.note("meetup ended".into());
+        }
         fn notice(&self, _: Notice) {}
         fn privacy_status_changed(&self) {}
+        fn notify(&self, notification: crate::notifications::CoreNotification) {
+            self.note(format!(
+                "{:?} {:#x}: {} / {}",
+                notification.kind, notification.id, notification.title, notification.body
+            ));
+        }
     }
 
     fn db_path(name: &str) -> String {
@@ -912,6 +983,107 @@ mod tests {
             .map_err(|_| CoreError::invalid("store"))?;
         let crates = fakes.crates();
         Core::open_with(db_path(name), app.clone(), app, move |_| Ok(crates)).await
+    }
+
+    #[tokio::test]
+    async fn a_push_that_starts_a_meetup_posts_its_notifications_and_events()
+    -> Result<(), CoreError> {
+        use pingers_client::ports::{MeetupsSection, PartiesSection};
+        let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
+        let app = Arc::new(App::default());
+        app.secure_store_put("pingers.database-key".into(), vec![7; 32])
+            .map_err(|_| CoreError::invalid("store"))?;
+        let crates = fakes.crates();
+        let core = Core::open_with(db_path("notify"), app.clone(), app.clone(), move |_| {
+            Ok(crates)
+        })
+        .await?;
+        // What the push leads to: the canvas's Meetup, its chat and Ben's request.
+        let fixture =
+            pingers_screens::fixtures::snapshot().map_err(|_| CoreError::invalid("fixture"))?;
+        fakes.set_parties(PartiesSection {
+            parties: fixture.parties.clone(),
+            ..PartiesSection::default()
+        });
+        core.on_dnd_changed().await?;
+        assert_eq!(
+            app.told(),
+            [
+                "parties changed",
+                "join requested",
+                "JoinRequest 0x3323232: Climbing crew / Ben opened your invite. Compare the code \
+                 on both phones, then let them in.",
+            ]
+        );
+        fakes.set_meetups(MeetupsSection {
+            meetups: fixture.meetups.clone(),
+            location_requests: fixture.location_requests.clone(),
+            ..MeetupsSection::default()
+        });
+        core.on_push(vec![1; 8]).await?;
+        assert_eq!(
+            app.told().get(3..),
+            Some(
+                [
+                    "meetup started".to_owned(),
+                    "MeetupStarted 0x1141414: Climbing crew / Ben and Chloé are at Riverside \
+                     Park too. Say hi?"
+                        .to_owned(),
+                    "meetup message".to_owned(),
+                    "ChatMessage 0x2141414: Ben · Riverside Park / Coffee after?".to_owned(),
+                    "meetup message".to_owned(),
+                    "ChatMessage 0x2141414: Chloé · Riverside Park / Yes please".to_owned(),
+                    "location request from 3".to_owned(),
+                    "LocationRequest 0x41e1e1e: Riverside Park / Ben asks to see where you are."
+                        .to_owned(),
+                ]
+                .as_slice()
+            )
+        );
+        // The Meetup ends on a later wake.
+        fakes.set_meetups(MeetupsSection::default());
+        core.on_wake().await?;
+        assert_eq!(app.told().last().map(String::as_str), Some("meetup ended"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn push_priorities_reach_the_client_and_downgrades_reach_privacy() -> Result<(), CoreError>
+    {
+        let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
+        let core = open_on("priority", &fakes).await?;
+        core.report_push_priority(crate::PushPriority::High, crate::PushPriority::Normal)
+            .await?;
+        assert!(
+            fakes
+                .calls()
+                .contains(&pingers_testkit::CrateCall::ReportPushPriority(
+                    pingers_client::PushPriority::High,
+                    pingers_client::PushPriority::Normal,
+                ))
+        );
+        assert_eq!(core.snapshot().privacy().push_downgrade, None);
+        fakes.set_server(ServerSection {
+            fallbacks: Vec::new(),
+            relay: pingers_client::snapshot::RelayStatus::Reachable,
+            map_host: None,
+            operators: None,
+            push_delivery: pingers_client::snapshot::PushDelivery::Downgraded(
+                pingers_client::snapshot::PushDowngrade::PriorityLowered,
+            ),
+        });
+        core.on_wake().await?;
+        let privacy = core.snapshot().privacy();
+        assert_eq!(
+            privacy.push_downgrade,
+            Some(crate::views::PushDowngrade::PriorityLowered)
+        );
+        assert!(
+            privacy
+                .push_delivery
+                .is_some_and(|text| text.contains("Keep Pingers running"))
+        );
+        Ok(())
     }
 
     const PARTY_HEX: &str = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";

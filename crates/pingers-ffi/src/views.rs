@@ -15,7 +15,7 @@ use crate::ids::{
 };
 
 /// The language every word is written in. Only English exists (pingers-words).
-const LANGUAGE: Language = Language::English;
+pub(crate) const LANGUAGE: Language = Language::English;
 
 /// A count for Kotlin. Counts on screens never come near `u32::MAX`.
 fn count(n: usize) -> u32 {
@@ -1143,6 +1143,38 @@ pub struct PrivacyView {
     pub visibility: Visibility,
     /// "No wake-up pushes".
     pub no_wake_pushes: bool,
+    /// Why wake-ups reach this phone late or not at all, if they do (design B.4.9).
+    pub push_downgrade: Option<PushDowngrade>,
+    /// What that means and what to do, for under the delivery row; `None` when wake-ups
+    /// arrive as they should or "No wake-up pushes" is on.
+    pub push_delivery: Option<String>,
+}
+
+/// Why wake-up pushes are downgraded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum PushDowngrade {
+    /// "No wake-up pushes" is on.
+    WakePushesOff,
+    /// No push service: no UnifiedPush distributor, or no FCM registration.
+    NoPushToken,
+    /// The build names no push relay, or the server does not list it.
+    NoPushRelay,
+    /// The push relay's key does not match its pins.
+    RelayKeyMismatch,
+    /// FCM has been delivering high-priority pushes at normal priority.
+    PriorityLowered,
+}
+
+impl From<screens::snapshot::PushDowngrade> for PushDowngrade {
+    fn from(reason: screens::snapshot::PushDowngrade) -> Self {
+        match reason {
+            screens::snapshot::PushDowngrade::WakePushesOff => Self::WakePushesOff,
+            screens::snapshot::PushDowngrade::NoPushToken => Self::NoPushToken,
+            screens::snapshot::PushDowngrade::NoPushRelay => Self::NoPushRelay,
+            screens::snapshot::PushDowngrade::RelayKeyMismatch => Self::RelayKeyMismatch,
+            screens::snapshot::PushDowngrade::PriorityLowered => Self::PriorityLowered,
+        }
+    }
 }
 
 impl From<screens::settings::Privacy> for PrivacyView {
@@ -1160,6 +1192,11 @@ impl From<screens::settings::Privacy> for PrivacyView {
             exclusion_zones: count(view.exclusion_zones),
             visibility: view.visibility.into(),
             no_wake_pushes: view.wake_pushes == screens::snapshot::WakePushes::NoWakePushes,
+            push_downgrade: match view.push_delivery {
+                screens::snapshot::PushDelivery::Full => None,
+                screens::snapshot::PushDelivery::Downgraded(reason) => Some(reason.into()),
+            },
+            push_delivery: text.push_delivery,
         }
     }
 }
