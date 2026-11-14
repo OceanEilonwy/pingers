@@ -485,6 +485,12 @@ impl MeetupSession {
         self.cadence.mode()
     }
 
+    /// Who set the current meet point (see [`crate::MeetPointRegister::set_by`]).
+    #[must_use]
+    pub fn meet_point_set_by(&self) -> Option<LeafIndex> {
+        self.meet_point.set_by()
+    }
+
     /// The current meet point.
     #[must_use]
     pub fn meet_point(&self) -> Option<&MeetPoint> {
