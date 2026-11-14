@@ -58,9 +58,8 @@ jobs:
 
       - name: Rust toolchain, Android targets and the NDK
         run: |
-          rustup toolchain install stable --profile minimal --no-self-update
-          rustup default stable
-          rustup target add aarch64-linux-android x86_64-linux-android
+          # rust-toolchain.toml names the version, components and targets.
+          rustup toolchain install --no-self-update
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
 
       # Separate keys from ci.yml's caches, so a pull request's run never writes what a release
