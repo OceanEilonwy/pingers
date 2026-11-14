@@ -90,9 +90,10 @@ fn host_of(url: &str) -> Result<Host, ClientError> {
     Host::new(host).map_err(|_invalid| ServerProblem::Unreachable.into())
 }
 
-fn relay_set(params: &Params) -> Vec<String> {
-    let mut relays: Vec<String> = params
-        .ohttp_relays
+/// A server's relays as a sorted set of origins, so two lists name the same relays whatever
+/// their order or spelling (`/ohttp` or not).
+fn relay_set(relays: &[pingers_proto::RelayUrl]) -> Vec<String> {
+    let mut relays: Vec<String> = relays
         .iter()
         .map(|relay| network::relay_origin(relay.as_str()).to_owned())
         .collect();
@@ -249,7 +250,7 @@ impl Net {
             .params(WakeBudget::UNLIMITED)
             .await
             .map_err(|error| problem(&error))?;
-        if relay_set(&relayed) != relay_set(&advertised) {
+        if relay_set(&relayed.ohttp_relays) != relay_set(&advertised.ohttp_relays) {
             return Err(ServerProblem::RelaysDiffer.into());
         }
         let build = self.servers.build_push_relay();
@@ -419,6 +420,21 @@ mod tests {
             key_config_hash: KeyConfigHash::from_bytes([key; 32]),
             operator: "op".to_owned(),
         })
+    }
+
+    #[test]
+    fn relay_lists_compare_by_origin_whatever_their_order() -> TestResult {
+        let url = |text: &str| RelayUrl::new(text.to_owned());
+        let direct = [url("https://a.example/ohttp")?, url("https://b.example")?];
+        let relayed = [url("https://b.example/")?, url("https://a.example")?];
+        assert_eq!(relay_set(&direct), relay_set(&relayed));
+        assert_eq!(
+            relay_set(&direct),
+            ["https://a.example", "https://b.example"]
+        );
+        let other = [url("https://a.example")?, url("https://evil.example")?];
+        assert_ne!(relay_set(&direct), relay_set(&other));
+        Ok(())
     }
 
     #[test]
