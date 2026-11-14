@@ -46,6 +46,7 @@ mod forwarded;
 mod gateway;
 mod groups;
 mod http;
+mod links;
 mod live;
 mod live_groups;
 mod mailbox_routes;
@@ -82,8 +83,8 @@ pub use crate::admin::{
     Command, OhttpSecret, new_ohttp_secret, os_ohttp_secret, pin_set, pins_output,
 };
 pub use crate::config::{
-    AddressList, CertificateSource, ConfigError, Database, Logging, OhttpKeys, RelayAllowList,
-    Required, ServedKey, ServerConfig,
+    AddressList, AndroidPackage, AppLinks, CertificateFingerprint, CertificateSource, ConfigError,
+    Database, Logging, OhttpKeys, RelayAllowList, Required, ServedKey, ServerConfig,
 };
 pub use crate::error::ServerError;
 pub use crate::forwarded::TrustedProxies;
@@ -180,6 +181,8 @@ pub(crate) struct Shared {
     pub(crate) quota: Quota,
     pub(crate) sessions: Sessions,
     pub(crate) params: PublishedParams,
+    /// `/.well-known/assetlinks.json`, when App Links are configured.
+    pub(crate) asset_links: Option<crate::links::AssetLinks>,
     pub(crate) tasks: Tasks,
     rng: Mutex<ChaCha20Rng>,
 }
@@ -425,6 +428,10 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
         live_channels: LiveChannels::default(),
         quota,
         sessions: Sessions::default(),
+        asset_links: config
+            .app_links
+            .as_ref()
+            .map(crate::links::AssetLinks::render),
         params: PublishedParams {
             server_operator: config.server_operator,
             ohttp_relays: config.ohttp_relay_urls,

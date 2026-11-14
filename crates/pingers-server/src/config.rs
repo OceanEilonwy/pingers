@@ -61,6 +61,12 @@
 //!                                  # key's pin as `pingers-push-relay pins` prints it: 43
 //!                                  # base64url characters (KeyConfigHash::to_pin)
 //! operator = "Push Relay Ltd"
+//!
+//! [app_links]                      # optional: the Android apps that may open this server's
+//!                                  # invite links (https://<server>/j) directly, served at
+//!                                  # /.well-known/assetlinks.json (404 without this table)
+//! packages = ["org.pingers.app", "org.pingers.app.foss"]
+//! certificates = ["AA:44:E4:54:...:18:16"]   # SHA-256 of the signing certificates
 //! ```
 //!
 //! Every field above `[ohttp]` other than `listen` and `server_id` is optional; so are those
@@ -167,6 +173,13 @@ pub enum ConfigError {
          given with operator"
     )]
     RelayInfo,
+    /// An `[app_links]` package id is not a Java package name, a certificate is not a SHA-256
+    /// fingerprint (32 hex pairs separated by colons), or a list is empty.
+    #[error(
+        "configuration: app_links needs package ids like org.pingers.app and SHA-256 \
+         fingerprints like AA:44:...:16"
+    )]
+    AppLinks,
     /// A duration or count is zero.
     #[error("configuration: {field} must be positive")]
     OutOfRange {
@@ -385,6 +398,83 @@ pub struct ServerConfig {
     pub push_timeout: Duration,
     /// How often expired board segments and mailboxes are swept.
     pub expire_interval: Duration,
+    /// The Android apps that may open this server's invite links directly (App Links), served
+    /// at `/.well-known/assetlinks.json`; `None`: that path is 404.
+    pub app_links: Option<AppLinks>,
+}
+
+/// The apps Android verifies for this server's `https://<server>/j` links.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppLinks {
+    /// Their package ids (Play and F-Droid builds; `.debug` for local builds).
+    pub packages: Vec<AndroidPackage>,
+    /// The SHA-256 fingerprints of the certificates they are signed with.
+    pub certificates: Vec<CertificateFingerprint>,
+}
+
+/// An Android package id, such as `org.pingers.app`: two or more dot-separated parts, each a
+/// letter then letters, digits or underscores.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AndroidPackage(String);
+
+impl AndroidPackage {
+    /// Checks the form.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::AppLinks`].
+    pub fn new(id: String) -> Result<Self, ConfigError> {
+        let part = |part: &str| {
+            part.chars()
+                .next()
+                .is_some_and(|first| first.is_ascii_alphabetic())
+                && part
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_')
+        };
+        if id.split('.').count() >= 2 && id.split('.').all(part) {
+            Ok(Self(id))
+        } else {
+            Err(ConfigError::AppLinks)
+        }
+    }
+
+    /// The id.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A signing certificate's SHA-256 fingerprint as `keytool` prints it: 32 upper-case hex pairs
+/// separated by colons.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CertificateFingerprint(String);
+
+impl CertificateFingerprint {
+    /// Checks the form; lower-case hex is accepted and kept upper-case.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::AppLinks`].
+    pub fn new(fingerprint: &str) -> Result<Self, ConfigError> {
+        let pairs: Vec<&str> = fingerprint.split(':').collect();
+        if pairs.len() == 32
+            && pairs
+                .iter()
+                .all(|pair| pair.len() == 2 && pair.chars().all(|digit| digit.is_ascii_hexdigit()))
+        {
+            Ok(Self(fingerprint.to_ascii_uppercase()))
+        } else {
+            Err(ConfigError::AppLinks)
+        }
+    }
+
+    /// The fingerprint.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// Where one of the server's stores is kept.
@@ -460,6 +550,7 @@ impl ServerConfig {
             push_relays: ListedRelays::default(),
             push_timeout: Duration::from_secs(default_push_timeout()),
             expire_interval: Duration::from_secs(default_expire_interval()),
+            app_links: None,
         }
     }
 }
@@ -526,6 +617,14 @@ struct File {
     expire_interval_s: u64,
     #[serde(default)]
     push_relays: Vec<FilePushRelay>,
+    app_links: Option<FileAppLinks>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileAppLinks {
+    packages: Vec<String>,
+    certificates: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -729,8 +828,27 @@ impl ServerConfig {
             push_relays: push.listed,
             push_timeout: positive_seconds("push_timeout_s", file.push_timeout_s)?,
             expire_interval: positive_seconds("expire_interval_s", file.expire_interval_s)?,
+            app_links: file.app_links.map(app_links).transpose()?,
         })
     }
+}
+
+fn app_links(file: FileAppLinks) -> Result<AppLinks, ConfigError> {
+    if file.packages.is_empty() || file.certificates.is_empty() {
+        return Err(ConfigError::AppLinks);
+    }
+    Ok(AppLinks {
+        packages: file
+            .packages
+            .into_iter()
+            .map(AndroidPackage::new)
+            .collect::<Result<_, _>>()?,
+        certificates: file
+            .certificates
+            .iter()
+            .map(|certificate| CertificateFingerprint::new(certificate))
+            .collect::<Result<_, _>>()?,
+    })
 }
 
 fn line_of(text: &str, offset: usize) -> usize {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The outer HTTP layer: HTTP/2 connections (prior knowledge; TLS is terminated in front, as
-//! for the reference relay) on two listeners. The public one serves metrics and direct
-//! requests; the gateway one serves `POST /ohttp` and the key config only.
+//! for the reference relay) on two listeners. The public one serves metrics, direct requests
+//! and the invite landing page with App Links (`links.rs`); the gateway one serves `POST /ohttp` and the key config only.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -41,6 +41,10 @@ pub(crate) fn public_router(shared: Arc<Shared>) -> Router {
     Router::new()
         .route("/ohttp", any(not_found))
         .route("/metrics", get(metrics))
+        .route(crate::links::LANDING_PATH, get(crate::links::landing))
+        .route(crate::links::SCRIPT_PATH, get(crate::links::script))
+        .route(crate::links::STYLE_PATH, get(crate::links::style))
+        .route(crate::links::ASSET_LINKS_PATH, get(asset_links))
         .fallback(direct)
         .with_state(shared)
 }
@@ -63,6 +67,11 @@ async fn key_config(State(shared): State<Arc<Shared>>) -> Response {
     let reply = key_config_reply(&shared);
     shared.metrics.record(Channel::Direct, reply.status);
     direct_response(reply)
+}
+
+/// `GET /.well-known/assetlinks.json`.
+async fn asset_links(State(shared): State<Arc<Shared>>) -> Response {
+    crate::links::asset_links(shared.asset_links.as_ref())
 }
 
 /// `GET /metrics`, for the configured addresses only; to anyone else it does not exist.

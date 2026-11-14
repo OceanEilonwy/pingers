@@ -1,0 +1,26 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+:root { color-scheme: light dark; }
+body {
+  margin: 0;
+  font: 17px/1.5 system-ui, sans-serif;
+  background: #f7f6f2;
+  color: #1c1b19;
+}
+main { max-width: 28rem; margin: 0 auto; padding: 3rem 1.25rem; }
+h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 1rem; }
+.small { font-size: 0.9rem; color: #5f5d57; }
+.button {
+  display: inline-block;
+  padding: 0.85rem 1.5rem;
+  border-radius: 999px;
+  background: #2f5bff;
+  color: #fff;
+  font-weight: 600;
+  text-decoration: none;
+}
+a { color: #2f5bff; }
+[hidden] { display: none; }
+@media (prefers-color-scheme: dark) {
+  body { background: #121211; color: #f1f0ec; }
+  .small { color: #a9a7a0; }
+}
