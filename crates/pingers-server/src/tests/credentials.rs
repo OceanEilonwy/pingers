@@ -174,7 +174,11 @@ async fn params_advertise_the_daily_token_limit_and_both_credentials() -> TestRe
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_batch_past_the_daily_limit_is_refused_with_what_is_left() -> TestResult {
     let server = started(Echo).await?;
-    let wallet = Wallet::fetch(&server, 1, 290).await?;
+    let wallet = Wallet::fetch(&server, 1, 0).await?;
+    // 290 of the day's 300, in batches small enough for a loaded machine.
+    for _ in 0..10 {
+        assert_eq!(Wallet::issue(&server, &wallet.bearer, 29).await?.len(), 29);
+    }
     let keys = direct(&server, "GET /v1/pp/keys", None, Vec::new()).await?;
     let public_key = pingers_proto::PrivacyPassKeys::decode(&keys.body)?
         .keys
