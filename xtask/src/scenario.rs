@@ -33,8 +33,8 @@
 //! Pushes are checked where they arrive (`dumpsys notification`): A is notified of B's join
 //! request, both of the Meetup, and B, sent to the launcher first, of A's chat message.
 //! With `--flavour gms` against a stack started with `--fcm-service-account`, one push also
-//! goes from the local push relay through FCM to A ([`crate::fcm_push`]), and A's core must
-//! take it.
+//! goes from the local push relay through FCM to a phone ([`crate::fcm_push`]), and its core
+//! must take it.
 //!
 //! Each step names what it waits for. The first failure stops the run and says which step
 //! failed and why; screenshots, UI dumps and logcat of both phones are saved in
@@ -558,7 +558,7 @@ fn play(
         step(
             report,
             scene,
-            "an FCM message through the push relay wakes A's core",
+            "an FCM message through the push relay wakes a core",
             fcm_wakes_the_core,
         )?;
     }
@@ -869,8 +869,14 @@ fn play(
 }
 
 /// The gms flavour's FCM check (see [`crate::fcm_push`]): a content-free push naming no handle
-/// of A's goes from the local push relay through FCM to A, and A's core takes it. Without FCM
-/// in the stack (no `--fcm-service-account`) the step says so and passes, since FCM is opt-in.
+/// goes from the local push relay through FCM to a phone, and that phone's core takes it.
+/// Without FCM in the stack (no `--fcm-service-account`) the step says so and passes, since
+/// FCM is opt-in.
+///
+/// Both emulators boot read-only from the same AVD, so they share one Play services identity,
+/// and FCM keeps only the registration made last: the other phone's token answers
+/// `UNREGISTERED` (the relay's 410). So A is tried first and B after a 410; at least one must
+/// take the push.
 fn fcm_wakes_the_core(scene: &mut Scene) -> Result<String> {
     let config = scene.gms_push_relay.clone().context("not a gms build")?;
     if !crate::fcm_push::configured(&config)? {
@@ -879,26 +885,50 @@ fn fcm_wakes_the_core(scene: &mut Scene) -> Result<String> {
                 .to_owned(),
         );
     }
-    let a = &scene.a;
-    let token = push_preference(a, scene.package, "fcm.token")
-        .context("A never got an FCM token (no Play services, or no google-services.json)")?;
-    a.shell("logcat -c")?;
-    let status = crate::fcm_push::send(&config, &token, [0; 8])?;
+    let mut gone = Vec::new();
+    for device in [&scene.a, &scene.b] {
+        let label = device.label;
+        let token = push_preference(device, scene.package, "fcm.token").with_context(|| {
+            format!("{label} never got an FCM token (no Play services, or no google-services.json)")
+        })?;
+        device.shell("logcat -c")?;
+        match crate::fcm_push::send(&config, &token, [0; 8])? {
+            crate::fcm_push::Sent::Gone => gone.push(label),
+            crate::fcm_push::Sent::Accepted(status) => {
+                let line = fcm_reached_the_core(device, &status)?;
+                let note = if gone.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " ({} token unregistered: the emulators share one Play services identity)",
+                        gone.join(", ")
+                    )
+                };
+                return Ok(format!(
+                    "relay answered {status}; {label}'s logcat: {line}{note}"
+                ));
+            }
+        }
+    }
+    bail!("FCM answered UNREGISTERED for both phones' tokens")
+}
+
+/// Waits for `device`'s core to take an FCM push the relay accepted with `status`, and
+/// returns the log line.
+fn fcm_reached_the_core(device: &Device, status: &str) -> Result<String> {
+    let label = device.label;
     let deadline = Deadline::after(NETWORK);
     loop {
-        let log = a.shell("logcat -d -s PingersCore")?;
+        let log = device.shell("logcat -d -s PingersCore")?;
         if let Some(line) = log.lines().find(|line| line.contains("onPush FCM")) {
             if !line.contains("onPush FCM: ok") {
-                bail!("A's core did not take the FCM push: {}", line.trim());
+                bail!("{label}'s core did not take the FCM push: {}", line.trim());
             }
-            return Ok(format!(
-                "relay answered {status}; A's logcat: {}",
-                line.trim()
-            ));
+            return Ok(line.trim().to_owned());
         }
         if deadline.passed() {
             bail!(
-                "the relay took the push ({status}) but it never reached A's core (no onPush FCM in logcat)"
+                "the relay took the push ({status}) but it never reached {label}'s core (no onPush FCM in logcat)"
             );
         }
         pause(Duration::from_secs(1));

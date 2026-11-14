@@ -40,13 +40,23 @@ pub(crate) fn configured(config: &Path) -> Result<bool> {
     Ok(read(config)?.contains_key("fcm"))
 }
 
+/// What the push relay made of a push.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Sent {
+    /// It took the push and sent it on; its HTTP status line.
+    Accepted(String),
+    /// 410: the token is gone (FCM answered `UNREGISTERED`, or the blob can never be sent).
+    Gone,
+}
+
 /// Sends `handle` to the FCM `token` through the push relay whose configuration is `config`,
-/// as an alert. Returns the relay's HTTP status line.
+/// as an alert.
 ///
 /// # Errors
 ///
-/// When the relay cannot be reached, its config does not decode, or it refuses the push.
-pub(crate) fn send(config: &Path, token: &str, handle: [u8; 8]) -> Result<String> {
+/// When the relay cannot be reached, its config does not decode, or it refuses the push for
+/// any reason but a gone token.
+pub(crate) fn send(config: &Path, token: &str, handle: [u8; 8]) -> Result<Sent> {
     let credential = credential(&read(config)?)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -55,7 +65,7 @@ pub(crate) fn send(config: &Path, token: &str, handle: [u8; 8]) -> Result<String
     runtime.block_on(post(&credential, token, handle))
 }
 
-async fn post(credential: &str, token: &str, handle: [u8; 8]) -> Result<String> {
+async fn post(credential: &str, token: &str, handle: [u8; 8]) -> Result<Sent> {
     let client = reqwest::Client::builder()
         .timeout(TIMEOUT)
         .build()
@@ -86,10 +96,13 @@ async fn post(credential: &str, token: &str, handle: [u8; 8]) -> Result<String> 
         .await
         .context("POST /v1/push to the push relay")?;
     let status = answer.status();
+    if status == reqwest::StatusCode::GONE {
+        return Ok(Sent::Gone);
+    }
     if !status.is_success() {
         bail!("the push relay refused the push: {status}");
     }
-    Ok(status.to_string())
+    Ok(Sent::Accepted(status.to_string()))
 }
 
 /// The `/v1/push` body: `token` sealed to the relay's published key under a fresh bind.

@@ -269,6 +269,27 @@ async fn a_party_its_spot_and_an_invite_show_in_the_snapshot() -> Result<(), Tes
 }
 
 #[tokio::test]
+async fn without_a_push_relay_wake_ups_are_downgraded_before_anything_is_tried()
+-> Result<(), TestError> {
+    let rig = rig().await?;
+    rig.platform
+        .set_push_registration(Some(pingers_testkit::PushRegistration {
+            platform: pingers_proto::PushPlatform::UnifiedPush,
+            token: pingers_proto::PushToken::from_bytes(b"endpoint".to_vec()),
+        }));
+    // Wake-up pushes are on by default and there is a token, but no push relay: the snapshot
+    // says so without a failed registration having taught the client.
+    rig.client.publish_snapshot().await?;
+    assert_eq!(
+        rig.client.snapshot().push_delivery,
+        pingers_client::snapshot::PushDelivery::Downgraded(
+            pingers_client::snapshot::PushDowngrade::NoPushRelay
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn deleting_the_spot_and_leaving_the_party_empty_the_snapshot() -> Result<(), TestError> {
     let rig = rig().await?;
     party_with_spot(&rig.client).await?;
