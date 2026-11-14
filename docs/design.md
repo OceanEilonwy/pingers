@@ -872,7 +872,7 @@ HTTP/2 over TLS 1.3, bodies in CBOR unless noted, MLS objects TLS-serialised ins
 - **Anon**: no account. Privacy class `Anonymous`; sent via OHTTP at `POST /ohttp`. One of:
   - **Rln**: `Authorization: PingersRln <base64url(RlnAuth)>`. Main app.
   - **PP**: `Authorization: PrivateToken token=...` (RFC 9577). App extensions, and devices in fallback (B.4.8).
-- **Grp**: Ed25519 signature by the group's current log-auth key over `(method, path, body hash, timestamp)`, plus Anon. One Anon credential per group per bucket buys a session cookie for that group.
+- **Grp**: Ed25519 signature by the group's current log-auth key over `(method, path, body hash, timestamp)`, plus Anon. One Anon credential per group per bucket buys a session cookie for that group, good for at most 64 writes.
 - **Cap**: no credential; a secret in the request is the capability (a mailbox's `read_key`, a server-MACed board cursor). Sent via OHTTP.
 
 ```rust
