@@ -195,7 +195,7 @@ Server side (each crate owns its storage trait, with a SQLite implementation beh
 
 **pingers-delivery**: the MLS delivery service: group logs with one commit per epoch, sealed-push subscriptions, Welcome routing via mailboxes, live-channel fan-out registry, group expiry. Deps: pingers-proto.
 
-**pingers-quota**: who may post: RLN membership tree and roots, nullifier set, Privacy Pass issuance and the spent set, per-bucket limits. Deps: pingers-anon (`verifier`, `issuer`).
+**pingers-quota**: who may post: accounts and their bearers (registration, sign-up limit), RLN membership tree and roots, nullifier set, Privacy Pass issuance and the spent set, per-bucket limits. Deps: pingers-anon (`verifier`, `issuer`), pingers-crypto.
 
 ### L4: presentation (pure)
 

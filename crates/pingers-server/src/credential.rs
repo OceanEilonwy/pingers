@@ -24,8 +24,9 @@
 //! - Sessions: design D's "one Anon credential per group per bucket buys a session cookie for
 //!   that group". A group write that spends an Anon credential (and `POST /v1/groups`) is
 //!   answered with `pingers-group-session: <hex>`; presenting it on later writes to that
-//!   group, until the end of the bucket, stands in for the credential. Optional: a client may
-//!   send a credential on every write instead.
+//!   group, until the end of the bucket and for at most [`SESSION_WRITES`] writes, stands in
+//!   for the credential (past that, the write needs a credential again, which starts a new
+//!   session). Optional: a client may send a credential on every write instead.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
@@ -142,11 +143,18 @@ pub(crate) fn admit(
     }
 }
 
-/// A session: which group it is for and until when.
+/// How many writes one session stands in for. A credential buys a session, so this is the
+/// most group writes one Anon credential can pay for: without it, one proof would buy
+/// unlimited writes to a group for a whole bucket. Far above a member's writes in a bucket
+/// (a commit, a few chat messages when the live channel is down, a subscription renewal).
+pub(crate) const SESSION_WRITES: u32 = 64;
+
+/// A session: which group it is for, until when, and how many writes it has left.
 #[derive(Clone, Copy)]
 struct Session {
     group: GroupId,
     expires_at: UnixSeconds,
+    writes_left: u32,
 }
 
 /// The group sessions in memory. Session ids are random and name no account.
@@ -161,11 +169,22 @@ impl Sessions {
         self.sessions.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Whether `id` is a live session for `group`.
-    fn valid(&self, id: &[u8; 32], group: &GroupId, now: UnixSeconds) -> bool {
-        self.lock()
-            .get(id)
-            .is_some_and(|session| session.group == *group && now < session.expires_at)
+    /// Spends one write of `id` if it is a live session for `group` with writes left.
+    fn spend(&self, id: &[u8; 32], group: &GroupId, now: UnixSeconds) -> bool {
+        let mut sessions = self.lock();
+        let Some(session) = sessions.get_mut(id) else {
+            return false;
+        };
+        if session.group != *group || now >= session.expires_at {
+            return false;
+        }
+        match session.writes_left.checked_sub(1) {
+            Some(left) => {
+                session.writes_left = left;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Drops expired sessions (the sweep).
@@ -182,10 +201,14 @@ pub(crate) fn start_session(shared: &Shared, group: GroupId) -> (&'static str, S
     let expires_at = now.bucket().end().unwrap_or(now);
     let mut id = [0_u8; 32];
     shared.with_rng(|rng| rng.fill_bytes(&mut id));
-    shared
-        .sessions
-        .lock()
-        .insert(id, Session { group, expires_at });
+    shared.sessions.lock().insert(
+        id,
+        Session {
+            group,
+            expires_at,
+            writes_left: SESSION_WRITES,
+        },
+    );
     (GROUP_SESSION, hex::encode(id))
 }
 
@@ -243,7 +266,7 @@ pub(crate) fn admit_group(
 ) -> Result<GroupAnon, Reply> {
     let session = header(request, GROUP_SESSION).and_then(hex_array::<32>);
     if let Some(id) = session
-        && shared.sessions.valid(&id, &group, shared.clock.now())
+        && shared.sessions.spend(&id, &group, shared.clock.now())
     {
         return Ok(GroupAnon::Session);
     }
@@ -261,17 +284,41 @@ mod tests {
         let group = GroupId::from_bytes([1; 32]);
         let other = GroupId::from_bytes([2; 32]);
         let expires_at = UnixSeconds::new(1_000);
-        sessions
-            .lock()
-            .insert([7; 32], Session { group, expires_at });
+        sessions.lock().insert(
+            [7; 32],
+            Session {
+                group,
+                expires_at,
+                writes_left: SESSION_WRITES,
+            },
+        );
         let before = UnixSeconds::new(999);
-        assert!(sessions.valid(&[7; 32], &group, before));
-        assert!(!sessions.valid(&[7; 32], &other, before));
-        assert!(!sessions.valid(&[8; 32], &group, before));
-        assert!(!sessions.valid(&[7; 32], &group, expires_at));
+        assert!(sessions.spend(&[7; 32], &group, before));
+        assert!(!sessions.spend(&[7; 32], &other, before));
+        assert!(!sessions.spend(&[8; 32], &group, before));
+        assert!(!sessions.spend(&[7; 32], &group, expires_at));
         sessions.expire(before);
         assert_eq!(sessions.lock().len(), 1);
         sessions.expire(expires_at);
         assert!(sessions.lock().is_empty());
+    }
+
+    #[test]
+    fn a_session_stands_in_for_a_bounded_number_of_writes() {
+        let sessions = Sessions::default();
+        let group = GroupId::from_bytes([1; 32]);
+        sessions.lock().insert(
+            [7; 32],
+            Session {
+                group,
+                expires_at: UnixSeconds::new(1_000),
+                writes_left: SESSION_WRITES,
+            },
+        );
+        let now = UnixSeconds::new(1);
+        for _ in 0..SESSION_WRITES {
+            assert!(sessions.spend(&[7; 32], &group, now));
+        }
+        assert!(!sessions.spend(&[7; 32], &group, now));
     }
 }

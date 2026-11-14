@@ -56,8 +56,9 @@ pub use group::{
     sign_group_request, verify_group_request,
 };
 pub use identity::{
-    AccountPublicKey, AccountSigningKey, Signature, account_id, sign_auth_challenge,
-    sign_registration, verify_auth_challenge, verify_registration,
+    AccountPublicKey, AccountSigningKey, BearerDigest, BearerToken, Signature, account_id,
+    bearer_digest, sign_auth_challenge, sign_registration, verify_auth_challenge,
+    verify_registration,
 };
 pub use invite::{InviteSecret, open_join_request, seal_join_request, seal_join_request_in_class};
 pub use keyed_hash::{KeyedHash, KeyedHashKey, KeyedHashPurpose, keyed_hash};

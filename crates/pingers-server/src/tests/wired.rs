@@ -633,3 +633,73 @@ async fn push_urls_join_the_relay_and_the_push_path() -> TestResult {
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_push_relay_config_is_fetched_once_per_cache_lifetime() -> TestResult {
+    // A relay that counts the config fetches it answers, and fails while `failing` is set.
+    let fetches = Arc::new(Mutex::new(0_u32));
+    let failing = Arc::new(Mutex::new(false));
+    let config = config_of_length(400)?;
+    let router = {
+        let (fetches, failing, config) =
+            (Arc::clone(&fetches), Arc::clone(&failing), config.clone());
+        Router::new().route(
+            "/v1/config",
+            axum::routing::get(move || {
+                let (fetches, failing, config) =
+                    (Arc::clone(&fetches), Arc::clone(&failing), config.clone());
+                async move {
+                    if let Ok(mut count) = fetches.lock() {
+                        *count = count.saturating_add(1);
+                    }
+                    if failing.lock().is_ok_and(|failing| *failing) {
+                        (StatusCode::SERVICE_UNAVAILABLE, Vec::new())
+                    } else {
+                        (StatusCode::OK, config)
+                    }
+                }
+            }),
+        )
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    let relays = ListedRelays::new([(
+        RelayId::new(1),
+        RelayTarget {
+            url: pingers_mailbox::PushRelayUrl::new(format!("http://{address}"))?,
+            credential: RelayCredential::new("credential".to_owned()),
+        },
+    )]);
+    let server = start(
+        Setup {
+            push_relays: relays,
+            ..Setup::default()
+        },
+        Echo,
+    )
+    .await?;
+    let ask = || super::wallet::direct(&server, "GET /v1/push-relays/1/config", None, Vec::new());
+    let count = || fetches.lock().map(|count| *count).map_err(|_| "lock");
+    for _ in 0..5 {
+        let answer = ask().await?;
+        assert_eq!(answer.status, StatusCode::OK);
+        assert_eq!(answer.body, config);
+    }
+    assert_eq!(count()?, 1);
+    // Once the cached config is stale the relay is asked again; a failure is remembered for
+    // a shorter time.
+    *failing.lock().map_err(|_| "lock")? = true;
+    server.clock.advance(crate::tasks::RELAY_CONFIG_TTL);
+    for _ in 0..3 {
+        assert_eq!(ask().await?.status, StatusCode::BAD_GATEWAY);
+    }
+    assert_eq!(count()?, 2);
+    *failing.lock().map_err(|_| "lock")? = false;
+    server.clock.advance(crate::tasks::RELAY_CONFIG_RETRY);
+    assert_eq!(ask().await?.status, StatusCode::OK);
+    assert_eq!(count()?, 3);
+    server.stop().await
+}

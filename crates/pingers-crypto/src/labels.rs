@@ -77,6 +77,8 @@ pub(crate) const GROUP_REQUEST: &[u8] = b"pingers/v1/grp-request";
 pub(crate) const REGISTRATION: &[u8] = b"pingers/v1/register";
 /// Decision: the account challenge signed for `POST /v1/auth`.
 pub(crate) const AUTH_CHALLENGE: &[u8] = b"pingers/v1/auth";
+/// Decision: the prefix of the digest the server stores in place of an Acct bearer.
+pub(crate) const BEARER: &[u8] = b"pingers/v1/bearer";
 /// Prefix of the RLN external nullifier preimage (design B.4.8). Moved from pingers-anon.
 pub(crate) const RLN_EXTERNAL_NULLIFIER: &[u8] = b"pingers/v1/rln";
 /// Prefix of the RLN request digest `x` preimage (design B.4.8). Moved from pingers-anon.
@@ -84,8 +86,9 @@ pub(crate) const RLN_REQUEST_DIGEST: &[u8] = b"pingers/v1/rln/x";
 
 /// Every private label, so tests can check they are distinct and vectors can name them.
 #[cfg(test)]
-pub(crate) const ALL: [&[u8]; 23] = [
+pub(crate) const ALL: [&[u8]; 24] = [
     AUTH_CHALLENGE,
+    BEARER,
     RLN_EXTERNAL_NULLIFIER,
     RLN_REQUEST_DIGEST,
     SPOT,

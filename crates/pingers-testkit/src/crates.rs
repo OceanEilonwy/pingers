@@ -470,27 +470,4 @@ impl MeetupsPort for FakeCrates {
 }
 
 #[cfg(test)]
-mod tests {
-    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
-
-    use pingers_client::Notice;
-    use pingers_wake::PushPriority;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn a_priority_report_is_recorded_and_answers_the_notice_set()
-    -> Result<(), FakeCratesError> {
-        let fakes = FakeCrates::new()?;
-        let report =
-            || SyncPort::report_push_priority(&fakes, PushPriority::High, PushPriority::Normal);
-        assert!(matches!(report().await, Ok(None)));
-        fakes.set_priority_notice(Some(Notice::PushDowngraded));
-        assert!(matches!(report().await, Ok(Some(Notice::PushDowngraded))));
-        assert_eq!(
-            fakes.calls(),
-            vec![CrateCall::ReportPushPriority(PushPriority::High, PushPriority::Normal); 2]
-        );
-        Ok(())
-    }
-}
+mod tests;
