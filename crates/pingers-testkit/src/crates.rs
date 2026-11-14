@@ -448,3 +448,6 @@ impl MeetupsPort for FakeCrates {
         self.section(CrateName::Meetups, |state| state.meetups.clone())
     }
 }
+
+#[cfg(test)]
+mod tests;
