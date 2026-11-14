@@ -562,6 +562,26 @@ async fn a_wake_confirmed_inside_a_spot_ends_at_the_sync_stub() -> TestResult {
 }
 
 #[tokio::test]
+async fn without_any_server_wake_pushes_cannot_go_on() -> TestResult {
+    let store = store()?;
+    let net = Arc::new(Net::new(
+        Arc::clone(&store.backend),
+        super::servers::Servers::new(Arc::clone(&store.backend), None, None),
+    ));
+    let sync = super::sync::Sync(net);
+    let tokens = crate::PushTokens {
+        platform: pingers_proto::PushPlatform::UnifiedPush,
+        token: pingers_proto::PushToken::from_bytes(b"https://push.example/up".to_vec()),
+    };
+    assert!(matches!(
+        sync.set_wake_pushes(crate::snapshot::WakePushes::On, Some(tokens))
+            .await,
+        Err(ClientError::Unavailable(crate::Unavailable::Sync))
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_link_that_is_not_an_invite_starts_no_join() -> TestResult {
     let store = store()?;
     let parties = Parties::new(Arc::clone(&store.backend), offline(&store));
