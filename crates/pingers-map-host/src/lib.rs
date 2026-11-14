@@ -29,6 +29,7 @@ pub mod config;
 pub mod counts;
 pub mod error;
 pub mod files;
+pub mod gateway;
 pub mod http;
 pub mod range;
 pub mod region;
@@ -39,6 +40,8 @@ use std::sync::Arc;
 
 use pingers_time::Clock;
 use pingers_transport::TokioTimer;
+use rand_chacha::ChaCha20Rng;
+use rand_core::{CryptoRng, SeedableRng as _};
 
 use crate::cache::{Cache, CacheParts, PackCutter, PmtilesCutter};
 use crate::config::{Logging, MapHostConfig};
@@ -78,11 +81,13 @@ pub async fn listen(config: &MapHostConfig) -> Result<tokio::net::TcpListener, M
 
 /// Serves `config.directory` on `listener` until `shutdown` completes. In cache mode, cuts use
 /// [`PmtilesCutter`]. The binary passes [`pingers_time::SystemClock`]; tests pass a manual
-/// clock. Must be called inside a tokio runtime.
+/// clock. The gateway's randomness is seeded from the operating system. Must be called inside
+/// a tokio runtime.
 ///
 /// # Errors
 ///
-/// As [`serve_with`].
+/// [`MapHostError::Entropy`] if the system's random number generator cannot be read;
+/// otherwise as [`serve_with`].
 pub async fn serve(
     config: MapHostConfig,
     listener: tokio::net::TcpListener,
@@ -94,11 +99,22 @@ pub async fn serve(
         Outside {
             cutter: None,
             clock,
+            rng: Box::new(ChaCha20Rng::from_seed(*os_seed()?)),
         },
         listener,
         shutdown,
     )
     .await
+}
+
+/// 32 bytes from the operating system's random number generator.
+fn os_seed() -> Result<zeroize::Zeroizing<[u8; 32]>, MapHostError> {
+    use std::io::Read as _;
+    let mut seed = zeroize::Zeroizing::new([0_u8; 32]);
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(seed.as_mut_slice()))
+        .map_err(MapHostError::Entropy)?;
+    Ok(seed)
 }
 
 /// The host's view of the outside world, injected into [`serve_with`].
@@ -108,6 +124,8 @@ pub struct Outside<C> {
     pub cutter: Option<Arc<dyn PackCutter>>,
     /// Wall time for last-served and provenance records.
     pub clock: C,
+    /// Randomness for the OHTTP gateway: a new key on first start, and response sealing.
+    pub rng: Box<dyn CryptoRng + Send>,
 }
 
 /// As [`serve`], with an injected cutter: for tests that use a fake upstream.
@@ -115,8 +133,9 @@ pub struct Outside<C> {
 /// # Errors
 ///
 /// [`MapHostError::Directory`] or [`MapHostError::NotADirectory`] if the directory is not
-/// usable, [`MapHostError::ReadRegionList`] or [`MapHostError::RegionList`] in cache mode, or
-/// [`MapHostError::Serve`] if the HTTP server fails.
+/// usable, [`MapHostError::OhttpKeyFile`] or [`MapHostError::OhttpKey`] if the gateway key
+/// cannot be read or made, [`MapHostError::ReadRegionList`] or [`MapHostError::RegionList`] in
+/// cache mode, or [`MapHostError::Serve`] if the HTTP server fails.
 pub async fn serve_with<C: Clock + 'static>(
     config: MapHostConfig,
     outside: Outside<C>,
@@ -138,6 +157,15 @@ pub async fn serve_with<C: Clock + 'static>(
         });
     }
     let directory = Directory::new(root);
+    let mut rng = outside.rng;
+    let key_file = config.ohttp_key_file.clone();
+    let (key, rng) = tokio::task::spawn_blocking(move || {
+        let key = gateway::load_or_create_key(&key_file, &mut *rng);
+        (key, rng)
+    })
+    .await
+    .map_err(|error| MapHostError::Serve(std::io::Error::other(error)))?;
+    let gateway = Arc::new(gateway::RelayGateway::new(key?, rng));
     let counts = Arc::default();
     let (cache, retry_after_seconds) = if let Some(cache_config) = &config.cache {
         {
@@ -178,6 +206,7 @@ pub async fn serve_with<C: Clock + 'static>(
         counts,
         cache,
         retry_after_seconds,
+        gateway,
     });
     let reporter = match config.logging {
         Logging::Off => None,

@@ -25,6 +25,13 @@ pingers-crypto = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "net", "signal"] }
 tokio-util = { workspace = true }
+# The OHTTP gateway for downloads through a privacy relay (gateway.rs), its key file and the
+# randomness that seals answers.
+pingers-ohttp = { workspace = true }
+hex = { workspace = true }
+rand_chacha = { workspace = true }
+rand_core = { workspace = true }
+zeroize = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]

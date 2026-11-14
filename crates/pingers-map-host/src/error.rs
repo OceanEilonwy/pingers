@@ -69,6 +69,21 @@ pub enum MapHostError {
     /// The HTTP server stopped with an error.
     #[error("the HTTP server failed")]
     Serve(#[source] io::Error),
+    /// The OHTTP gateway key file could not be read or made, or does not hold a key.
+    #[error("cannot use the OHTTP key file {path}")]
+    OhttpKeyFile {
+        /// The file.
+        path: PathBuf,
+        /// Why.
+        #[source]
+        source: io::Error,
+    },
+    /// The OHTTP gateway key is not usable.
+    #[error("the OHTTP key is not usable")]
+    OhttpKey(#[source] pingers_ohttp::OhttpError),
+    /// The operating system's random number generator could not be read.
+    #[error("cannot read the system random number generator")]
+    Entropy(#[source] io::Error),
 }
 
 /// What is wrong with the configuration.
