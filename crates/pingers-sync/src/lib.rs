@@ -68,7 +68,7 @@ pub use membership::MembershipRefresh;
 /// The prover self-test plan `SyncSettings::self_test` takes (pingers-anon's).
 pub use pingers_anon::SelfTestPlan;
 pub use pool::{LEASE_BUCKETS, PoolRefill, PoolTarget, WakePush};
-pub use prover::{RETEST_AFTER, SelfTestStanding};
+pub use prover::{RETEST_AFTER, SelfTestStanding, SelfTestStart};
 pub use queue::{QueueCapacity, QueuePolicy, Sending};
 pub use request::{ApiRequest, GroupLifetime, GroupSigner, GroupStart, Route};
 pub use server::VerifiedPushRelay;

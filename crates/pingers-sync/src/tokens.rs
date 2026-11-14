@@ -471,6 +471,16 @@ mod tests {
     }
 
     #[test]
+    fn only_a_401_to_the_issuance_means_a_lapsed_bearer() {
+        let status = |route, status| SyncError::Status { route, status };
+        assert!(bearer_lapsed(&status(Route::PrivacyPassIssue, 401)));
+        assert!(!bearer_lapsed(&status(Route::PrivacyPassIssue, 503)));
+        assert!(!bearer_lapsed(&status(Route::PrivacyPassIssue, 403)));
+        assert!(!bearer_lapsed(&status(Route::RlnLeaf, 401)));
+        assert!(!bearer_lapsed(&SyncError::NoCredential));
+    }
+
+    #[test]
     fn the_day_ends_at_utc_midnight() -> Result<(), SyncError> {
         assert_eq!(issuance_day(UnixSeconds::new(86_399)), 0);
         assert_eq!(issuance_day(UnixSeconds::new(86_400)), 1);

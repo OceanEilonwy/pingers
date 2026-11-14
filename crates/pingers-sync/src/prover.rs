@@ -45,6 +45,19 @@ pub enum SelfTestStanding {
     Due,
 }
 
+/// What [`SyncEngine::start_prover_self_test`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+#[non_exhaustive]
+pub enum SelfTestStart {
+    /// A test started in the background.
+    Started,
+    /// A test was already running; nothing more started.
+    AlreadyRunning,
+    /// Nothing to do: an extension, or a result that stands.
+    NotDue,
+}
+
 /// The standing of `record` at `now`.
 pub(crate) fn standing(record: Option<&SelfTestRecord>, now: UnixSeconds) -> SelfTestStanding {
     let Some(record) = record.filter(|record| record.parameters == PARAMETERS_ID) else {
@@ -60,11 +73,11 @@ pub(crate) fn standing(record: Option<&SelfTestRecord>, now: UnixSeconds) -> Sel
         {
             SelfTestStanding::Due
         }
-        ProverVerdict::TooSlow | ProverVerdict::WrongParameters | ProverVerdict::ProofRejected => {
-            SelfTestStanding::Failed
-        }
-        // A verdict this build does not know is no pass.
-        _ => SelfTestStanding::Failed,
+        // A failure stands, and a verdict this build does not know is no pass.
+        ProverVerdict::TooSlow
+        | ProverVerdict::WrongParameters
+        | ProverVerdict::ProofRejected
+        | _ => SelfTestStanding::Failed,
     }
 }
 
@@ -153,22 +166,23 @@ impl SyncEngine {
         }
     }
 
-    /// Starts the configured self-test (`SyncSettings::self_test`) in the background if this is the main app, no valid
-    /// result is stored, and no test is running. Returns at once; the engine owns the task and
-    /// aborts it when dropped. Until a test passes, requests carry Privacy Pass tokens.
+    /// Starts the configured self-test (`SyncSettings::self_test`) in the background if this is
+    /// the main app, no valid result is stored, and no test is running. Returns at once; the
+    /// engine owns the task and aborts it when dropped. Until a test passes, requests carry
+    /// Privacy Pass tokens.
     ///
     /// # Errors
     ///
     /// [`SyncError::Store`].
-    pub async fn start_prover_self_test(&self) -> Result<(), SyncError> {
+    pub async fn start_prover_self_test(&self) -> Result<SelfTestStart, SyncError> {
         if self.settings().role != ProcessRole::MainApp
             || self.prover_standing().await? != SelfTestStanding::Due
         {
-            return Ok(());
+            return Ok(SelfTestStart::NotDue);
         }
         let mut running = lock(&self.self_test);
         if running.as_ref().is_some_and(|task| !task.is_finished()) {
-            return Ok(());
+            return Ok(SelfTestStart::AlreadyRunning);
         }
         let run = self.self_test_run();
         let plan = self.settings().self_test;
@@ -176,7 +190,7 @@ impl SyncEngine {
             // A fault leaves no record: the next call tries again.
             drop(run.go(plan).await);
         }));
-        Ok(())
+        Ok(SelfTestStart::Started)
     }
 }
 

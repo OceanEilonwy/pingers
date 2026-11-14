@@ -14,8 +14,8 @@ use pingers_proto::{
 };
 use pingers_store::{ProverVerdict, SelfTestRecord};
 use pingers_sync::{
-    CredentialChoice, Delivered, Refill, RlnReadiness, Route, SelfTestStanding, SyncError,
-    WakeBudget,
+    CredentialChoice, Delivered, ProcessRole, Refill, RlnReadiness, Route, SelfTestStanding,
+    SelfTestStart, SyncError, WakeBudget,
 };
 use pingers_testkit::{HarnessConfig, seeded_rng};
 use pingers_time::{Clock as _, UnixSeconds};
@@ -462,7 +462,10 @@ async fn a_failed_self_test_keeps_the_main_app_on_tokens() -> TestResult {
         CredentialChoice::PrivacyPass
     );
     // A result stands: no test starts again within the week.
-    device.engine.start_prover_self_test().await?;
+    assert_eq!(
+        device.engine.start_prover_self_test().await?,
+        SelfTestStart::NotDue
+    );
     assert_eq!(
         device.engine.prover_standing().await?,
         SelfTestStanding::Failed
@@ -491,5 +494,35 @@ async fn an_operator_who_turns_proofs_off_gets_tokens() -> TestResult {
     );
     register_mailbox(&device).await?;
     assert_eq!(last_scheme(&device).as_deref(), Some("PrivateToken"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_self_test_runs_at_a_time_and_only_in_the_main_app() -> TestResult {
+    let world = World::start()?;
+    let device = world.device()?;
+    assert_eq!(
+        device.engine.start_prover_self_test().await?,
+        SelfTestStart::Started
+    );
+    // Two proofs take far longer than this call: the first test is still running.
+    assert_eq!(
+        device.engine.start_prover_self_test().await?,
+        SelfTestStart::AlreadyRunning
+    );
+    assert!(matches!(
+        tested(&device).await?,
+        SelfTestStanding::Passed { .. }
+    ));
+    assert_eq!(
+        device.engine.start_prover_self_test().await?,
+        SelfTestStart::NotDue
+    );
+    let address = world.harness.endpoints().ohttp_relay.to_string();
+    let extension = world.device_with(&address, ProcessRole::Extension)?;
+    assert_eq!(
+        extension.engine.start_prover_self_test().await?,
+        SelfTestStart::NotDue
+    );
     Ok(())
 }

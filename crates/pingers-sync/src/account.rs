@@ -204,7 +204,7 @@ impl SyncEngine {
         let tokens = self.stock_tokens(budget).await?;
         // The tree first: a fresh copy is what shows a removed leaf, which is then replaced.
         let membership = if self.settings().role == ProcessRole::MainApp {
-            self.start_prover_self_test().await?;
+            let _: crate::SelfTestStart = self.start_prover_self_test().await?;
             self.ensure_membership_fresh(budget).await?
         } else {
             None
