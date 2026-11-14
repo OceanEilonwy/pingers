@@ -8,7 +8,12 @@ enum class Route(val dark: Boolean = false) {
     NewParty,
     Advanced,
     Invite,
-    AcceptInvite,
+    /** "Ben asked to join", from an opened invite on Invite people. */
+    JoinRequest,
+    /** Join flow A on the joiner's phone: a link opened, then the code, then You're in. */
+    OpenInvite,
+    AskedToJoin,
+    LetIn,
     Party,
     SpotEditor,
     DrawArea,

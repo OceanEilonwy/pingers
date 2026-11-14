@@ -13,9 +13,9 @@
 
 pub use pingers_client::snapshot::{
     ChatEntry, ChatMessage, ChatReply, ClientSnapshot, DailyWindow, Days, EndedMeetup,
-    ExclusionZone, HideTrail, Hosting, Invite, InviteLink, InviteStatus, InviteUrl, JoinPreview,
-    KeyTrust, LocationRequest, MeetPlace, MeetPointSnapshot, Meetup, MeetupPeer, MeetupSelf,
-    Member, OwnPosition, Party, PartyConfig, PauseInFocus, PeerAccess, PostQuantum, PushRelay,
-    PushRelayKind, QuietHoursPreference, RelayStatus, SafetyCode, Service, Settings, Spot, Toggle,
-    WakePushes, ZoneId, ZoneParties, ZoneSchedule, ZoneTimes, daily_window,
+    ExclusionZone, HideTrail, Hosting, Invite, InviteLink, InviteStatus, InviteUrl, JoinRequest,
+    Joining, KeyTrust, LocationRequest, MeetPlace, MeetPointSnapshot, Meetup, MeetupPeer,
+    MeetupSelf, Member, OwnPosition, Party, PartyConfig, PauseInFocus, PeerAccess, PostQuantum,
+    PushRelay, PushRelayKind, QuietHoursPreference, RelayStatus, SafetyCode, Service, Settings,
+    Spot, Toggle, WakePushes, ZoneId, ZoneParties, ZoneSchedule, ZoneTimes, daily_window,
 };

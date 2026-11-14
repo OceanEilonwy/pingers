@@ -101,8 +101,8 @@ fn wire_secrets_stay_out_of_debug_and_compare_by_content() {
 #[test]
 fn structs_holding_secrets_compare_every_field() -> Result<(), ProtoError> {
     use pingers_proto::{
-        AuthResponse, InvitePayload, InviteUses, InviterFingerprint, MailboxId, RegisterRequest,
-        SecretBytes, SecretText, ServerId,
+        AuthResponse, InvitePayload, InviterFingerprint, MailboxId, RegisterRequest, SecretBytes,
+        SecretText, ServerId,
     };
     use pingers_time::UnixSeconds;
 
@@ -142,7 +142,6 @@ fn structs_holding_secrets_compare_every_field() -> Result<(), ProtoError> {
         invite_secret: SecretBytes::new([2; 32]),
         inviter_fingerprint: InviterFingerprint::from_bytes([3; 8]),
         expires: UnixSeconds::new(4),
-        uses: InviteUses::Single,
         gateway_pins: vec![pingers_proto::KeyConfigHash::from_bytes([5; 32])],
         push_relay_pins: Vec::new(),
         registration_code: Some(SecretText::new(String::from("code"))),
@@ -175,10 +174,6 @@ fn structs_holding_secrets_compare_every_field() -> Result<(), ProtoError> {
         },
         InvitePayload {
             expires: UnixSeconds::new(9),
-            ..invite.clone()
-        },
-        InvitePayload {
-            uses: InviteUses::Multiple,
             ..invite.clone()
         },
         InvitePayload {

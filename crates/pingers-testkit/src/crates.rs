@@ -62,7 +62,8 @@ pub enum CrateCall {
     CreateParty(PartyDraft),
     CreateInvite(PartyId),
     OpenInvite(InviteUrl, Name),
-    AcceptInvite,
+    WithdrawJoin,
+    DismissJoin,
     DecideJoin(PartyId, MailboxId, JoinDecision),
     CancelInvite(PartyId, MailboxId),
     SetDisplayName(Name),
@@ -108,7 +109,7 @@ struct State {
 }
 
 impl FakeCrates {
-    /// The id every `create_party` and `accept_invite` returns.
+    /// The id every `create_party` returns.
     pub const PARTY: PartyId = PartyId::from_bytes([0xa1; 16]);
     /// The id every `save_spot` returns.
     pub const SPOT: SpotId = SpotId::from_bytes([0xb2; 16]);
@@ -293,17 +294,21 @@ impl PartiesPort for FakeCrates {
         self.answer(CrateName::Parties, CrateCall::OpenInvite(link, my_name), ())
     }
 
-    async fn accept_invite(&self) -> Result<PartyId, ClientError> {
-        self.answer(CrateName::Parties, CrateCall::AcceptInvite, Self::PARTY)
+    async fn withdraw_join(&self) -> Result<(), ClientError> {
+        self.answer(CrateName::Parties, CrateCall::WithdrawJoin, ())
+    }
+
+    async fn dismiss_join(&self) -> Result<(), ClientError> {
+        self.answer(CrateName::Parties, CrateCall::DismissJoin, ())
     }
 
     async fn decide_join(
         &self,
         party: PartyId,
-        invite: MailboxId,
+        request: MailboxId,
         decision: JoinDecision,
     ) -> Result<(), ClientError> {
-        let call = CrateCall::DecideJoin(party, invite, decision);
+        let call = CrateCall::DecideJoin(party, request, decision);
         self.answer(CrateName::Parties, call, ())
     }
 

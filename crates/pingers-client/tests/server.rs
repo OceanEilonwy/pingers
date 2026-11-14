@@ -330,7 +330,6 @@ async fn an_invite_links_registration_code_registers_the_joiner() -> Result<(), 
             .now()
             .checked_add(std::time::Duration::from_hours(1))
             .ok_or(TestError::Setup("time"))?,
-        uses: pingers_proto::InviteUses::Multiple,
         gateway_pins: vec![pingers_crypto::key_config_hash(
             &harness.endpoints().ohttp_key_config,
         )],

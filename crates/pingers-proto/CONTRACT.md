@@ -160,26 +160,32 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
 
 - **`InvitePayload`**, the link fragment (`https://<host>/j#v1.<base64url(encoding)>`):
   `[server (ServerId text), invite mailbox (16), invite secret (32, SecretBytes), inviter
-  fingerprint (8), expires (UnixSeconds), uses]`, plus a seventh element, the operator's
-  registration code (`Option<SecretText>`, never empty), only when present (added 2026-11-14,
-  r-accounts), so six-element links decode unchanged. `InviteUses` replaces the design's
-  `single_use: bool` (0 `Multiple`, 1 `Single`). `InviterFingerprint` is an 8-byte newtype with
+  fingerprint (8), expires (UnixSeconds)]`, plus a sixth element, the operator's registration
+  code (`Option<SecretText>`, never empty), only when present (r-accounts). Join flow A
+  (2026-11-14) removed the design's `single_use` (and `InviteUses`): every invite waits for
+  the inviter and stops working once one joiner is let in, and nothing about the Party is in
+  the link. `InviterFingerprint` is an 8-byte newtype with
   a redacted `Debug`. The `v1.` prefix and base64url are left to pingers-parties, so this crate
   needs no base64 dependency; the CBOR carries its own version.
 - **`JoinRequest`**, the plaintext pingers-crypto's `seal_join_request` seals:
-  `[key package, display name, reply mailbox (16), party subscription]`. The AEAD under
+  `[key package, X-Wing key package or null, display name, reply mailbox (16), party
+  subscription or null]`. The X-Wing slot (owner decision 2026-11-14) lets a joiner serve a
+  quantum-resistant Party without the link naming the suite. The
+  subscription is optional since join flow A: a joiner with wake-up pushes off still joins. The AEAD under
   `HKDF(invite_secret, "join")` is what authenticates the joiner's `KeyPackage` under the
   secret; this crate only encodes it. `DisplayName` is 1 to 200 bytes of UTF-8 (the design
   gives no limit; 200 matches pingers-store's `MemberName`) with a redacted `Debug`.
-- Vectors `invite-payload-encoding` and `join-request-encoding`; fuzz targets
-  `invite_payload` and `join_request`.
-- **Key pins in the link** (added 2026-11-14, v1-multiserver): the payload is now `[server,
-  invite mailbox, invite secret, inviter fingerprint, expires, uses, gateway pins, push relay
-  pins]` plus the code: eight or nine elements. `gateway_pins` (1 to `MAX_PINS` = 4
-  `KeyConfigHash`es) and `push_relay_pins` (0 to 4) are the hashes the inviter trusts for the
-  Party's server, so a joiner new to the server pins them rather than whatever key it is first
-  shown (owner decision: nothing is pinned on first use). Older six- and seven-element links
-  are refused; none were released.
+- **`InvitePost`** (join flow A), what is sealed and posted to the invite mailbox: `[0, join
+  request]` or `[1, reply mailbox]` (`Withdraw`, the joiner's "Withdraw request").
+- Vectors `invite-payload-encoding`, `join-request-encoding` and `invite-post-encoding`; fuzz
+  targets `invite_payload`, `join_request` and `invite_post`. The files come from `cargo xtask vectors`
+  (`xtask/src/vectors/proto/invite.rs`).
+- **Key pins in the link** (added 2026-11-14, v1-multiserver): the payload is `[server, invite
+  mailbox, invite secret, inviter fingerprint, expires, gateway pins, push relay pins]` plus the
+  code: seven or eight elements. `gateway_pins` (1 to `MAX_PINS` = 4 `KeyConfigHash`es) and
+  `push_relay_pins` (0 to 4) are the hashes the inviter trusts for the Party's server, so a joiner
+  new to the server pins them rather than whatever key it is first shown (owner decision:
+  nothing is pinned on first use).
 
 ### Privacy Pass keys (added 2026-11-13, wave 3 server)
 

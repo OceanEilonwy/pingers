@@ -166,7 +166,7 @@ async fn open_builds_the_crates_and_publishes_their_sections() -> Result<(), Tes
     };
     fakes.set_parties(PartiesSection {
         parties: Vec::new(),
-        join_preview: None,
+        joining: None,
         display_name: Some(Name::new("Sam")?),
     });
     let mut pipeline = fakes_pipeline(&fakes).await?;
@@ -198,7 +198,7 @@ async fn open_builds_the_crates_and_publishes_their_sections() -> Result<(), Tes
         alert: Some(MEETUP),
         location_requests: Vec::new(),
         ended_meetup: None,
-        join_preview: None,
+        joining: None,
         display_name: Some(Name::new("Sam")?),
         own_position: pipeline.own_position,
         fallbacks: vec![Fallback::PrivacyPassOnly],
@@ -308,8 +308,12 @@ async fn party_commands_reach_parties_and_republish() -> Result<(), TestError> {
     rig.expect_last(&CrateCall::OpenInvite(url, name("Ben")?), reads);
 
     let reads = rig.fakes.section_reads();
-    assert_eq!(client.accept_invite().await?, FakeCrates::PARTY);
-    rig.expect_last(&CrateCall::AcceptInvite, reads);
+    client.withdraw_join().await?;
+    rig.expect_last(&CrateCall::WithdrawJoin, reads);
+
+    let reads = rig.fakes.section_reads();
+    client.dismiss_join().await?;
+    rig.expect_last(&CrateCall::DismissJoin, reads);
 
     let invite = MailboxId::from_bytes([9; 16]);
     let reads = rig.fakes.section_reads();
@@ -542,6 +546,7 @@ async fn a_wake_outcome_goes_to_the_platform_and_the_events() -> Result<(), Test
         events: vec![
             ClientEvent::PartiesChanged,
             ClientEvent::JoinRequested(party),
+            ClientEvent::LetIn(party),
             ClientEvent::MeetupStarted(MEETUP),
             ClientEvent::MeetupUpdated(MEETUP),
             ClientEvent::MeetupEnded(MEETUP),
@@ -579,6 +584,7 @@ async fn a_wake_outcome_goes_to_the_platform_and_the_events() -> Result<(), Test
         [
             RecordedEvent::PartiesChanged,
             RecordedEvent::JoinRequested { party },
+            RecordedEvent::LetIn { party },
             RecordedEvent::MeetupStarted { meetup: MEETUP },
             RecordedEvent::MeetupUpdated { meetup: MEETUP },
             RecordedEvent::MeetupEnded { meetup: MEETUP },

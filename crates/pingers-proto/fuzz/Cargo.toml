@@ -285,3 +285,10 @@ path = "fuzz_targets/join_request.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "invite_post"
+path = "fuzz_targets/invite_post.rs"
+test = false
+doc = false
+bench = false

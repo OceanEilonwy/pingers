@@ -28,6 +28,10 @@ reason = "equivalent in the client tests: without a harness server no Meetup goe
 
 
 [[mutant]]
+name = "crates/pingers-parties/src/joining.rs: replace match guard admitted == reply with true in PartyLifecycle<'_>::approve_join"
+reason = "defensive and unreachable through the API: letting someone in drops every other request through that invite, and a used invite refuses new ones, so the only request a used invite can still hold is the one it admitted (put back by commit_rejected)"
+
+[[mutant]]
 name = "crates/pingers-server/src/http.rs: replace <impl HttpBody for TrackedBody>::is_end_stream -> bool with false"
 reason = "equivalent: is_end_stream is only a hint; with false, hyper polls the inner body once more, gets its end, and the client receives the same response"
 

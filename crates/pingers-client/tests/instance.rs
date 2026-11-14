@@ -49,7 +49,7 @@ enum TestError {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_join_needs_a_sealed_subscription_and_a_real_link() -> Result<(), TestError> {
+async fn a_join_with_pushes_on_needs_a_token_and_every_join_a_real_link() -> Result<(), TestError> {
     let config = HarnessConfig::default();
     let harness = InProcessHarness::start(&config)?;
     let rig = rig(&harness, &config, harness_pins(&harness)?).await?;
@@ -65,11 +65,28 @@ async fn a_join_needs_a_sealed_subscription_and_a_real_link() -> Result<(), Test
         token: PushToken::from_bytes(b"https://push.harness.invalid/up/abc".to_vec()),
     }));
     // With a token the subscription is sealed to the pinned push relay key and the request
-    // goes out; nobody reads this invite mailbox, so no Welcome comes.
+    // goes out; nobody reads this invite mailbox, so the join stays asked.
     rig.client.open_invite(link, name).await?;
     assert!(matches!(
-        rig.client.accept_invite().await,
-        Err(ClientError::Unavailable(Unavailable::AwaitingWelcome))
+        rig.client.snapshot().joining,
+        Some(pingers_client::snapshot::Joining::Asked { .. })
+    ));
+    rig.client.withdraw_join().await?;
+    assert_eq!(rig.client.snapshot().joining, None);
+    // Withdrawn, there is nothing left to withdraw; and a link that is not an invite starts
+    // nothing.
+    assert!(matches!(
+        rig.client.withdraw_join().await,
+        Err(ClientError::Parties(
+            pingers_parties::PartiesError::UnknownJoin
+        ))
+    ));
+    let bad = pingers_client::snapshot::InviteUrl::new("https://pingers.invalid/j#x")?;
+    assert!(matches!(
+        rig.client
+            .open_invite(bad, pingers_client::snapshot::Name::new("Bob")?)
+            .await,
+        Err(ClientError::Parties(_))
     ));
     Ok(())
 }
@@ -100,8 +117,8 @@ impl Drop for TestDir {
 
 struct Rig {
     client: Client,
-    events: Arc<RecordingEvents>,
     platform: FakePlatform,
+    events: RecordingEvents,
     database: PathBuf,
     _dir: TestDir,
 }
@@ -109,7 +126,7 @@ struct Rig {
 /// The pins an official build would carry for the harness: the served key and a next one.
 struct Pins {
     gateway: KeyPins,
-    /// `None`: a build without push relay pins, which pins on first use.
+    /// `None`: a build without push relay pins, which seals no token.
     push_relay: Option<KeyPins>,
 }
 
@@ -139,19 +156,57 @@ async fn rig(
     config: &HarnessConfig,
     pins: Pins,
 ) -> Result<Rig, TestError> {
+    rig_as(
+        harness,
+        config,
+        pins,
+        Who {
+            seed: 3,
+            account: Account::Preset,
+        },
+    )
+    .await
+}
+
+/// How a rig's account comes about.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Account {
+    /// Saved in the store before the client opens, as a registered device has it.
+    Preset,
+    /// None: the client registers one itself on its first credentialed request, trusting
+    /// the harness's HTTPS front and the build's key pins.
+    Register,
+}
+
+/// Which person a rig is: the seed of its random streams, and how it gets an account.
+struct Who {
+    seed: u64,
+    account: Account,
+}
+
+/// A client whose random streams (and preset account key) come from `seed`, so two rigs are
+/// two people.
+async fn rig_as(
+    harness: &InProcessHarness,
+    config: &HarnessConfig,
+    pins: Pins,
+    who: Who,
+) -> Result<Rig, TestError> {
+    let Who { seed, account } = who;
     let dir = TestDir::new()?;
     let endpoints = harness.endpoints();
     let server = ServerId::new(endpoints.server_id.clone())?;
     let database_path = dir.0.join("pingers.db");
-    {
+    if account == Account::Preset {
         let database =
             Database::open(&database_path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
-        let signing_key = AccountSigningKey::generate(&mut ChaCha20Rng::seed_from_u64(3));
+        let signing_key = AccountSigningKey::generate(&mut ChaCha20Rng::seed_from_u64(seed));
         database.session()?.identity().save(&Identity {
             account: account_id(&signing_key.public_key()),
             signing_key,
         })?;
     }
+    // Nothing is pinned on first use: either way the build's pins come with the instance.
     let instance = Instance {
         server,
         relay: format!("http://{}", endpoints.ohttp_relay),
@@ -166,7 +221,10 @@ async fn rig(
     platform
         .secure_store_put("pingers.database-key", &KEY)
         .map_err(|_locked| TestError::Setup("secure store"))?;
-    let seeds = Arc::new(AtomicU64::new(500));
+    // Each person draws from their own stream, or two would make the same mailbox ids.
+    let seeds = Arc::new(AtomicU64::new(
+        500_u64.saturating_add(seed.saturating_mul(100_000)),
+    ));
     let outside = Outside {
         clock: Arc::new(clock.clone()),
         timer: Arc::new(clock),
@@ -176,7 +234,7 @@ async fn rig(
             ))
         }),
     };
-    let events = Arc::new(RecordingEvents::new());
+    let events = RecordingEvents::new();
     let crates_platform: Arc<dyn pingers_client::Platform> = Arc::new(platform.clone());
     let opened = instance.clone();
     let client = Client::open_with(
@@ -185,18 +243,14 @@ async fn rig(
             instance: Some(instance),
         },
         Arc::new(platform.clone()),
-        {
-            let recorder: Arc<RecordingEvents> = Arc::clone(&events);
-            let shared: Arc<dyn pingers_client::Events> = recorder;
-            shared
-        },
+        Arc::new(events.clone()),
         move |database| Crates::real(database, crates_platform, outside, Some(&opened)),
     )
     .await?;
     Ok(Rig {
         client,
-        events,
         platform,
+        events,
         database: database_path,
         _dir: dir,
     })
@@ -344,7 +398,6 @@ fn harness_link(
         expires: pingers_time::Clock::now(&config.clock)
             .checked_add(std::time::Duration::from_hours(1))
             .ok_or(TestError::Setup("time"))?,
-        uses: pingers_proto::InviteUses::Multiple,
         gateway_pins: vec![pingers_crypto::key_config_hash(
             &harness.endpoints().ohttp_key_config,
         )],
@@ -395,13 +448,16 @@ async fn turning_wake_pushes_off_drops_the_seals() -> Result<(), TestError> {
     up_token(&rig);
     rig.client.set_wake_pushes(WakePushes::On).await?;
     rig.client.set_wake_pushes(WakePushes::NoWakePushes).await?;
-    // With the seals gone a join request has no subscription to carry.
-    let link = harness_link(&harness, &config)?;
+    // With the seals gone a join request carries no subscription, so it gets as far as
+    // reading the link, which holds no invite.
+    let link = pingers_client::snapshot::InviteUrl::new("https://pingers.invalid/j#x")?;
     assert!(matches!(
         rig.client
             .open_invite(link, pingers_client::snapshot::Name::new("Bob")?)
             .await,
-        Err(ClientError::Unavailable(Unavailable::WakePushesOff))
+        Err(ClientError::Parties(
+            pingers_parties::PartiesError::InvalidLink
+        ))
     ));
     // And a mailbox registered from now on (an invite's) wakes nobody.
     let party = rig
@@ -440,5 +496,179 @@ async fn wake_pushes_need_the_platform_s_push_token() -> Result<(), TestError> {
         rig.client.set_wake_pushes(WakePushes::On).await,
         Err(ClientError::Unavailable(Unavailable::NoPushToken))
     ));
+    Ok(())
+}
+
+/// A client that registers its own account and tokens, with wake-up pushes off: joining no
+/// longer needs them, and every wake then reads the mailboxes joins wait on.
+async fn person(
+    harness: &InProcessHarness,
+    config: &HarnessConfig,
+    seed: u64,
+) -> Result<Rig, TestError> {
+    let rig = rig_as(
+        harness,
+        config,
+        harness_pins(harness)?,
+        Who {
+            seed,
+            account: Account::Register,
+        },
+    )
+    .await?;
+    rig.client.set_wake_pushes(WakePushes::NoWakePushes).await?;
+    Ok(rig)
+}
+
+/// Ana's Party.
+async fn climbing_crew(ana: &Rig) -> Result<pingers_proto::PartyId, TestError> {
+    use pingers_client::ports::PartyDraft;
+    use pingers_client::snapshot::{Name, PartyColour, PostQuantum};
+
+    Ok(ana
+        .client
+        .create_party(PartyDraft {
+            server: None,
+            name: Name::new("Climbing crew")?,
+            my_name: Name::new("Ana")?,
+            colour: PartyColour::Teal,
+            post_quantum: PostQuantum::Off,
+        })
+        .await?)
+}
+
+/// Invite mailboxes pooled on `rig`'s device, ready for its next link.
+fn pooled_invites(
+    harness: &InProcessHarness,
+    rig: &Rig,
+    config: &HarnessConfig,
+) -> Result<u32, TestError> {
+    let database = Database::open(&rig.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+    let now = pingers_time::Clock::now(&config.clock);
+    let session = database.session()?;
+    let server = session.server(&ServerId::new(harness.endpoints().server_id.clone())?)?;
+    Ok(server
+        .mailboxes()
+        .pooled_count(pingers_store::MailboxPurpose::Invite, now)?)
+}
+
+fn asked_code(rig: &Rig) -> Option<pingers_client::snapshot::SafetyCode> {
+    match rig.client.snapshot().joining.clone() {
+        Some(pingers_client::snapshot::Joining::Asked { code, .. }) => Some(code),
+        _ => None,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ask_compare_codes_let_in_then_turn_the_next_one_away() -> Result<(), TestError> {
+    use pingers_client::ports::{Foreground, JoinDecision};
+    use pingers_client::snapshot::{Joining, Name};
+    use pingers_testkit::{EventKind, RecordedEvent};
+
+    let config = HarnessConfig::default();
+    let harness = InProcessHarness::start(&config)?;
+    // Ana has wake-up pushes on: her invites are read when a push names them or when she opens
+    // the app, not on every wake.
+    let ana = person(&harness, &config, 3).await?;
+    up_token(&ana);
+    ana.client.set_wake_pushes(WakePushes::On).await?;
+    let ben = person(&harness, &config, 4).await?;
+    let party = climbing_crew(&ana).await?;
+    let link = ana.client.create_invite(party).await?;
+    let shared_at = link
+        .expires_at
+        .checked_sub(pingers_parties::INVITE_LIFETIME)
+        .ok_or(TestError::Setup("link expiry"))?;
+    config.clock.advance(std::time::Duration::from_secs(600));
+
+    // Ben asks to join; his phone shows the code at once, and nothing about the Party.
+    ben.client.open_invite(link.url, Name::new("Ben")?).await?;
+    let ben_code = asked_code(&ben).ok_or(TestError::Setup("Ben has no code"))?;
+    assert_eq!(ben_code.as_str().len(), 14);
+    assert!(ben.client.snapshot().parties.is_empty());
+
+    // A scheduled wake does not read Ana's invites (pushes on); opening the app does: same
+    // code, before anyone is let in.
+    ana.client.on_wake().await?;
+    assert!(ana.client.snapshot().party(party)?.join_requests.is_empty());
+    ana.client.on_foreground(Foreground::Visible).await?;
+    let snapshot = ana.client.snapshot();
+    let requests = &snapshot.party(party)?.join_requests;
+    assert_eq!(requests.len(), 1);
+    let request = requests.first().ok_or(TestError::Setup("Ben's request"))?;
+    assert_eq!(request.name.as_str(), "Ben");
+    assert_eq!(request.code, ben_code);
+    assert_eq!(request.shared_at, shared_at);
+    // Being in a Party, Ana keeps an invite mailbox pooled for the next link.
+    assert_eq!(pooled_invites(&harness, &ana, &config)?, 1);
+    assert!(
+        ana.events
+            .events()
+            .contains(&RecordedEvent::JoinRequested { party })
+    );
+
+    // Codes match: Ana lets Ben in. The link stops working.
+    ana.client
+        .decide_join(party, request.id, JoinDecision::Admit)
+        .await?;
+    let snapshot = ana.client.snapshot();
+    let after = snapshot.party(party)?;
+    assert!(after.join_requests.is_empty());
+    assert!(after.invites.is_empty());
+
+    // Ben's next wake finds the Welcome: the Party, its members and who let him in appear.
+    ben.client.on_wake().await?;
+    let snapshot = ben.client.snapshot();
+    assert_eq!(
+        snapshot.joining,
+        Some(Joining::LetIn {
+            party,
+            inviter: Name::new("Ana")?,
+            code: ben_code.clone(),
+        })
+    );
+    let joined = snapshot.party(party)?;
+    assert_eq!(joined.name.as_str(), "Climbing crew");
+    let names: Vec<&str> = joined
+        .members
+        .iter()
+        .map(|member| member.name.as_str())
+        .collect();
+    assert_eq!(names, ["Ana", "Ben"]);
+    assert_eq!(ben.events.count(EventKind::LetIn), 1);
+    ben.client.dismiss_join().await?;
+    assert_eq!(ben.client.snapshot().joining, None);
+
+    // A second invite: Cat asks, Ana turns her away, and Cat is never let in.
+    let cat = person(&harness, &config, 5).await?;
+    let second = ana.client.create_invite(party).await?;
+    cat.client
+        .open_invite(second.url, Name::new("Cat")?)
+        .await?;
+    let cat_code = asked_code(&cat).ok_or(TestError::Setup("Cat has no code"))?;
+    assert_ne!(cat_code, ben_code);
+    ana.client.on_foreground(Foreground::Visible).await?;
+    let snapshot = ana.client.snapshot();
+    let request = snapshot
+        .party(party)?
+        .join_requests
+        .first()
+        .ok_or(TestError::Setup("Cat's request"))?;
+    assert_eq!(request.code, cat_code);
+    ana.client
+        .decide_join(party, request.id, JoinDecision::Refuse)
+        .await?;
+    let snapshot = ana.client.snapshot();
+    let after = snapshot.party(party)?;
+    assert!(after.join_requests.is_empty());
+    // Turning someone away leaves the link open.
+    assert_eq!(after.invites.len(), 1);
+    cat.client.on_wake().await?;
+    assert_eq!(asked_code(&cat), Some(cat_code));
+    assert!(cat.client.snapshot().parties.is_empty());
+    assert_eq!(cat.events.count(EventKind::LetIn), 0);
+    // Cat gives up: her request is withdrawn and her phone forgets it.
+    cat.client.withdraw_join().await?;
+    assert_eq!(cat.client.snapshot().joining, None);
     Ok(())
 }

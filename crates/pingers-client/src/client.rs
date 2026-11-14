@@ -154,7 +154,7 @@ async fn assemble(crates: &Crates) -> Result<ClientSnapshot, ClientError> {
         alert: meetups.alert,
         location_requests: meetups.location_requests,
         ended_meetup: meetups.ended_meetup,
-        join_preview: parties.join_preview,
+        joining: parties.joining,
         display_name: parties.display_name,
         own_position: pipeline.own_position,
         fallbacks: server.fallbacks,

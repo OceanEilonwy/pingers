@@ -375,6 +375,9 @@ async fn one_device_holds_parties_on_two_servers_with_their_own_pins() -> TestRe
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_joiner_new_to_a_server_registers_there_with_the_invite_s_pins() -> TestResult {
+    use pingers_client::ports::{Foreground, JoinDecision};
+    use pingers_client::snapshot::{Joining, WakePushes};
+
     let world = World::start()?;
     let (ana, _on_a, on_b) = ana_on_both(&world).await?;
     let link = ana.client.create_invite(on_b).await?;
@@ -382,24 +385,44 @@ async fn a_joiner_new_to_a_server_registers_there_with_the_invite_s_pins() -> Te
 
     let ben = Device::open(&world, "ben", 500).await?;
     let b = world.b_server()?;
-    // Ben has wake-up pushes off and no push token: the join request goes without a
-    // subscription once r-invite's optional subscriptions land; on this layout it needs one.
-    let opened = tokio::time::timeout(
+    // Ben has wake-up pushes off: the join request goes without a subscription.
+    ben.client.set_wake_pushes(WakePushes::NoWakePushes).await?;
+    tokio::time::timeout(
         STEP,
         ben.client.open_invite(link.url.clone(), Name::new("Ben")?),
     )
     .await
-    .map_err(|_elapsed| TestError::Setup("opening the invite did not finish"))?;
+    .map_err(|_elapsed| TestError::Setup("opening the invite did not finish"))??;
+    assert!(matches!(
+        ben.client.snapshot().joining,
+        Some(Joining::Asked { .. })
+    ));
+
+    // Ana reads her invite on B, lets Ben in, and Ben's next wake finds the Welcome on B.
+    ana.client.on_foreground(Foreground::Visible).await?;
+    let request = ana
+        .client
+        .snapshot()
+        .party(on_b)?
+        .join_requests
+        .first()
+        .map(|request| request.id)
+        .ok_or(TestError::Setup(
+            "Ben's request did not reach Ana through B",
+        ))?;
+    ana.client
+        .decide_join(on_b, request, JoinDecision::Admit)
+        .await?;
+    ben.client.on_wake().await?;
+    let snapshot = ben.client.snapshot();
     assert!(
-        matches!(
-            opened,
-            Ok(())
-                | Err(ClientError::Unavailable(
-                    pingers_client::Unavailable::NoPushToken
-                ))
-        ),
-        "{opened:?}"
+        matches!(snapshot.joining, Some(Joining::LetIn { party, .. }) if party == on_b),
+        "{:?}",
+        snapshot.joining
     );
+    let joined = snapshot.party(on_b)?;
+    assert_eq!(joined.config.origin, b, "the Party Ben joined is on B");
+    assert_eq!(joined.config.keys, KeyTrust::FromInvite);
 
     // B was recorded with the invite's pins, as an invited server, and Ben registered there
     // with the link's code.

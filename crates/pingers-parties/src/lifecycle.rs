@@ -8,9 +8,8 @@ use pingers_mls::{
 };
 use pingers_presence::EpochTransition;
 use pingers_proto::{
-    AppMessage, CommitRequest, Delivery, Epoch, GroupId, JoinRequest, LeafIndex, MailboxId,
-    MlsMessageBytes, Padded, PartyId, SizeClass, Subscription, SubscriptionId, Urgency,
-    WireDecode as _, WireEncode as _,
+    AppMessage, CommitRequest, Delivery, Epoch, GroupId, LeafIndex, MailboxId, MlsMessageBytes,
+    Padded, PartyId, SizeClass, Subscription, SubscriptionId, Urgency,
 };
 use pingers_store::{
     Identity, LocationVisibility, Member, MemberName, Party, PartyName, Session, Verification,
@@ -19,6 +18,7 @@ use pingers_time::Clock;
 use rand_core::CryptoRng;
 
 use crate::codec::{Reader, Writer};
+use crate::invite::{InviteRecord, StoredStatus};
 use crate::joining::Approval;
 use crate::ops::{PartyOperation, Profile, Snapshot, spot_wins};
 use crate::records::{self, Key};
@@ -132,8 +132,7 @@ impl PendingCommit {
         match self {
             Self::Add(approval) => {
                 writer.byte(0);
-                writer.fixed(approval.invite.as_bytes());
-                writer.variable(&approval.request.encode()?)?;
+                writer.variable(&approval.encode()?)?;
             }
             Self::Remove => writer.byte(1),
             Self::Proposals => writer.byte(2),
@@ -145,10 +144,12 @@ impl PendingCommit {
     fn decode(bytes: &[u8]) -> Result<Self, PartiesError> {
         let mut reader = Reader::new(bytes, "pending commit");
         let pending = match reader.byte()? {
-            0 => Self::Add(Box::new(Approval {
-                invite: MailboxId::from_bytes(reader.fixed()?),
-                request: JoinRequest::decode(reader.variable()?)?,
-            })),
+            0 => {
+                let mut inner = Reader::new(reader.variable()?, "pending join");
+                let approval = Approval::read(&mut inner)?;
+                inner.end()?;
+                Self::Add(Box::new(approval))
+            }
             1 => Self::Remove,
             2 => Self::Proposals,
             3 => Self::Update,
@@ -523,7 +524,11 @@ impl<'session> PartyLifecycle<'session> {
             let added_profile = match &pending {
                 PendingCommit::Add(approval) => Some(AddedProfile {
                     name: MemberName::new(approval.request.display_name.as_str().to_owned())?,
-                    subscription: approval.request.party_subscription.id,
+                    subscription: approval
+                        .request
+                        .party_subscription
+                        .as_ref()
+                        .map(|subscription| subscription.id),
                 }),
                 PendingCommit::Remove | PendingCommit::Proposals | PendingCommit::Update => None,
             };
@@ -775,7 +780,7 @@ pub(crate) struct CommitParts<'parts> {
     /// Keys whose profiles the snapshot leaves out.
     pub(crate) excluded: &'parts [AccountPublicKey],
     /// The added member's subscription and reply mailbox.
-    pub(crate) added: Option<(Subscription, MailboxId)>,
+    pub(crate) added: Option<Added>,
     pub(crate) removed: Vec<SubscriptionId>,
 }
 
@@ -796,10 +801,10 @@ pub(crate) fn finish_commit(
     let snapshot = snapshot(session, &row.id, parts.excluded)?;
     let state = seal_state_snapshot(&group.pending_state_key()?, &snapshot.encode()?, rng)?;
     let (subscriptions_added, welcome) = match (parts.added, parts.commit.welcome) {
-        (Some((subscription, mailbox)), Some(welcome)) => (
-            vec![subscription],
+        (Some(added), Some(welcome)) => (
+            added.subscription.into_iter().collect(),
             Some(WelcomeDelivery {
-                mailbox,
+                mailbox: added.reply,
                 body: Padded::pad_smallest(welcome.as_bytes(), &SizeClass::MAILBOX_POST)?,
             }),
         ),
@@ -822,9 +827,16 @@ pub(crate) fn finish_commit(
     })
 }
 
+/// A member a commit adds: their subscription, if they have wake-up pushes on, and where their
+/// Welcome goes.
+pub(crate) struct Added {
+    pub(crate) subscription: Option<Subscription>,
+    pub(crate) reply: MailboxId,
+}
+
 struct AddedProfile {
     name: MemberName,
-    subscription: SubscriptionId,
+    subscription: Option<SubscriptionId>,
 }
 
 /// A merged commit: the roster after it, what it changed, and (for this device's own Add) the
@@ -866,7 +878,7 @@ fn apply_roster_change(
                     avatar: None,
                     verification: Verification::Unverified,
                 })?;
-                set_subscription(session, &row.id, *key, Some(profile.subscription))?;
+                set_subscription(session, &row.id, *key, profile.subscription)?;
             }
         }
     }
@@ -946,17 +958,21 @@ pub(crate) fn apply_operation(
     }
 }
 
-/// Deletes a Party with its MLS group and records; returns requests deleting its invite
-/// mailboxes on the server.
+/// Deletes a Party with its MLS group and records; returns requests deleting the invite
+/// mailboxes still open on the server (a used or cancelled invite's mailbox went already).
 fn delete_party(
     session: &Session,
     context: &MlsContext<'_, Session>,
     row: &Party,
 ) -> Result<Vec<Outbound>, PartiesError> {
-    let outbound = records::read_mailbox_list(session, &Key::Invites(&row.id))?
-        .into_iter()
-        .map(|mailbox| Outbound::DeleteMailbox { mailbox })
-        .collect();
+    let mut outbound = Vec::new();
+    for mailbox in records::read_mailbox_list(session, &Key::Invites(&row.id))? {
+        let bytes = records::read(session, &Key::Invite(&row.id, &mailbox))?
+            .ok_or(PartiesError::UnknownInvite)?;
+        if InviteRecord::decode(&bytes)?.status == StoredStatus::Open {
+            outbound.push(Outbound::DeleteMailbox { mailbox });
+        }
+    }
     context.delete_group(&row.group)?;
     records::delete_party(session, &row.id)?;
     session.parties().delete(&row.id)?;

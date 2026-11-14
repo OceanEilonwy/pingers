@@ -590,12 +590,41 @@ async fn a_link_that_is_not_an_invite_starts_no_join() -> TestResult {
         parties.open_invite(link, Name::new("Al")?).await,
         Err(ClientError::Parties(_))
     ));
-    assert!(matches!(
-        parties.accept_invite().await,
-        Err(ClientError::Parties(
-            pingers_parties::PartiesError::UnknownJoin
-        ))
-    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_decisions_and_withdrawals_need_a_request() -> TestResult {
+    let store = store()?;
+    let parties = Parties::new(Arc::clone(&store.backend), offline(&store));
+    let draft = PartyDraft {
+        server: None,
+        name: Name::new("Crew")?,
+        my_name: Name::new("Sam")?,
+        colour: PartyColour::Blue,
+        post_quantum: PostQuantum::Off,
+    };
+    let party = parties.create_party(draft).await?;
+    // Nobody asked to join, and this device asked nothing.
+    let unknown = [
+        parties
+            .decide_join(party, MailboxId::from_bytes([1; 16]), JoinDecision::Admit)
+            .await,
+        parties
+            .decide_join(party, MailboxId::from_bytes([1; 16]), JoinDecision::Refuse)
+            .await,
+        parties.withdraw_join().await,
+    ];
+    for result in unknown {
+        assert!(matches!(
+            result,
+            Err(ClientError::Parties(
+                pingers_parties::PartiesError::UnknownJoin
+            ))
+        ));
+    }
+    // Nothing to show while no join is under way.
+    assert_eq!(parties.section().await?.joining, None);
     Ok(())
 }
 
@@ -661,14 +690,6 @@ async fn party_commands_reach_pingers_parties_and_the_store() -> TestResult {
             .await
             .is_err()
     );
-
-    // Admitting waits on reading invite mailboxes.
-    assert!(matches!(
-        parties
-            .decide_join(party, MailboxId::from_bytes([1; 16]), JoinDecision::Admit)
-            .await,
-        Err(ClientError::Unavailable(crate::Unavailable::Sync))
-    ));
 
     // Without an instance nothing is sent: the relay is unreachable by definition.
     let sync = super::sync::Sync(offline(&store));

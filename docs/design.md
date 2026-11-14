@@ -446,7 +446,7 @@ A **group subscription** is the same `SealedPush` without a message queue: the g
 | Knock mailbox | One lease; one per real board record | Location (iOS) or Standard/Alert | Party members who match the record |
 | Reply mailbox | One lease, one-time | Standard/Alert | The poster being knocked |
 | Meetup group subscription | Until the Meetup ends | Standard; urgency chosen per message | Carried in the knock; listed by whoever adds the member |
-| Party group subscription | 30 days, renewed | Standard; urgency chosen per message | Carried in the join request; renewed by the member under the group's log-auth key |
+| Party group subscription | 30 days, renewed | Standard; urgency chosen per message | Carried in the join request when the joiner has wake-up pushes on (optional: without it the member reads the group on its own wakes); renewed by the member under the group's log-auth key |
 | Invite mailbox | Until the invite expires | Standard/Alert | Holders of the invite link |
 
 **The push relay.** A small stateless service that holds the HPKE private key and the APNs and FCM credentials.
@@ -1002,10 +1002,14 @@ The relay opens `blob` with `info = "pingers/v1/push" ‖ bind`, reads `platform
 
 **Invite flow**
 
-- Link: `https://<host>/j#v1.<base64url(cbor{ server, invite_mailbox, invite_secret[32], inviter_fpr[8], expires, single_use, gateway_pins[1..4], push_relay_pins[0..4], reg_code? })>`. The fragment never reaches the server. `gateway_pins` and `push_relay_pins` are the key config hashes the inviter trusts for the Party's server and its push relay (decided 2026-11-14): a joiner that has not used the server records it with these pins and refuses it if its keys do not match (`Notice::RelayKeyMismatch`); nothing is pinned on first use. A joiner that already knows the server keeps its own pins. Vectors: `vectors/proto/invite-payload-encoding.json`. `reg_code` is the operator's registration code (B.1), present when the inviter registered with one, so the joiner's first `POST /v1/accounts` needs no typing; like the link it is a bearer capability. The QR code encodes the same string.
-- Joiner registers an account on that server, registers a one-time reply mailbox, then posts to `invite_mailbox`: `XChaCha20-Poly1305(HKDF(invite_secret,"join"), { key_package, display_name, reply_mailbox, party_sub })`, where `party_sub` is its sealed push subscription for the Party group.
-- Inviter's device wakes, decrypts (authenticates possession of the secret), shows "Bob wants to join" for multi-use links (single-use links auto-approve), commits `Add` with `subs_add = [party_sub]`, posts the Welcome to `reply_mailbox`.
-- Joiner checks that the group in the Welcome contains a leaf whose key matches `inviter_fpr`, fetches the state snapshot, publishes its roster profile, and is in.
+Join flow A (decided 2026-11-14): the link carries nothing about the Party, every joiner is let in by the inviter after comparing a code, and the link stops working once someone is let in.
+
+- Link: `https://<host>/j#v1.<base64url(cbor[ server, invite_mailbox, invite_secret[32], inviter_fpr[8], expires, gateway_pins[1..4], push_relay_pins[0..4], reg_code? ])>`. `gateway_pins` and `push_relay_pins` are the key config hashes the inviter trusts for the Party's server and its push relay (decided 2026-11-14): a joiner that has not used the server records it with these pins and refuses it if its keys do not match (`Notice::RelayKeyMismatch`); nothing is pinned on first use. A joiner that already knows the server keeps its own pins. No Party name, members, colour, suite or use count, so a link that leaks (forwarded, or read by the app that carried it) reveals only the server. `inviter_fpr` is `account_id(inviter_pk)[..8]`. `reg_code` is the operator's registration code (B.1), present when the inviter registered with one, so the joiner's first `POST /v1/accounts` needs no typing; like the link it is a bearer capability. The fragment never reaches the server. The QR code encodes the same string.
+- Joiner registers an account on that server, registers a one-time reply mailbox, then posts to `invite_mailbox` an invite post `[0, { key_package, key_package_xwing | null, display_name, reply_mailbox, party_sub | null }]`. The link does not name the Party's suite, so the joiner sends a classical key package and, when its build can make one, an X-Wing one; the inviter adds the one its Party's suite needs, and a quantum-resistant Party refuses a request without an X-Wing one, sealed as `nonce || XChaCha20-Poly1305(HKDF(invite_secret,"join"), …)` and padded to a mailbox size class. `party_sub` is its sealed push subscription for the Party group, or null with wake-up pushes off: such a member joins all the same and reads the group on its own wakes.
+- **Join code.** Both phones show `code = be64(HMAC-SHA256(HKDF-Expand(invite_secret, "pingers/v1/join-code", 32), be32(len(kp)) || kp || be32(len(kp_xwing)) || kp_xwing)[..8]) mod 10^12` (`kp_xwing` empty when the request carries none), 12 digits as `4821 0937 5512`, as soon as the request exists: the joiner computes it when it builds the request, the inviter when it opens it. It binds the request to the link and to both of the joiner's key packages (each carries, and is signed by, the joiner's signature key), so whichever one the inviter adds is covered. Someone who intercepted the link can post their own request, but cannot read the real joiner's (only the inviter holds the invite mailbox's read key), so their code matches by chance only, once in 10^12. Vectors: `vectors/crypto/join-code.json`.
+- Inviter's device reads the invite mailbox (on its push, or every wake with pushes off; posts are handled once, in order) and shows "Ben asked to join" with the code. The joiner reads its code out, in person or on a call. "Codes match · Let Ben in" commits `Add` (with `subs_add = [party_sub]` when there is one), posts the Welcome to `reply_mailbox`, marks the invite used, drops any other request through it and deletes the invite mailbox. "Don't let in" sends nothing; the joiner never hears back.
+- The joiner can withdraw ("Withdraw request"): it posts `[1, reply_mailbox]` under the same seal, deletes its reply mailbox and forgets the join; the inviter drops the waiting request. The pairing of request and reply mailbox is known only to the two phones; the server sees mailbox ids, so a server that also held the link could withdraw a request (denial only).
+- Joiner checks that the group in the Welcome contains a leaf whose key matches `inviter_fpr`, fetches the state snapshot, publishes its roster profile, and is in: only now does it learn the Party's name, members and Spots ("Ana let you in"), and it keeps the code that was checked.
 - Invite and reply mailboxes are anonymous like any other: the server sees them used and sees the group gain a subscription, without accounts.
 - A link is a bearer capability: revoke by deleting the invite mailbox.
 
@@ -1033,7 +1037,8 @@ pub trait Platform: Send + Sync {
 #[uniffi::export(callback_interface)]
 pub trait Events: Send + Sync {
     fn parties_changed(&self);
-    fn join_request(&self, party: PartyId, req: JoinRequest);
+    fn join_requested(&self, party: PartyId);                        // "Ben asked to join"; details and the code in the snapshot
+    fn let_in(&self, party: PartyId);                                // the inviter let this device in ("Ana let you in")
     fn meetup_started(&self, m: MeetupSummary);
     fn meetup_updated(&self, id: MeetupId);                          // roster, meet point
     fn meetup_message(&self, id: MeetupId, msg: ChatMessage);
@@ -1073,8 +1078,10 @@ impl Core {
     // parties and spots
     pub async fn create_party(&self, name: String, my_name: String) -> Result<PartyId, CoreError>;
     pub async fn create_invite(&self, party: PartyId, opts: InviteOpts) -> Result<String, CoreError>;
-    pub async fn accept_invite(&self, link: String, my_name: String) -> Result<PartyId, CoreError>;
-    pub async fn resolve_join_request(&self, party: PartyId, req: JoinRequestId, approve: bool) -> Result<(), CoreError>;
+    pub async fn open_invite(&self, link: String, my_name: String) -> Result<(), CoreError>;   // "Ask to join"; the snapshot shows the code
+    pub async fn withdraw_join(&self) -> Result<(), CoreError>;
+    pub async fn let_in(&self, party: PartyId, request: JoinRequestId) -> Result<(), CoreError>;   // codes matched
+    pub async fn turn_away(&self, party: PartyId, request: JoinRequestId) -> Result<(), CoreError>;
     pub async fn remove_member(&self, party: PartyId, member: MemberId) -> Result<(), CoreError>;
     pub async fn leave_party(&self, party: PartyId) -> Result<(), CoreError>;
     pub fn parties(&self) -> Vec<Party>;
@@ -1219,13 +1226,17 @@ sequenceDiagram
   A-->>B: link or QR (out of band, secret in URL fragment)
   B->>S: register account, RLN leaf, Privacy Pass batch   (identified)
   B->>S: POST /mailboxes {reply mailbox Y, sealed push}   (Privacy Pass: leaf not live yet)
-  B->>S: POST /mailboxes/I/msgs  seal(invite_secret, {KeyPackage_B, name, Y, sub_B})
+  B->>B: code = join_code(invite_secret, KeyPackage_B), shown at once
+  B->>S: POST /mailboxes/I/msgs  seal(invite_secret, [0, {KeyPackage_B, name, Y, sub_B or null}])
   S->>PR: push {blob of I, bind, Alert, handle}
   PR-->>A: Alert push
   A->>S: GET /mailboxes/I/msgs (read_key)
-  A->>A: open, verify, (approve), Commit Add(B)
+  A->>A: open, compute the same code, show "Bob asked to join"
+  B-->>A: Bob reads his code out (in person or on a call)
+  A->>A: codes match: let in, Commit Add(B), invite used
   A->>S: POST /groups/P/commit {epoch 0, commit, next_auth_pk, state', subs_add=[sub_B]}
   A->>S: POST /mailboxes/Y/msgs  Welcome
+  A->>S: DELETE /mailboxes/I   (the link stops working)
   S->>PR: push {blob of Y}
   PR-->>B: Alert push
   B->>S: GET /mailboxes/Y/msgs, GET /groups/P/state
