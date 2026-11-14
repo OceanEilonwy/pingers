@@ -239,6 +239,10 @@ mod privacy_pass {
         let key = key(&vector)?;
         assert_eq!(key.public_key(), vector.expected_bytes("public_key")?);
         assert_eq!(key.key_id().as_slice(), vector.expected_bytes("key_id")?);
+        assert_eq!(
+            pingers_anon::token_key_id(&vector.expected_bytes("public_key")?).as_slice(),
+            vector.expected_bytes("key_id")?
+        );
         assert_eq!(key.expose_bytes(), vector.input_bytes("secret_key")?);
         Ok(())
     }

@@ -18,7 +18,6 @@ impl Session {
 
 /// Whether the account is registered with its server (design B.1), and with which code.
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub enum AccountRegistration {
     /// `POST /v1/accounts` is still to be done, presenting `code` if there is one.
     Pending {

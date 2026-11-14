@@ -23,6 +23,8 @@ pingers-transport = { workspace = true }
 # Identifiers in paths and the read-key header are hex (pingers-server `wire.rs`).
 hex = { workspace = true }
 rand_core = { workspace = true }
+# Registration codes are compared in constant time (style guide §8).
+subtle = { workspace = true }
 thiserror = { workspace = true }
 # spawn_blocking for SQLCipher and proving; select! for the wake budget.
 tokio = { workspace = true }

@@ -38,7 +38,7 @@ pub use identity::{
 #[cfg(feature = "issuer")]
 pub use issuer::{IssuerKey, batch_token_count, check_redemption, issue_tokens};
 #[cfg(any(feature = "prover", feature = "issuer"))]
-pub use pp::TokenCount;
+pub use pp::{TokenCount, token_key_id};
 #[cfg(feature = "prover")]
 pub use prove::{ProofRequest, prove};
 #[cfg(feature = "prover")]

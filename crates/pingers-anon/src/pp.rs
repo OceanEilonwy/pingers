@@ -73,6 +73,13 @@ pub(crate) fn challenge_digest() -> [u8; 32] {
     hasher.finalize().into()
 }
 
+/// `token_key_id = SHA-256(pkI)` (RFC 9578), for a client checking that a key list from the
+/// issuer names each key by its own hash before fetching tokens against it.
+#[must_use]
+pub fn token_key_id(public_key: &[u8]) -> [u8; 32] {
+    key_id(public_key)
+}
+
 /// `token_key_id = SHA-256(pkI)`.
 pub(crate) fn key_id(public_key: &[u8]) -> [u8; 32] {
     Sha256::digest(public_key).into()
