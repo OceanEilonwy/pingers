@@ -39,8 +39,8 @@ jobs:
 
       - name: Rust toolchain
         run: |
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy --no-self-update
-          rustup default stable
+          # rust-toolchain.toml names the version, components and targets.
+          rustup toolchain install --no-self-update
           rustc --version
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -98,9 +98,8 @@ jobs:
       - name: Rust toolchain, Android targets and the NDK
         if: steps.firebase.outputs.build == 'true'
         run: |
-          rustup toolchain install stable --profile minimal --no-self-update
-          rustup default stable
-          rustup target add aarch64-linux-android x86_64-linux-android
+          # rust-toolchain.toml names the version, components and targets.
+          rustup toolchain install --no-self-update
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

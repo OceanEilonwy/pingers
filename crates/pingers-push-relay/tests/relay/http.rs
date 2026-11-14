@@ -214,3 +214,40 @@ async fn the_push_endpoint_accepts_only_post() -> TestResult {
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     Ok(())
 }
+
+#[tokio::test]
+async fn without_a_scheduled_key_there_is_no_next_config() -> TestResult {
+    let relay = relay_with(FakeOpener::default()).await?;
+    let response = reqwest::get(relay.url("/v1/config/next")).await?;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_status_is_uncached_json_without_counts() -> TestResult {
+    let relay = relay_with(FakeOpener::default()).await?;
+    let response = reqwest::get(relay.url("/status")).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("cache-control")
+            .map(reqwest::header::HeaderValue::as_bytes),
+        Some(&b"no-store"[..])
+    );
+    let status: serde_json::Value = serde_json::from_slice(&response.bytes().await?)?;
+    assert_eq!(
+        status,
+        serde_json::json!({
+            "service": "pingers-push-relay",
+            "version": env!("CARGO_PKG_VERSION"),
+            "status": "ok",
+            "operator": "Integration Test Relay",
+            "platforms": ["unifiedpush"],
+            "published_key_id": KEY_ID,
+            "next_key_id": null,
+            "next_key_activates_at": null,
+        })
+    );
+    Ok(())
+}

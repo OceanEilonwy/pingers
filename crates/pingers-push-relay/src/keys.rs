@@ -80,6 +80,12 @@ impl RelayKey {
         PushRelayKeyId::new(self.public_key.key_id())
     }
 
+    /// When the key is first published.
+    #[must_use]
+    pub const fn activated_at(&self) -> UnixSeconds {
+        self.lifetime.activated_at
+    }
+
     /// The private key, for opening.
     #[must_use]
     pub const fn private_key(&self) -> &PushRelayPrivateKey {
@@ -172,6 +178,21 @@ impl KeyRing {
             .iter()
             .rev()
             .find(|key| key.lifetime.opens_at(now))
+    }
+
+    /// The key that will be published next: the earliest whose `activated_at` is after `now`.
+    /// It is announced before it activates (`GET /v1/config/next`), so pin sets and clients
+    /// can take it up before devices start sealing to it (two-slot rotation). `None` if no
+    /// key is scheduled.
+    #[must_use]
+    pub fn next(&self, now: UnixSeconds) -> Option<&RelayKey> {
+        self.keys.iter().find(|key| key.lifetime.activated_at > now)
+    }
+
+    /// Every configured key, earliest activation first: what `pingers-push-relay pins`
+    /// prints. In the two-slot scheme that is the served key and the next one.
+    pub fn all(&self) -> impl Iterator<Item = &RelayKey> {
+        self.keys.iter()
     }
 
     /// The key that opens blobs sealed under `key_id` now, if it is active or still inside its
@@ -276,6 +297,33 @@ pub(crate) mod tests {
         assert_eq!(published_id(&early, 9), None);
         let ring = rotated_ring()?;
         assert_eq!(published_id(&ring, u64::MAX), Some(2));
+        Ok(())
+    }
+
+    fn next_id(ring: &KeyRing, now: u64) -> Option<u8> {
+        ring.next(UnixSeconds::new(now))
+            .map(|key| key.key_id().get())
+    }
+
+    #[test]
+    fn the_next_key_is_announced_until_it_activates() -> Result<(), ConfigError> {
+        let ring = rotated_ring()?;
+        assert_eq!(next_id(&ring, 0), Some(2));
+        assert_eq!(next_id(&ring, 100 * DAY - 1), Some(2));
+        assert_eq!(next_id(&ring, 100 * DAY), None);
+        Ok(())
+    }
+
+    #[test]
+    fn the_next_key_is_the_earliest_scheduled_one() -> Result<(), ConfigError> {
+        let ring = KeyRing::new(vec![
+            key(3, 200 * DAY, None),
+            key(1, 0, None),
+            key(2, 100 * DAY, None),
+        ])?;
+        assert_eq!(next_id(&ring, 0), Some(2));
+        let all: Vec<u8> = ring.all().map(|key| key.key_id().get()).collect();
+        assert_eq!(all, [1, 2, 3]);
         Ok(())
     }
 
