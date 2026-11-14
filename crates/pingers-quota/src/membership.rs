@@ -29,6 +29,14 @@ pub const LEAVES_PER_PAGE: usize = 10_000;
 /// The tree's capacity: depth 20.
 const TREE_CAPACITY: usize = 1 << 20;
 
+/// How many leaves one account may register in 24 root epochs (a day). A device needs one;
+/// a reinstall or a crash between registering and saving its secret needs another. Without a
+/// limit, one account could fill the tree (every registration takes a new position).
+pub const DAILY_LEAF_LIMIT: usize = 4;
+
+/// The root epochs [`DAILY_LEAF_LIMIT`] counts over.
+const LEAF_LIMIT_EPOCHS: u32 = 24;
+
 /// The root epoch containing `instant`.
 ///
 /// # Errors
@@ -203,7 +211,8 @@ impl<S: MembershipStore> Membership<S> {
     /// # Errors
     ///
     /// [`QuotaError::Anon`] with [`AnonError::NotAFieldElement`] for a non-canonical
-    /// commitment or [`AnonError::TreeFull`]; storage errors.
+    /// commitment or [`AnonError::TreeFull`]; [`QuotaError::LeafLimit`] if the account
+    /// registered [`DAILY_LEAF_LIMIT`] leaves in the last day; storage errors.
     pub fn register(
         &self,
         account: AccountId,
@@ -215,6 +224,17 @@ impl<S: MembershipStore> Membership<S> {
         let live_from = next_epoch(current)?;
         if state.leaves.len() >= TREE_CAPACITY {
             return Err(QuotaError::Anon(AnonError::TreeFull));
+        }
+        let recent = state
+            .leaves
+            .iter()
+            .filter(|leaf| {
+                leaf.account == account
+                    && leaf.live_from.get().saturating_add(LEAF_LIMIT_EPOCHS) > live_from.get()
+            })
+            .count();
+        if recent >= DAILY_LEAF_LIMIT {
+            return Err(QuotaError::LeafLimit);
         }
         let index = index_of(state.leaves.len())?;
         let replaces = live_leaf(&state, &account).map(|old| Zeroing {

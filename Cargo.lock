@@ -3883,11 +3883,13 @@ name = "pingers-quota"
 version = "0.1.0"
 dependencies = [
  "pingers-anon",
+ "pingers-crypto",
  "pingers-proto",
  "pingers-testkit",
  "pingers-time",
  "rand_core 0.10.1",
  "rusqlite",
+ "subtle",
  "thiserror",
  "zeroize",
 ]
@@ -6472,6 +6474,7 @@ dependencies = [
  "pingers-push-relay",
  "pingers-server",
  "rcgen",
+ "reqwest",
  "rustls",
  "serde_json",
  "sha2 0.11.1",

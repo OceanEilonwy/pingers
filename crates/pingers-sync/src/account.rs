@@ -13,8 +13,9 @@
 //! and registration is not tried again until another code is offered
 //! ([`SyncEngine::offer_registration_code`]). A 401 to a bearer request means the bearer is no
 //! longer accepted: it is dropped, a fresh one fetched, and the request tried once more. A 403
-//! to `POST /v1/auth` means the server does not know the account (an in-memory account table
-//! after a server restart): the device registers again once, with the code it registered with.
+//! to `POST /v1/auth` means the server does not know the account (an operator deleted it, or a
+//! server whose quota store is in memory restarted): the device registers again once, with the
+//! code it registered with.
 //!
 //! The issuer key is not pinned at build time (it rotates weekly). The design has no Party-state
 //! hash for it, so the checks are: the list comes through the relay, where the server cannot tell
