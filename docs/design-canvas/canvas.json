@@ -2,7 +2,10 @@
 "boards":{
 "Main.dc.html":{"x":0,"y":0,"w":390,"h":844,"title":"Home","radius":36},
 "CreateParty.dc.html":{"x":470,"y":0,"w":390,"h":844,"title":"New party + invite","radius":36},
-"JoinParty.dc.html":{"x":940,"y":0,"w":390,"h":844,"title":"Accept invite","radius":36},
+"JoinA1.dc.html":{"x":0,"y":5200,"w":390,"h":844,"title":"Open invite","radius":36},
+"JoinA2.dc.html":{"x":470,"y":5200,"w":390,"h":844,"title":"Asked to join","radius":36},
+"JoinA3.dc.html":{"x":940,"y":5200,"w":390,"h":844,"title":"You're in","radius":36},
+"InviteApprove.dc.html":{"x":1410,"y":5200,"w":390,"h":844,"title":"Ben asked to join","radius":36},
 "PartyDetail.dc.html":{"x":1410,"y":0,"w":390,"h":844,"title":"Party","radius":36},
 "PartyAdvanced.dc.html":{"x":1880,"y":0,"w":390,"h":844,"title":"New party · Advanced","radius":36,"is_interactive":true},
 "InviteMembers.dc.html":{"x":2350,"y":0,"w":390,"h":844,"title":"Invite people","radius":36},
@@ -20,7 +23,7 @@
 "MeetupEnded.dc.html":{"x":2350,"y":3700,"w":390,"h":844,"title":"Meetup ended","radius":36},
 "LocationRequest.dc.html":{"x":2820,"y":3700,"w":390,"h":844,"title":"Exact location request","radius":36}
 },
-"order":["Main.dc.html","CreateParty.dc.html","JoinParty.dc.html","PartyDetail.dc.html","SpotEditor.dc.html","ExclusionZones.dc.html","PrivacySettings.dc.html","WhatServerSees.dc.html","MeetupAlert.dc.html","Meetup.dc.html","Chat.dc.html","MeetPoint.dc.html","Compass.dc.html","MeetupEnded.dc.html","LocationRequest.dc.html","SpotDrawArea.dc.html","PartyAdvanced.dc.html","SecurityDetails.dc.html","InviteMembers.dc.html"],
+"order":["Main.dc.html","CreateParty.dc.html","JoinA1.dc.html","JoinA2.dc.html","JoinA3.dc.html","InviteApprove.dc.html","PartyDetail.dc.html","SpotEditor.dc.html","ExclusionZones.dc.html","PrivacySettings.dc.html","WhatServerSees.dc.html","MeetupAlert.dc.html","Meetup.dc.html","Chat.dc.html","MeetPoint.dc.html","Compass.dc.html","MeetupEnded.dc.html","LocationRequest.dc.html","SpotDrawArea.dc.html","PartyAdvanced.dc.html","SecurityDetails.dc.html","InviteMembers.dc.html"],
 "notes":{
 "t1":{"x":0,"y":-300,"text":"1 · Parties and invites","kind":"title1","maxW":2740},
 "t2":{"x":0,"y":900,"text":"2 · Spots and privacy controls","kind":"title1","maxW":2740},
