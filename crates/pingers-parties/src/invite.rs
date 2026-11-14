@@ -67,6 +67,13 @@ impl JoinId {
         Self(reply_mailbox)
     }
 
+    /// The join whose Welcome goes to `reply_mailbox`, as the joiner recorded it (a join
+    /// survives a restart of the app).
+    #[must_use]
+    pub const fn for_reply_mailbox(reply_mailbox: MailboxId) -> Self {
+        Self(reply_mailbox)
+    }
+
     /// The joiner's reply mailbox, where the Welcome goes.
     #[must_use]
     pub const fn reply_mailbox(self) -> MailboxId {

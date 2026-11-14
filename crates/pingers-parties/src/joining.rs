@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Invites (inviter side) and joins (joiner side): design D invite flow, design G.1.
 
-use pingers_crypto::{InviteSecret, open_join_request, open_state_snapshot, seal_join_request};
+use pingers_crypto::{
+    InviteSecret, LogAuthKeyPair, open_join_request, open_state_snapshot, seal_join_request,
+};
 use pingers_mls::{CipherSuitePolicy, KeyPackagePurpose, MlsContext};
 use pingers_proto::{
-    DisplayName, InvitePayload, InviteUses, JoinRequest, MailboxId, Padded, PartyId,
+    DisplayName, GroupId, InvitePayload, InviteUses, JoinRequest, MailboxId, Padded, PartyId,
     SealedSnapshot, SecretBytes, Subscription, WelcomeBytes, WireDecode as _, WireEncode as _,
 };
 use pingers_store::{MailboxPurpose, Member, MemberName, Party, Session, Verification};
@@ -73,6 +75,15 @@ pub struct ArrivedWelcome {
     pub welcome: Padded,
     /// The group's latest state snapshot.
     pub snapshot: SealedSnapshot,
+}
+
+/// What a joiner needs to read the group's state snapshot before joining: the group and the
+/// log-auth key of the epoch its Welcome joins (`GET /v1/groups/{id}/state` is a group request).
+pub struct WelcomeAccess {
+    /// The group the Welcome is for.
+    pub group: GroupId,
+    /// That epoch's log-auth key pair.
+    pub auth: LogAuthKeyPair,
 }
 
 /// A Party this device has joined.
@@ -374,6 +385,41 @@ impl PartyLifecycle<'_> {
                 },
             })
         })
+    }
+
+    /// Joiner: the group and log-auth key a Welcome in the reply mailbox gives, so pingers-sync
+    /// can fetch the group's state snapshot for [`Self::accept_welcome`]. Nothing is kept: the
+    /// Welcome is processed in a transaction that is rolled back.
+    ///
+    /// # Errors
+    ///
+    /// [`PartiesError::UnknownJoin`]; [`PartiesError::Mls`] (a Welcome not for this device);
+    /// [`PartiesError::Proto`] (a post that is not a padded Welcome); [`PartiesError::Store`].
+    pub fn welcome_access(
+        &self,
+        join: JoinId,
+        welcome: &Padded,
+    ) -> Result<WelcomeAccess, PartiesError> {
+        let mut access = None;
+        let outcome = self.session.transaction(|session| {
+            records::read(session, &Key::Joining(&join.reply_mailbox()))?
+                .ok_or(PartiesError::UnknownJoin)?;
+            let identity = identity(session)?;
+            let context = MlsContext::new(session, &identity.signing_key);
+            let welcome = WelcomeBytes::from_bytes(welcome.payload()?.to_vec());
+            let group = context.join_party_group(&welcome)?;
+            access = Some(WelcomeAccess {
+                group: group.group_id(),
+                auth: group.log_auth_key_pair()?,
+            });
+            // Roll back: the join happens in `accept_welcome`, with the snapshot.
+            Err::<(), _>(PartiesError::Internal)
+        });
+        match (access, outcome) {
+            (Some(access), Err(PartiesError::Internal)) => Ok(access),
+            (_, Err(error)) => Err(error),
+            (_, Ok(())) => Err(PartiesError::Internal),
+        }
     }
 
     /// Joiner: the Welcome arrived in the reply mailbox and pingers-sync fetched the group's

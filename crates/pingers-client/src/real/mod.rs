@@ -17,6 +17,7 @@
 //! - `network`: the instance settings, and the router and engine built from them.
 //! - `records`: the client's own records in the store's key-value table.
 
+mod join;
 mod meetups;
 mod network;
 mod parties;
@@ -101,15 +102,18 @@ impl Crates {
             )?),
             _ => None,
         };
-        let learned = push::Learned::new(instance.and_then(|instance| {
-            instance
-                .push_relay
-                .clone()
-                .map(|origin| push::PushRelaySetup {
-                    origin,
-                    pins: instance.push_relay_pins.clone(),
-                })
-        }));
+        let learned = push::Learned::new(
+            instance.and_then(|instance| {
+                instance
+                    .push_relay
+                    .clone()
+                    .map(|origin| push::PushRelaySetup {
+                        origin,
+                        pins: instance.push_relay_pins.clone(),
+                    })
+            }),
+            Some(Arc::clone(&platform)),
+        );
         let net = Arc::new(sync::Net::new(Arc::clone(&backend), engine, learned));
         let meetups = Arc::new(meetups::Meetups::new(
             Arc::clone(&backend),

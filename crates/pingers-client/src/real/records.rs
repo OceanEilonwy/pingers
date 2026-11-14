@@ -35,6 +35,8 @@ pub(crate) enum Key<'id> {
     ServerMapHost,
     /// The push relay key config hash taken on first use, for a build without pins.
     PushRelayPin,
+    /// The join this device started from an invite link: its reply mailbox and subscription.
+    PendingJoin,
 }
 
 impl Key<'_> {
@@ -55,6 +57,7 @@ impl Key<'_> {
             Self::DisplayName => key.extend_from_slice(b"display-name"),
             Self::ServerMapHost => key.extend_from_slice(b"server-map-host"),
             Self::PushRelayPin => key.extend_from_slice(b"push-relay-pin"),
+            Self::PendingJoin => key.extend_from_slice(b"pending-join"),
         }
         key
     }
@@ -204,6 +207,11 @@ impl Reader<'_> {
 
     pub(crate) fn len(&mut self) -> Result<usize, ClientError> {
         usize::try_from(self.u32()?).map_err(|_too_long| corrupt())
+    }
+
+    /// Everything not read yet.
+    pub(crate) fn rest(&mut self) -> Vec<u8> {
+        core::mem::take(&mut self.bytes).to_vec()
     }
 
     pub(crate) fn text(&mut self) -> Result<String, ClientError> {

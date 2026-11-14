@@ -503,7 +503,8 @@ impl SyncPort for Sync {
         match (setting, tokens) {
             (StoredPushes::Disabled, _) => Ok(()),
             (StoredPushes::Enabled, None) => {
-                self.0.engine()?.set_wake_push(None);
+                self.0.engine()?;
+                self.0.clear_wake_push();
                 Ok(())
             }
             (StoredPushes::Enabled, Some(tokens)) => self.0.seal_wake_push(&tokens).await,
@@ -529,9 +530,7 @@ impl SyncPort for Sync {
                     .await
             }
             WakePushes::NoWakePushes => {
-                if let Some(engine) = &self.0.engine {
-                    engine.set_wake_push(None);
-                }
+                self.0.clear_wake_push();
                 self.0
                     .backend
                     .store(|session, _clock, _rng| {

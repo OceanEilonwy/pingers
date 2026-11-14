@@ -130,7 +130,7 @@ fn offline(store: &Store) -> Arc<Net> {
     Arc::new(Net::new(
         Arc::clone(&store.backend),
         None,
-        super::push::Learned::new(None),
+        super::push::Learned::new(None, None),
     ))
 }
 

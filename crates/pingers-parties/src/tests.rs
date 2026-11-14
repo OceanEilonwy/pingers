@@ -182,13 +182,29 @@ fn complete_join(
     rng: &mut ChaCha20Rng,
 ) -> Result<PartyId, TestError> {
     inviter.parties().commit_accepted(&admission.commit.party)?;
-    let membership = joiner
+    let welcome = arrived(admission.posted, admission.commit)?;
+    // What the joiner reads the snapshot with, from the Welcome alone; asking twice shows the
+    // first look kept nothing.
+    let access = joiner
         .parties()
-        .accept_welcome(&arrived(admission.posted, admission.commit)?, rng)?;
+        .welcome_access(welcome.join, &welcome.welcome)?;
+    let again = joiner
+        .parties()
+        .welcome_access(welcome.join, &welcome.welcome)?;
+    assert_eq!(access.group, again.group);
+    let membership = joiner.parties().accept_welcome(&welcome, rng)?;
+    assert_eq!(
+        joiner
+            .parties()
+            .log_auth_key(&membership.party)?
+            .public_key(),
+        access.auth.public_key()
+    );
     let mut outbound = membership.outbound.into_iter();
     let Some(Outbound::GroupMessage { group, message }) = outbound.next() else {
         return Err(TestError::Unexpected("expected the joiner's profile"));
     };
+    assert_eq!(group, access.group);
     assert!(matches!(
         outbound.next(),
         Some(Outbound::DeleteMailbox { mailbox }) if mailbox == admission.posted.join.reply_mailbox()

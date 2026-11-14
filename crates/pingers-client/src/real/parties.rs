@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! [`PartiesPort`] over pingers-parties' `PartyLifecycle`, one store session per call.
 //!
-//! Every `Outbound` value goes to pingers-sync through the [`Net`] outbox, flushed at once. Joining (`open_invite`,
-//! `accept_invite`) and admitting (`decide_join`) need a subscription, a reply mailbox or a
-//! join request that only pingers-sync can provide, so they answer [`Unavailable::Sync`].
+//! Every `Outbound` value goes to pingers-sync through the [`Net`] outbox, flushed at once.
+//! Joining (`open_invite`, `accept_invite`) is in `join.rs`. Admitting (`decide_join`) needs the
+//! invite mailboxes read and their join requests handed to pingers-parties, which nothing does
+//! yet, so it answers [`Unavailable::Sync`].
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -163,12 +164,14 @@ impl PartiesPort for Parties {
             .await
     }
 
-    async fn open_invite(&self, _link: InviteUrl, _my_name: Name) -> Result<(), ClientError> {
-        Err(Unavailable::Sync.into())
+    /// Posts the join request (`join.rs`). The preview stays empty: the Party's name, members
+    /// and the safety code are only known from the Welcome's snapshot.
+    async fn open_invite(&self, link: InviteUrl, my_name: Name) -> Result<(), ClientError> {
+        super::join::open_invite(&self.net, link, my_name).await
     }
 
     async fn accept_invite(&self) -> Result<PartyId, ClientError> {
-        Err(Unavailable::Sync.into())
+        super::join::accept_invite(&self.net).await
     }
 
     async fn decide_join(

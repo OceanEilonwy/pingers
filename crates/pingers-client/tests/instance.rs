@@ -40,8 +40,42 @@ enum TestError {
     Ohttp(#[from] pingers_ohttp::OhttpError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Snapshot(#[from] pingers_client::snapshot::SnapshotError),
     #[error("setup: {0}")]
     Setup(&'static str),
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_join_needs_a_sealed_subscription_and_a_real_link() -> Result<(), TestError> {
+    let config = HarnessConfig::default();
+    let harness = InProcessHarness::start(&config)?;
+    let rig = rig(&harness, &config, harness_pins(&harness)?).await?;
+    let link = pingers_client::snapshot::InviteUrl::new("https://pingers.invalid/j#x")?;
+    let name = pingers_client::snapshot::Name::new("Bob")?;
+    // No token from the platform: no subscription can be sealed for the join request.
+    assert!(matches!(
+        rig.client.open_invite(link.clone(), name.clone()).await,
+        Err(ClientError::Unavailable(Unavailable::NoPushToken))
+    ));
+    rig.platform.set_push_registration(Some(PushRegistration {
+        platform: PushPlatform::UnifiedPush,
+        token: PushToken::from_bytes(b"https://push.harness.invalid/up/abc".to_vec()),
+    }));
+    // With a token the subscription is sealed to the pinned push relay key; the link is read
+    // next, and this one holds no invite.
+    assert!(matches!(
+        rig.client.open_invite(link, name).await,
+        Err(ClientError::Parties(_))
+    ));
+    // Nothing was started, so there is nothing to accept.
+    assert!(matches!(
+        rig.client.accept_invite().await,
+        Err(ClientError::Parties(
+            pingers_parties::PartiesError::UnknownJoin
+        ))
+    ));
+    Ok(())
 }
 
 const KEY: [u8; 32] = [4; 32];

@@ -9,7 +9,8 @@
 //!   and keeps that hash in a record: from then on it is the pin.
 //! - pingers-sync's `WakePush`, sealed from the platform's push token for that key.
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use pingers_crypto::key_config_hash;
 use pingers_ohttp::KeyPins;
@@ -20,7 +21,7 @@ use pingers_sync::{PushSeal, VerifiedPushRelay, WakeBudget, WakePush};
 
 use super::records::{self, Key, corrupt};
 use super::sync::Net;
-use crate::{ClientError, PushTokens, Unavailable};
+use crate::{ClientError, Platform, PushTokens, Unavailable};
 
 /// The longest a sealed token is good for: a Party subscription lives 30 days (design B.4.9),
 /// unless the relay allows less.
@@ -38,16 +39,25 @@ pub(crate) struct PushRelaySetup {
 /// What the server told this process, and the push relay set up for it.
 pub(crate) struct Learned {
     push_relay: Option<PushRelaySetup>,
+    /// Where the platform's push token is read when seals must be made again (a new process).
+    platform: Option<Arc<dyn Platform>>,
     params: Mutex<Option<Params>>,
     verified: Mutex<Option<VerifiedPushRelay>>,
+    /// Whether pingers-sync holds seals made in this process.
+    sealed: AtomicBool,
 }
 
 impl Learned {
-    pub(crate) const fn new(push_relay: Option<PushRelaySetup>) -> Self {
+    pub(crate) const fn new(
+        push_relay: Option<PushRelaySetup>,
+        platform: Option<Arc<dyn Platform>>,
+    ) -> Self {
         Self {
             push_relay,
+            platform,
             params: Mutex::new(None),
             verified: Mutex::new(None),
+            sealed: AtomicBool::new(false),
         }
     }
 }
@@ -176,7 +186,43 @@ impl Net {
         let verified = self.push_relay().await?;
         let push = wake_push(&verified, tokens, self.engine()?.corrected_now())?;
         self.engine()?.set_wake_push(Some(push));
+        self.learned.sealed.store(true, Ordering::Relaxed);
         Ok(())
+    }
+
+    /// No seals from now on ("No wake-up pushes", or the platform lost its token).
+    pub(crate) fn clear_wake_push(&self) {
+        if let Some(engine) = &self.engine {
+            engine.set_wake_push(None);
+        }
+        self.learned.sealed.store(false, Ordering::Relaxed);
+    }
+
+    /// Makes sure pingers-sync holds seals, making them from the platform's token if this
+    /// process has not yet (a join request must carry a sealed subscription).
+    ///
+    /// # Errors
+    ///
+    /// [`Unavailable::WakePushesOff`] with "No wake-up pushes" set;
+    /// [`Unavailable::NoPushToken`]; as [`Net::seal_wake_push`].
+    pub(crate) async fn ensure_wake_push(&self) -> Result<(), ClientError> {
+        if self.learned.sealed.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let setting = self
+            .backend
+            .store(|session, _clock, _rng| Ok(session.settings().wake_pushes()?))
+            .await?;
+        if setting == pingers_store::WakePushes::Disabled {
+            return Err(Unavailable::WakePushesOff.into());
+        }
+        let tokens = self
+            .learned
+            .platform
+            .as_ref()
+            .and_then(|platform| platform.push_tokens())
+            .ok_or(Unavailable::NoPushToken)?;
+        self.seal_wake_push(&tokens).await
     }
 }
 

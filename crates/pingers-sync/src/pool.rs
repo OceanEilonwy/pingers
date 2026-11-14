@@ -164,6 +164,21 @@ impl SyncEngine {
             .map(|seal| self.new_subscription(&seal, lifetime))
             .transpose()
     }
+
+    /// A sealed subscription for a Party this device is joining (the join request's
+    /// `party_subscription`), sealed with the alert push; `None` when wake-up pushes are off.
+    /// The joiner records it with [`SyncEngine::remember_subscription`] once it is in the
+    /// group.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Crypto`] if sealing fails.
+    pub fn party_subscription(
+        &self,
+        lifetime: TimeToLive,
+    ) -> Result<Option<Subscription>, SyncError> {
+        self.knock_subscription(lifetime)
+    }
 }
 
 #[cfg(test)]
