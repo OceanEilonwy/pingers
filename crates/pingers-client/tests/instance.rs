@@ -148,21 +148,48 @@ async fn rig(
     config: &HarnessConfig,
     pins: Pins,
 ) -> Result<Rig, TestError> {
-    rig_as(harness, config, pins, 3).await
+    rig_as(
+        harness,
+        config,
+        pins,
+        Who {
+            seed: 3,
+            account: Account::Preset,
+        },
+    )
+    .await
 }
 
-/// A client whose account key comes from `seed`, so two rigs are two people.
+/// How a rig's account comes about.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Account {
+    /// Saved in the store before the client opens, as a registered device has it.
+    Preset,
+    /// None: the client registers one itself on its first credentialed request, trusting
+    /// the harness's HTTPS front and pinning keys on first use.
+    Register,
+}
+
+/// Which person a rig is: the seed of its random streams, and how it gets an account.
+struct Who {
+    seed: u64,
+    account: Account,
+}
+
+/// A client whose random streams (and preset account key) come from `seed`, so two rigs are
+/// two people.
 async fn rig_as(
     harness: &InProcessHarness,
     config: &HarnessConfig,
     pins: Pins,
-    seed: u64,
+    who: Who,
 ) -> Result<Rig, TestError> {
+    let Who { seed, account } = who;
     let dir = TestDir::new()?;
     let endpoints = harness.endpoints();
     let server = ServerId::new(endpoints.server_id.clone())?;
     let database_path = dir.0.join("pingers.db");
-    {
+    if account == Account::Preset {
         let database =
             Database::open(&database_path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
         let signing_key = AccountSigningKey::generate(&mut ChaCha20Rng::seed_from_u64(seed));
@@ -176,14 +203,25 @@ async fn rig_as(
             pingers_mls::MlsStorage::write(&database.session()?, PIN_RECORD, &pin)?;
         }
     }
-    let instance = Instance {
-        server,
-        relay: format!("http://{}", endpoints.ohttp_relay),
-        push_relay: Some(format!("https://{}/", endpoints.push_relay)),
-        gateway_pins: Some(pins.gateway),
-        push_relay_pins: pins.push_relay,
-        trust: Trust::Mozilla,
-        registration_code: None,
+    let instance = match account {
+        Account::Preset => Instance {
+            server,
+            relay: format!("http://{}", endpoints.ohttp_relay),
+            push_relay: Some(format!("https://{}/", endpoints.push_relay)),
+            gateway_pins: Some(pins.gateway),
+            push_relay_pins: pins.push_relay,
+            trust: Trust::Mozilla,
+            registration_code: None,
+        },
+        Account::Register => Instance {
+            server,
+            relay: format!("http://{}/ohttp", endpoints.ohttp_relay),
+            push_relay: Some(format!("https://{}", endpoints.push_relay)),
+            gateway_pins: None,
+            push_relay_pins: None,
+            trust: Trust::from_pem(&endpoints.push_relay_ca)?,
+            registration_code: None,
+        },
     };
     let clock = config.clock.clone();
     let platform = FakePlatform::new(clock.clone());
@@ -432,110 +470,23 @@ async fn wake_pushes_need_the_platform_s_push_token() -> Result<(), TestError> {
     Ok(())
 }
 
-/// Tokens fetched for each test client.
-const TOKENS: u16 = 120;
-
-/// The credential bypass until the client registers its own account (agent r-accounts): an
-/// account for the rig's key is registered over the identified API, a batch of Privacy Pass
-/// tokens is issued to it, and the tokens are put straight into the client's store, where
-/// pingers-sync takes one per credentialed request.
-async fn stock_tokens(
-    harness: &InProcessHarness,
-    config: &HarnessConfig,
-    rig: &Rig,
-    seed: u64,
-) -> Result<(), TestError> {
-    use pingers_proto::{
-        AuthRequest, AuthResponse, PrivacyPassIssueRequest, PrivacyPassIssueResponse,
-        PrivacyPassKeys, RegisterRequest, RegisterResponse, WireDecode as _, WireEncode as _,
-    };
-
-    let endpoints = harness.endpoints();
-    let server = ServerId::new(endpoints.server_id.clone())?;
-    let key = AccountSigningKey::generate(&mut ChaCha20Rng::seed_from_u64(seed));
-    let call = |method: &str, path: &str, authorization: Option<String>, body: Vec<u8>| {
-        let mut headers = vec![pingers_ohttp::Header {
-            name: "content-type".to_owned(),
-            value: b"application/cbor".to_vec(),
-        }];
-        if let Some(value) = authorization {
-            headers.push(pingers_ohttp::Header {
-                name: "authorization".to_owned(),
-                value: value.into_bytes(),
-            });
-        }
-        let request = pingers_ohttp::BinaryRequest {
-            method: method.to_owned(),
-            path: path.to_owned(),
-            headers,
-            body,
-        };
-        async move {
-            let response = pingers_testkit::send_direct(endpoints.server, &request).await?;
-            if response.status.get() == 200 {
-                Ok(response.body)
-            } else {
-                Err(TestError::Setup("an identified request was refused"))
-            }
-        }
-    };
-    let registration = RegisterRequest {
-        signature_key: *key.public_key().as_bytes(),
-        proof: *pingers_crypto::sign_registration(&key, &server)
-            .map_err(|_| TestError::Setup("registration proof"))?
-            .as_bytes(),
-        registration_code: None,
-    };
-    let registered = call("POST", "/v1/accounts", None, registration.encode()?).await?;
-    let challenge = pingers_crypto::sign_auth_challenge(
-        &key,
-        &server,
-        pingers_time::Clock::now(&config.clock).bucket(),
-    )
-    .map_err(|_| TestError::Setup("auth challenge"))?;
-    let auth = AuthRequest {
-        account_id: RegisterResponse::decode(&registered)?.account_id,
-        nonce_signature: *challenge.as_bytes(),
-    };
-    let authed = call("POST", "/v1/auth", None, auth.encode()?).await?;
-    let bearer = format!("Bearer {}", AuthResponse::decode(&authed)?.bearer.expose());
-    let keys = PrivacyPassKeys::decode(&call("GET", "/v1/pp/keys", None, Vec::new()).await?)?;
-    let issuer = keys
-        .keys
-        .last()
-        .ok_or(TestError::Setup("the server has no issuer key"))?;
-    let mut rng = ChaCha20Rng::seed_from_u64(seed.wrapping_add(1_000));
-    let pending = pingers_anon::begin_token_issuance(
-        &issuer.public_key,
-        pingers_anon::TokenCount::new(TOKENS).map_err(|_| TestError::Setup("token count"))?,
-        &mut rng,
-    )
-    .map_err(|_| TestError::Setup("token request"))?;
-    let request = PrivacyPassIssueRequest::new(pending.request().to_vec())?;
-    let batch = call("POST", "/v1/pp/issue", Some(bearer), request.encode()?).await?;
-    let tokens: Vec<pingers_store::UnspentToken> = pending
-        .finish(PrivacyPassIssueResponse::decode(&batch)?.token_response())
-        .map_err(|_| TestError::Setup("token response"))?
-        .iter()
-        .map(|token| pingers_store::UnspentToken::from_bytes(token.as_bytes().to_vec()))
-        .collect();
-    let database = Database::open(&rig.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
-    database.session()?.privacy_pass_tokens().add(
-        &tokens,
-        &pingers_store::TokenKeyId::from_bytes(issuer.key_id),
-    )?;
-    Ok(())
-}
-
-/// A client with its own account and a stock of tokens, with wake-up pushes off: joining no
+/// A client that registers its own account and tokens, with wake-up pushes off: joining no
 /// longer needs them, and every wake then reads the mailboxes joins wait on.
 async fn person(
     harness: &InProcessHarness,
     config: &HarnessConfig,
     seed: u64,
 ) -> Result<Rig, TestError> {
-    let rig = rig_as(harness, config, harness_pins(harness)?, seed).await?;
-    stock_tokens(harness, config, &rig, seed).await?;
+    let rig = rig_as(
+        harness,
+        config,
+        harness_pins(harness)?,
+        Who {
+            seed,
+            account: Account::Register,
+        },
+    )
+    .await?;
     rig.client.set_wake_pushes(WakePushes::NoWakePushes).await?;
     Ok(rig)
 }
