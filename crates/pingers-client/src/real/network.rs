@@ -71,7 +71,7 @@ impl Trust {
         Ok(Self::Only(certificates_from_pem(pem)?))
     }
 
-    fn roots(&self) -> Result<TlsRoots, ClientError> {
+    pub(crate) fn roots(&self) -> Result<TlsRoots, ClientError> {
         Ok(match self {
             Self::Mozilla => TlsRoots::mozilla(),
             Self::Only(certificates) => TlsRoots::from_der(certificates)?,

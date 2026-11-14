@@ -21,6 +21,8 @@ use crate::ports::{
 use crate::snapshot::{ClientSnapshot, InviteLink, InviteUrl, Name, RelayStatus, WakePushes};
 use crate::{ClientError, Events, Instance, Outside, Platform, SecureStoreKey};
 
+mod maps;
+
 /// Where the client keeps its data.
 #[derive(Clone, Debug)]
 pub struct ClientConfig {

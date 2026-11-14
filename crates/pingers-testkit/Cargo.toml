@@ -23,6 +23,7 @@ client = [
   "dep:pingers-presence",
   "dep:pingers-wake",
   "dep:async-trait",
+  "dep:pingers-map-downloads",
 ]
 # `InProcessHarness::start` runs pingers-server, an OHTTP relay and pingers-push-relay on
 # ephemeral ports. Off by default so crates that only need the fake platform do not compile
@@ -49,6 +50,8 @@ pingers-proto = { workspace = true }
 pingers-geo = { workspace = true }
 pingers-gate = { workspace = true }
 pingers-client = { workspace = true, optional = true }
+# The maps port's types, for FakeCrates.
+pingers-map-downloads = { workspace = true, optional = true }
 pingers-meetup = { workspace = true, optional = true }
 # Each crate's error, for `FakeCrates::fail` (feature `client`).
 pingers-meetup-session = { workspace = true, optional = true }

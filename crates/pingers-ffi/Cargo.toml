@@ -35,6 +35,9 @@ pingers-client = { workspace = true }
 pingers-gate = { workspace = true }
 pingers-geo = { workspace = true }
 pingers-meetup = { workspace = true }
+# The map catalog, offers and manifests the app's map calls convert.
+pingers-map-downloads = { workspace = true }
+pingers-map-packs = { workspace = true }
 pingers-proto = { workspace = true }
 pingers-screens = { workspace = true }
 pingers-store = { workspace = true }

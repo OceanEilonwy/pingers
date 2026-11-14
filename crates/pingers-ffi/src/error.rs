@@ -45,6 +45,14 @@ pub enum CoreError {
         /// Why.
         reason: String,
     },
+    /// A map catalog or download failed.
+    #[error("{reason}")]
+    Map {
+        /// Why, for the picker's words.
+        failure: crate::maps::MapFailure,
+        /// Why, for logs.
+        reason: String,
+    },
 }
 
 impl CoreError {

@@ -747,3 +747,66 @@ async fn an_admission_the_client_cannot_carry_out_is_reported() -> TestResult {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn map_host_pins_are_kept_for_their_host_and_forgotten_on_request() -> TestResult {
+    use pingers_map_downloads::fetch::KeyPinStore as _;
+
+    use super::maps::{Maps, StoredPins};
+    use crate::ports::MapsPort as _;
+
+    let store = store()?;
+    let pins = StoredPins(Arc::clone(&store.backend));
+    let host = pingers_proto::MapHostUrl::new("https://maps.example".to_owned())?;
+    let other = pingers_proto::MapHostUrl::new("https://other.example".to_owned())?;
+    assert_eq!(pins.pinned(&host).await?, None);
+    pins.pin(&host, KeyConfigHash::from_bytes([3; 32])).await?;
+    assert_eq!(
+        pins.pinned(&host).await?,
+        Some(KeyConfigHash::from_bytes([3; 32]))
+    );
+    // A pin for one host says nothing about another.
+    assert_eq!(pins.pinned(&other).await?, None);
+    let maps = Maps::new(
+        Arc::clone(&store.backend),
+        offline(&store),
+        pingers_transport::TlsRoots::mozilla(),
+    )?;
+    maps.forget_key_pin().await?;
+    assert_eq!(pins.pinned(&host).await?, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn without_an_instance_relayed_maps_have_no_route_and_send_nothing() -> TestResult {
+    use crate::ports::{MapHosts, MapRoute, MapsPort as _};
+
+    let store = store()?;
+    let maps = super::maps::Maps::new(
+        Arc::clone(&store.backend),
+        offline(&store),
+        pingers_transport::TlsRoots::mozilla(),
+    )?;
+    let hosts = MapHosts {
+        user_override: Some(pingers_proto::MapHostUrl::new(
+            "https://mine.invalid".to_owned(),
+        )?),
+        publisher: Some(pingers_proto::MapHostUrl::new(
+            "https://publisher.invalid".to_owned(),
+        )?),
+    };
+    let catalog = maps.catalog(hosts, MapRoute::Relay).await?;
+    assert!(catalog.offers.is_empty());
+    assert_eq!(
+        catalog
+            .failed
+            .iter()
+            .map(|failed| failed.reason)
+            .collect::<Vec<_>>(),
+        [
+            pingers_map_downloads::catalog::HostFailure::NoRelayRoute,
+            pingers_map_downloads::catalog::HostFailure::NoRelayRoute
+        ]
+    );
+    Ok(())
+}
