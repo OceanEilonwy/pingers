@@ -1,5 +1,16 @@
 package org.pingers.app.ui.screens
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.provider.Settings
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.pingers.app.data.toUi
+import uniffi.pingers.HomeWakeupsView
+import uniffi.pingers.NoticeLink
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -92,7 +103,33 @@ fun HomeScreen(state: HomeState, repo: PingersRepository, nav: Navigator, simula
                 )
                 SettingsMenu(repo, nav, simulateAlert)
             }
-            SharingCard(state, onClick = { nav.go(Route.Privacy) })
+            // The one notice first, then the waiting join and the orange wake-ups fault, then
+            // the sharing card with the grey "Wake-ups off" line under it.
+            val context = LocalContext.current
+            val notice = repo.notice.collectAsStateWithLifecycle().value
+            val wakeups = repo.homeWakeups.collectAsStateWithLifecycle().value
+            val pending = repo.pendingJoin.collectAsStateWithLifecycle().value
+            notice?.let {
+                NoticeCard(it) { link ->
+                    when (link) {
+                        NoticeLink.DateTime -> try {
+                            context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        } catch (_: ActivityNotFoundException) {
+                        }
+                        is NoticeLink.Party -> {
+                            repo.openPartySettings(link.party.toUi())
+                            nav.go(Route.PartySettings)
+                        }
+                        NoticeLink.Privacy -> nav.reset(Route.Privacy)
+                    }
+                }
+            }
+            pending?.let { PendingJoinRow(it) { nav.go(Route.AskedToJoin) } }
+            (wakeups as? HomeWakeupsView.Fault)?.let { WakeupsFaultBanner(it) { nav.go(Route.Wakeups) } }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SharingCard(state, onClick = { nav.go(Route.Privacy) })
+                (wakeups as? HomeWakeupsView.OffByChoice)?.let { WakeupsOffLine(it.text) { nav.go(Route.Wakeups) } }
+            }
             state.alert?.let { AlertBanner(it, onOpen = { repo.dismissAlert(); nav.go(Route.Meetup) }, onHide = repo::hideMeHere) }
             state.liveMeetup?.let { LiveCard(it, onClick = { nav.go(Route.Meetup) }) }
             SectionLabel(stringResource(R.string.home_parties), Modifier.padding(top = 10.dp))
@@ -111,14 +148,29 @@ fun HomeScreen(state: HomeState, repo: PingersRepository, nav: Navigator, simula
 @Composable
 private fun SettingsMenu(repo: PingersRepository, nav: Navigator, simulateAlert: () -> Unit) {
     var open by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    // The cog opens Settings; debug builds keep the preview menu behind a long press.
+    val debuggable = remember { context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0 }
+    val label = stringResource(R.string.cd_settings)
     Box {
-        IconAction(
-            PIcons.Settings, stringResource(R.string.cd_settings), { open = true },
-            background = Pc.Card, border = Pc.Line, iconSize = 20.dp,
-        )
+        Box(
+            Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .background(Pc.Card)
+                .border(1.dp, Pc.Line, CircleShape)
+                .combinedClickable(
+                    role = Role.Button,
+                    onLongClick = if (debuggable) ({ open = true }) else null,
+                    onClick = { nav.go(Route.Settings) },
+                )
+                .semantics { contentDescription = label }
+                .testTag(E2eTags.SETTINGS_OPEN),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(PIcons.Settings, null, tint = Pc.Ink, modifier = Modifier.size(20.dp))
+        }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Pc.Card) {
-            DropdownMenuItem(text = { Text(stringResource(R.string.menu_privacy)) }, onClick = { open = false; nav.go(Route.Privacy) })
-            HorizontalDivider(color = Pc.Divider)
             Text(
                 stringResource(R.string.menu_preview),
                 style = body(12.sp, 600, Pc.Muted),
