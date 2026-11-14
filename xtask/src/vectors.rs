@@ -197,7 +197,7 @@ mod tests {
     fn generated_files_match_the_committed_files() -> TestResult {
         let root = crate::workspace_root()?;
         let files = generate()?;
-        assert_eq!(files.len(), 20);
+        assert_eq!(files.len(), 21);
         assert_eq!(stale_files(&root, &files), Vec::<&Path>::new());
         Ok(())
     }

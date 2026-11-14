@@ -176,9 +176,8 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
 - **`InvitePost`** (join flow A), what is sealed and posted to the invite mailbox: `[0, join
   request]` or `[1, reply mailbox]` (`Withdraw`, the joiner's "Withdraw request").
 - Vectors `invite-payload-encoding`, `join-request-encoding` and `invite-post-encoding`; fuzz
-  targets `invite_payload`, `join_request` and `invite_post`. The proto vectors were edited by
-  hand for this change (the CBOR deltas are a dropped field, `null` and a two-element
-  wrapper); `vectors/proto/generate.py` was not updated (no Python in this repo's tooling).
+  targets `invite_payload`, `join_request` and `invite_post`. The files come from `cargo xtask vectors`
+  (`xtask/src/vectors/proto/invite.rs`).
 
 ### Privacy Pass keys (added 2026-11-13, wave 3 server)
 
