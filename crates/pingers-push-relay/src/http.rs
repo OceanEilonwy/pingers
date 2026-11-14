@@ -2,11 +2,19 @@
 //! The HTTP surface (design D, "Push relay API"):
 //!
 //! - `GET /v1/config`: [`PushRelayConfig`] as CBOR (`application/cbor`), no auth, cacheable.
+//!   503 if no key is active.
+//! - `GET /v1/config/next`: the same for the key scheduled to activate next, so members and
+//!   build-time pin sets can take up its hash before it is published (two-slot rotation). 404
+//!   if none is scheduled.
 //! - `POST /v1/push`: `Authorization: Bearer <server credential>`, body [`PushRequest`] as CBOR.
 //!   Answers 202, 400, 401, 410 (delete the blob), 422, 429, 500, 501, 502 or 504, with no
 //!   body.
+//! - `GET /status`: JSON for an operator's status panel, never cached: `service`, `version`,
+//!   `status` (`ok` or `no_active_key`), `operator`, `platforms`, `published_key_id`,
+//!   `next_key_id` and `next_key_activates_at` (Unix seconds; `null` when none). No secrets and
+//!   no counts.
 //!
-//! Both bodies are pingers-proto types; the design (D) says bodies are CBOR unless noted.
+//! The CBOR bodies are pingers-proto types; the design (D) says bodies are CBOR unless noted.
 //!
 //! [`PushRelayConfig`]: pingers_proto::PushRelayConfig
 //! [`PushRequest`]: pingers_proto::PushRequest
@@ -20,8 +28,8 @@ use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, WWW_AUTHENT
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use pingers_proto::WireEncode as _;
-use pingers_time::Clock;
+use pingers_proto::{PushPlatform, PushRelayConfig, PushRelayKeyId, WireEncode as _};
+use pingers_time::{Clock, UnixSeconds};
 
 use crate::delivery::PushSender;
 use crate::opener::TokenOpener;
@@ -37,7 +45,9 @@ pub fn router<O: TokenOpener, S: PushSender, C: Clock + 'static>(
 ) -> Router {
     Router::new()
         .route("/v1/config", get(config::<O, S, C>))
+        .route("/v1/config/next", get(next_config::<O, S, C>))
         .route("/v1/push", post(push::<O, S, C>))
+        .route("/status", get(status::<O, S, C>))
         .layer(DefaultBodyLimit::max(MAX_BODY))
         .with_state(relay)
 }
@@ -62,9 +72,56 @@ pub const fn status_of(outcome: PushOutcome) -> StatusCode {
 async fn config<O: TokenOpener, S: PushSender, C: Clock>(
     State(relay): State<Arc<Relay<O, S, C>>>,
 ) -> Response {
-    let Some(config) = relay.published_config() else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
+    match relay.published_config() {
+        Some(config) => config_response(&config),
+        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+async fn next_config<O: TokenOpener, S: PushSender, C: Clock>(
+    State(relay): State<Arc<Relay<O, S, C>>>,
+) -> Response {
+    match relay.next_config() {
+        Some(config) => config_response(&config),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn status<O: TokenOpener, S: PushSender, C: Clock>(
+    State(relay): State<Arc<Relay<O, S, C>>>,
+) -> Response {
+    let status = relay.status();
+    let body = serde_json::json!({
+        "service": "pingers-push-relay",
+        "version": env!("CARGO_PKG_VERSION"),
+        "status": if status.published_key.is_some() { "ok" } else { "no_active_key" },
+        "operator": status.operator,
+        "platforms": status.platforms.iter().filter_map(|platform| platform_name(*platform)).collect::<Vec<_>>(),
+        "published_key_id": status.published_key.map(PushRelayKeyId::get),
+        "next_key_id": status.next_key.map(PushRelayKeyId::get),
+        "next_key_activates_at": status.next_key_activates_at.map(UnixSeconds::get),
+    });
+    (
+        [
+            (CACHE_CONTROL, "no-store"),
+            (CONTENT_TYPE, "application/json"),
+        ],
+        body.to_string(),
+    )
+        .into_response()
+}
+
+fn platform_name(platform: PushPlatform) -> Option<&'static str> {
+    if platform == PushPlatform::Fcm {
+        Some("fcm")
+    } else if platform == PushPlatform::UnifiedPush {
+        Some("unifiedpush")
+    } else {
+        None
+    }
+}
+
+fn config_response(config: &PushRelayConfig) -> Response {
     match config.encode() {
         Ok(body) => (
             [

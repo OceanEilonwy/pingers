@@ -3839,6 +3839,7 @@ dependencies = [
 name = "pingers-proto"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "minicbor",
  "pingers-testkit",
  "pingers-time",
@@ -3856,12 +3857,14 @@ dependencies = [
  "aws-lc-rs",
  "axum",
  "base64",
+ "getrandom 0.4.3",
  "hex",
  "pingers-crypto",
  "pingers-proto",
  "pingers-testkit",
  "pingers-time",
  "pingers-transport",
+ "rand_chacha 0.10.0",
  "rand_core 0.10.1",
  "rcgen",
  "reqwest",
@@ -6458,9 +6461,15 @@ dependencies = [
  "hex",
  "nodo-manifest",
  "nodo-settings",
+ "pingers-crypto",
+ "pingers-map-host",
+ "pingers-ohttp",
+ "pingers-proto",
+ "pingers-push-relay",
  "rcgen",
  "sha2 0.11.1",
  "toml 1.2.1+spec-1.1.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -6543,6 +6552,7 @@ version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 dependencies = [
+ "serde",
  "zeroize_derive",
 ]
 

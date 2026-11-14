@@ -132,17 +132,17 @@ return {
       validate = https_origin,
     },
     {
-      -- TODO(p-server, p-relays): push_relays.key_config_hash holds one hash today; with the
-      -- relay's two-slot keys and `pingers-push-relay pins` this may become a list or move.
+      -- TODO(p-server): push_relays.key_config_hash in the pin form (unpadded base64url SHA-256,
+      -- 43 characters), as p-server is changing it; one pin, the served key's.
       name = "push_relay_key_config_hash",
       type = "string",
       label = "Push relay key hash",
-      help = "SHA-256 of the push relay's served key config, as `pingers-push-relay pins` "
-        .. "prints it (push_relays.key_config_hash). /v1/params lists it so devices can check "
-        .. "the relay's key.",
+      help = "The pin of the push relay's served key config, 43 base64url characters, from "
+        .. "`pingers-push-relay pins` (push_relays.key_config_hash). /v1/params lists it so "
+        .. "devices can check the relay's key.",
       required = true,
       validate = function(hash)
-        return nodo.matches(hash, "^[0-9a-f]{64}$"), "must be 64 lowercase hex characters"
+        return nodo.matches(hash, "^[A-Za-z0-9_-]{43}$"), "must be a pin: 43 base64url characters"
       end,
     },
     {

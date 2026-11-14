@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Push relay binary: `pingers-push-relay <config.toml>`.
+//! Push relay binary: `pingers-push-relay <config.toml>`, and the operator subcommands `pins`,
+//! `keygen` and `credential-hash` (see the library's `command` module).
 //!
 //! The publisher-run push relay. Stateless: HPKE open, check the mailbox binding, send to FCM
 //! HTTP v1 or a UnifiedPush endpoint; per-token and per-server rate limits; key config
@@ -7,11 +8,16 @@
 #![forbid(unsafe_code)]
 
 use std::error::Error as _;
-use std::path::PathBuf;
+use std::io::{Read as _, Write as _};
+use std::path::Path;
 use std::process::ExitCode;
 
+use pingers_push_relay::command::{self, Command};
 use pingers_push_relay::error::RelayError;
 use pingers_time::SystemClock;
+use rand_chacha::ChaCha20Rng;
+use rand_core::SeedableRng as _;
+use zeroize::Zeroizing;
 
 fn main() -> ExitCode {
     match run() {
@@ -24,11 +30,39 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), RelayError> {
-    let mut arguments = std::env::args_os().skip(1);
-    let (Some(path), None) = (arguments.next(), arguments.next()) else {
-        return Err(RelayError::Usage);
-    };
-    let config = pingers_push_relay::load_config(&PathBuf::from(path))?;
+    match Command::parse(std::env::args_os().skip(1))? {
+        Command::Pins { config } => {
+            let config = pingers_push_relay::load_config(&config)?;
+            print(&command::pins_output(&config))
+        }
+        Command::Keygen => {
+            let mut seed = Zeroizing::new([0_u8; 32]);
+            getrandom::fill(seed.as_mut_slice()).map_err(|_error| RelayError::Entropy)?;
+            let mut rng = ChaCha20Rng::from_seed(*seed);
+            print(&command::keygen_output(&mut rng))
+        }
+        Command::CredentialHash => {
+            let mut input = Zeroizing::new(String::new());
+            std::io::stdin()
+                .take(command::MAX_CREDENTIAL_INPUT)
+                .read_to_string(&mut input)
+                .map_err(RelayError::ReadInput)?;
+            print(&command::credential_hash_output(&input)?)
+        }
+        Command::Serve { config } => serve(&config),
+    }
+}
+
+fn print(text: &str) -> Result<(), RelayError> {
+    let mut output = std::io::stdout().lock();
+    output
+        .write_all(text.as_bytes())
+        .and_then(|()| output.flush())
+        .map_err(RelayError::WriteOutput)
+}
+
+fn serve(path: &Path) -> Result<(), RelayError> {
+    let config = pingers_push_relay::load_config(path)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

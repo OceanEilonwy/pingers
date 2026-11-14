@@ -35,5 +35,5 @@ url = "http://127.0.0.1:9472"                                # TODO(p-server): l
 public_url = "https://10.0.2.2:9445"                         # TODO(p-server): advertised url
 credential = "3333333333333333333333333333333333333333333333333333333333333333"
 # `pingers-push-relay pins packaging/nodo/dev/push-relay.toml` prints the value for these keys.
-key_config_hash = "0000000000000000000000000000000000000000000000000000000000000000"   # TODO(p-server, p-relays)
+key_config_hash = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"   # TODO(p-server): pin form
 operator = "Local test"

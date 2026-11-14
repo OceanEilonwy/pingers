@@ -193,7 +193,17 @@ fn hex(byte: char) -> String {
 }
 
 /// What an owner sets, plus what the device generates on install, for each app.
-fn example_values() -> BTreeMap<&'static str, BTreeMap<String, SettingValue>> {
+/// A service account of the shape Google issues, with a throwaway RSA key: the relay checks the
+/// key when it reads its configuration. On one line, as an owner pastes it.
+fn service_account_json() -> TestResult<String> {
+    let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_RSA_SHA256)?;
+    let pem = key.serialize_pem().replace('\n', "\\n");
+    Ok(format!(
+        r#"{{"type": "service_account", "project_id": "example-project", "private_key_id": "test", "private_key": "{pem}", "client_email": "relay@example-project.iam.gserviceaccount.com", "token_uri": "https://oauth2.googleapis.com/token"}}"#
+    ))
+}
+
+fn example_values() -> TestResult<BTreeMap<&'static str, BTreeMap<String, SettingValue>>> {
     let server = BTreeMap::from([
         ("server_id".to_owned(), url("https://pingers.example.org")),
         (
@@ -205,7 +215,10 @@ fn example_values() -> BTreeMap<&'static str, BTreeMap<String, SettingValue>> {
             "push_relay_public_url".to_owned(),
             url("https://push.example.org"),
         ),
-        ("push_relay_key_config_hash".to_owned(), text(&hex('a'))),
+        (
+            "push_relay_key_config_hash".to_owned(),
+            text("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+        ),
         ("ohttp_key_a".to_owned(), secret(&hex('1'))),
         ("ohttp_key_b".to_owned(), secret(&hex('2'))),
     ]);
@@ -214,26 +227,24 @@ fn example_values() -> BTreeMap<&'static str, BTreeMap<String, SettingValue>> {
         ("fcm_project_id".to_owned(), text("example-project")),
         (
             "fcm_service_account".to_owned(),
-            secret(
-                r#"{"type":"service_account","private_key":"-----BEGIN PRIVATE KEY-----\nAA\n-----END PRIVATE KEY-----\n"}"#,
-            ),
+            secret(&service_account_json()?),
         ),
         ("hash_key".to_owned(), secret(&hex('4'))),
         ("key_a".to_owned(), secret(&hex('5'))),
         ("key_b".to_owned(), secret(&hex('6'))),
         ("server_credential".to_owned(), secret(&hex('3'))),
     ]);
-    BTreeMap::from([
+    Ok(BTreeMap::from([
         ("pingers-server", server),
         ("pingers-push-relay", push),
         ("pingers-ohttp-relay", BTreeMap::new()),
         ("pingers-map-host", BTreeMap::new()),
-    ])
+    ]))
 }
 
 /// All four apps installed together, with the one grant the owner approves.
 fn installed() -> TestResult<Installed> {
-    let mut values = example_values();
+    let mut values = example_values()?;
     let mut installed = Installed::default();
     for (id, _) in APPS {
         installed.packages.insert(
@@ -367,7 +378,7 @@ fn both_operators_say_the_same_unless_the_owner_changes_one() -> TestResult {
 
 #[test]
 fn validators_accept_the_examples_and_refuse_near_misses() -> TestResult {
-    let examples = example_values();
+    let examples = example_values()?;
     for (id, _) in APPS {
         let loaded = settings(id)?;
         let values: BTreeMap<String, Value> = examples
@@ -432,5 +443,36 @@ fn the_feed_publishes_the_recipe_and_every_subpackage() -> TestResult {
             "{id} needs its srcpkgs symlink"
         );
     }
+    Ok(())
+}
+
+/// The push relay and the map host read what nodo renders, and the tier-1 dev configs, with
+/// their own parsers. TODO(p-server): the server's too, once its new keys (`[ohttp] listen`,
+/// `served_key_id`, loopback push relay `url` with `public_url`, the pin-form
+/// `key_config_hash`) are on main.
+#[test]
+fn the_services_accept_the_rendered_and_dev_configs() -> TestResult {
+    let installed = installed()?;
+    let dev = |name: &str| read(&packaging().join("dev").join(format!("{name}.toml")));
+    let push = |text: &str, what: &str| -> TestResult {
+        pingers_push_relay::config::RelayConfig::parse(text)
+            .map(drop)
+            .map_err(|error| format!("{what} push-relay.toml: {error}").into())
+    };
+    push(
+        &render(&installed, "pingers-push-relay", "push-relay")?.text,
+        "rendered",
+    )?;
+    push(&dev("push-relay")?, "dev")?;
+    let maps = |text: &str, what: &str| -> TestResult {
+        pingers_map_host::config::MapHostConfig::parse(text, Path::new("/"))
+            .map(drop)
+            .map_err(|error| format!("{what} map-host.toml: {error}").into())
+    };
+    maps(
+        &render(&installed, "pingers-map-host", "map-host")?.text,
+        "rendered",
+    )?;
+    maps(&dev("map-host")?, "dev")?;
     Ok(())
 }

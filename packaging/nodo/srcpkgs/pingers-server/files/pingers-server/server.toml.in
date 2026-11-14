@@ -39,5 +39,5 @@ url = "$(pingers-push-relay.server-url)"                     # TODO(p-server): l
 public_url = "$(pingers-server.push_relay_public_url)"       # TODO(p-server): advertised url
 # A sealed secret of pingers-push-relay: the owner approves pingers-server's grant once.
 credential = "$(pingers-push-relay.server_credential)"
-key_config_hash = "$(pingers-server.push_relay_key_config_hash)"   # TODO(p-server, p-relays)
+key_config_hash = "$(pingers-server.push_relay_key_config_hash)"   # TODO(p-server): pin form
 operator = "$(pingers-push-relay.operator)"

@@ -99,7 +99,6 @@ return {
       min = 0,
     },
     {
-      -- TODO(p-relays): retired_at = 0 meaning "not scheduled" (P8).
       name = "key_a_retired_at",
       type = "int",
       label = "Key A retires",
@@ -109,7 +108,6 @@ return {
       min = 0,
     },
     {
-      -- TODO(p-relays): retired_at = 0 meaning "not scheduled" (P8).
       name = "key_b_retired_at",
       type = "int",
       label = "Key B retires",

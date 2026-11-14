@@ -24,15 +24,13 @@ variables (`PINGERS_SERVER_HOST`, `PINGERS_OHTTP_RELAY`, `PINGERS_PUSH_RELAY`,
   merged there, nodo refuses the server's and relay's manifests (`upstream_protocol`) and the
   feed workflow stops at its first check.
 - Server config keys `[ohttp] listen`, `[ohttp] served_key_id`, a loopback `http://`
-  `[[push_relays]] url` with a separate advertised `public_url`, and the push relay key pins
-  (`TODO(p-server)`).
-- Push relay config: `[[servers]] credential` inline, `[fcm] service_account_json` inline,
-  `retired_at = 0` for "not scheduled", and the map host's `hosted` as a space-separated string
-  (`TODO(p-relays)`).
+  `[[push_relays]] url` with a separate advertised `public_url`, and `key_config_hash` in the pin
+  form (`TODO(p-server)`).
 
-`cargo test -p xtask --test nodo_packaging` checks the packaging against nodo's own parsers; it
-does not yet run the services' own config parsers on the rendered files, because those keys are
-still changing.
+`cargo test -p xtask --test nodo_packaging` checks the packaging against nodo's own parsers
+(manifests, settings, rendering) and parses the rendered push relay and map host configs, and
+their dev configs, with those services' own parsers. The server's config joins once its keys
+are on main.
 
 ## 1. The four apps
 
@@ -103,7 +101,7 @@ config with the gateway keys stays inside the volume)
 | `ohttp_key_a_id`, `ohttp_key_b_id` | int 1 to 255 | 1, 2 | `[[ohttp.keys]] key_id` |
 | `ohttp_served_key_id` | int 1 to 255 | 1 | `[ohttp] served_key_id` (TODO p-server) |
 | `push_relay_public_url` | url, required | | `[[push_relays]] public_url`, such as `https://push.example.org` (TODO p-server) |
-| `push_relay_key_config_hash` | string, 64 hex, required | | `[[push_relays]] key_config_hash` (TODO p-server, p-relays) |
+| `push_relay_key_config_hash` | string, a pin (43 base64url characters), required | | `[[push_relays]] key_config_hash` (TODO p-server) |
 | `gateway_url`, `gateway_key_config_url` | url, public endpoints | `http://127.0.0.1:9471/...` | read by pingers-ohttp-relay |
 
 It also reads `pingers-push-relay.server_credential` (a sealed secret of the push relay) once the
@@ -120,17 +118,17 @@ in memory)
 | `key_a`, `key_b` | **secret**, generated | | `[[keys]] private_key` |
 | `key_a_id`, `key_b_id` | int 1 to 255 | 1, 2 | `[[keys]] key_id` |
 | `key_a_activated_at`, `key_b_activated_at` | int, Unix seconds | 0, 4102444800 | `[[keys]] activated_at` (B is held in reserve) |
-| `key_a_retired_at`, `key_b_retired_at` | int, 0 = not scheduled | 0 | `[[keys]] retired_at` (TODO p-relays) |
-| `server_credential` | **secret**, generated | | `[[servers]] credential` (TODO p-relays); also read by pingers-server |
+| `key_a_retired_at`, `key_b_retired_at` | int, 0 = not scheduled | 0 | `[[keys]] retired_at` |
+| `server_credential` | **secret**, generated | | `[[servers]] credential`; also read by pingers-server |
 | `fcm_project_id` | string, required | | `[fcm] project_id` |
-| `fcm_service_account` | **secret**, required, pasted by the owner | | `[fcm] service_account_json` (TODO p-relays) |
+| `fcm_service_account` | **secret**, required, pasted by the owner | | `[fcm] service_account_json` |
 | `server_url` | url, public endpoint | `http://127.0.0.1:9472` | read by pingers-server |
 
 **pingers-ohttp-relay** (`relay.toml.in`; no storage, no secrets): `response_timeout_seconds`
 (int 5 to 300, default 30). The gateway addresses come from pingers-server.
 
 **pingers-map-host** (`map-host.toml.in`; unencrypted data on the data drive): `max_disk`
-(default `40GB`), `hosted` (default `oceania/australia`, space-separated; TODO p-relays),
+(default `40GB`), `hosted` (default `oceania/australia`, space-separated),
 `logging`.
 
 ### 1.2 Keys and rotation
@@ -143,8 +141,10 @@ Both HPKE key sets (the OHTTP gateway's and the push relay's) have two slots, an
 the hashes of both, so the app never meets an unpinned key:
 
 1. At install, slots A and B are generated. A is served (`ohttp_served_key_id = 1`; the push
-   relay's B activates in 2100). Put both hashes in CI: `PINGERS_GATEWAY_KEY_PINS` and
-   `PINGERS_PUSH_RELAY_KEY_PINS` (from `pingers-server pins` and `pingers-push-relay pins`).
+   relay's B activates in 2100). Put both pins in CI: `PINGERS_GATEWAY_KEY_PINS` and
+   `PINGERS_PUSH_RELAY_KEY_PINS` (section 6, step 9). A pin is the unpadded base64url SHA-256 of
+   a key config, 43 characters; the push relay also publishes its next key at
+   `GET /v1/config/next`.
 2. Yearly, serve B: set `ohttp_served_key_id = 2`; for the push relay set `key_b_activated_at` to
    now and `key_a_retired_at` to at least 30 days later. Every configured key keeps opening
    requests meanwhile. Update `push_relay_key_config_hash` in pingers-server.
@@ -365,24 +365,30 @@ to a fresh VM and check the gateway key hash is unchanged.
 4. **Server.** Install `pingers-server` (creates the 1 GiB encrypted volume) and approve its
    grant for `pingers-push-relay.server_credential`. Set `server_id`
    (`https://pingers.example.org`), `ohttp_relay_url` (`https://ohttp.example.org/ohttp`),
-   `map_host`, `push_relay_public_url`, and `push_relay_key_config_hash` from
+   `map_host`, `push_relay_public_url`, and `push_relay_key_config_hash`: the first pin (slot A,
+   the active key; pins follow `activated_at`) that
    `/opt/nodo/apps/pingers-push-relay/libexec/pingers-push-relay pins
-   /run/nodo/secrets/pingers-push-relay/config/push-relay.toml` over the owner's SSH. Leave
+   /run/nodo/secrets/pingers-push-relay/config/push-relay.toml` prints over the owner's SSH. Leave
    `operator` at its default, the push relay's.
 5. **Relay.** Install `pingers-ohttp-relay`. Nothing to set.
 6. **Map host.** UseDataDrive on, install, check `max_disk` and `hosted`, rsync the packs.
 7. **Exposure.** Section 2 for each site; wait until the certificate status is valid for all four.
 8. **Smoke tests from outside the LAN:**
    - `curl -sI https://maps.example.org/catalog.json` gives 200.
-   - `curl -s https://ohttp.example.org/v1/ohttp/config | sha256sum` equals the served key's hash
+   - `curl -s https://ohttp.example.org/v1/ohttp/config | openssl dgst -sha256 -binary | basenc
+     --base64url | tr -d =` equals the served key's pin from `pingers-server pins
+     /run/nodo/volumes/pingers-server/config/server.toml`.| sha256sum` equals the served key's hash
      from `pingers-server pins /run/nodo/volumes/pingers-server/config/server.toml`.
    - `curl -s -o /dev/null -w '%{http_code}' -X POST https://pingers.example.org/ohttp` gives
      404: the gateway is not reachable directly.
    - `curl -s -o /dev/null -w '%{http_code}' -X POST https://push.example.org/v1/push` gives 404.
    - The `openssl s_client -groups X25519MLKEM768` check of section 2.1, for each name.
-9. **Pins into CI.** Compare `pingers-server pins` and `pingers-push-relay pins` (over SSH) with
-   `cargo xtask pins` from outside, then set `PINGERS_GATEWAY_KEY_PINS` and
-   `PINGERS_PUSH_RELAY_KEY_PINS`, and build the release APKs.
+9. **Pins into CI.** Over the owner's SSH, run `pingers-server pins` and `pingers-push-relay pins`
+   on the rendered configs (paths in steps 4 and 8); each prints one pin per line. Join each
+   pair with a comma into `PINGERS_GATEWAY_KEY_PINS` and `PINGERS_PUSH_RELAY_KEY_PINS`, check the
+   served ones against the curl checks above, and build the release APKs. (`cargo xtask pins
+   <server.toml> <push-relay.toml>` prints both lines from copies of the configs, but those hold
+   the private keys: on nodo, keep them on the device and use the binaries.)
 10. **Two real phones** on mobile data, once with FCM and once with UnifiedPush: the tier-1
     scenario, including a ten-minute Meetup (streaming through the router).
 11. **Backup.** A USB backup with the device passphrase (so it includes the device key), stored

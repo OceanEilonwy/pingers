@@ -20,7 +20,11 @@ pingers-transport = { workspace = true }
 aws-lc-rs = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }
+# `keygen`: a ChaCha generator seeded from the operating system (the server's pattern).
+getrandom = { workspace = true }
 hex = { workspace = true }
+rand_chacha = { workspace = true }
+rand_core = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -29,11 +33,11 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["net", "signal"] }
 toml = { workspace = true }
 url = { workspace = true }
-zeroize = { workspace = true }
+# "serde": a plain `credential` and `service_account_json` are read straight into Zeroizing.
+zeroize = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 pingers-testkit = { workspace = true }
-rand_core = { workspace = true }
 # Throwaway RSA keys for the service-account tests.
 rcgen = { workspace = true }
 

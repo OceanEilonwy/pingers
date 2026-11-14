@@ -12,6 +12,8 @@ layer = 0
 
 [dependencies]
 pingers-time = { workspace = true }
+# Unpadded base64url: the text form of key config pins (KeyConfigHash::to_pin).
+base64 = { workspace = true }
 minicbor = { workspace = true }
 # Constant-time comparison and zeroing of wire secrets (bearer tokens, revoke keys).
 subtle = { workspace = true }

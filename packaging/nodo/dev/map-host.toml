@@ -6,6 +6,6 @@ listen = "127.0.0.1:9474"
 # Relative to the working directory, like every path here.
 directory = "target/dev-stack/maps"
 max_disk = "1GB"
-hosted = "oceania/australia"                                 # TODO(p-relays): hosted as a string
+hosted = "oceania/australia"
 logging = "counts"
 counts_interval_s = 60

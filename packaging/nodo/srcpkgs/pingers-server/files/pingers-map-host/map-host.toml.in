@@ -5,5 +5,5 @@ listen = "127.0.0.1:9474"
 # first upload. Upload packs into it with rsync.
 directory = "/var/lib/apps/pingers-map-host"
 max_disk = "$(pingers-map-host.max_disk)"
-hosted = "$(pingers-map-host.hosted)"                        # TODO(p-relays): hosted as a string
+hosted = "$(pingers-map-host.hosted)"
 logging = "$(pingers-map-host.logging)"

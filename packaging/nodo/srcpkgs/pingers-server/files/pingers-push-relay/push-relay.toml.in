@@ -12,19 +12,19 @@ max_ttl_s = 2592000
 key_id = "$(pingers-push-relay.key_a_id)"
 private_key = "$(pingers-push-relay.key_a)"
 activated_at = "$(pingers-push-relay.key_a_activated_at)"
-retired_at = "$(pingers-push-relay.key_a_retired_at)"        # TODO(p-relays): 0 = not scheduled
+retired_at = "$(pingers-push-relay.key_a_retired_at)"
 
 [[keys]]
 key_id = "$(pingers-push-relay.key_b_id)"
 private_key = "$(pingers-push-relay.key_b)"
 activated_at = "$(pingers-push-relay.key_b_activated_at)"
-retired_at = "$(pingers-push-relay.key_b_retired_at)"        # TODO(p-relays): 0 = not scheduled
+retired_at = "$(pingers-push-relay.key_b_retired_at)"
 
 [[servers]]
 # This device's pingers-server, the relay's only sender.
 server_id = "local"
 # The credential itself, hashed under hash_key at load and then zeroized (P8).
-credential = "$(pingers-push-relay.server_credential)"       # TODO(p-relays): inline credential
+credential = "$(pingers-push-relay.server_credential)"
 pushes_per_minute = 600
 
 [unifiedpush]
@@ -33,4 +33,4 @@ allow_insecure_local_endpoints = false
 [fcm]
 project_id = "$(pingers-push-relay.fcm_project_id)"
 # The service account's JSON, inline (P8): in memory only, never a file on disk.
-service_account_json = "$(pingers-push-relay.fcm_service_account)"   # TODO(p-relays): inline JSON
+service_account_json = "$(pingers-push-relay.fcm_service_account)"

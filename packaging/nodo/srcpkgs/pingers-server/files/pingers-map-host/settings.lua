@@ -16,7 +16,6 @@ return {
       end,
     },
     {
-      -- TODO(p-relays): hosted as a space-separated string (P10).
       name = "hosted",
       type = "string",
       label = "Hosted regions",
