@@ -983,7 +983,10 @@ mod tests {
             operators: Some(pingers_client::snapshot::ServerOperators {
                 server: pingers_client::snapshot::Operator::new("Flat 7")
                     .map_err(|_| CoreError::invalid("operator"))?,
-                push_relay: None,
+                push_relay: Some(
+                    pingers_client::snapshot::Operator::new("Push Co")
+                        .map_err(|_| CoreError::invalid("operator"))?,
+                ),
             }),
         });
         let check = core.check_reachability().await?;
@@ -994,7 +997,10 @@ mod tests {
             Some("https://maps.pingers.invalid")
         );
         assert_eq!(core.snapshot().server_operator().as_deref(), Some("Flat 7"));
-        assert_eq!(core.snapshot().push_relay_operator(), None);
+        assert_eq!(
+            core.snapshot().push_relay_operator().as_deref(),
+            Some("Push Co")
+        );
         assert!(
             check
                 .text

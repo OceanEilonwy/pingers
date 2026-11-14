@@ -255,6 +255,26 @@ async fn a_fresh_client_registers_gets_tokens_creates_a_party_and_a_mailbox()
     // The wake also uploaded its lease: one token for the board sync, one for the mailbox.
     assert!(session.board_upload().last()?.is_some());
     assert_eq!(session.privacy_pass_tokens().count()?, 297);
+
+    // An invite this device makes passes its registration code on. The invite mailbox is put
+    // in the pool by hand: refilling it is the invite flow's part.
+    session.mailboxes().insert(&pingers_store::Mailbox {
+        read_key: pingers_crypto::MailboxReadKey::from_bytes(Zeroizing::new([9; 32])),
+        purpose: MailboxPurpose::Invite,
+        state: pingers_store::MailboxState::Pooled,
+        push: None,
+        expires_at: clock
+            .now()
+            .checked_add(std::time::Duration::from_hours(48))
+            .ok_or(TestError::Setup("time"))?,
+    })?;
+    drop(session);
+    let link = client.create_invite(party).await?;
+    let payload = pingers_parties::InviteLink::from_text(link.url.as_str().to_owned()).payload()?;
+    assert_eq!(
+        payload.registration_code.as_ref().map(SecretText::expose),
+        Some(CODE)
+    );
     Ok(())
 }
 

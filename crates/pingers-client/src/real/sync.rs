@@ -167,7 +167,12 @@ impl Net {
                 .offer_registration_code(code.clone(), CodeSource::Build)
                 .await?;
         }
-        self.credentials(engine.prepare_credentials(WakeBudget::UNLIMITED).await)
+        let result = engine.prepare_credentials(WakeBudget::UNLIMITED).await;
+        self.observe(&result);
+        match result {
+            Err(SyncError::Store(error)) => Err(SyncError::Store(error).into()),
+            Ok(_) | Err(_) => Ok(()),
+        }
     }
 
     /// [`Net::prepare_credentials`] when there is an instance; offline, nothing to do. Commands
@@ -181,15 +186,6 @@ impl Net {
             return Ok(());
         }
         self.prepare_credentials().await
-    }
-
-    /// What a credential step's result says: observed, and only a store failure kept.
-    fn credentials<T>(&self, result: Result<T, SyncError>) -> Result<(), ClientError> {
-        self.observe(&result);
-        match result {
-            Err(SyncError::Store(error)) => Err(SyncError::Store(error).into()),
-            Ok(_) | Err(_) => Ok(()),
-        }
     }
 
     /// Offers the registration code an invite link carries for the first registration, and
