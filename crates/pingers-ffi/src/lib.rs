@@ -43,7 +43,7 @@ pub use ids::{
     InviteId, LocationRequestId, MeetupId, MemberId, MessageId, PartyId, SpotId, ZoneId,
 };
 pub use maps::{MapHostSource, MapsWords, maps_words};
-pub use servers::{ServerIssue, ServerLook};
+pub use servers::{KeysTrusted, PartySettingsView, ServerIssue, ServerLook, ServiceRowView};
 pub use snapshot::{AreaEditor, LocalClock, Snapshot};
 pub use views::*;
 

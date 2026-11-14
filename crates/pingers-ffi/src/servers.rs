@@ -8,8 +8,8 @@ use pingers_proto::{SecretText, ServerId};
 use pingers_words::Language;
 use pingers_words::errors::{ServerRefusal, server_refusal};
 
-use crate::CoreError;
 use crate::core::Core;
+use crate::{CoreError, Snapshot};
 
 /// Why a server could not be used, for the app to pick its screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, uniffi::Enum)]
@@ -185,8 +185,105 @@ impl Core {
     }
 }
 
+/// How this device came to trust a Party's server keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum KeysTrusted {
+    /// The app's built-in server: pinned in the app.
+    BuiltIn,
+    /// From the invite link, as the inviter trusted them.
+    FromInvite,
+    /// The user trusted them when creating the Party.
+    Confirmed,
+}
+
+/// One service on a Party's settings page.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct ServiceRowView {
+    /// Where it is.
+    pub host: String,
+    /// Who declares to run it.
+    pub operator: String,
+}
+
+/// A Party's settings page: its own server, relays and operators. Device-wide settings are
+/// elsewhere.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct PartySettingsView {
+    /// The server's origin.
+    pub origin: String,
+    /// The server.
+    pub server: ServiceRowView,
+    /// The privacy relay.
+    pub relay: ServiceRowView,
+    /// Whether the server answered through it lately, and that in words.
+    pub relay_check: crate::views::RelayCheck,
+    /// The push relay: `None` host for the official one.
+    pub push_relay_host: Option<String>,
+    /// Who declares to run the push relay.
+    pub push_relay_operator: String,
+    /// "No wake-up pushes" is on.
+    pub wake_pushes_off: bool,
+    /// How the server's keys were trusted.
+    pub keys: KeysTrusted,
+    /// The quantum-resistant suite.
+    pub post_quantum: bool,
+    /// The server and push relay declare the same operator.
+    pub same_operator: bool,
+}
+
+impl From<pingers_screens::party_settings::PartySettingsView> for PartySettingsView {
+    fn from(view: pingers_screens::party_settings::PartySettingsView) -> Self {
+        use pingers_screens::snapshot::{KeyTrust, PostQuantum, PushRelayKind, WakePushes};
+        Self {
+            origin: view.origin.as_str().to_owned(),
+            server: ServiceRowView {
+                host: view.server.host.as_str().to_owned(),
+                operator: view.server.operator.as_str().to_owned(),
+            },
+            relay: ServiceRowView {
+                host: view.relay.host.as_str().to_owned(),
+                operator: view.relay.operator.as_str().to_owned(),
+            },
+            relay_check: view.relay_status.into(),
+            push_relay_host: match view.push_relay.kind {
+                PushRelayKind::Official => None,
+                PushRelayKind::Custom(host) => Some(host.as_str().to_owned()),
+            },
+            push_relay_operator: view.push_relay.operator.as_str().to_owned(),
+            wake_pushes_off: view.push_relay.wake_pushes == WakePushes::NoWakePushes,
+            keys: match view.keys {
+                KeyTrust::BuiltIn => KeysTrusted::BuiltIn,
+                KeyTrust::FromInvite => KeysTrusted::FromInvite,
+                KeyTrust::Confirmed => KeysTrusted::Confirmed,
+            },
+            post_quantum: view.post_quantum == PostQuantum::On,
+            same_operator: view.same_operator,
+        }
+    }
+}
+
+#[uniffi::export]
+impl Snapshot {
+    /// A Party's settings page.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::NotFound`] or [`CoreError::Invalid`].
+    pub fn party_settings(&self, id: &crate::PartyId) -> Result<PartySettingsView, CoreError> {
+        Ok(
+            pingers_screens::party_settings::party_settings(
+                self.client_snapshot(),
+                id.try_into()?,
+            )?
+            .into(),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
     use super::*;
 
     #[test]
@@ -194,6 +291,33 @@ mod tests {
         let shown = fingerprint(&pingers_proto::KeyConfigHash::from_bytes([0xab; 32]));
         assert!(shown.starts_with("abab abab "));
         assert_eq!(shown.split(' ').count(), 16);
+    }
+
+    #[test]
+    fn a_party_s_settings_carry_its_own_server() -> Result<(), CoreError> {
+        let mut snapshot = pingers_screens::fixtures::snapshot()
+            .map_err(|_fixture| CoreError::invalid("fixture"))?;
+        let id = snapshot
+            .parties
+            .first()
+            .map(|party| party.id)
+            .ok_or_else(|| CoreError::invalid("fixture"))?;
+        if let Some(party) = snapshot.parties.first_mut() {
+            party.config.keys = pingers_screens::snapshot::KeyTrust::FromInvite;
+            party.config.push_relay.kind = pingers_screens::snapshot::PushRelayKind::Custom(
+                pingers_screens::common::Host::new("push.other.example")?,
+            );
+        }
+        let snapshot = Snapshot::new(std::sync::Arc::new(snapshot));
+        let view = snapshot.party_settings(&crate::PartyId::from(id))?;
+        assert_eq!(view.origin, "https://pingers.flat7.org");
+        assert_eq!(view.server.host, "pingers.flat7.org");
+        assert_eq!(view.server.operator, "Flat 7");
+        assert_eq!(view.relay.host, "relay.quietpath.net");
+        assert_eq!(view.keys, KeysTrusted::FromInvite);
+        assert_eq!(view.push_relay_host.as_deref(), Some("push.other.example"));
+        assert!(!view.post_quantum);
+        Ok(())
     }
 
     #[test]
