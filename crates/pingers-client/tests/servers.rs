@@ -578,3 +578,41 @@ async fn a_real_record_on_server_b_takes_a_knock_mailbox_of_server_b() -> TestRe
     );
     Ok(())
 }
+
+/// The requests a harness server answered through its relay, by its own metrics.
+async fn relayed_answers(harness: &InProcessHarness) -> Result<u64, TestError> {
+    let answer = pingers_testkit::send_direct(
+        harness.endpoints().server,
+        &pingers_ohttp::BinaryRequest {
+            method: "GET".to_owned(),
+            path: "/metrics".to_owned(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        },
+    )
+    .await?;
+    let text = String::from_utf8_lossy(&answer.body).into_owned();
+    Ok(text
+        .lines()
+        .filter(|line| line.starts_with("pingers_requests_total{channel=\"ohttp\",outcome=\"ok\"}"))
+        .filter_map(|line| line.rsplit(' ').next()?.parse::<u64>().ok())
+        .sum())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn leaving_the_party_on_b_posts_the_leave_to_b_once() -> TestResult {
+    let world = World::start()?;
+    let (ana, on_a, on_b) = ana_on_both(&world).await?;
+    let before = relayed_answers(world.b()?).await?;
+    ana.client.leave_party(on_b).await?;
+    // A command on A flushes every server's waiting requests: a leave already sent is not
+    // sent again.
+    ana.client.set_display_name(Name::new("Ana")?).await?;
+    let _invite = ana.client.create_invite(on_a).await?;
+    assert_eq!(
+        relayed_answers(world.b()?).await?,
+        before.saturating_add(1),
+        "one leave proposal reached B, through B's relay"
+    );
+    Ok(())
+}
