@@ -238,6 +238,31 @@ impl Phone {
         .await
     }
 
+    /// Waits, in real time, until the shell has been told `kind` at least once. Events follow
+    /// the snapshot that shows them, so a step that saw the snapshot waits for its event here.
+    async fn heard(&self, what: &'static str, kind: EventKind) -> TestResult {
+        let mut ticks = tokio::time::interval(Duration::from_millis(20));
+        within(what, async move {
+            while self.events.count(kind) == 0 {
+                ticks.tick().await;
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    /// Waits, in real time, until the shell has been told exactly `event`.
+    async fn told(&self, what: &'static str, event: RecordedEvent) -> TestResult {
+        let mut ticks = tokio::time::interval(Duration::from_millis(20));
+        within(what, async move {
+            while !self.events.events().contains(&event) {
+                ticks.tick().await;
+            }
+            Ok(())
+        })
+        .await
+    }
+
     /// The Meetup rows left in this phone's store.
     fn meetup_rows(&self) -> Result<usize, TestError> {
         let database =
@@ -353,17 +378,18 @@ async fn meet<'phones>(
 
 impl Meeting<'_> {
     /// Both shells heard of the Meetup, run the Meetup location service and show the alert.
-    fn started(&self) {
+    async fn started(&self) -> TestResult {
         let meetup = self.meetup;
         for phone in [self.ana, self.ben] {
             let started = RecordedEvent::MeetupStarted { meetup };
-            assert!(phone.events.events().contains(&started));
+            phone.told("the Meetup started", started).await?;
             assert_eq!(
                 phone.platform.location_mode(),
                 LocationMode::MeetupBackground
             );
             assert_eq!(phone.client.snapshot().alert, Some(meetup));
         }
+        Ok(())
     }
 
     /// Ana writes; Ben's chat shows it, with the event that refreshes his screen.
@@ -390,7 +416,8 @@ impl Meeting<'_> {
         let message = message.ok_or(TestError::Missing("the message"))?;
         assert_eq!(message.author, self.ana_leaf);
         assert_eq!(message.body.as_str(), "On the left wall");
-        assert!(self.ben.events.count(EventKind::MeetupMessage) >= 1);
+        let message_event = EventKind::MeetupMessage;
+        self.ben.heard("the message event", message_event).await?;
         Ok(())
     }
 
@@ -415,7 +442,7 @@ impl Meeting<'_> {
             from: self.ben_leaf,
             request: sent,
         };
-        assert!(ana.events.events().contains(&raised));
+        ana.told("the request raised", raised).await?;
         let allow = LocationAnswer::Allow {
             scope: GrantScope::ThisMeetup,
             ask_back: AskBack::DoNotAskBack,
@@ -424,10 +451,8 @@ impl Meeting<'_> {
         ana.client
             .answer_location_request(meetup, request.id, allow)
             .await?;
-        ben.until("access to Ana", |_snapshot| {
-            ben.events.count(EventKind::LocationAccessChanged) >= 1
-        })
-        .await?;
+        ben.heard("access to Ana", EventKind::LocationAccessChanged)
+            .await?;
         Ok(())
     }
 
@@ -456,7 +481,7 @@ impl Meeting<'_> {
                     meetup,
                     peer: self.ana_leaf,
                 };
-                assert!(ben.events.events().contains(&moved));
+                ben.told("Ana's position event", moved).await?;
                 let sharing = ana.client.snapshot().meetup(meetup)?.sharing_with.clone();
                 assert_eq!(sharing, vec![self.ben_leaf]);
                 return Ok(());
@@ -492,7 +517,7 @@ impl Meeting<'_> {
             assert_eq!(snapshot.alert, None);
             assert_eq!(phone.meetup_rows()?, 0);
             let ended = RecordedEvent::MeetupEnded { meetup };
-            assert!(phone.events.events().contains(&ended));
+            phone.told("the Meetup ended", ended).await?;
             assert_eq!(phone.platform.location_mode(), mode);
             let summary = snapshot
                 .ended_meetup
@@ -530,7 +555,7 @@ async fn two_clients_meet_chat_share_a_location_and_end_the_meetup() -> TestResu
     let party = party_of_two(&ana, &ben).await?;
     spot(&ana, party).await?;
     let meeting = meet(&ana, &ben).await?;
-    meeting.started();
+    meeting.started().await?;
     meeting.chat().await?;
     meeting.ask_and_allow().await?;
     meeting.frames().await?;
