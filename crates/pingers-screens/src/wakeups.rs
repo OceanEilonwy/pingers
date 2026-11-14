@@ -58,6 +58,23 @@ pub enum Downgrade {
     None,
 }
 
+impl Downgrade {
+    /// How long a `PushDowngraded` notice counts after it was raised: the core raises it once
+    /// when delays become frequent, and says nothing when they stop.
+    pub const LASTS: core::time::Duration = core::time::Duration::from_hours(7 * 24);
+
+    /// Whether a notice raised at `raised_at` still counts at `now`.
+    #[must_use]
+    pub fn since(raised_at: Option<UnixSeconds>, now: UnixSeconds) -> Self {
+        match raised_at {
+            Some(at) if now.get().saturating_sub(at.get()) < Self::LASTS.as_secs() => {
+                Self::Reported
+            }
+            Some(_) | None => Self::None,
+        }
+    }
+}
+
 /// What the Wake-ups screens need from the phone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WakePlatform {
@@ -196,6 +213,19 @@ mod tests {
         assert_eq!(view.pushes, WakePushes::On);
         assert_eq!(home_wakeups(&snapshot, &platform), HomeWakeups::Nothing);
         Ok(())
+    }
+
+    #[test]
+    fn a_downgrade_notice_counts_for_a_week() {
+        let now = UnixSeconds::new(1_000_000);
+        let week = Downgrade::LASTS.as_secs();
+        let ago = |seconds: u64| Some(UnixSeconds::new(now.get().saturating_sub(seconds)));
+        assert_eq!(
+            Downgrade::since(ago(week.saturating_sub(1)), now),
+            Downgrade::Reported
+        );
+        assert_eq!(Downgrade::since(ago(week), now), Downgrade::None);
+        assert_eq!(Downgrade::since(None, now), Downgrade::None);
     }
 
     #[test]

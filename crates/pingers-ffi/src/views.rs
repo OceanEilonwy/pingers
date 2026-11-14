@@ -425,6 +425,16 @@ pub enum PushRelayChoice {
     },
 }
 
+mirror_enum!(
+    /// Which server a new Party goes on.
+    ServerChoice from screens::party::ServerChoice {
+        /// "The app's server".
+        BuiltIn,
+        /// "Another server".
+        Another,
+    }
+);
+
 /// What New party and Advanced have so far.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct PartyDraft {
@@ -432,6 +442,10 @@ pub struct PartyDraft {
     pub name: String,
     /// The colour.
     pub colour: PartyColour,
+    /// Which server.
+    pub server_choice: ServerChoice,
+    /// The app's own server, as the build names it ("server.pingers.org").
+    pub built_in: String,
     /// The server.
     pub server: ServiceDraft,
     /// The privacy relay.
@@ -451,6 +465,8 @@ impl TryFrom<&PartyDraft> for screens::party::PartyDraft {
         Ok(Self {
             name: screens::common::DraftText::new(draft.name.clone()),
             colour: draft.colour.into(),
+            server_choice: draft.server_choice.into(),
+            built_in: screens::common::Host::new(&draft.built_in)?,
             server: (&draft.server).try_into()?,
             relay: (&draft.relay).try_into()?,
             push_relay: match &draft.push_relay {
@@ -506,19 +522,78 @@ pub struct NewPartyView {
     pub name: String,
     /// The colour.
     pub colour: PartyColour,
+    /// Which server.
+    pub server_choice: ServerChoice,
     /// The server as typed.
     pub server: String,
     /// How private it would be.
     pub privacy: DraftPrivacy,
     /// Whether Create is enabled.
     pub can_create: bool,
+    /// Its words.
+    pub text: NewPartyText,
+}
+
+/// New party (canvas `CreateParty`), in words.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct NewPartyText {
+    /// "New party".
+    pub title: String,
+    /// "Party name".
+    pub name_label: String,
+    /// "Colour".
+    pub colour_label: String,
+    /// Each colour's spoken name, in `PartyColour` order.
+    pub colour_names: Vec<String>,
+    /// "Server".
+    pub server_label: String,
+    /// "The app's server".
+    pub built_in: String,
+    /// "server.pingers.org · built in".
+    pub built_in_detail: String,
+    /// "Another server".
+    pub another: String,
+    /// "Enter its address, like pingers.example.org".
+    pub another_detail: String,
+    /// The address field's placeholder.
+    pub another_placeholder: String,
+    /// "Advanced".
+    pub advanced: String,
+    /// "Relays and encryption · Full privacy".
+    pub advanced_detail: String,
+    /// "You'll invite people and add Spots once the party is created."
+    pub later: String,
+    /// "Create party".
+    pub create: String,
 }
 
 impl From<screens::party::NewParty> for NewPartyView {
     fn from(view: screens::party::NewParty) -> Self {
+        let text = pingers_words::party::new_party(LANGUAGE, &view);
         Self {
             name: view.name.as_str().to_owned(),
             colour: view.colour.into(),
+            server_choice: view.server_choice.into(),
+            text: NewPartyText {
+                title: text.title,
+                name_label: text.name_label,
+                colour_label: text.colour_label,
+                colour_names: text
+                    .swatches
+                    .into_iter()
+                    .map(|swatch| swatch.name)
+                    .collect(),
+                server_label: text.server_label,
+                built_in: text.built_in,
+                built_in_detail: text.built_in_detail,
+                another: text.another,
+                another_detail: text.another_detail,
+                another_placeholder: text.another_placeholder,
+                advanced: text.advanced,
+                advanced_detail: text.advanced_detail,
+                later: text.later,
+                create: text.create,
+            },
             server: view.server.as_str().to_owned(),
             privacy: view.privacy.into(),
             can_create: view.can_create,
@@ -531,6 +606,10 @@ impl From<screens::party::NewParty> for NewPartyView {
 pub struct AdvancedView {
     /// How private it would be.
     pub privacy: DraftPrivacy,
+    /// Which server.
+    pub server_choice: ServerChoice,
+    /// The app's own server.
+    pub built_in: String,
     /// The server.
     pub server: ServiceDraft,
     /// The privacy relay.
@@ -539,12 +618,78 @@ pub struct AdvancedView {
     pub push_relay: PushRelayChoice,
     /// Whether X-Wing is on.
     pub post_quantum: bool,
+    /// Its words.
+    pub text: AdvancedText,
+}
+
+/// Advanced (canvas `PartyAdvanced`), in words.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct AdvancedText {
+    /// "Advanced".
+    pub title: String,
+    /// "Full privacy", "Reduced privacy", "Checking".
+    pub privacy: String,
+    /// What it means.
+    pub privacy_detail: String,
+    /// "Server".
+    pub server_label: String,
+    /// "Which server".
+    pub server_choice_label: String,
+    /// "The app's server", "Another server".
+    pub server_choices: Vec<String>,
+    /// The server check, for screen readers.
+    pub server_check: String,
+    /// Help under the server field.
+    pub server_help: String,
+    /// "Privacy relay".
+    pub relay_label: String,
+    /// The relay check, for screen readers.
+    pub relay_check: String,
+    /// Help under the relay field.
+    pub relay_help: String,
+    /// "Push relay".
+    pub push_label: String,
+    /// "Pingers (official app)".
+    pub push_official: String,
+    /// "Custom URL (UnifiedPush or own build)".
+    pub push_custom: String,
+    /// Help under the push relay choice.
+    pub push_help: String,
+    /// "Post-quantum encryption".
+    pub post_quantum: String,
+    /// Its help line.
+    pub post_quantum_help: String,
+    /// "Done".
+    pub done: String,
 }
 
 impl From<screens::party::Advanced> for AdvancedView {
     fn from(view: screens::party::Advanced) -> Self {
+        let text = pingers_words::party::advanced(LANGUAGE, &view);
         Self {
             privacy: view.privacy.into(),
+            server_choice: view.server_choice.into(),
+            built_in: view.built_in.as_str().to_owned(),
+            text: AdvancedText {
+                title: text.title,
+                privacy: text.privacy.level,
+                privacy_detail: text.privacy.detail,
+                server_label: text.server_label,
+                server_choice_label: text.server_choice_label,
+                server_choices: text.server_choices.into(),
+                server_check: text.server_check.label,
+                server_help: text.server_help,
+                relay_label: text.relay_label,
+                relay_check: text.relay_check.label,
+                relay_help: text.relay_help,
+                push_label: text.push_label,
+                push_official: text.push_official,
+                push_custom: text.push_custom,
+                push_help: text.push_help,
+                post_quantum: text.post_quantum,
+                post_quantum_help: text.post_quantum_help,
+                done: text.done,
+            },
             server: (&view.server).into(),
             relay: (&view.relay).into(),
             push_relay: match view.push_relay {
@@ -607,11 +752,19 @@ pub struct PartyView {
     pub privacy: PrivacyLevel,
     /// Its live Meetup, if any.
     pub meetup: Option<MeetupId>,
+    /// The settings row at the bottom (canvas `PartyDetail`): "pingers.flat7.org · Full
+    /// privacy".
+    pub settings_row: String,
+    /// "Party settings: server, invites, leave".
+    pub settings_detail: String,
 }
 
 impl From<screens::party::PartyView> for PartyView {
     fn from(view: screens::party::PartyView) -> Self {
+        let text = pingers_words::party::party(LANGUAGE, &view);
         Self {
+            settings_row: text.server_row,
+            settings_detail: text.server_subtitle,
             id: view.id.into(),
             name: view.name.as_str().to_owned(),
             members: people(&view.members),
@@ -765,6 +918,19 @@ impl From<screens::invite::JoinRequestView> for JoinRequestView {
     }
 }
 
+/// The name a join goes by, once set: "You'll join as Ben · Change".
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct JoinAs {
+    /// "BE".
+    pub avatar: String,
+    /// "You'll join as Ben".
+    pub title: String,
+    /// "The same name in every Party".
+    pub subtitle: String,
+    /// "Change", which opens Your name.
+    pub change: String,
+}
+
 /// Open invite (canvas `JoinA1`): nothing about the Party, only the name to go by.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct OpenInviteView {
@@ -776,10 +942,12 @@ pub struct OpenInviteView {
     pub what_joining_means: String,
     /// The points under it.
     pub points: Vec<String>,
-    /// "Your name in this Party".
+    /// "You'll join as Ben · Change", once a name is set; no name field then.
+    pub join_as: Option<JoinAs>,
+    /// "Your name", the field shown only before a name is set; what is typed becomes Your name.
     pub name_label: String,
-    /// The name to prefill, or empty.
-    pub name: String,
+    /// "The same name in every Party".
+    pub name_help: String,
     /// "Ask to join".
     pub ask: String,
     /// "Not now".
@@ -794,8 +962,14 @@ impl From<screens::invite::OpenInvite> for OpenInviteView {
             subtitle: text.subtitle,
             what_joining_means: text.what_joining_means,
             points: text.points.into(),
+            join_as: text.join_as.map(|join_as| JoinAs {
+                avatar: join_as.avatar,
+                title: join_as.title,
+                subtitle: join_as.subtitle,
+                change: join_as.change,
+            }),
             name_label: text.name_label,
-            name: text.name,
+            name_help: text.name_help,
             ask: text.ask,
             not_now: text.not_now,
         }
@@ -1281,14 +1455,23 @@ pub struct PrivacyView {
 
 impl From<screens::settings::Privacy> for PrivacyView {
     fn from(view: screens::settings::Privacy) -> Self {
-        let text = pingers_words::settings::privacy(LANGUAGE, &view);
+        let paused_because = view.paused_because.map(|reason| {
+            format!(
+                "Paused · {}",
+                pingers_words::settings::paused_because(LANGUAGE, reason)
+            )
+        });
         Self {
             paused: view.paused_because.map(Into::into),
-            paused_because: text.paused,
+            paused_because,
             sharing: view.sharing == pingers_gate::LocationSharing::On,
             pause_in_focus: view.pause_in_focus == screens::snapshot::PauseInFocus::On,
             quiet_hours: view.quiet_hours.state == screens::snapshot::Toggle::On,
-            quiet_hours_range: text.quiet_hours_range,
+            quiet_hours_range: pingers_words::common::time_range(
+                LANGUAGE,
+                view.quiet_hours.from,
+                view.quiet_hours.to,
+            ),
             quiet_hours_from: view.quiet_hours.from.into(),
             quiet_hours_to: view.quiet_hours.to.into(),
             exclusion_zones: count(view.exclusion_zones),
@@ -1298,17 +1481,44 @@ impl From<screens::settings::Privacy> for PrivacyView {
     }
 }
 
-/// The name this device's user goes by in Parties they create or join.
+/// Your name (canvas `YourName`): the same in every Party, with the Parties it changes in.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct YourNameView {
     /// The name set, if any.
     pub name: Option<String>,
     /// "Your name".
     pub title: String,
+    /// "Back to Settings".
+    pub back: String,
+    /// "BE", once a name is set.
+    pub avatar: Option<String>,
+    /// "How you appear to members".
+    pub appears_as: String,
+    /// "Name".
+    pub label: String,
     /// The empty field's hint.
     pub placeholder: String,
-    /// Who sees it.
+    /// How long it may be and who sees it.
     pub help: String,
+    /// "Changes in every Party you're in", when there are Parties.
+    pub parties_heading: Option<String>,
+    /// The Parties it changes in.
+    pub parties: Vec<PartyChip>,
+    /// When members see a new name.
+    pub note: String,
+    /// "Save".
+    pub save: String,
+}
+
+/// A Party on Your name.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct PartyChip {
+    /// "CC".
+    pub initials: String,
+    /// "Climbing crew".
+    pub name: String,
+    /// Its colour.
+    pub colour: PartyColour,
 }
 
 impl From<screens::settings::YourName> for YourNameView {
@@ -1317,8 +1527,25 @@ impl From<screens::settings::YourName> for YourNameView {
         Self {
             name: text.name,
             title: text.title,
+            back: text.back,
+            avatar: text.avatar,
+            appears_as: text.appears_as,
+            label: text.label,
             placeholder: text.placeholder,
             help: text.help,
+            parties_heading: text.parties_heading,
+            parties: view
+                .parties
+                .iter()
+                .zip(text.parties)
+                .map(|(chip, words)| PartyChip {
+                    initials: words.initials,
+                    name: words.name,
+                    colour: chip.colour.into(),
+                })
+                .collect(),
+            note: text.note,
+            save: text.save,
         }
     }
 }

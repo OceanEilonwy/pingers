@@ -17,6 +17,7 @@ pingers-geo = { workspace = true }
 pingers-meetup = { workspace = true }
 pingers-proto = { workspace = true }
 pingers-screens = { workspace = true }
+pingers-time = { workspace = true }
 
 [dev-dependencies]
 pingers-screens = { workspace = true, features = ["fixtures"] }

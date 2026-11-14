@@ -162,14 +162,32 @@ pub struct OpenInviteText {
     pub what_joining_means: String,
     /// The two points.
     pub points: [String; 2],
-    /// "Your name in this Party".
+    /// "You'll join as Ben", once a name is set: no field then.
+    pub join_as: Option<JoinAsText>,
+    /// "Your name", the field shown only before a name is set.
     pub name_label: String,
-    /// The name to prefill, or empty.
-    pub name: String,
+    /// "The same name in every Party", under the field.
+    pub name_help: String,
     /// "Ask to join".
     pub ask: String,
     /// "Not now".
     pub not_now: String,
+}
+
+/// "The same name in every Party".
+const SAME_NAME: &str = "The same name in every Party";
+
+/// The name a join goes by, once set (canvas `JoinA1`): "You'll join as Ben · Change".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JoinAsText {
+    /// "BE".
+    pub avatar: String,
+    /// "You'll join as Ben".
+    pub title: String,
+    /// "The same name in every Party".
+    pub subtitle: String,
+    /// "Change", which opens Your name.
+    pub change: String,
 }
 
 /// The Open invite screen, in words.
@@ -189,11 +207,14 @@ pub fn open_invite(language: Language, view: &OpenInvite) -> OpenInviteText {
              Spot you're in."
                 .into(),
         ],
-        name_label: "Your name in this Party".into(),
-        name: view
-            .name
-            .as_ref()
-            .map_or_else(String::new, |name| name.as_str().to_owned()),
+        join_as: view.name.as_ref().map(|name| JoinAsText {
+            avatar: Initials::of(name).as_str().to_owned(),
+            title: format!("You'll join as {}", name.as_str()),
+            subtitle: SAME_NAME.into(),
+            change: "Change".into(),
+        }),
+        name_label: "Your name".into(),
+        name_help: SAME_NAME.into(),
         ask: "Ask to join".into(),
         not_now: "Not now".into(),
     }
@@ -437,15 +458,25 @@ mod tests {
             ]
         );
         assert_eq!(
-            (text.name_label.as_str(), text.name.as_str()),
-            ("Your name in this Party", "Sam")
+            text.join_as,
+            Some(JoinAsText {
+                avatar: "SA".into(),
+                title: "You'll join as Sam".into(),
+                subtitle: "The same name in every Party".into(),
+                change: "Change".into(),
+            })
         );
         assert_eq!(
             (text.ask.as_str(), text.not_now.as_str()),
             ("Ask to join", "Not now")
         );
         snapshot.display_name = None;
-        assert_eq!(open_invite(EN, &open_screen(&snapshot)).name, "");
+        let unnamed = open_invite(EN, &open_screen(&snapshot));
+        assert_eq!(unnamed.join_as, None);
+        assert_eq!(
+            (unnamed.name_label.as_str(), unnamed.name_help.as_str()),
+            ("Your name", "The same name in every Party")
+        );
         Ok(())
     }
 

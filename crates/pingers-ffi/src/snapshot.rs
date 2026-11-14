@@ -51,6 +51,11 @@ impl Snapshot {
     pub(crate) fn new(snapshot: Arc<ClientSnapshot>) -> Arc<Self> {
         Arc::new(Self(snapshot))
     }
+
+    /// The client's snapshot, for the screens in other modules.
+    pub(crate) fn client(&self) -> &ClientSnapshot {
+        &self.0
+    }
 }
 
 #[uniffi::export]

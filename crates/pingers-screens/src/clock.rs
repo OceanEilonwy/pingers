@@ -242,13 +242,22 @@ mod tests {
             offset: UtcOffset::from_seconds(3_600)?,
         };
         assert_eq!(clock.day_of(now), RelativeDay::Today);
-        assert_eq!(clock.day_of(UnixSeconds::new(now.get() - 1_800)), RelativeDay::Today);
-        assert_eq!(clock.day_of(UnixSeconds::new(now.get() - 3_600)), RelativeDay::Yesterday);
+        assert_eq!(
+            clock.day_of(UnixSeconds::new(now.get() - 1_800)),
+            RelativeDay::Today
+        );
+        assert_eq!(
+            clock.day_of(UnixSeconds::new(now.get() - 3_600)),
+            RelativeDay::Yesterday
+        );
         assert_eq!(
             clock.day_of(UnixSeconds::new(now.get() - 3 * 86_400)),
             RelativeDay::DaysAgo(3)
         );
-        assert_eq!(clock.day_of(UnixSeconds::new(now.get() + 86_400)), RelativeDay::Today);
+        assert_eq!(
+            clock.day_of(UnixSeconds::new(now.get() + 86_400)),
+            RelativeDay::Today
+        );
         Ok(())
     }
 
