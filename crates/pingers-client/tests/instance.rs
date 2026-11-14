@@ -383,6 +383,30 @@ async fn turning_wake_pushes_off_drops_the_seals() -> Result<(), TestError> {
             .await,
         Err(ClientError::Unavailable(Unavailable::WakePushesOff))
     ));
+    // And a mailbox registered from now on (an invite's) wakes nobody.
+    let party = rig
+        .client
+        .create_party(pingers_client::ports::PartyDraft {
+            server: None,
+            name: pingers_client::snapshot::Name::new("Climbing")?,
+            my_name: pingers_client::snapshot::Name::new("Ana")?,
+            colour: pingers_client::snapshot::PartyColour::Blue,
+            post_quantum: pingers_client::snapshot::PostQuantum::Off,
+        })
+        .await?;
+    let link = rig.client.create_invite(party).await?;
+    let mailbox = pingers_parties::InviteLink::from_text(link.url.as_str().to_owned())
+        .payload()
+        .map_err(|_bad| TestError::Setup("invite link"))?
+        .invite_mailbox;
+    let database = Database::open(&rig.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+    let session = database.session()?;
+    let server = session.server(&ServerId::new(harness.endpoints().server_id.clone())?)?;
+    let invite = server
+        .mailboxes()
+        .get(&mailbox)?
+        .ok_or(TestError::Setup("invite mailbox not stored"))?;
+    assert!(invite.push.is_none(), "no push token is sealed into it");
     Ok(())
 }
 
