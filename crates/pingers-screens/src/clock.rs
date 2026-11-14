@@ -55,6 +55,34 @@ impl LocalClock {
         let minute = u16::try_from(into_day / 60).unwrap_or(0);
         LocalTime { minute }
     }
+
+    /// Which local day `at` falls on, counted back from today: "today", "yesterday", or a
+    /// number of days ago. A time after now counts as today.
+    #[must_use]
+    pub fn day_of(&self, at: UnixSeconds) -> RelativeDay {
+        let day = |time: UnixSeconds| {
+            i64::try_from(time.get())
+                .unwrap_or(i64::MAX)
+                .saturating_add(i64::from(self.offset.0))
+                .div_euclid(SECONDS_PER_DAY)
+        };
+        match day(self.now).saturating_sub(day(at)) {
+            ..=0 => RelativeDay::Today,
+            1 => RelativeDay::Yesterday,
+            days => RelativeDay::DaysAgo(u32::try_from(days).unwrap_or(u32::MAX)),
+        }
+    }
+}
+
+/// A local day, counted back from today.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RelativeDay {
+    /// Today.
+    Today,
+    /// Yesterday.
+    Yesterday,
+    /// Two or more days ago.
+    DaysAgo(u32),
 }
 
 /// A local time of day, to the minute.
@@ -97,6 +125,15 @@ impl LocalTime {
     /// [`ScreenError::InvalidTime`] rather than assumed.
     pub fn minute_of_day(self) -> Result<MinuteOfDay, ScreenError> {
         MinuteOfDay::new(self.minute).map_err(|_out_of_range| ScreenError::InvalidTime)
+    }
+
+    /// Midnight, 00:00.
+    pub const MIDNIGHT: Self = Self { minute: 0 };
+
+    /// Minutes since midnight, 0 to 1439.
+    #[must_use]
+    pub fn minutes_since_midnight(self) -> u32 {
+        u32::from(self.minute)
     }
 
     /// The hour, 0 to 23.
@@ -195,6 +232,25 @@ mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
     use super::*;
+
+    #[test]
+    fn days_are_counted_back_in_local_time() -> Result<(), ScreenError> {
+        // 2026-11-14 00:30 in UTC+1 is still 2026-11-13 23:30 UTC.
+        let now = UnixSeconds::new(1_763_163_000);
+        let clock = LocalClock {
+            now,
+            offset: UtcOffset::from_seconds(3_600)?,
+        };
+        assert_eq!(clock.day_of(now), RelativeDay::Today);
+        assert_eq!(clock.day_of(UnixSeconds::new(now.get() - 1_800)), RelativeDay::Today);
+        assert_eq!(clock.day_of(UnixSeconds::new(now.get() - 3_600)), RelativeDay::Yesterday);
+        assert_eq!(
+            clock.day_of(UnixSeconds::new(now.get() - 3 * 86_400)),
+            RelativeDay::DaysAgo(3)
+        );
+        assert_eq!(clock.day_of(UnixSeconds::new(now.get() + 86_400)), RelativeDay::Today);
+        Ok(())
+    }
 
     #[test]
     fn a_picked_time_is_a_minute_of_the_day() -> Result<(), ScreenError> {

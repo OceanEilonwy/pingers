@@ -197,11 +197,10 @@ pub struct ServerOperators {
 
 impl PartyConfig {
     /// Fills in who runs what from the server's published parameters. An OHTTP privacy relay
-    /// publishes no operator of its own, so it is counted as the server's: the cautious
-    /// reading, which then reports one operator running both.
+    /// publishes no operator of its own, so its operator stays unknown; the screens count it
+    /// as the server's, the cautious reading.
     pub fn declare(&mut self, operators: &ServerOperators) {
         self.server.operator = Some(operators.server.clone());
-        self.relay.operator = Some(operators.server.clone());
         if let Some(host) = &operators.relay_host {
             self.relay.host = host.clone();
         }
@@ -1009,7 +1008,7 @@ mod tests {
     }
 
     #[test]
-    fn declared_operators_count_the_relay_as_the_servers() -> Result<(), TestError> {
+    fn declared_operators_leave_the_relays_unknown() -> Result<(), TestError> {
         let mut config = party(1, &[])?.config;
         config.server.operator = None;
         config.relay.operator = None;
@@ -1022,7 +1021,7 @@ mod tests {
         };
         config.declare(&operators);
         assert_eq!(config.server.operator, Some(Operator::new("pingers")?));
-        assert_eq!(config.relay.operator, Some(Operator::new("Pingers")?));
+        assert_eq!(config.relay.operator, None);
         assert_eq!(config.relay.host.as_str(), "relay.pingers.org");
         assert_eq!(config.push_relay.operator, Some(Operator::new("Pingers")?));
         assert_eq!(

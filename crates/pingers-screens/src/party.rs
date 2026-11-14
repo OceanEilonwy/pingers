@@ -65,6 +65,21 @@ pub fn overlaps(operators: Operators<'_>, wake_pushes: WakePushes) -> Vec<Overla
     found
 }
 
+/// Which services share an operator for a configured Party. A privacy relay that publishes
+/// no operator (an OHTTP relay never does) is counted as the server's: the cautious reading,
+/// so a Party is never called fully private on an operator nobody declared.
+#[must_use]
+pub fn party_overlaps(config: &PartyConfig, wake_pushes: WakePushes) -> Vec<Overlap> {
+    let declared = Operators::of(config);
+    overlaps(
+        Operators {
+            relay: declared.relay.or(declared.server),
+            ..declared
+        },
+        wake_pushes,
+    )
+}
+
 /// Full privacy when no two services share an operator.
 #[must_use]
 pub const fn privacy_level(overlaps: &[Overlap]) -> PrivacyLevel {
@@ -113,6 +128,15 @@ pub enum PushRelayChoice {
     Custom(DraftText),
 }
 
+/// Which server a new Party goes on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ServerChoice {
+    /// "The app's server", built in.
+    BuiltIn,
+    /// "Another server", typed in.
+    Another,
+}
+
 /// New party and Advanced, as filled in so far.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartyDraft {
@@ -120,6 +144,10 @@ pub struct PartyDraft {
     pub name: DraftText,
     /// The colour chosen.
     pub colour: PartyColour,
+    /// Which server.
+    pub server_choice: ServerChoice,
+    /// The app's own server, as the build names it.
+    pub built_in: Host,
     /// The server.
     pub server: ServiceDraft,
     /// The privacy relay.
@@ -154,6 +182,10 @@ pub struct NewParty {
     pub name: DraftText,
     /// The colour chosen.
     pub colour: PartyColour,
+    /// Which server.
+    pub server_choice: ServerChoice,
+    /// The app's own server.
+    pub built_in: Host,
     /// The server, as typed.
     pub server: DraftText,
     /// How private the setup is.
@@ -167,6 +199,10 @@ pub struct NewParty {
 pub struct Advanced {
     /// How private the setup is.
     pub privacy: DraftPrivacy,
+    /// Which server.
+    pub server_choice: ServerChoice,
+    /// The app's own server.
+    pub built_in: Host,
     /// The server field.
     pub server: ServiceDraft,
     /// The relay field.
@@ -209,6 +245,8 @@ pub fn new_party(draft: &PartyDraft, wake_pushes: WakePushes) -> NewParty {
     NewParty {
         name: draft.name.clone(),
         colour: draft.colour,
+        server_choice: draft.server_choice,
+        built_in: draft.built_in.clone(),
         server: draft.server.host.clone(),
         privacy: draft_privacy(draft, wake_pushes),
         can_create: draft.name.name().is_some()
@@ -222,11 +260,65 @@ pub fn new_party(draft: &PartyDraft, wake_pushes: WakePushes) -> NewParty {
 pub fn advanced(draft: &PartyDraft, wake_pushes: WakePushes) -> Advanced {
     Advanced {
         privacy: draft_privacy(draft, wake_pushes),
+        server_choice: draft.server_choice,
+        built_in: draft.built_in.clone(),
         server: draft.server.clone(),
         relay: draft.relay.clone(),
         push_relay: draft.push_relay.clone(),
         post_quantum: draft.post_quantum,
     }
+}
+
+/// What the server said to the code last tried.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CodeAnswer {
+    /// No code tried yet: the server only said it needs one.
+    NotTried,
+    /// The server refused the code; no Party was created.
+    Refused,
+}
+
+/// "This server needs a code" (canvas `PartyCode`, `PartyCodeRefused`), opened when the chosen
+/// server refuses to make an account without a registration code.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PartyCode {
+    /// The server chosen.
+    pub server: Host,
+    /// Who publishes they run it, once known.
+    pub operator: Option<Operator>,
+    /// The Party's name.
+    pub party_name: Name,
+    /// The code typed.
+    pub code: DraftText,
+    /// What the server said.
+    pub answer: CodeAnswer,
+    /// Whether "Create party" (or "Try again") is enabled: a code is typed.
+    pub can_create: bool,
+}
+
+/// "This server needs a code" for a draft.
+///
+/// # Errors
+///
+/// [`ScreenError::InvalidName`] for a draft without a name; [`ScreenError::InvalidHost`] for a
+/// server that is not a host.
+pub fn party_code(
+    draft: &PartyDraft,
+    code: &DraftText,
+    answer: CodeAnswer,
+) -> Result<PartyCode, ScreenError> {
+    let server = match draft.server_choice {
+        ServerChoice::BuiltIn => draft.built_in.clone(),
+        ServerChoice::Another => Host::new(draft.server.host.as_str())?,
+    };
+    Ok(PartyCode {
+        server,
+        operator: draft.server.check.operator().cloned(),
+        party_name: draft.name.name().ok_or(ScreenError::InvalidName)?,
+        code: code.clone(),
+        answer,
+        can_create: !code.as_str().trim().is_empty(),
+    })
 }
 
 /// A Spot's shape as its row describes it.
@@ -291,7 +383,7 @@ pub struct PartyView {
 pub fn party(snapshot: &ClientSnapshot, id: PartyId) -> Result<PartyView, ScreenError> {
     let party = snapshot.party(id)?;
     let meetup = snapshot.meetups.iter().find(|meetup| meetup.party == id);
-    let overlaps = overlaps(Operators::of(&party.config), snapshot.settings.wake_pushes);
+    let overlaps = party_overlaps(&party.config, snapshot.settings.wake_pushes);
     Ok(PartyView {
         id,
         name: party.name.clone(),
@@ -333,6 +425,8 @@ mod tests {
         Ok(PartyDraft {
             name: DraftText::new("Climbing crew".into()),
             colour: PartyColour::Blue,
+            server_choice: ServerChoice::Another,
+            built_in: Host::new("server.pingers.org")?,
             server: ServiceDraft {
                 host: DraftText::new("pingers.flat7.org".into()),
                 check: Reachability::Reachable(operator("Flat 7")?),
@@ -468,6 +562,32 @@ mod tests {
         assert_eq!(screen.push_relay, quantum.push_relay);
         assert_eq!(screen.server, quantum.server);
         assert_eq!(screen.relay, quantum.relay);
+        Ok(())
+    }
+
+    #[test]
+    fn the_code_screen_names_the_server_and_its_operator() -> Result<(), ScreenError> {
+        let typed = DraftText::new("spring-otter-4471".into());
+        let view = party_code(&draft()?, &typed, CodeAnswer::NotTried)?;
+        assert_eq!(view.server.as_str(), "pingers.flat7.org");
+        assert_eq!(view.operator, Some(operator("Flat 7")?));
+        assert_eq!(view.party_name.as_str(), "Climbing crew");
+        assert!(view.can_create);
+        let refused = party_code(&draft()?, &DraftText::new("  ".into()), CodeAnswer::Refused)?;
+        assert_eq!(refused.answer, CodeAnswer::Refused);
+        assert!(!refused.can_create);
+        let mut built_in = draft()?;
+        built_in.server_choice = ServerChoice::BuiltIn;
+        built_in.server.check = Reachability::Checking;
+        let view = party_code(&built_in, &typed, CodeAnswer::NotTried)?;
+        assert_eq!(view.server.as_str(), "server.pingers.org");
+        assert_eq!(view.operator, None);
+        let mut unnamed = draft()?;
+        unnamed.name = DraftText::new(String::new());
+        assert_eq!(
+            party_code(&unnamed, &typed, CodeAnswer::NotTried),
+            Err(ScreenError::InvalidName)
+        );
         Ok(())
     }
 

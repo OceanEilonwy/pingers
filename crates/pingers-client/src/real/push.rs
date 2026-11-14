@@ -137,7 +137,6 @@ impl Net {
     /// # Errors
     ///
     /// A storage failure, or a corrupt record.
-
     pub(crate) async fn map_host(&self) -> Result<Option<MapHostUrl>, ClientError> {
         if let Some(params) = lock(&self.learned.params).as_ref() {
             return Ok(params.map_host.clone());
