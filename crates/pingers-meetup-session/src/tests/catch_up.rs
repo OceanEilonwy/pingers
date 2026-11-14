@@ -180,3 +180,25 @@ async fn revoking_while_members_are_offline_reaches_only_those_who_keep_access()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_push_has_an_offline_member_read_the_log_at_once() -> TestResult {
+    let world = World::new(2)?;
+    let [alice, bob] = world.meetup_of_two().await?;
+    // Bob's channel is down and stays down: only the log has Alice's message.
+    go_offline(&world, &[(&bob, "Bob")]).await?;
+    alice
+        .handle
+        .act(MeetupAction::SendChat {
+            body: pingers_proto::ChatBody::new("On my way".to_owned())?,
+            parent: None,
+        })
+        .await?;
+    let bob_device = world.device(1)?;
+    let group = bob.handle.group();
+    assert_eq!(bob_device.chat_rows(&group)?, 0);
+    // The push for his subscription has him read it, without waiting for the channel.
+    bob.handle.read_log().await?;
+    assert_eq!(bob_device.chat_rows(&group)?, 1);
+    Ok(())
+}

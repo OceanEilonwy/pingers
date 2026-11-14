@@ -106,6 +106,25 @@ impl Meetups {
         Ok(self.handle(meetup)?.act(action).await?)
     }
 
+    /// A push for this device's subscription in `group` arrived: if it is a live Meetup, its
+    /// log is read before the wake goes on, so the message or commit it announced is in the
+    /// snapshot (and its notification) when the wake ends. A group that is no live Meetup (a
+    /// Party) is the pipeline's.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::MeetupSession`] if the Meetup failed.
+    pub(crate) async fn pushed(&self, group: GroupId) -> Result<(), ClientError> {
+        let Ok(handle) = self.handle(group) else {
+            return Ok(());
+        };
+        match handle.read_log().await {
+            // It ended meanwhile: nothing left to read.
+            Err(pingers_meetup_session::SessionError::Ended) => Ok(()),
+            other => Ok(other?),
+        }
+    }
+
     /// The Meetup screen opened or closed, or the app came on screen or left it.
     pub(crate) async fn screen(&self, screen: MeetupScreen) -> Result<(), ClientError> {
         for handle in self.handles() {

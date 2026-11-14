@@ -17,7 +17,7 @@ use pingers_geo::{Fix, GeofenceCapacity, ZoneStatus};
 use pingers_meetup::LocationVisibility;
 use pingers_meetup_session::MeetupScreen;
 use pingers_presence::DataMode;
-use pingers_proto::{CoverReadRatio, PartyId, PushHandle};
+use pingers_proto::{CoverReadRatio, GroupId, PartyId, PushHandle};
 use pingers_store::{LocationVisibility as StoredVisibility, Session, WakePushes as StoredPushes};
 use pingers_time::{Clock, UnixSeconds};
 use pingers_wake::{
@@ -142,16 +142,20 @@ impl Wake {
         Ok((report, outcome))
     }
 
-    /// What a push handle names: one of this device's mailboxes, a group's log, or neither.
-    async fn push_reason(&self, handle: PushHandle) -> Result<PushReason, ClientError> {
+    /// What a push handle names: one of this device's mailboxes, a group's log (and which
+    /// group), or neither.
+    async fn push_reason(
+        &self,
+        handle: PushHandle,
+    ) -> Result<(PushReason, Option<GroupId>), ClientError> {
         self.backend
             .store(move |session, _clock, _rng| {
                 if session.mailboxes().by_handle(&handle)?.is_some() {
-                    Ok(PushReason::Mailbox)
-                } else if session.subscriptions().by_handle(&handle)?.is_some() {
-                    Ok(PushReason::GroupCommit)
+                    Ok((PushReason::Mailbox, None))
+                } else if let Some(subscription) = session.subscriptions().by_handle(&handle)? {
+                    Ok((PushReason::GroupCommit, Some(subscription.group)))
                 } else {
-                    Ok(PushReason::Unknown)
+                    Ok((PushReason::Unknown, None))
                 }
             })
             .await
@@ -177,7 +181,13 @@ impl WakePort for Wake {
                 at: self.backend.outside.clock.now(),
             }),
             WakeInput::Scheduled => WakeTrigger::Scheduled,
-            WakeInput::Push(handle) => WakeTrigger::Push(self.push_reason(handle).await?),
+            WakeInput::Push(handle) => {
+                let (reason, group) = self.push_reason(handle).await?;
+                if let Some(group) = group {
+                    self.meetups.pushed(group).await?;
+                }
+                WakeTrigger::Push(reason)
+            }
             WakeInput::FocusChanged(_focus) => WakeTrigger::FocusChanged,
             WakeInput::Foreground(Foreground::Visible) => {
                 self.meetups.screen(MeetupScreen::Open).await?;

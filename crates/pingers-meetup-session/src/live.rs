@@ -494,6 +494,19 @@ impl MeetupHandle {
         answer.await.map_err(|_| SessionError::Ended)?
     }
 
+    /// Reads the group log now, and returns once what it held has been applied: a push for
+    /// this Meetup's subscription arrived (design B.4.9), so a message or commit is waiting,
+    /// possibly while the live channel is down.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::Ended`] once the Meetup is over.
+    pub async fn read_log(&self) -> Result<(), SessionError> {
+        let (reply, answer) = oneshot::channel();
+        self.send(Command::ReadLog { reply }).await?;
+        answer.await.map_err(|_| SessionError::Ended)
+    }
+
     /// Leaves: sends this device's self-remove proposal (or, when alone, deletes the group
     /// on the server), closes the channel and deletes the Meetup's keys and content.
     ///
@@ -555,6 +568,9 @@ enum Command {
         reply: oneshot::Sender<Result<WelcomeBytes, SessionError>>,
     },
     Leave {
+        reply: oneshot::Sender<()>,
+    },
+    ReadLog {
         reply: oneshot::Sender<()>,
     },
 }
@@ -801,6 +817,11 @@ impl Driver {
                 let ended = self.leave().await;
                 let _answered = reply.send(());
                 ended.map(Some)
+            }
+            Command::ReadLog { reply } => {
+                let ended = self.read_log().await?;
+                let _answered = reply.send(());
+                Ok(ended)
             }
         }
     }
