@@ -13,9 +13,9 @@ import com.google.firebase.messaging.RemoteMessage
  * the core returns. The token goes to the core as an FCM push target; the core seals it to the
  * push relay's key, so the Pingers server never sees it (B.4.9).
  *
- * Every message's original and delivered priority are recorded: FCM downgrades high-priority
+ * Every message's original and delivered priority go to the core: FCM downgrades high-priority
  * messages from apps that don't show a notification for them, and the core raises
- * `Notice::PushDowngraded` when that happens too often.
+ * `Notice::PushDowngraded` and marks wake-ups downgraded when that happens too often.
  */
 class FcmService : FirebaseMessagingService() {
     override fun onNewToken(token: String) {
@@ -23,14 +23,13 @@ class FcmService : FirebaseMessagingService() {
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
-        val downgraded = Push.recordPriority(
-            this,
+        val priority = FcmPriority(
             sentHigh = message.originalPriority == RemoteMessage.PRIORITY_HIGH,
             deliveredHigh = message.priority == RemoteMessage.PRIORITY_HIGH,
         )
         // The relay sends the body as the data field "p".
         val payload = message.data["p"]?.toByteArray() ?: message.rawData ?: ByteArray(0)
-        Push.wake(this, PushPlatform.FCM, payload, downgraded)
+        Push.wake(PushPlatform.FCM, payload, priority)
     }
 }
 

@@ -138,7 +138,7 @@ fun PrivacyScreen(state: PrivacyState, repo: PingersRepository, nav: Navigator) 
             Card {
                 SwitchRow(stringResource(R.string.privacy_no_wake), stringResource(R.string.privacy_no_wake_help), state.noWakePushes, { setNoWakePushes(context, repo, it) })
                 RowDivider()
-                DeviceSettingsRows(state.noWakePushes)
+                DeviceSettingsRows(state.noWakePushes, state.pushDelivery)
             }
             Row(
                 Modifier

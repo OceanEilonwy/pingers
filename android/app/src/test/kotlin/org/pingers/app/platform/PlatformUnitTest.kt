@@ -122,15 +122,6 @@ class PlatformUnitTest {
     }
 
     @Test
-    fun downgradesAreCounted() {
-        context.getSharedPreferences(Push.PREFS, Context.MODE_PRIVATE).edit().clear().commit()
-        assertEquals(false, Push.recordPriority(context, sentHigh = true, deliveredHigh = true))
-        assertEquals(true, Push.recordPriority(context, sentHigh = true, deliveredHigh = false))
-        assertEquals(false, Push.recordPriority(context, sentHigh = false, deliveredHigh = false))
-        assertEquals(Push.DowngradeCount(sentHigh = 2, downgraded = 1), Push.downgradeCount(context))
-    }
-
-    @Test
     fun scheduledWakeRunsTheCore() {
         WorkManagerTestInitHelper.initializeTestWorkManager(
             context,
@@ -145,17 +136,23 @@ class PlatformUnitTest {
     }
 
     @Test
-    fun pushPostsWhatTheCoreReturns() {
-        val replying = RecordingSink(CoreNotification(7, "Climbing", "Ana is at the wall", alert = true))
-        PlatformHost.sinkProvider = { replying }
+    fun aPushReachesTheCoreWithItsFcmPriority() {
+        val priority = FcmPriority(sentHigh = true, deliveredHigh = false)
+        Push.wake(PushPlatform.FCM, """{"v":1,"h":"AAAAAAAAAAA="}""".toByteArray(), priority)
+        val pushed = sink.await<RecordingSink.Pushed>()!!
+        assertEquals("""{"v":1,"h":"AAAAAAAAAAA="}""", pushed.payload)
+        assertEquals(priority, pushed.priority)
+    }
+
+    @Test
+    fun coreNotificationsGoToTheAlertsChannelAndReplaceByTheirId() {
         shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
-        Push.wake(context, PushPlatform.UNIFIED_PUSH, """{"v":1,"h":"AAAAAAAAAAA="}""".toByteArray(), downgraded = false)
-        assertEquals("""{"v":1,"h":"AAAAAAAAAAA="}""", replying.await<RecordingSink.Pushed>()!!.payload)
+        Notifications.post(context, CoreNotification(7, "Ben · The wall", "Coffee after?", NotificationKind.CHAT_MESSAGE))
+        Notifications.post(context, CoreNotification(7, "Chloé · The wall", "Yes please", NotificationKind.CHAT_MESSAGE))
         val manager = shadowOf(context.getSystemService(NotificationManager::class.java))
-        // The post happens on the push executor just after the core call.
-        val deadline = System.currentTimeMillis() + 5_000
-        while (manager.allNotifications.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(20)
+        assertEquals(1, manager.allNotifications.size)
         val posted = manager.getNotification(7)
         assertEquals(Notifications.CHANNEL_ALERTS, posted.channelId)
+        assertEquals("Chloé · The wall", shadowOf(posted).contentTitle.toString())
     }
 }

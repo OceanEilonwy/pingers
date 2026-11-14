@@ -27,7 +27,7 @@ import org.junit.runner.RunWith
 class PlatformDeviceTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context: Context = instrumentation.targetContext
-    private val sink = RecordingSink(CoreNotification(42, "Climbing", "Someone is at the wall", alert = true))
+    private val sink = RecordingSink()
 
     @Before
     fun setUp() {
@@ -133,10 +133,19 @@ class PlatformDeviceTest {
         val push = sink.await<RecordingSink.Pushed>(120)
         assertNotNull("no push reached the core", push)
         assertEquals("""{"v":1,"h":"AQIDBAUGBwg="}""", push!!.payload)
-        // The notification the core returned is posted.
-        val manager = context.getSystemService(android.app.NotificationManager::class.java)
-        assertTrue(waitFor(5) { manager.activeNotifications.any { it.id == 42 } })
+        // UnifiedPush has no priorities to report.
+        assertEquals(null, push.priority)
         Log.i("PingersTest", "PINGERS_PUSH_OK")
+    }
+
+    @Test
+    fun aNotificationTheCoreWroteIsPostedAndOpensTheMeetup() {
+        val manager = context.getSystemService(android.app.NotificationManager::class.java)
+        Notifications.post(context, CoreNotification(42, "Climbing crew", "Ben is at the wall too. Say hi?", NotificationKind.MEETUP_STARTED))
+        assertTrue(waitFor(5) { manager.activeNotifications.any { it.id == 42 } })
+        val posted = manager.activeNotifications.first { it.id == 42 }
+        assertEquals(Notifications.CHANNEL_ALERTS, posted.notification.channelId)
+        manager.cancel(42)
     }
 
     @Test

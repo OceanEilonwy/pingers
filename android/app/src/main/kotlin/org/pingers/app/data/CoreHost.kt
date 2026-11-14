@@ -16,8 +16,11 @@ import org.json.JSONObject
 import org.pingers.app.platform.AndroidPlatform
 import org.pingers.app.platform.CoreNotification
 import org.pingers.app.platform.CoreSink
+import org.pingers.app.platform.FcmPriority
 import org.pingers.app.platform.Fix
 import org.pingers.app.platform.GeofenceTransition
+import org.pingers.app.platform.NotificationKind
+import org.pingers.app.platform.Notifications
 import org.pingers.app.platform.PlatformException
 import org.pingers.app.platform.PlatformHost
 import org.pingers.app.platform.PushPlatform
@@ -205,16 +208,17 @@ object CoreHost {
             }
         }
 
-        override fun onPush(platform: PushPlatform, payload: ByteArray, downgraded: Boolean): CoreNotification? {
+        override fun onPush(platform: PushPlatform, payload: ByteArray, priority: FcmPriority?) {
             val handle = handleOf(payload)
             if (handle == null) {
                 Log.i(TAG, "onPush $platform: not a Pingers push")
-                return null
+                return
             }
-            // WAITING(pingers-ffi): on_push takes no "downgraded" flag yet; the count stays in Push.
-            blocking("onPush $platform") { it.onPush(handle) }
-            // What to show comes back through Events (meetup_started, notice), not from here.
-            return null
+            blocking("onPush $platform") { core ->
+                priority?.let { core.reportPushPriority(it.sentHigh.toPriority(), it.deliveredHigh.toPriority()) }
+                // What the wake leads to comes back through Events.notify (Fanout) before this returns.
+                core.onPush(handle)
+            }
         }
 
         override fun onPushTokensChanged(tokens: PushTokens?) {
@@ -232,12 +236,32 @@ object CoreHost {
         }
     }
 
+    /** Whether the app is on screen: a chat message shown in the app needs no notification. */
+    @Volatile
+    private var visible = false
+
     /** The app came on screen or left it. */
     fun onForeground(visible: Boolean) {
+        this.visible = visible
         Thread {
             blocking("onForeground $visible") { it.onForeground(visible) }
         }.start()
     }
+
+    private fun Boolean.toPriority() = if (this) uniffi.pingers.PushPriority.HIGH else uniffi.pingers.PushPriority.NORMAL
+
+    /** A notification the core wrote, as the platform layer posts it. */
+    internal fun uniffi.pingers.CoreNotification.toShell() = CoreNotification(
+        id = id,
+        title = title,
+        body = body,
+        kind = when (kind) {
+            uniffi.pingers.NotificationKind.MEETUP_STARTED -> NotificationKind.MEETUP_STARTED
+            uniffi.pingers.NotificationKind.JOIN_REQUEST -> NotificationKind.JOIN_REQUEST
+            uniffi.pingers.NotificationKind.CHAT_MESSAGE -> NotificationKind.CHAT_MESSAGE
+            uniffi.pingers.NotificationKind.LOCATION_REQUEST -> NotificationKind.LOCATION_REQUEST
+        },
+    )
 
     /** `{"v":1,"h":"<base64 of 8 bytes>"}`, the push relay's content-free body. */
     internal fun handleOf(payload: ByteArray): ByteArray? = try {
@@ -282,5 +306,14 @@ object CoreHost {
             each { it.notice(notice) }
         }
         override fun privacyStatusChanged() = each { it.privacyStatusChanged() }
+
+        /** Posted here, for the whole process: a push may have started it with no screen open. */
+        override fun notify(notification: uniffi.pingers.CoreNotification) {
+            val shown = notification.toShell()
+            Log.i(TAG, "notify: ${shown.kind}")
+            if (shown.kind == NotificationKind.CHAT_MESSAGE && visible) return
+            Notifications.post(app, shown)
+            each { it.notify(notification) }
+        }
     }
 }

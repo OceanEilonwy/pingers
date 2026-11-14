@@ -70,6 +70,10 @@ class CoreRepository(
             refreshLater()
         }
         override fun privacyStatusChanged() = refreshLater()
+
+        // CoreHost posts the notification for the whole process; the screens refresh on the
+        // event that came with it.
+        override fun notify(notification: uniffi.pingers.CoreNotification) = Unit
     }
 
     /** Null until [Core.open] finishes, or if it failed (then [openError] says why). */

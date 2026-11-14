@@ -27,15 +27,20 @@ enum class WakeReason {
     APP_UPDATED,
 }
 
-/** A notification the core asks the shell to show after a push (design B.7). */
+/** What a notification is about: where tapping it leads. */
+enum class NotificationKind { MEETUP_STARTED, JOIN_REQUEST, CHAT_MESSAGE, LOCATION_REQUEST }
+
+/** A notification the core asks the shell to show after a wake (design B.7): the push arrived empty, the core wrote this. */
 data class CoreNotification(
-    /** Stable id: a later notification with the same id replaces this one. */
+    /** Stable id: a later notification with the same id replaces this one (the next chat message of a Meetup). */
     val id: Int,
     val title: String,
     val body: String,
-    /** Alerts make a sound; quiet ones only appear in the shade. */
-    val alert: Boolean,
+    val kind: NotificationKind,
 )
+
+/** The priority FCM sent a message with and the one it delivered it at (`RemoteMessage.getOriginalPriority()` and `getPriority()`). */
+data class FcmPriority(val sentHigh: Boolean, val deliveredHigh: Boolean)
 
 /**
  * The core's entry points the shell calls when the OS reports something (design E.2: "shell
@@ -52,8 +57,11 @@ interface CoreSink {
     /** OS geofences fired. [location] is the fix that triggered them, when Play services gives one. */
     fun onGeofence(regionIds: List<String>, transition: GeofenceTransition, location: Fix?)
 
-    /** A push arrived; [payload] is its body (`{"v":1,"h":handle}`). [downgraded]: FCM delivered it below the priority it was sent with (B.4.9). Returns what to show, if anything. */
-    fun onPush(platform: PushPlatform, payload: ByteArray, downgraded: Boolean): CoreNotification?
+    /**
+     * A push arrived; [payload] is its body (`{"v":1,"h":handle}`). [priority]: for FCM, the priority it was sent and
+     * delivered at, which the core counts (B.4.9). What the wake leads to is posted through the core's events.
+     */
+    fun onPush(platform: PushPlatform, payload: ByteArray, priority: FcmPriority?)
 
     /** The push registration changed (new endpoint or token, or none). */
     fun onPushTokensChanged(tokens: PushTokens?)
@@ -89,9 +97,8 @@ object LoggingSink : CoreSink {
         Log.i(TAG, "onGeofence $transition ${regionIds.size}")
     }
 
-    override fun onPush(platform: PushPlatform, payload: ByteArray, downgraded: Boolean): CoreNotification? {
-        Log.i(TAG, "onPush $platform ${payload.size} bytes downgraded=$downgraded")
-        return null
+    override fun onPush(platform: PushPlatform, payload: ByteArray, priority: FcmPriority?) {
+        Log.i(TAG, "onPush $platform ${payload.size} bytes priority=$priority")
     }
 
     override fun onPushTokensChanged(tokens: PushTokens?) {

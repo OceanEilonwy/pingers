@@ -41,7 +41,7 @@ import org.pingers.app.ui.theme.body
  * platform layer), not in the core.
  */
 @Composable
-fun DeviceSettingsRows(noWakePushes: Boolean) {
+fun DeviceSettingsRows(noWakePushes: Boolean, pushDelivery: String? = null) {
     val context = LocalContext.current
     val platform = remember { AndroidPlatform.get(context) }
     // Read again on resume: a distributor may have been installed or removed meanwhile.
@@ -52,8 +52,11 @@ fun DeviceSettingsRows(noWakePushes: Boolean) {
     var picking by remember { mutableStateOf(false) }
     var keepRunning by remember { mutableStateOf(platform.modes.keepRunning) }
 
+    // The core's reason wake-ups are downgraded (key mismatch, FCM holding them back, no push
+    // service) comes first: it knows what the platform layer cannot.
     val subtitle = when {
         noWakePushes -> stringResource(R.string.device_push_off)
+        pushDelivery != null -> pushDelivery
         chosen != null -> label(context, chosen!!)
         distributors.isEmpty() && platform.fcmAvailable -> stringResource(R.string.device_push_none_fcm)
         distributors.isEmpty() -> stringResource(R.string.device_push_none)

@@ -4,11 +4,11 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /** A [CoreSink] that records every call, for tests. */
-class RecordingSink(private val reply: CoreNotification? = null) : CoreSink {
+class RecordingSink : CoreSink {
     val calls = LinkedBlockingQueue<Any>()
 
     data class Geofenced(val ids: List<String>, val transition: GeofenceTransition, val location: Fix?)
-    data class Pushed(val platform: PushPlatform, val payload: String, val downgraded: Boolean)
+    data class Pushed(val platform: PushPlatform, val payload: String, val priority: FcmPriority?)
     data class Woken(val reason: WakeReason)
     data class Focused(val focus: FocusState)
     data class Fixed(val fix: Fix?)
@@ -22,9 +22,8 @@ class RecordingSink(private val reply: CoreNotification? = null) : CoreSink {
         calls.add(Geofenced(regionIds, transition, location))
     }
 
-    override fun onPush(platform: PushPlatform, payload: ByteArray, downgraded: Boolean): CoreNotification? {
-        calls.add(Pushed(platform, String(payload), downgraded))
-        return reply
+    override fun onPush(platform: PushPlatform, payload: ByteArray, priority: FcmPriority?) {
+        calls.add(Pushed(platform, String(payload), priority))
     }
 
     override fun onPushTokensChanged(tokens: PushTokens?) {
