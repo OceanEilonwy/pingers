@@ -1,6 +1,6 @@
 {
   "name": "join-request-encoding",
-  "description": "Join request plaintext (sealed with seal_join_request, posted to the invite mailbox) as canonical CBOR: [key package, display name, reply mailbox, party subscription] (design D, invite flow)",
+  "description": "Join request plaintext (sealed with seal_join_request, posted to the invite mailbox) as canonical CBOR: [key package, display name, reply mailbox, party subscription or null when the joiner has wake-up pushes off] (design D, invite flow). Inside an invite post it is nested as [0, this body] (invite-post-encoding)",
   "vectors": [
     {
       "name": "bob",
@@ -49,7 +49,19 @@
     {
       "name": "no-subscription",
       "inputs": {
+        "key_package": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6061626364656667",
+        "display_name": "Bob",
+        "reply_mailbox": "5152535455565758595a5b5c5d5e5f60",
+        "subscription_id": ""
+      },
+      "expected": {
         "encoding": "8201845828404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666763426f62505152535455565758595a5b5c5d5e5f60f6"
+      }
+    },
+    {
+      "name": "subscription-not-an-array",
+      "inputs": {
+        "encoding": "8201845828404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666763426f62505152535455565758595a5b5c5d5e5f6000"
       },
       "expected": {
         "error": "Cbor"

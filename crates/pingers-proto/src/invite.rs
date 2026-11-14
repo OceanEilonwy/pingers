@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Invites (design D, "Invite flow"): the payload in an invite link's URL fragment, and the
-//! join request a joiner posts to the invite mailbox.
+//! Invites (design D, "Invite flow"; join flow A): the payload in an invite link's URL
+//! fragment, and what a joiner posts to the invite mailbox: a join request, or the withdrawal
+//! of one.
 //!
 //! The link is `https://<host>/j#v1.<base64url(InvitePayload encoding)>`; the fragment never
-//! reaches the server. The join request is sealed by pingers-crypto's `seal_join_request` under
-//! `HKDF(invite_secret, "join")`, so opening it proves the joiner held the link, and the AEAD
+//! reaches the server. Posts are sealed by pingers-crypto's `seal_join_request` under
+//! `HKDF(invite_secret, "join")`, so opening one proves the poster held the link, and the AEAD
 //! authenticates the `KeyPackage` inside under that secret.
 
 use minicbor::Decoder;
@@ -43,38 +44,14 @@ impl core::fmt::Debug for InviterFingerprint {
     }
 }
 
-/// How many people a link admits (design D, `single_use`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum InviteUses {
-    /// Any number of joiners until it expires; the inviter approves each ("Bob wants to join").
-    Multiple,
-    /// One joiner, approved automatically; the invite mailbox is deleted after.
-    Single,
-}
-
-impl InviteUses {
-    /// Writes the wire value: 0 for Multiple, 1 for Single.
-    fn encode_cbor(self, writer: &mut Writer) {
-        writer.unsigned(match self {
-            Self::Multiple => 0_u8,
-            Self::Single => 1,
-        });
-    }
-
-    fn decode_cbor(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
-        match decoder.u8()? {
-            0 => Ok(Self::Multiple),
-            1 => Ok(Self::Single),
-            _ => Err(ProtoError::OutOfRange {
-                field: "invite uses",
-            }),
-        }
-    }
-}
-
-/// What an invite link's fragment carries (design D): where to post, the secret that
-/// authenticates the join request, who to expect in the Welcome, and until when.
-/// `==` compares the secret in constant time.
+/// What an invite link's fragment carries (design D, join flow A): where to post, the secret
+/// that authenticates the join request, who to expect in the Welcome, and until when.
+///
+/// Nothing about the Party (its name, members, colour or suite) is in it, so a link that leaks
+/// (forwarded, or read by the app that carried it) reveals only the server. The joiner learns
+/// the Party from the Welcome, after the inviter lets them in. Every invite waits for the
+/// inviter to let each joiner in and stops working once one has been let in, so the link says
+/// nothing about how many may use it. `==` compares the secret in constant time.
 #[derive(Clone, Debug)]
 pub struct InvitePayload {
     /// The Pingers server the Party lives on; the joiner registers there.
@@ -87,8 +64,6 @@ pub struct InvitePayload {
     pub inviter_fingerprint: InviterFingerprint,
     /// After this the link is refused.
     pub expires: UnixSeconds,
-    /// Single or multiple use.
-    pub uses: InviteUses,
 }
 
 impl PartialEq for InvitePayload {
@@ -98,40 +73,37 @@ impl PartialEq for InvitePayload {
             && bool::from(self.invite_secret.ct_eq(&other.invite_secret))
             && self.inviter_fingerprint == other.inviter_fingerprint
             && self.expires == other.expires
-            && self.uses == other.uses
     }
 }
 
 impl Eq for InvitePayload {}
 
 /// Layout: `[server (text), invite mailbox (16 bytes), invite secret (32 bytes), inviter
-/// fingerprint (8 bytes), expires (seconds), uses (0 multiple, 1 single)]`.
+/// fingerprint (8 bytes), expires (seconds)]`.
 impl CborBody for InvitePayload {
     fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
-        writer.array(6)?;
+        writer.array(5)?;
         writer.text(self.server.as_str())?;
         writer.bytes(self.invite_mailbox.as_bytes())?;
         writer.bytes(self.invite_secret.expose())?;
         writer.bytes(self.inviter_fingerprint.as_bytes())?;
         writer.unsigned(self.expires.get());
-        self.uses.encode_cbor(writer);
         Ok(())
     }
 
     fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
-        cbor::array_of(decoder, 6)?;
+        cbor::array_of(decoder, 5)?;
         Ok(Self {
             server: ServerId::new(decoder.str()?.to_owned())?,
             invite_mailbox: MailboxId::from_bytes(cbor::fixed_bytes(decoder)?),
             invite_secret: SecretBytes::new(cbor::fixed_bytes(decoder)?),
             inviter_fingerprint: InviterFingerprint::from_bytes(cbor::fixed_bytes(decoder)?),
             expires: UnixSeconds::new(decoder.u64()?),
-            uses: InviteUses::decode_cbor(decoder)?,
         })
     }
 }
 
-/// A joiner's name as the inviter's "wants to join" prompt and the roster show it: 1 to 200
+/// A joiner's name as the inviter's "asked to join" screen and the roster show it: 1 to 200
 /// bytes of UTF-8, as pingers-store's member names. `Debug` does not print it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct DisplayName(String);
@@ -168,28 +140,34 @@ impl core::fmt::Debug for DisplayName {
     }
 }
 
-/// The plaintext of a join request (design D): sealed with pingers-crypto's
-/// `seal_join_request` and posted, padded, to the invite mailbox.
+/// A join request (design D): the joiner's key package, name, reply mailbox and, if it has
+/// wake-up pushes on, its sealed subscription for the Party group.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JoinRequest {
-    /// The joiner's MLS `KeyPackage`, which the inviter adds; authenticated by the seal.
+    /// The joiner's MLS `KeyPackage`, which the inviter adds; authenticated by the seal. The
+    /// join code both phones show is derived from it (pingers-crypto's `join_code`).
     pub key_package: KeyPackageBytes,
     /// Shown to the inviter.
     pub display_name: DisplayName,
     /// Where the inviter posts the Welcome.
     pub reply_mailbox: MailboxId,
     /// The joiner's sealed push subscription for the Party group (`subs_add` of the Commit).
-    pub party_subscription: Subscription,
+    /// `None` when the joiner has wake-up pushes off: it still joins, and reads the group on
+    /// its own wakes instead of being woken.
+    pub party_subscription: Option<Subscription>,
 }
 
-/// Layout: `[key package, display name (text), reply mailbox (16 bytes), party subscription]`.
+/// Layout: `[key package, display name (text), reply mailbox (16 bytes), party subscription or
+/// null]`.
 impl CborBody for JoinRequest {
     fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
         writer.array(4)?;
         writer.bytes(self.key_package.as_bytes())?;
         writer.text(self.display_name.as_str())?;
         writer.bytes(self.reply_mailbox.as_bytes())?;
-        self.party_subscription.encode_body(writer)
+        writer.option(self.party_subscription.as_ref(), |writer, subscription| {
+            subscription.encode_body(writer)
+        })
     }
 
     fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
@@ -198,12 +176,64 @@ impl CborBody for JoinRequest {
             key_package: KeyPackageBytes::from_bytes(decoder.bytes()?.to_vec()),
             display_name: DisplayName::new(decoder.str()?.to_owned())?,
             reply_mailbox: MailboxId::from_bytes(cbor::fixed_bytes(decoder)?),
-            party_subscription: Subscription::decode_body(decoder)?,
+            party_subscription: cbor::option(decoder, Subscription::decode_body)?,
         })
     }
 }
 
-versioned_cbor!(InvitePayload, JoinRequest);
+/// What a joiner posts to an invite mailbox, sealed with pingers-crypto's `seal_join_request`
+/// and padded to a mailbox size class.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InvitePost {
+    /// Asks to join.
+    Join(JoinRequest),
+    /// Withdraws the request whose Welcome would go to this reply mailbox ("Withdraw
+    /// request"). Only the joiner and the inviter know the pairing of request and reply
+    /// mailbox; the server also sees the mailbox id, so a server that also held the link could
+    /// withdraw a request, which the joiner sees as not being let in.
+    Withdraw {
+        /// The withdrawn request's reply mailbox.
+        reply_mailbox: MailboxId,
+    },
+}
+
+/// Wire values of [`InvitePost`]'s variants.
+mod post_kind {
+    pub(super) const JOIN: u8 = 0;
+    pub(super) const WITHDRAW: u8 = 1;
+}
+
+/// Layout: `[0, join request]` or `[1, reply mailbox (16 bytes)]`.
+impl CborBody for InvitePost {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(2)?;
+        match self {
+            Self::Join(request) => {
+                writer.unsigned(post_kind::JOIN);
+                request.encode_body(writer)
+            }
+            Self::Withdraw { reply_mailbox } => {
+                writer.unsigned(post_kind::WITHDRAW);
+                writer.bytes(reply_mailbox.as_bytes())
+            }
+        }
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 2)?;
+        match decoder.u8()? {
+            post_kind::JOIN => Ok(Self::Join(JoinRequest::decode_body(decoder)?)),
+            post_kind::WITHDRAW => Ok(Self::Withdraw {
+                reply_mailbox: MailboxId::from_bytes(cbor::fixed_bytes(decoder)?),
+            }),
+            _ => Err(ProtoError::OutOfRange {
+                field: "invite post kind",
+            }),
+        }
+    }
+}
+
+versioned_cbor!(InvitePayload, JoinRequest, InvitePost);
 
 #[cfg(test)]
 mod tests {

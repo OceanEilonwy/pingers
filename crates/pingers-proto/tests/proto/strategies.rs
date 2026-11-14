@@ -8,7 +8,7 @@ use pingers_proto::{
     BoardCursor, BoardPage, BoardSyncRequest, BoardSyncResponse, ChatBody, ChatMessageId,
     CommitRequest, CommitResponse, ContentType, CoverReadRatio, CreateGroup, CustomPushRelays,
     Delivery, DisplayName, E7Coordinate, Epoch, GroupAuthKey, GroupId, GroupLogEntry,
-    GroupMessages, GroupState, HeadingDegrees, HourlyRoot, InvitePayload, InviteUses,
+    GroupMessages, GroupState, HeadingDegrees, HourlyRoot, InvitePayload, InvitePost,
     InviterFingerprint, JoinRequest, KeyConfigHash, KeyPackageBytes, Knock, KnockSignature,
     Lamport, LeafIndex, Lease, LeaseId, LeaseReplacement, LiveFrame, LocationGeneration,
     LocationPlaintext, MailboxId, MailboxMessage, MailboxMessages, MailboxSpec, MapHostUrl,
@@ -202,16 +202,14 @@ pub(crate) fn invite_payload() -> impl Strategy<Value = InvitePayload> {
         bytes32(),
         uniform::<_, 8>(any::<u8>()),
         unix_seconds(),
-        prop_oneof![Just(InviteUses::Multiple), Just(InviteUses::Single)],
     )
         .prop_map(
-            |(server, mailbox, secret, fingerprint, expires, uses)| InvitePayload {
+            |(server, mailbox, secret, fingerprint, expires)| InvitePayload {
                 server,
                 invite_mailbox: MailboxId::from_bytes(mailbox),
                 invite_secret: SecretBytes::new(secret),
                 inviter_fingerprint: InviterFingerprint::from_bytes(fingerprint),
                 expires,
-                uses,
             },
         )
 }
@@ -222,7 +220,7 @@ pub(crate) fn join_request() -> impl Strategy<Value = JoinRequest> {
         text(DisplayName::MAX_BYTES)
             .prop_filter_map("1 to 200 bytes", |name| DisplayName::new(name).ok()),
         bytes16(),
-        subscription(),
+        option::of(subscription()),
     )
         .prop_map(
             |(key_package, display_name, reply_mailbox, party_subscription)| JoinRequest {
@@ -232,6 +230,15 @@ pub(crate) fn join_request() -> impl Strategy<Value = JoinRequest> {
                 party_subscription,
             },
         )
+}
+
+pub(crate) fn invite_post() -> impl Strategy<Value = InvitePost> {
+    prop_oneof![
+        join_request().prop_map(InvitePost::Join),
+        bytes16().prop_map(|reply_mailbox| InvitePost::Withdraw {
+            reply_mailbox: MailboxId::from_bytes(reply_mailbox),
+        }),
+    ]
 }
 
 pub(crate) fn mailbox_spec() -> impl Strategy<Value = MailboxSpec> {
