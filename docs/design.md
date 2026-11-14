@@ -183,6 +183,12 @@ Configuration:
 
 **Server access control without membership knowledge**: each epoch all members derive an Ed25519 keypair from `MLS-Exporter("pingers/v1/log-auth", group_id, 32)`. The committer sends the next epoch's public key with the Commit; the server stores it and requires a signature by it on reads and writes of that group log. Removed members cannot derive the new key.
 
+**Reading with an earlier epoch's key** (decided 2026-11-14). The server keeps every earlier epoch's key, because a member that missed commits can only sign with the key it still has. Writes, subscription changes, deletes and the live channel take only the current key; a commit signed with an older key is answered `409` with the head epoch. Reads follow one rule: **a key of epoch `e` reads the log up to and including the commit that ended `e`, and nothing after it, whatever position it asks to read after.**
+
+- A lagging member reads with its old key, gets everything up to the commit that ended its epoch, applies it, and reads on from that position with the next epoch's key. Each key reads everything before its own boundary, so it misses nothing, including late messages a slower member wrote in an older epoch.
+- A removed member keeps only the key of the epoch it was removed in. It reads up to the commit that removed it (so it learns it was removed) and nothing written after, not even a late message in its old epoch that it could still open.
+- Such a reader is told the head epoch as at most one past its own (it learns its epoch ended, not how many followed), cannot fetch a snapshot of a later epoch (`GET /state` answers `403`), and its reads do not count as activity, so a removed member polling cannot keep a group from expiring.
+
 ### B.3 Private co-presence detection: options
 
 | Option | Server learns | Rounds / battery | Fit |
@@ -944,6 +950,7 @@ PUT  /v1/groups/{id}/subs/{sub_id} (Grp) Subscription                      // a 
 DELETE /v1/groups/{id}/subs/{sub_id} (Grp)
 POST /v1/groups/{id}/msgs  (Grp) AppMsg { epoch: u64, body: Bytes, ephemeral: bool, wake: None|Quiet|Alert } -> { seq }
 GET  /v1/groups/{id}/msgs?after=seq (Grp) -> { msgs: Vec<GrpMsg>, head_epoch }
+                           // signed with an earlier epoch's key: only up to the commit that ended it (B.2)
 GET  /v1/groups/{id}/state (Grp) -> { epoch, blob }
 DELETE /v1/groups/{id}     (Grp)
 POST /v1/groups/{id}/live?sub=<sub_id>  (Grp) chunked OHTTP exchange: request and response bodies are streams of Frame { epoch, body, ephemeral }   // privacy class Stream; reached only via POST /ohttp with message/ohttp-chunked-req

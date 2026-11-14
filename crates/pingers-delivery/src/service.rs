@@ -14,7 +14,9 @@ use pingers_time::{Clock, UnixSeconds};
 use rand_core::CryptoRng;
 
 use crate::live::{ChannelId, LiveRegistry};
-use crate::store::{CommitWrite, DeliveryStore, NewCommit, NewEntry, NewGroup, StoredSubscription};
+use crate::store::{
+    CommitWrite, DeliveryStore, NewCommit, NewEntry, NewGroup, PastAuthKey, StoredSubscription,
+};
 use crate::{DeliveryError, GroupLifetime, GroupStart};
 
 /// The longest a subscription may live: Party subscriptions are renewed every 30 days
@@ -40,6 +42,25 @@ pub struct Wake {
     pub urgency: Urgency,
     /// How long to wait before forwarding.
     pub delay: Duration,
+}
+
+/// Who reads a group's log, by the log-auth key that signed the request (design B.2: the
+/// server stores each epoch's key and requires a signature by it).
+///
+/// The rule: a key of epoch `e` reads the log up to and including the position of the commit
+/// that ended `e`, never past it, whatever position it asks to read after. A current member
+/// that missed commits reads with its old key, applies the commit that ended its epoch, and
+/// reads on from there with the next epoch's key, one commit at a time; it misses nothing,
+/// because each next key reads everything before its own boundary. A removed member holds the
+/// key of the epoch it was removed in, so it reads up to the commit that removed it (and so
+/// learns it was removed), and nothing written after, not even a late message a lagging
+/// sender wrote in that old epoch: it cannot derive the next key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reader {
+    /// Signed with the head epoch's key: reads everything.
+    Current,
+    /// Signed with the key of this earlier epoch.
+    Behind(Epoch),
 }
 
 /// The answer to a commit.
@@ -322,7 +343,12 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
     }
 
     /// `GET /v1/groups/{id}/msgs?after=seq`: up to [`crate::PAGE_ENTRIES`] entries after `after`.
-    /// A read by a member counts as activity.
+    /// A read by a current member counts as activity.
+    ///
+    /// A reader [`Reader::Behind`] gets only entries up to and including the commit that ended
+    /// its key's epoch, and the head epoch as at most one past its own: it learns that its
+    /// epoch has ended, not what followed or how much. Its read is not activity, so a removed
+    /// member polling cannot keep a group alive.
     ///
     /// # Errors
     ///
@@ -331,29 +357,61 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         &self,
         group: &GroupId,
         after: SequenceNumber,
+        reader: Reader,
     ) -> Result<GroupMessages, DeliveryError> {
         let now = self.clock.now();
         let messages = self.store.entries_after(group, after)?;
         let head = self.store.head(group)?;
-        self.store
-            .touch(group, Self::idle_expiry(now, head.lifetime)?)?;
-        Ok(GroupMessages {
-            messages,
-            head_epoch: head.head_epoch,
-        })
+        match reader {
+            Reader::Current => {
+                self.store
+                    .touch(group, Self::idle_expiry(now, head.lifetime)?)?;
+                Ok(GroupMessages {
+                    messages,
+                    head_epoch: head.head_epoch,
+                })
+            }
+            Reader::Behind(epoch) => {
+                // A past key exists only because a commit ended its epoch; were that commit
+                // ever missing, the reader gets nothing rather than everything.
+                let boundary = self.store.commit_position(group, epoch)?;
+                Ok(GroupMessages {
+                    messages: messages
+                        .into_iter()
+                        .take_while(|entry| boundary.is_some_and(|last| entry.sequence <= last))
+                        .collect(),
+                    head_epoch: epoch.checked_next().unwrap_or(epoch).min(head.head_epoch),
+                })
+            }
+        }
     }
 
-    /// `GET /v1/groups/{id}/state`: the latest snapshot. A read counts as activity.
+    /// `GET /v1/groups/{id}/state`: the latest snapshot. A read by a current member counts as
+    /// activity.
     ///
     /// # Errors
     ///
-    /// [`DeliveryError::UnknownGroup`]; storage errors.
-    pub fn state(&self, group: &GroupId) -> Result<Option<GroupState>, DeliveryError> {
+    /// [`DeliveryError::UnknownGroup`]; [`DeliveryError::LaterEpoch`] for a reader
+    /// [`Reader::Behind`] the snapshot's epoch (it could not open it, and a removed member must
+    /// not see what the group became); storage errors.
+    pub fn state(
+        &self,
+        group: &GroupId,
+        reader: Reader,
+    ) -> Result<Option<GroupState>, DeliveryError> {
         let now = self.clock.now();
         let state = self.store.state(group)?;
-        let lifetime = self.store.head(group)?.lifetime;
-        self.store.touch(group, Self::idle_expiry(now, lifetime)?)?;
-        Ok(state)
+        match reader {
+            Reader::Current => {
+                let lifetime = self.store.head(group)?.lifetime;
+                self.store.touch(group, Self::idle_expiry(now, lifetime)?)?;
+                Ok(state)
+            }
+            Reader::Behind(epoch) => match state {
+                Some(found) if found.epoch > epoch => Err(DeliveryError::LaterEpoch),
+                other @ (Some(_) | None) => Ok(other),
+            },
+        }
     }
 
     /// The key that `Grp` requests to this group must be signed with now.
@@ -365,24 +423,31 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         Ok(self.store.head(group)?.auth_key)
     }
 
-    /// The keys of the group's earlier epochs, newest first. A request signed with one is
-    /// from a member (or a removed member) that has not applied the later commits: the server
-    /// lets it read the log to catch up, and answers its commit with the conflict.
+    /// The keys of the group's earlier epochs with their epochs, newest first. A request
+    /// signed with one is from a member that has not applied the later commits, or from one
+    /// they removed: it reads as [`Reader::Behind`] that epoch, and its commit is answered
+    /// with the conflict.
     ///
     /// # Errors
     ///
     /// [`DeliveryError::UnknownGroup`]; storage errors.
-    pub fn past_auth_keys(&self, group: &GroupId) -> Result<Vec<GroupAuthKey>, DeliveryError> {
+    pub fn past_auth_keys(&self, group: &GroupId) -> Result<Vec<PastAuthKey>, DeliveryError> {
         self.store.past_auth_keys(group)
     }
 
-    /// The epoch the next commit must be made in.
+    /// The head epoch as `reader` may see it: the epoch the next commit must be made in, or
+    /// for a reader [`Reader::Behind`], at most one past its own (as in
+    /// [`Delivery::messages`]).
     ///
     /// # Errors
     ///
     /// [`DeliveryError::UnknownGroup`]; storage errors.
-    pub fn head_epoch(&self, group: &GroupId) -> Result<Epoch, DeliveryError> {
-        Ok(self.store.head(group)?.head_epoch)
+    pub fn head_epoch(&self, group: &GroupId, reader: Reader) -> Result<Epoch, DeliveryError> {
+        let head = self.store.head(group)?.head_epoch;
+        Ok(match reader {
+            Reader::Current => head,
+            Reader::Behind(epoch) => epoch.checked_next().unwrap_or(epoch).min(head),
+        })
     }
 
     /// `PUT /v1/groups/{id}/subs/{sub_id}`: a member renews or replaces its own subscription.

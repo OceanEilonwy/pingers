@@ -31,6 +31,10 @@ pub enum DeliveryError {
     /// A time computed from the clock does not fit in `UnixSeconds`.
     #[error("time out of range")]
     TimeOutOfRange,
+    /// A reader behind the head asked for what its epoch's key may not read: the snapshot
+    /// of a later epoch. HTTP 403.
+    #[error("not readable with an earlier epoch's key")]
+    LaterEpoch,
     /// No live channel with this id is attached to the group.
     #[error("no such live channel")]
     UnknownChannel,

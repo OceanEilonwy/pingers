@@ -701,6 +701,112 @@ async fn group_logs_take_one_commit_per_epoch_and_rotate_the_key() -> TestResult
     server.stop().await
 }
 
+/// Positions read with the creator's current key after `after`, and the head epoch told.
+async fn read_log(
+    server: &Running,
+    creator: &Creator,
+    after: u64,
+) -> Result<(Vec<u64>, Epoch), TestError> {
+    let answer = call(
+        server,
+        &creator.request("GET", &format!("/msgs?after={after}"), Vec::new())?,
+    )
+    .await?;
+    assert_eq!(answer.status.get(), 200);
+    let page = GroupMessages::decode(&answer.body)?;
+    Ok((
+        page.messages
+            .iter()
+            .map(|entry| entry.sequence.get())
+            .collect(),
+        page.head_epoch,
+    ))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_old_key_reads_up_to_the_commit_that_ended_its_epoch() -> TestResult {
+    let server = started(DeliveryLive).await?;
+    let wallet = Wallet::fetch(&server, 1, 1).await?;
+    let mut creator = create_group(&server, &wallet, 21).await?;
+    let keys: Vec<LogAuthKeyPair> = (0..3_u8)
+        .map(|fill| LogAuthKeyPair::from_bytes(Zeroizing::new([fill.saturating_add(21); 32])))
+        .collect();
+    let post = |epoch: u64| {
+        AppMessage {
+            epoch: Epoch::new(epoch),
+            body: MlsMessageBytes::from_bytes(vec![0xA0; 3]),
+            delivery: Mode::Stored,
+            wake: None,
+        }
+        .encode()
+    };
+    // 1 post, 2 commit to epoch 1 (removing someone), 3 post, 4 commit to epoch 2 with a new
+    // snapshot, 5 post.
+    for (epoch, next) in [(0_u64, 1_usize), (1, 2)] {
+        let posted = call(&server, &creator.request("POST", "/msgs", post(epoch)?)?).await?;
+        assert_eq!(posted.status.get(), 200);
+        let next_key = keys.get(next).ok_or("key")?;
+        let body = CommitRequest {
+            state: (next == 2).then(|| SealedSnapshot::from_bytes(vec![0xE2])),
+            ..CommitRequest::decode(&commit_body(epoch, next_key)?)?
+        }
+        .encode()?;
+        let committed = call(&server, &creator.request("POST", "/commit", body)?).await?;
+        assert_eq!(committed.status.get(), 200);
+        creator.key = LogAuthKeyPair::from_bytes(Zeroizing::new(
+            [u8::try_from(next).map_err(|_| "key")?.saturating_add(21); 32],
+        ));
+    }
+    let posted = call(&server, &creator.request("POST", "/msgs", post(2)?)?).await?;
+    assert_eq!(posted.status.get(), 200);
+
+    // The member removed at the end of epoch 0 still has that key: it reads up to the commit
+    // that removed it and nothing after, from wherever it asks, and is not shown the snapshot
+    // of a later epoch.
+    let current = core::mem::replace(
+        &mut creator.key,
+        LogAuthKeyPair::from_bytes(Zeroizing::new([21; 32])),
+    );
+    assert_eq!(
+        read_log(&server, &creator, 0).await?,
+        (vec![1, 2], Epoch::new(1))
+    );
+    for after in [2, 3, 4] {
+        assert_eq!(
+            read_log(&server, &creator, after).await?,
+            (vec![], Epoch::new(1))
+        );
+    }
+    let state = call(&server, &creator.request("GET", "/state", Vec::new())?).await?;
+    assert_eq!(state.status.get(), 403);
+    let late = call(
+        &server,
+        &creator.request("POST", "/commit", commit_body(0, &current)?)?,
+    )
+    .await?;
+    assert_eq!(
+        CommitResponse::decode(&late.body)?,
+        CommitResponse::Conflict {
+            head_epoch: Epoch::new(1)
+        }
+    );
+    // A member that lagged with epoch 1's key catches up from the same point.
+    creator.key = LogAuthKeyPair::from_bytes(Zeroizing::new([22; 32]));
+    assert_eq!(
+        read_log(&server, &creator, 2).await?,
+        (vec![3, 4], Epoch::new(2))
+    );
+    // The current key reads everything.
+    creator.key = current;
+    assert_eq!(
+        read_log(&server, &creator, 0).await?,
+        (vec![1, 2, 3, 4, 5], Epoch::new(2))
+    );
+    let state = call(&server, &creator.request("GET", "/state", Vec::new())?).await?;
+    assert_eq!(GroupState::decode(&state.body)?.epoch, Epoch::new(2));
+    server.stop().await
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn subscriptions_are_put_and_deleted_by_their_own_id() -> TestResult {
     use pingers_proto::{
