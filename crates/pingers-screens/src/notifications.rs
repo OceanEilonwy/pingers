@@ -15,7 +15,7 @@ use pingers_proto::{
 
 use crate::common::Name;
 use crate::home::{CoPresenceAlert, meetup_names};
-use crate::snapshot::{ChatEntry, ClientSnapshot, InviteStatus, Meetup};
+use crate::snapshot::{ChatEntry, ClientSnapshot, Meetup};
 
 /// Something that happened in a wake, for a notification.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,23 +163,20 @@ pub fn notifications(before: &ClientSnapshot, after: &ClientSnapshot) -> Vec<Not
             asker: request.from,
         });
     }
-    let opened: HashSet<MailboxId> = before
+    let asked: HashSet<MailboxId> = before
         .parties
         .iter()
-        .flat_map(|party| party.invites.iter())
-        .filter(|invite| matches!(invite.status, InviteStatus::Opened { .. }))
-        .map(|invite| invite.id)
+        .flat_map(|party| party.join_requests.iter())
+        .map(|request| request.id)
         .collect();
     for party in &after.parties {
-        for invite in &party.invites {
-            if let InviteStatus::Opened { name, .. } = &invite.status
-                && !opened.contains(&invite.id)
-            {
+        for request in &party.join_requests {
+            if !asked.contains(&request.id) {
                 found.push(Notification::JoinRequest {
                     party: party.id,
-                    invite: invite.id,
+                    invite: request.id,
                     party_name: party.name.clone(),
-                    name: name.clone(),
+                    name: request.name.clone(),
                 });
             }
         }

@@ -179,8 +179,13 @@ android {
         applicationId = "org.pingers.app"
         minSdk = minSdkVersion
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        // Release builds take both from the release tag (`cargo xtask release-android` passes
+        // -PpingersVersionCode and -PpingersVersionName, xtask/src/release_version.rs), so every
+        // tag gets the same numbers and a later tag a larger code. Local builds keep these.
+        versionCode = providers.gradleProperty("pingersVersionCode")
+            .map { it.toInt() }
+            .getOrElse(1)
+        versionName = providers.gradleProperty("pingersVersionName").getOrElse("0.1.0")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // The publisher's map host, the last link of the map host chain (a user override, then
         // the host the Pingers server advertises, then this). Deployment configuration, never

@@ -40,6 +40,8 @@ pub(crate) enum Key<'id> {
     /// FCM's priority downgrades of the last high-priority pushes (pingers-wake's
     /// `PriorityWindow`).
     PushPriority,
+    /// The Party this device was just let into, until the user opens it ("You're in").
+    LetIn,
 }
 
 impl Key<'_> {
@@ -62,6 +64,7 @@ impl Key<'_> {
             Self::PushRelayPin => key.extend_from_slice(b"push-relay-pin"),
             Self::PendingJoin => key.extend_from_slice(b"pending-join"),
             Self::PushPriority => key.extend_from_slice(b"push-priority"),
+            Self::LetIn => key.extend_from_slice(b"let-in"),
         }
         key
     }

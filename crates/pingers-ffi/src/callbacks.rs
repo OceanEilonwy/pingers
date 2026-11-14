@@ -201,8 +201,11 @@ impl From<client::Notice> for Notice {
 pub trait Events: Send + Sync {
     /// Parties, rosters or Spots changed.
     fn parties_changed(&self);
-    /// Someone asked to join a Party.
+    /// Someone asked to join a Party through this device's invite.
     fn join_requested(&self, party: PartyId);
+    /// The inviter let this device into a Party: post the notification `Snapshot::let_in`
+    /// words ("Ana let you in").
+    fn let_in(&self, party: PartyId);
     /// A Meetup started.
     fn meetup_started(&self, meetup: MeetupId);
     /// A Meetup's roster or meet point changed.
@@ -333,6 +336,10 @@ impl client::Events for EventsAdapter {
 
     fn join_requested(&self, party: pingers_proto::PartyId) {
         self.0.join_requested(party.into());
+    }
+
+    fn let_in(&self, party: pingers_proto::PartyId) {
+        self.0.let_in(party.into());
     }
 
     fn meetup_started(&self, meetup: pingers_proto::GroupId) {

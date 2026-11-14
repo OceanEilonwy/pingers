@@ -5,8 +5,8 @@ use pingers_proto::{ChatMessageId, MailboxId};
 
 use super::*;
 use crate::fixtures::{self, FixtureError, chloe, location_request_id, meetup_id, sam};
+use crate::snapshot::ChatMessage;
 use crate::snapshot::Party;
-use crate::snapshot::{ChatMessage, SafetyCode};
 
 fn names(texts: &[&str]) -> Result<Vec<Name>, FixtureError> {
     texts
@@ -91,11 +91,11 @@ fn a_new_message_in_a_live_meetup_shows_once_under_the_meetup_s_key() -> Result<
 }
 
 #[test]
-fn an_invite_opened_since_shows_a_join_request() -> Result<(), FixtureError> {
+fn a_join_request_since_shows_a_notification() -> Result<(), FixtureError> {
     let after = fixtures::snapshot()?;
     let mut before = after.clone();
     for party in &mut before.parties {
-        party.invites.clear();
+        party.join_requests.clear();
     }
     let found = notifications(&before, &after);
     assert_eq!(
@@ -115,15 +115,16 @@ fn an_invite_opened_since_shows_a_join_request() -> Result<(), FixtureError> {
         found.first().map(Notification::key),
         Some(NotificationKey::Invite(MailboxId::from_bytes([50; 16])))
     );
-    // Still open on the next wake: not shown again.
+    // Still waiting on the next wake: not shown again; a second request is.
+    assert!(notifications(&after, &after).is_empty());
     let mut later = after.clone();
-    if let Some(party) = later.parties.first_mut() {
-        party.invites.push(crate::snapshot::Invite {
+    if let Some(party) = later.parties.first_mut()
+        && let Some(first) = party.join_requests.first().cloned()
+    {
+        party.join_requests.push(crate::snapshot::JoinRequest {
             id: MailboxId::from_bytes([53; 16]),
-            status: InviteStatus::Opened {
-                name: Name::new("Dev").map_err(|_| FixtureError::Missing)?,
-                code: SafetyCode::new("1234").map_err(|_| FixtureError::Missing)?,
-            },
+            name: Name::new("Dev").map_err(|_| FixtureError::Missing)?,
+            ..first
         });
     }
     assert_eq!(notifications(&after, &later).len(), 1);

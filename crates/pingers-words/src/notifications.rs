@@ -78,7 +78,7 @@ mod tests {
         before.meetups.clear();
         before.location_requests.clear();
         for party in &mut before.parties {
-            party.invites.clear();
+            party.join_requests.clear();
         }
         let text: Vec<NotificationText> = notifications(&before, &after)
             .iter()

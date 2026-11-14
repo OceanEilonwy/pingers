@@ -210,8 +210,8 @@ pub struct ClientSnapshot {
     /// The summary of the Meetup that ended last, kept until the user dismisses it. Its keys
     /// and content are already deleted.
     pub ended_meetup: Option<EndedMeetup>,
-    /// An invite link opened on this device, waiting for the user to compare codes.
-    pub join_preview: Option<JoinPreview>,
+    /// The join this device started from an invite link: asked and waiting, or just let in.
+    pub joining: Option<Joining>,
     /// The name this device's user goes by in Parties they create or join from now on, once
     /// they set one.
     pub display_name: Option<Name>,
@@ -353,6 +353,8 @@ pub struct Party {
     pub invites: Vec<Invite>,
     /// The current invite link to share, if one has been made.
     pub invite_link: Option<InviteLink>,
+    /// People who asked to join through this device's invites, oldest first.
+    pub join_requests: Vec<JoinRequest>,
 }
 
 /// A member of a Party.
@@ -456,13 +458,6 @@ pub enum InviteStatus {
         /// When it stops working.
         expires_at: UnixSeconds,
     },
-    /// Someone opened the link; the codes must be compared before they join.
-    Opened {
-        /// The name they gave.
-        name: Name,
-        /// The code both screens show.
-        code: SafetyCode,
-    },
     /// They joined after the codes were verified.
     Joined {
         /// Their leaf in the Party group.
@@ -509,7 +504,7 @@ impl fmt::Debug for InviteUrl {
     }
 }
 
-/// The safety code two people compare when one joins ("4729 1836").
+/// The code two people compare when one joins ("4821 0937 5512").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SafetyCode(String);
 
@@ -538,21 +533,41 @@ impl SafetyCode {
     }
 }
 
-/// What an opened invite link shows before joining.
+/// A join this device started from an invite link (join flow A). The link says nothing about
+/// the Party, so nothing about it shows until the inviter lets this device in.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct JoinPreview {
-    /// Who invited.
-    pub inviter: Name,
-    /// The Party's name.
-    pub party_name: Name,
-    /// Its colour.
-    pub colour: PartyColour,
-    /// Its members' names, in roster order.
-    pub members: Vec<Name>,
-    /// How many Spots it has.
-    pub spot_count: usize,
-    /// The code to compare with the inviter's screen.
-    pub safety_code: SafetyCode,
+pub enum Joining {
+    /// Asked to join, waiting for the inviter ("Asked to join").
+    Asked {
+        /// The code to read to the inviter.
+        code: SafetyCode,
+        /// When this device asked.
+        asked_at: UnixSeconds,
+    },
+    /// Let in ("You're in"), until the user opens the Party.
+    LetIn {
+        /// The Party, now in [`ClientSnapshot::parties`].
+        party: PartyId,
+        /// Who let this device in.
+        inviter: Name,
+        /// The code that was checked.
+        code: SafetyCode,
+    },
+}
+
+/// Someone who asked to join through this device's invite ("Ben asked to join").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JoinRequest {
+    /// The request, to let in or turn away.
+    pub id: MailboxId,
+    /// The name they gave.
+    pub name: Name,
+    /// The code their phone shows; it must match.
+    pub code: SafetyCode,
+    /// When this device read the request.
+    pub asked_at: UnixSeconds,
+    /// When the link they used was shared.
+    pub shared_at: UnixSeconds,
 }
 
 /// A local identifier for an exclusion zone. Zones never leave the device, so this is a row id,
@@ -950,6 +965,7 @@ mod tests {
             },
             invites: Vec::new(),
             invite_link: None,
+            join_requests: Vec::new(),
         })
     }
 
@@ -974,7 +990,7 @@ mod tests {
             alert: None,
             location_requests: Vec::new(),
             ended_meetup: None,
-            join_preview: None,
+            joining: None,
             display_name: None,
             own_position: None,
             fallbacks: Vec::new(),

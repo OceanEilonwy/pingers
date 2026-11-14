@@ -111,7 +111,7 @@ mod tests {
         before.meetups.clear();
         before.location_requests.clear();
         for party in &mut before.parties {
-            party.invites.clear();
+            party.join_requests.clear();
         }
         let meetup = Some(MeetupId::from(fixtures::meetup_id()));
         let posted: Vec<(NotificationKind, Option<MeetupId>, bool)> =

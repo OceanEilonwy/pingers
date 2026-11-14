@@ -654,13 +654,13 @@ pub enum Invitation {
         /// Hours until it stops working.
         expires_in_hours: u32,
     },
-    /// Opened: compare codes.
+    /// Someone asked to join: compare codes, then open [`JoinRequestView`].
     Opened {
-        /// The invite.
+        /// The request.
         id: InviteId,
         /// The name they gave.
         name: String,
-        /// The safety code.
+        /// The join code.
         code: String,
     },
     /// Joined.
@@ -719,41 +719,175 @@ impl From<screens::invite::InviteView> for InviteView {
     }
 }
 
-/// Accept invite.
+/// "Ben asked to join" (canvas `InviteApprove`), with its words from pingers-words.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
-pub struct AcceptInviteView {
-    /// Who invited.
-    pub inviter: String,
-    /// The Party's name.
-    pub party_name: String,
-    /// Its initials.
-    pub party_initials: String,
-    /// Its colour.
-    pub colour: PartyColour,
-    /// The first few members.
-    pub preview: Vec<Person>,
-    /// How many more.
-    pub more_members: u32,
-    /// How many members.
-    pub members: u32,
-    /// How many Spots.
-    pub spots: u32,
-    /// The code to compare.
-    pub safety_code: String,
+pub struct JoinRequestView {
+    /// The request, for `Core::let_in` and `Core::turn_away`.
+    pub id: InviteId,
+    /// "BE".
+    pub avatar: String,
+    /// "Ben asked to join".
+    pub title: String,
+    /// "Climbing crew · from the link you shared 2 h ago".
+    pub subtitle: String,
+    /// "Ask Ben to read their code. It should be:".
+    pub ask: String,
+    /// "4821 0937 5512".
+    pub code: String,
+    /// "A different code means someone else opened your link. Don't let them in."
+    pub warning: String,
+    /// "When you let Ben in".
+    pub when_heading: String,
+    /// What letting them in does.
+    pub when_body: String,
+    /// "Codes match · Let Ben in".
+    pub let_in: String,
+    /// "Don't let in".
+    pub turn_away: String,
 }
 
-impl From<screens::invite::AcceptInvite> for AcceptInviteView {
-    fn from(view: screens::invite::AcceptInvite) -> Self {
+impl From<screens::invite::JoinRequestView> for JoinRequestView {
+    fn from(view: screens::invite::JoinRequestView) -> Self {
+        let text = pingers_words::invite::join_request(LANGUAGE, &view);
         Self {
-            inviter: view.inviter.as_str().to_owned(),
-            party_name: view.party_name.as_str().to_owned(),
-            party_initials: view.party_initials.as_str().to_owned(),
+            id: view.id.into(),
+            avatar: text.avatar,
+            title: text.title,
+            subtitle: text.subtitle,
+            ask: text.ask,
+            code: text.code,
+            warning: text.warning,
+            when_heading: text.when_heading,
+            when_body: text.when_body,
+            let_in: text.let_in,
+            turn_away: text.turn_away,
+        }
+    }
+}
+
+/// Open invite (canvas `JoinA1`): nothing about the Party, only the name to go by.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct OpenInviteView {
+    /// "You've been invited to a Party".
+    pub title: String,
+    /// "You'll see its name and who's in it once the person who invited you lets you in."
+    pub subtitle: String,
+    /// "What joining means".
+    pub what_joining_means: String,
+    /// The points under it.
+    pub points: Vec<String>,
+    /// "Your name in this Party".
+    pub name_label: String,
+    /// The name to prefill, or empty.
+    pub name: String,
+    /// "Ask to join".
+    pub ask: String,
+    /// "Not now".
+    pub not_now: String,
+}
+
+impl From<screens::invite::OpenInvite> for OpenInviteView {
+    fn from(view: screens::invite::OpenInvite) -> Self {
+        let text = pingers_words::invite::open_invite(LANGUAGE, &view);
+        Self {
+            title: text.title,
+            subtitle: text.subtitle,
+            what_joining_means: text.what_joining_means,
+            points: text.points.into(),
+            name_label: text.name_label,
+            name: text.name,
+            ask: text.ask,
+            not_now: text.not_now,
+        }
+    }
+}
+
+/// Asked to join (canvas `JoinA2`): the code to read to the inviter.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct AskedToJoinView {
+    /// "Asked to join".
+    pub title: String,
+    /// What happens next.
+    pub subtitle: String,
+    /// "Read this code to them, in person or on a call".
+    pub read_code: String,
+    /// "4821 0937 5512".
+    pub code: String,
+    /// "If their code is different, someone else may have your link. Tell them not to let you
+    /// in."
+    pub warning: String,
+    /// "You can leave this screen. We'll notify you when you're in."
+    pub leave_note: String,
+    /// "Done".
+    pub done: String,
+    /// "Withdraw request".
+    pub withdraw: String,
+}
+
+impl From<screens::invite::AskedToJoin> for AskedToJoinView {
+    fn from(view: screens::invite::AskedToJoin) -> Self {
+        let text = pingers_words::invite::asked_to_join(LANGUAGE, &view);
+        Self {
+            title: text.title,
+            subtitle: text.subtitle,
+            read_code: text.read_code,
+            code: text.code,
+            warning: text.warning,
+            leave_note: text.leave_note,
+            done: text.done,
+            withdraw: text.withdraw,
+        }
+    }
+}
+
+/// You're in (canvas `JoinA3`): the Party, now that this device was let in.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct LetInView {
+    /// The Party, to open or leave.
+    pub party: PartyId,
+    /// Its colour.
+    pub colour: PartyColour,
+    /// "CC".
+    pub party_initials: String,
+    /// "Ana let you in".
+    pub let_in_by: String,
+    /// "Climbing crew".
+    pub party_name: String,
+    /// The first few other members, as avatars.
+    pub preview: Vec<Person>,
+    /// "+2", when there are more members than avatars.
+    pub more: Option<String>,
+    /// "6 members · 3 spots".
+    pub counts: String,
+    /// "Code 4821 0937 5512 was checked before Ana let you in. …"
+    pub checked: String,
+    /// "Open Climbing crew".
+    pub open: String,
+    /// "Leave Party".
+    pub leave: String,
+    /// The notification to post when `Events::let_in` arrives: "Ana let you in".
+    pub notification_title: String,
+    /// "Climbing crew".
+    pub notification_body: String,
+}
+
+impl From<screens::invite::LetIn> for LetInView {
+    fn from(view: screens::invite::LetIn) -> Self {
+        let text = pingers_words::invite::let_in(LANGUAGE, &view);
+        Self {
+            party: view.party.into(),
             colour: view.colour.into(),
+            party_initials: text.party_initials,
+            let_in_by: text.let_in_by,
+            party_name: text.party_name,
             preview: people(&view.preview),
-            more_members: count(view.more_members),
-            members: count(view.members),
-            spots: count(view.spots),
-            safety_code: view.safety_code.as_str().to_owned(),
+            more: text.more,
+            counts: text.counts,
+            checked: text.checked,
+            open: text.open,
+            leave: text.leave,
+            notification_title: text.notification_title,
+            notification_body: text.notification_body,
         }
     }
 }

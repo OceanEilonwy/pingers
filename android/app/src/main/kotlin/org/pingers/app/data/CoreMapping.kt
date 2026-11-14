@@ -211,9 +211,21 @@ internal fun uniffi.pingers.InviteView.toUi() = InviteState(
     },
 )
 
-internal fun uniffi.pingers.AcceptInviteView.toUi() = AcceptInviteState(
-    inviter, partyName, partyInitials, colour.toUi(), preview.map { it.toUi() },
-    moreMembers.toInt(), members.toInt(), spots.toInt(), safetyCode,
+internal fun uniffi.pingers.OpenInviteView.toUi(error: String?) = OpenInviteState(
+    title, subtitle, whatJoiningMeans, points, nameLabel, name, ask, notNow, error,
+)
+
+internal fun uniffi.pingers.AskedToJoinView.toUi() = AskedToJoinState(
+    title, subtitle, readCode, code, warning, leaveNote, done, withdraw,
+)
+
+internal fun uniffi.pingers.LetInView.toUi() = LetInState(
+    party.toUi(), colour.toUi(), partyInitials, letInBy, partyName, preview.map { it.toUi() }, more,
+    counts, checked, open, leave, notificationTitle, notificationBody,
+)
+
+internal fun uniffi.pingers.JoinRequestView.toUi() = JoinRequestState(
+    id.toUi(), avatar, title, subtitle, ask, code, warning, whenHeading, whenBody, letIn, turnAway,
 )
 
 // ---------------------------------------------------------------- Spots and privacy

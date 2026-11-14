@@ -16,14 +16,6 @@ variables (`PINGERS_SERVER_HOST`, `PINGERS_OHTTP_RELAY`, `PINGERS_PUSH_RELAY`,
 | `push.example.org` | pingers-push-relay |
 | `maps.example.org` | pingers-map-host |
 
-**Not yet done.** The package depends on work still in flight:
-
-- nodo change **N1** (h2c upstreams with immediate flushing) and **N2** (third-party recipes and
-  a configurable feed signer). Both are written as patches against monokulo-nodo; until they are
-  merged there, nodo refuses the server's and relay's manifests (`upstream_protocol`) and the
-  feed workflow stops at its first check. `xtask/tests/nodo_packaging.rs` marks the one
-  workaround with `TODO(N1)`.
-
 `cargo test -p xtask --test nodo_packaging` checks the packaging against nodo's own parsers
 (manifests, settings, rendering) and parses the rendered server, push relay and map host configs,
 and their dev configs, with those services' own parsers.
@@ -303,9 +295,11 @@ gh release create feed --repo OceanEilonwy/pingers --target main --latest=false 
   --notes "Signed xbps feed. Address: https://github.com/OceanEilonwy/pingers/releases/download/feed  Key fingerprint: 9d:c4:00:6e:53:d8:99:c4:f9:5d:9c:96:b0:e9:1a:07"
 ```
 
-Then set `NODO_REV` in `feed.yml` to a monokulo-nodo commit that has N1 and N2.
+`NODO_REV` in `feed.yml` names the monokulo-nodo commit the feed is built with; it must have N1
+and N2, which monokulo-nodo merged in #12 (4ad5661, also the commit `cargo test -p xtask` parses
+the packaging with).
 
-**Building locally** (Docker, a monokulo-nodo checkout with N1 and N2 at `$NODO`):
+**Building locally** (Docker, a monokulo-nodo checkout at 4ad5661 or later, which has N1 and N2, at `$NODO`):
 
 ```sh
 cargo xtask nodo-dist HEAD --nodo "$NODO"     # prints version, sha256; fills target/nodo/srcpkgs
@@ -355,7 +349,7 @@ tests, `crates/pingers-e2e`, and the push relay's ntfy script.
    `push-relay.toml`, `relay.toml`, `map-host.toml`. Cut the Melbourne CBD test pack into
    `target/dev-stack/maps` first.
 3. `caddy run --config packaging/nodo/dev/caddy.json` puts Caddy in front exactly as nodo-web
-   will after N1: h2c and `flush_interval: -1` for the server (9443) and relay (9444), HTTP/1.1
+   does (N1): h2c and `flush_interval: -1` for the server (9443) and relay (9444), HTTP/1.1
    for the push relay (9445) and map host (9446), `/ohttp`, `/metrics` and `/v1/push` hidden.
 4. Build debug APKs with `PINGERS_SERVER_HOST=https://10.0.2.2:9443`,
    `PINGERS_OHTTP_RELAY=https://10.0.2.2:9444/ohttp`, `PINGERS_PUSH_RELAY=https://10.0.2.2:9445`,
@@ -370,7 +364,7 @@ tests, `crates/pingers-e2e`, and the push relay's ntfy script.
    channel both ways, and chat.
 
 **Tier 2: the real packages in nodo's x86-kvm VM** (`scripts/dev-vm.sh up` in a nodo checkout
-with N1 and N2): build x86_64 packages, sign a test feed with a throwaway key, copy it into the
+at 4ad5661 or later): build x86_64 packages, sign a test feed with a throwaway key, copy it into the
 VM as a directory feed, `AddFeed`, then install in dependency order (push relay, server, relay,
 map host). Check the firewall (`_pingers-server` reaches nothing but 9472; only
 `_pingers-ohttp-relay` reaches 9471), reboot (services wait for the unlock), and restore a backup

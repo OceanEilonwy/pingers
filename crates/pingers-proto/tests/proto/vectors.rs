@@ -8,7 +8,7 @@ use core::time::Duration;
 
 use pingers_proto::{
     AppMessage, BoardBeacon, BoardCursor, BoardPage, ChatBody, ChatMessageId, Delivery,
-    DisplayName, E7Coordinate, Epoch, HeadingDegrees, InvitePayload, InviteUses,
+    DisplayName, E7Coordinate, Epoch, HeadingDegrees, InvitePayload, InvitePost,
     InviterFingerprint, JoinRequest, KeyConfigHash, KeyPackageBytes, Knock, KnockSignature,
     Lamport, LeafIndex, Lease, LocationGeneration, LocationPlaintext, MailboxId, MailboxPush,
     MailboxSpec, MeetPoint, MeetPointLabel, MeetupHint, MeetupMessage, MlsMessageBytes,
@@ -534,11 +534,6 @@ fn invite_payload_vectors() -> Result<(), TestError> {
                     "inviter_fingerprint",
                 )?),
                 expires: UnixSeconds::new(number(vector, "expires")?),
-                uses: match text(vector, "uses")?.as_str() {
-                    "single" => InviteUses::Single,
-                    "multiple" => InviteUses::Multiple,
-                    _ => return Err(field_error(vector, "uses")),
-                },
                 registration_code: vector
                     .inputs
                     .get("registration_code")
@@ -556,26 +551,53 @@ fn join_request_vectors() -> Result<(), TestError> {
     check(&Format {
         file: "join-request-encoding",
         bytes_field: "encoding",
-        build: |vector| {
-            Ok(JoinRequest {
-                key_package: KeyPackageBytes::from_bytes(vector.input_bytes("key_package")?),
-                display_name: DisplayName::new(text(vector, "display_name")?)?,
-                reply_mailbox: MailboxId::from_bytes(bytes(vector, "reply_mailbox")?),
-                party_subscription: Subscription {
-                    id: SubscriptionId::from_bytes(bytes(vector, "subscription_id")?),
-                    push: SealedPush {
-                        relay: RelayRef::Listed(RelayId::new(2)),
-                        key_id: PushRelayKeyId::new(1),
-                        blob: SealedPushBlob::from_bytes(blob()),
-                        urgency: Urgency::Quiet,
-                        handle: PushHandle::from_bytes(ramp::<8>(0xf0)),
-                    },
-                    time_to_live: time_to_live(vector, "subscription_ttl_seconds")?,
-                },
-            })
-        },
+        build: join_request,
         encode: JoinRequest::encode,
         decode: JoinRequest::decode,
+    })
+}
+
+/// A join request from a vector; `subscription_id` `""` means no subscription.
+fn join_request(vector: &Vector) -> Result<JoinRequest, TestError> {
+    let party_subscription = match optional_bytes(vector, "subscription_id")? {
+        Some(id) => Some(Subscription {
+            id: SubscriptionId::from_bytes(id),
+            push: SealedPush {
+                relay: RelayRef::Listed(RelayId::new(2)),
+                key_id: PushRelayKeyId::new(1),
+                blob: SealedPushBlob::from_bytes(blob()),
+                urgency: Urgency::Quiet,
+                handle: PushHandle::from_bytes(ramp::<8>(0xf0)),
+            },
+            time_to_live: time_to_live(vector, "subscription_ttl_seconds")?,
+        }),
+        None => None,
+    };
+    let x_wing = vector.input_bytes("x_wing_key_package")?;
+    Ok(JoinRequest {
+        key_package: KeyPackageBytes::from_bytes(vector.input_bytes("key_package")?),
+        quantum_resistant_key_package: (!x_wing.is_empty())
+            .then(|| KeyPackageBytes::from_bytes(x_wing)),
+        display_name: DisplayName::new(text(vector, "display_name")?)?,
+        reply_mailbox: MailboxId::from_bytes(bytes(vector, "reply_mailbox")?),
+        party_subscription,
+    })
+}
+
+#[test]
+fn invite_post_vectors() -> Result<(), TestError> {
+    check(&Format {
+        file: "invite-post-encoding",
+        bytes_field: "encoding",
+        build: |vector| match text(vector, "kind")?.as_str() {
+            "join" => Ok(InvitePost::Join(Box::new(join_request(vector)?))),
+            "withdraw" => Ok(InvitePost::Withdraw {
+                reply_mailbox: MailboxId::from_bytes(bytes(vector, "reply_mailbox")?),
+            }),
+            _ => Err(field_error(vector, "kind")),
+        },
+        encode: InvitePost::encode,
+        decode: InvitePost::decode,
     })
 }
 
