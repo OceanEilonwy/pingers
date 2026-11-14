@@ -2,11 +2,12 @@
 //! The engine: sends one request with the right privacy class and credential, inside the wake
 //! budget, and queues or drops what could not be sent.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use pingers_ohttp::{BinaryResponse, OhttpError};
-use pingers_proto::{CommitResponse, MessageAccepted, ServerId, WireDecode};
-use pingers_store::{Database, NewQueuedRequest, Pushed, Session};
+use pingers_proto::{CommitResponse, MessageAccepted, PushHandle, ServerId, WireDecode};
+use pingers_store::{Database, NewQueuedRequest, Pushed, SealStamp, Session};
 use pingers_time::{Clock, Timer, UnixSeconds};
 use pingers_transport::{DuplexStream, PrivacyClass, Transport, TransportError};
 
@@ -218,6 +219,9 @@ pub struct SyncEngine {
     pub(crate) settings: Mutex<SyncSettings>,
     clock_status: Mutex<ClockStatus>,
     pub(crate) wake_push: Mutex<Option<WakePush>>,
+    /// What each subscription handed out in this process was sealed with, by handle, until it
+    /// is recorded.
+    pub(crate) issued: Mutex<HashMap<PushHandle, SealStamp>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -249,6 +253,7 @@ impl SyncEngine {
             rng: Arc::new(Mutex::new(parts.rng)),
             clock_status: Mutex::new(ClockStatus::Unchecked),
             wake_push: Mutex::new(None),
+            issued: Mutex::new(HashMap::new()),
             settings: Mutex::new(settings),
         }
     }

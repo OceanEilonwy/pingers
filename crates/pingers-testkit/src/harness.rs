@@ -73,6 +73,9 @@ pub struct HarnessConfig {
     /// The operator's registration codes (design B.1): empty, the server takes any
     /// registration; otherwise `POST /v1/accounts` must present one of them.
     pub registration_codes: Vec<String>,
+    /// Schedules a second push relay key (key id 2, from its own seed) to be published from
+    /// this time, for rotation tests ([`Endpoints::push_relay_next_key`]). `None`: one key.
+    pub push_relay_next_key_at: Option<UnixSeconds>,
 }
 
 impl Default for HarnessConfig {
@@ -83,6 +86,7 @@ impl Default for HarnessConfig {
             seed: 0,
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
             registration_codes: Vec::new(),
+            push_relay_next_key_at: None,
         }
     }
 }
@@ -114,6 +118,9 @@ pub struct Endpoints {
     pub ohttp_key_config: Vec<u8>,
     /// The push relay's X25519 HPKE public key (key id 1), which clients seal push tokens to.
     pub push_relay_key: Vec<u8>,
+    /// The scheduled second push relay key (key id 2), with
+    /// [`HarnessConfig::push_relay_next_key_at`].
+    pub push_relay_next_key: Option<Vec<u8>>,
 }
 
 /// A push the push relay would have delivered to FCM or a UnifiedPush endpoint.

@@ -14,7 +14,7 @@ use crate::SyncError;
 
 /// Every route, at the index that is its code. Append only: queued requests outlive an app
 /// update, so a code once used never changes meaning.
-const ROUTE_CODES: [Route; 26] = [
+const ROUTE_CODES: [Route; 28] = [
     Route::Params,
     Route::CreateAccount,
     Route::Auth,
@@ -41,6 +41,8 @@ const ROUTE_CODES: [Route; 26] = [
     Route::Live,
     Route::OhttpConfig,
     Route::PushRelayConfig,
+    Route::PushRelayNextConfig,
+    Route::ReplaceMailboxPush,
 ];
 
 fn route_code(route: Route) -> Result<u8, SyncError> {
@@ -189,7 +191,7 @@ mod tests {
         let params = ApiRequest::params().to_queued()?;
         let mut unknown_route = params.expose_bytes().to_vec();
         if let Some(code) = unknown_route.first_mut() {
-            *code = 26;
+            *code = u8::try_from(ROUTE_CODES.len()).unwrap_or(u8::MAX);
         }
         assert!(matches!(
             ApiRequest::from_queued(

@@ -121,7 +121,7 @@ pub use repo::board::{
     StoredLease,
 };
 pub use repo::mailbox::{
-    Mailbox, MailboxPurpose, MailboxState, Mailboxes, StoredSubscription, Subscriptions,
+    Mailbox, MailboxPurpose, MailboxState, Mailboxes, SealStamp, StoredSubscription, Subscriptions,
 };
 pub use repo::meetup::{
     GrantScope, GrantedKey, LocationAsks, LocationGrants, LocationRequest, LocationRequestState,

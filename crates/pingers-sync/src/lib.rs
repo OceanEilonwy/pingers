@@ -45,6 +45,7 @@ mod group;
 mod mailbox;
 mod pool;
 mod queue;
+mod registrations;
 mod request;
 mod server;
 mod tokens;
@@ -64,6 +65,7 @@ pub use group::{CommitAttempts, CommitOwner, Committed, GroupCall, GroupLogOwner
 pub use mailbox::{Delivered, NewMailbox, PushSeal};
 pub use pool::{LEASE_BUCKETS, PoolRefill, PoolTarget, WakePush};
 pub use queue::{QueueCapacity, QueuePolicy, Sending};
+pub use registrations::{GroupMembership, Maintained, Maintenance, RENEW_AHEAD};
 pub use request::{ApiRequest, GroupLifetime, GroupSigner, GroupStart, Route};
-pub use server::VerifiedPushRelay;
+pub use server::{NextPushRelayKey, ScheduledPushRelay, VerifiedPushRelay};
 pub use tokens::{Refill, TokenIssuer, TokenStock};
