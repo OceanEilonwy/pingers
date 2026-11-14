@@ -18,9 +18,13 @@
 //!   variables from the deployed configurations. See [`pins`].
 //! - `cargo xtask release-android [--flavour gms|foss]...`: the signed release build CI's
 //!   `release.yml` runs, from the same environment variables. See [`release_android`].
+//! - `cargo xtask nodo-dist [<commit>] [--nodo <checkout>]`: the vendored source tarball and
+//!   filled-in xbps recipes for monokulo-nodo's builder; `cargo xtask dev-ca`: a throwaway CA
+//!   for the tier-1 local stack. See [`nodo`].
 #![forbid(unsafe_code)]
 
 mod full;
+mod nodo;
 mod pins;
 mod release_android;
 
@@ -90,7 +94,12 @@ const USAGE: &str = "usage: cargo xtask <command>\n\n\
                      release-android [--flavour gms|foss]...\n          \
                      signed release APKs and AABs from PINGERS_KEYSTORE_PATH,\n          \
                      PINGERS_KEYSTORE_PASSWORD and PINGERS_KEY_ALIAS, checked with\n          \
-                     apksigner (android/docs/release.md)";
+                     apksigner (android/docs/release.md)\n  \
+                     nodo-dist [<commit>] [--nodo <checkout>]\n          \
+                     vendored source tarball (prints its SHA-256) and filled-in xbps\n          \
+                     recipes in target/nodo/ (docs/deploy-nodo.md)\n  \
+                     dev-ca [--san <name>]...\n          \
+                     throwaway CA and server certificate in target/dev-ca/";
 
 fn run() -> Result<Outcome> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -126,6 +135,14 @@ fn run() -> Result<Outcome> {
         },
         Some("release-android") => match release_android::parse_options(options) {
             Some(choice) => release_android::run(&workspace_root()?, &choice),
+            None => usage(),
+        },
+        Some("nodo-dist") => match nodo::parse_dist_options(options) {
+            Some(dist) => nodo::nodo_dist(&workspace_root()?, &dist),
+            None => usage(),
+        },
+        Some("dev-ca") => match nodo::parse_ca_options(options) {
+            Some(names) => nodo::dev_ca(&workspace_root()?, &names),
             None => usage(),
         },
         _ => usage(),

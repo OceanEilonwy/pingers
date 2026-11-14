@@ -1,0 +1,20 @@
+#!/bin/sh
+# Starts pingers-server with the configuration file nodo renders from its settings.
+#
+# nodo's exec arguments cannot name /etc/apps/<id>/ (check_exec_arg), and every Pingers service
+# takes its configuration file as its only argument, so this launcher names it. The service
+# reads only that file: the NODO_* variables nodo also passes, sealed secrets among them, are
+# removed before it starts so they never sit in its environment.
+#
+# The launcher keeps the binary's name, so the generated control/t's `pkill -x pingers-server` matches
+# whichever of the two is running.
+set -eu
+config=/etc/apps/pingers-server/server.toml
+if [ ! -r "$config" ]; then
+	echo "pingers-server launcher: $config has not been written" >&2
+	exit 1
+fi
+for variable in $(env | sed -n 's/^\(NODO_[A-Za-z0-9_]*\)=.*/\1/p'); do
+	unset "$variable"
+done
+exec "$(dirname "$0")/../libexec/pingers-server" "$config"

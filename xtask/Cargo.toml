@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "Workspace checks that cargo cannot express: the layer rule, and the CI sequence."
+description = "Workspace checks that cargo cannot express: the layer rule, the CI sequence, and nodo packaging."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -19,11 +19,22 @@ pingers-proto = { workspace = true }
 hex = { workspace = true }
 toml = { workspace = true }
 zeroize = { workspace = true }
+# nodo-dist: the tarball's gzip (deterministic header) and its SHA-256.
+flate2 = { workspace = true }
+sha2 = { workspace = true }
+# dev-ca: a throwaway CA and leaf for the tier-1 local stack.
+rcgen = { workspace = true }
 
 [dev-dependencies]
 # `pins` is checked against the relay's and the server's own `pins` subcommands.
 pingers-push-relay = { path = "../crates/pingers-push-relay" }
+# tests/nodo_packaging.rs also parses the rendered server config with the server's parser.
 pingers-server = { path = "../crates/pingers-server" }
+# tests/nodo_packaging.rs parses the rendered map host config with the host's own parser.
+pingers-map-host = { path = "../crates/pingers-map-host" }
+# tests/nodo_packaging.rs checks packaging/nodo with nodo's own parsers.
+nodo-manifest = { workspace = true }
+nodo-settings = { workspace = true }
 
 [lints]
 workspace = true

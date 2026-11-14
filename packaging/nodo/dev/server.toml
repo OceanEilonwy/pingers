@@ -1,0 +1,39 @@
+# Tier-1 local stack (docs/deploy-nodo.md, "Local testing"): pingers-server with the shape of
+# packaging/nodo's server.toml.in and TEST KEYS ONLY. Run from the repository root:
+#   cargo run --release -p pingers-server -- packaging/nodo/dev/server.toml
+# The hosts are the dev Caddy's (packaging/nodo/dev/caddy.json) as an emulator sees them.
+listen = "127.0.0.1:9470"
+server_id = "https://10.0.2.2:9443"
+server_operator = "Local test"
+ohttp_relay_urls = ["https://10.0.2.2:9444/ohttp"]
+map_host = "https://10.0.2.2:9446"
+logging = "counts"
+counts_interval_s = 60
+delivery_db = "target/dev-stack/groups.sqlite"
+quota_db = "target/dev-stack/quota.sqlite"
+mailbox_db = "target/dev-stack/mailboxes.sqlite"
+
+[ohttp]
+listen = "127.0.0.1:9471"                                    # TODO(p-server): [ohttp] listen
+relays = ["127.0.0.1"]
+served_key_id = 1                                            # TODO(p-server): served_key_id
+
+[[ohttp.keys]]
+key_id = 1
+secret = "1111111111111111111111111111111111111111111111111111111111111111"
+
+[[ohttp.keys]]
+key_id = 2
+secret = "2222222222222222222222222222222222222222222222222222222222222222"
+
+[metrics]
+allow = ["127.0.0.1"]
+
+[[push_relays]]
+relay_id = 1
+url = "http://127.0.0.1:9472"                                # TODO(p-server): loopback http url
+public_url = "https://10.0.2.2:9445"                         # TODO(p-server): advertised url
+credential = "3333333333333333333333333333333333333333333333333333333333333333"
+# `pingers-push-relay pins packaging/nodo/dev/push-relay.toml` prints the value for these keys.
+key_config_hash = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"   # TODO(p-server): pin form
+operator = "Local test"

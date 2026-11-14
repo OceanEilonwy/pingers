@@ -1,0 +1,43 @@
+# pingers-server on monokulo-nodo: the API, and the OHTTP gateway on a listener of its own.
+# docs/deploy-nodo.md explains every choice here.
+api_version = 1
+id = "pingers-server"
+version = "@VERSION@"
+# The launcher runs libexec/pingers-server /etc/apps/pingers-server/server.toml.
+exec = ["bin/pingers-server"]
+settings = "settings.lua"
+# A live channel is dropped on shutdown; mailboxes are in SQLite, which survives a kill.
+stop_timeout_secs = 15
+health = { tcp = { port = 9470 } }
+
+[config]
+template = "server.toml.in"
+name = "server.toml"
+
+[storage]
+# Mailboxes, groups, the RLN tree, Privacy Pass issuer keys and the spent set: kilobytes per
+# device. Encrypted, so the rendered config (with the gateway keys) stays inside the volume too.
+encrypted = true
+size_mib = 1024
+data_layout = 1
+
+# The gateway listener. Not a web site: only pingers-ohttp-relay reaches it, because only it
+# references gateway-url, and the firewall opens a loopback port to the packages that do.
+[[network.inbound]]
+port = 9471
+protocol = "tcp"
+scope = "local"
+
+# No outbound access: the server reaches only the push relay, on loopback, by reference.
+
+[[web]]
+name = "api"
+upstream = "127.0.0.1:9470"
+# The server speaks HTTP/2 only (prior knowledge). Needs nodo change N1.
+upstream_protocol = "h2c"
+suggested_subdomain = "pingers"
+# Belt and braces: the gateway is not on this listener at all, and /metrics is loopback-only.
+admin_paths = ["/ohttp", "/metrics"]
+# The origin is the server's identity (server_id: RLN external nullifiers, account
+# registrations), so it has one address.
+multi_address = false

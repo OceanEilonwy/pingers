@@ -1,0 +1,43 @@
+# pingers-server's configuration, rendered by nodo from pingers-server's settings: change them in
+# nodo-tui, not here. The format is crates/pingers-server/src/config.rs.
+listen = "127.0.0.1:9470"
+server_id = "$(pingers-server.server_id)"
+server_operator = "$(pingers-server.operator)"
+ohttp_relay_urls = ["$(pingers-server.ohttp_relay_url)"]
+map_host = "$(pingers-server.map_host)"
+logging = "$(pingers-server.logging)"
+delivery_db = "/var/lib/apps/pingers-server/groups.sqlite"
+quota_db = "/var/lib/apps/pingers-server/quota.sqlite"
+mailbox_db = "/var/lib/apps/pingers-server/mailboxes.sqlite"
+
+[ohttp]
+# The gateway's own listener (P1): only POST /ohttp and GET /v1/ohttp/config, reachable by
+# pingers-ohttp-relay alone. The public listener answers /ohttp with 404.
+listen = "127.0.0.1:9471"                                    # TODO(p-server): [ohttp] listen
+# Every peer on the gateway listener is the relay on loopback: a second check behind the firewall.
+relays = ["127.0.0.1"]
+served_key_id = "$(pingers-server.ohttp_served_key_id)"      # TODO(p-server): served_key_id
+# No trusted_proxies (P7): the relay is on this device, so no proxy stands between it and the
+# gateway, and the router's proxy in front of 443 never reaches this listener.
+
+[[ohttp.keys]]
+key_id = "$(pingers-server.ohttp_key_a_id)"
+secret = "$(pingers-server.ohttp_key_a)"
+
+[[ohttp.keys]]
+key_id = "$(pingers-server.ohttp_key_b_id)"
+secret = "$(pingers-server.ohttp_key_b)"
+
+[metrics]
+allow = ["127.0.0.1"]
+
+[[push_relays]]
+relay_id = 1
+# Loopback http to pingers-push-relay (P4): no hairpin through the router, and no internet
+# access for the server.
+url = "$(pingers-push-relay.server-url)"                     # TODO(p-server): loopback http url
+public_url = "$(pingers-server.push_relay_public_url)"       # TODO(p-server): advertised url
+# A sealed secret of pingers-push-relay: the owner approves pingers-server's grant once.
+credential = "$(pingers-push-relay.server_credential)"
+key_config_hash = "$(pingers-server.push_relay_key_config_hash)"   # TODO(p-server): pin form
+operator = "$(pingers-push-relay.operator)"

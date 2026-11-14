@@ -1,0 +1,27 @@
+# pingers-ohttp-relay on monokulo-nodo: the Oblivious HTTP relay in front of the server's gateway.
+# docs/deploy-nodo.md explains every choice here.
+api_version = 1
+id = "pingers-ohttp-relay"
+version = "@VERSION@"
+# The launcher runs libexec/pingers-ohttp-relay /etc/apps/pingers-ohttp-relay/relay.toml.
+exec = ["bin/pingers-ohttp-relay"]
+# A config template needs a settings file; the gateway addresses come from pingers-server's.
+settings = "settings.lua"
+stop_timeout_secs = 10
+health = { tcp = { port = 9473 } }
+
+[config]
+template = "relay.toml.in"
+name = "relay.toml"
+
+# No storage, no outbound internet, and no logs: the firewall opens only the gateway port, which
+# it is granted by referencing pingers-server's gateway-url.
+
+[[web]]
+name = "relay"
+upstream = "127.0.0.1:9473"
+# The relay speaks HTTP/2 only (prior knowledge), and chunked OHTTP needs every chunk passed on
+# at once. Needs nodo change N1.
+upstream_protocol = "h2c"
+suggested_subdomain = "ohttp"
+multi_address = true

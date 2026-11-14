@@ -1,0 +1,24 @@
+# pingers-map-host on monokulo-nodo: serves pre-cut map packs.
+# docs/deploy-nodo.md explains every choice here.
+api_version = 1
+id = "pingers-map-host"
+version = "@VERSION@"
+# The launcher runs libexec/pingers-map-host /etc/apps/pingers-map-host/map-host.toml.
+exec = ["bin/pingers-map-host"]
+settings = "settings.lua"
+stop_timeout_secs = 10
+health = { tcp = { port = 9474 } }
+
+[config]
+template = "map-host.toml.in"
+name = "map-host.toml"
+
+# Unencrypted on purpose: map packs are public OpenStreetMap data, too large to back up, and can
+# be cut again. Turn on UseDataDrive before installing, so they go to the data drive. No
+# outbound access: packs are uploaded (rsync over the owner's SSH), not fetched.
+
+[[web]]
+name = "maps"
+upstream = "127.0.0.1:9474"
+suggested_subdomain = "maps"
+multi_address = true
