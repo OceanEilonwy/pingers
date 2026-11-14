@@ -146,10 +146,14 @@ reaches phones:
   (a new invite link, or another build), so a phone never retries a 403 in a loop.
 
 To stop new accounts from old invite links, Reset `registration_code` in nodo-tui, and give the
-new code to phones that should keep inviting (today: a new debug build). Caution: the server keeps
-accounts in memory for now, so after it restarts every phone registers again with the code it
-first used. Until accounts persist, a reset locks out phones registered with the old code at the
-server's next restart.
+new code to phones that should keep inviting (today: a new debug build). Phones that already
+have an account are not affected: accounts live in `quota_db`
+(`/var/lib/apps/pingers-server/quota.sqlite`, on the encrypted volume), and a registered phone
+proves its key without any code. A restart keeps every account and every bearer: a bearer is
+still accepted until the hour it was issued for ends, a deleted account stays deleted, and the
+database holds only each account's public key, when it registered, and a digest of each bearer
+(never a usable bearer). The code only gates new accounts, which the server also limits to
+`signups_per_hour` (default 60) whatever the code.
 
 ### 1.2 Keys and rotation
 

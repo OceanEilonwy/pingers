@@ -29,14 +29,13 @@
 //! - **Groups** (`groups.rs`, `live_groups.rs`) are wired to pingers-delivery: logs, the one
 //!   commit per epoch, subscriptions, snapshots, deletion, lifetime classes, wakes to the push
 //!   relays (410 deletes the subscription) and live fan-out.
-//! - **Accounts, the membership tree and Privacy Pass** (`accounts.rs`, `quota_routes.rs`)
-//!   are wired to pingers-quota; `/v1/params` publishes the configuration.
+//! - **Accounts, the membership tree and Privacy Pass** (`quota_routes.rs`) are wired to
+//!   pingers-quota, which keeps accounts and bearer digests in `quota_db`; `/v1/params` publishes the configuration.
 //! - **Background tasks**: the expiry sweep (board, mailboxes, idle groups, sessions,
 //!   bearers), the hourly membership root and the daily issuer key rotation, all owned and
 //!   cancelled on shutdown.
 #![forbid(unsafe_code)]
 
-mod accounts;
 mod admin;
 mod board_routes;
 mod config;
@@ -70,7 +69,9 @@ use pingers_delivery::{Delivery, SqliteDeliveryStore};
 use pingers_mailbox::{MailboxParts, MailboxRules, Mailboxes, PostsPerBucket, SqliteStorage};
 use pingers_ohttp::{Gateway, KeyConfig};
 use pingers_proto::{PushRelayInfo, RelayUrl};
-use pingers_quota::{Membership, Nullifiers, PrivacyPass, SqliteQuotaStore};
+use pingers_quota::{
+    AccountPolicy, Accounts, Membership, Nullifiers, PrivacyPass, SqliteQuotaStore,
+};
 use pingers_time::{Clock, Timer};
 use pingers_transport::TokioTimer;
 use rand_chacha::ChaCha20Rng;
@@ -93,7 +94,6 @@ pub use crate::live::{
 #[cfg(unix)]
 pub use crate::signal::StopSignals;
 
-use crate::accounts::Accounts;
 use crate::board_routes::BoardService;
 use crate::credential::Sessions;
 use crate::groups::GroupService;
@@ -138,6 +138,7 @@ pub struct Outside<C, T, L> {
 
 /// pingers-quota's services over one store.
 pub(crate) struct Quota {
+    pub(crate) accounts: Accounts<Arc<SqliteQuotaStore>>,
     pub(crate) membership: Membership<Arc<SqliteQuotaStore>>,
     pub(crate) nullifiers: Nullifiers,
     pub(crate) privacy_pass: PrivacyPass<Arc<SqliteQuotaStore>>,
@@ -176,7 +177,6 @@ pub(crate) struct Shared {
     pub(crate) groups: Arc<GroupService>,
     pub(crate) live_channels: LiveChannels,
     pub(crate) quota: Quota,
-    pub(crate) accounts: Accounts,
     pub(crate) sessions: Sessions,
     pub(crate) params: PublishedParams,
     pub(crate) tasks: Tasks,
@@ -325,6 +325,15 @@ fn quota(config: &ServerConfig, clock: &Arc<dyn Clock>) -> Result<Quota, ServerE
         .map_err(ServerError::QuotaStore)?,
     );
     Ok(Quota {
+        accounts: Accounts::new(
+            Arc::clone(&store),
+            Arc::clone(clock),
+            AccountPolicy {
+                server: config.server_id.clone(),
+                registration_codes: config.registration_codes.clone(),
+                signups_per_hour: config.signups_per_hour,
+            },
+        ),
         membership: Membership::new(Arc::clone(&store), Arc::clone(clock))
             .map_err(ServerError::QuotaStore)?,
         nullifiers: Nullifiers::new(config.server_id.clone(), Arc::clone(clock)),
@@ -409,7 +418,6 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
         groups,
         live_channels: LiveChannels::default(),
         quota,
-        accounts: Accounts::new(config.server_id, config.registration_codes),
         sessions: Sessions::default(),
         params: PublishedParams {
             server_operator: config.server_operator,
@@ -457,7 +465,7 @@ fn expire_groups_and_sessions(shared: &Shared) {
     let now = shared.clock.now();
     let _ = shared.groups.expire_idle();
     shared.sessions.expire(now);
-    shared.accounts.expire(now);
+    let _ = shared.quota.accounts.expire();
 }
 
 /// Starts the next membership root on time even when nobody asks.

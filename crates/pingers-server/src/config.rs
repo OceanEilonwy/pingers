@@ -7,11 +7,14 @@
 //! server_id = "https://pingers.example"   # this server's origin: RLN proofs and account
 //!                                  # registrations are bound to it
 //! server_operator = "Example Ltd"  # optional, shown in /v1/params (default: server_id)
-//! registration_codes = ["<code>"]  # optional: without it anyone may register an account
+//! registration_codes = ["<code>"]  # optional: without it anyone may register an account;
+//!                                  # a device already registered needs none
+//! signups_per_hour = 60            # new accounts the server takes per hour
 //! ohttp_relay_urls = ["https://relay.example/ohttp"]   # advertised in /v1/params
 //! map_host = "https://maps.example"                   # optional, advertised in /v1/params
 //! delivery_db = "/var/lib/pingers/groups.sqlite"       # optional: without it, in memory
-//! quota_db = "/var/lib/pingers/quota.sqlite"           # optional: without it, in memory
+//! quota_db = "/var/lib/pingers/quota.sqlite"           # optional: accounts, bearer digests,
+//!                                  # the membership tree, issuer keys (without it, in memory)
 //! push_relay_ca = "/etc/pingers/push-relay-ca.pem"     # optional: extra trust roots for
 //!                                  # the push relays' TLS certificates (still https only)
 //! logging = "off"                  # or "counts": request totals every counts_interval_s
@@ -90,6 +93,7 @@ use pingers_ohttp::{GatewayKey, KeyConfig, OhttpError};
 use pingers_proto::{
     KeyConfigHash, MapHostUrl, PushRelayInfo, RelayId, RelayUrl, SecretText, ServerId,
 };
+use pingers_quota::SignupsPerHour;
 use serde::Deserialize;
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -326,8 +330,11 @@ pub struct ServerConfig {
     pub server_id: ServerId,
     /// Who runs the server, as published in `/v1/params`.
     pub server_operator: String,
-    /// Codes that allow `POST /v1/accounts`; empty means anyone may register (design B.1).
+    /// Codes that allow a new account at `POST /v1/accounts`; empty means anyone may register
+    /// (design B.1). A device already registered needs none.
     pub registration_codes: Vec<SecretText>,
+    /// How many new accounts the server takes per hour.
+    pub signups_per_hour: SignupsPerHour,
     /// The OHTTP relays advertised in `/v1/params`.
     pub ohttp_relay_urls: Vec<RelayUrl>,
     /// The push relays advertised in `/v1/params` (those configured with a key hash and an
@@ -420,6 +427,7 @@ impl ServerConfig {
             server_operator: server_id.as_str().to_owned(),
             server_id,
             registration_codes: Vec::new(),
+            signups_per_hour: DEFAULT_SIGNUPS_PER_HOUR,
             ohttp_relay_urls: Vec::new(),
             advertised_push_relays: Vec::new(),
             map_host: None,
@@ -442,6 +450,13 @@ impl ServerConfig {
     }
 }
 
+/// New accounts per hour unless configured: far above a household's or a club's sign-ups,
+/// far below what would fill the membership tree.
+const DEFAULT_SIGNUPS_PER_HOUR: SignupsPerHour = match NonZeroU32::new(60) {
+    Some(count) => SignupsPerHour::new(count),
+    None => SignupsPerHour::new(NonZeroU32::MIN),
+};
+
 /// Posts per mailbox per bucket unless configured: well above the few knocks a lease draws.
 const DEFAULT_POSTS_PER_BUCKET: NonZeroU32 = match NonZeroU32::new(60) {
     Some(count) => count,
@@ -456,6 +471,7 @@ struct File {
     server_operator: Option<String>,
     #[serde(default)]
     registration_codes: Vec<String>,
+    signups_per_hour: Option<u32>,
     #[serde(default)]
     ohttp_relay_urls: Vec<String>,
     map_host: Option<String>,
@@ -623,6 +639,14 @@ impl ServerConfig {
                 .into_iter()
                 .map(SecretText::new)
                 .collect(),
+            signups_per_hour: match file.signups_per_hour {
+                None => DEFAULT_SIGNUPS_PER_HOUR,
+                Some(count) => {
+                    SignupsPerHour::new(NonZeroU32::new(count).ok_or(ConfigError::OutOfRange {
+                        field: "signups_per_hour",
+                    })?)
+                }
+            },
             ohttp_relay_urls: file
                 .ohttp_relay_urls
                 .into_iter()

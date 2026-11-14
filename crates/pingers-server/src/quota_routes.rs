@@ -1,34 +1,39 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The account, membership tree, Privacy Pass and parameter routes: each one call into
-//! `accounts.rs` or pingers-quota. Blocking (SQLite): `dispatch.rs` runs them on the blocking
-//! pool.
+//! pingers-quota. Blocking (SQLite): `dispatch.rs` runs them on the blocking pool.
 //!
 //! Wire encodings: `?after=` on `GET /v1/rln/leaves` is a decimal leaf position (0 when
-//! absent); Acct requests carry `Authorization: Bearer <hex>` from `POST /v1/auth`.
+//! absent); Acct requests carry `Authorization: Bearer <64 hex>` from `POST /v1/auth`.
 
 use axum::http::StatusCode;
 use pingers_anon::IdCommitment;
 use pingers_board_store::PageSize;
+use pingers_crypto::BearerToken;
 use pingers_ohttp::BinaryRequest;
 use pingers_proto::{
     AccountId, AnonymousCredential, AuthRequest, AuthResponse, CoverReadRatio, CustomPushRelays,
     MembershipIndex, MembershipLeafRequest, Params, PrivacyPassIssueRequest,
     PrivacyPassIssueResponse, PrivacyPassKey, PrivacyPassKeys, RegisterRequest, RegisterResponse,
-    Slashing,
+    SecretText, Slashing,
 };
 use pingers_quota::QuotaError;
 use pingers_time::Clock as _;
-use rand_core::Rng as _;
+use zeroize::Zeroizing;
 
 use crate::Shared;
-use crate::accounts::AccountRefusal;
 use crate::credential::AUTHORIZATION;
 use crate::dispatch::Reply;
-use crate::wire::{decode, encoded, header, query};
+use crate::wire::{decode, encoded, header, hex_array, query};
+
+/// The `Authorization` scheme of the Acct credential.
+const BEARER_SCHEME: &str = "Bearer ";
 
 fn status_of(error: &QuotaError) -> StatusCode {
     match error {
-        QuotaError::DailyLimit => StatusCode::TOO_MANY_REQUESTS,
+        QuotaError::DailyLimit | QuotaError::SignupLimit | QuotaError::LeafLimit => {
+            StatusCode::TOO_MANY_REQUESTS
+        }
+        QuotaError::BadSignature | QuotaError::RegistrationCode => StatusCode::FORBIDDEN,
         QuotaError::Anon(
             pingers_anon::AnonError::NotAFieldElement | pingers_anon::AnonError::BadIssuance,
         ) => StatusCode::UNPROCESSABLE_ENTITY,
@@ -50,11 +55,24 @@ fn refused(error: &QuotaError) -> Reply {
     Reply::status(status_of(error))
 }
 
+/// The bearer in an `Authorization: Bearer <64 hex>` value.
+fn bearer_of(value: &str) -> Option<BearerToken> {
+    hex_array::<{ BearerToken::LENGTH }>(value.strip_prefix(BEARER_SCHEME)?)
+        .map(|bytes| BearerToken::from_bytes(Zeroizing::new(bytes)))
+}
+
 /// The account a request's bearer names: 401 without a valid one.
 fn account(shared: &Shared, request: &BinaryRequest) -> Result<AccountId, Reply> {
-    header(request, AUTHORIZATION)
-        .and_then(|value| shared.accounts.account_of(value, shared.clock.now()))
-        .ok_or(Reply::status(StatusCode::UNAUTHORIZED))
+    let unauthorized = || Reply::status(StatusCode::UNAUTHORIZED);
+    let bearer = header(request, AUTHORIZATION)
+        .and_then(bearer_of)
+        .ok_or_else(unauthorized)?;
+    shared
+        .quota
+        .accounts
+        .account_of(&bearer)
+        .map_err(|error| refused(&error))?
+        .ok_or_else(unauthorized)
 }
 
 /// `GET /v1/params`.
@@ -86,28 +104,28 @@ pub(crate) fn params(shared: &Shared, _request: &BinaryRequest) -> Result<Reply,
 /// `POST /v1/accounts`.
 pub(crate) fn create_account(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
     let registration = decode::<RegisterRequest>(&request.body)?;
-    match shared.accounts.register(&registration) {
-        Ok(account_id) => Ok(encoded(StatusCode::OK, &RegisterResponse { account_id })),
-        Err(AccountRefusal::BadSignature | AccountRefusal::RegistrationCode) => {
-            Err(Reply::status(StatusCode::FORBIDDEN))
-        }
-    }
+    let account_id = shared
+        .quota
+        .accounts
+        .register(&registration)
+        .map_err(|error| refused(&error))?;
+    Ok(encoded(StatusCode::OK, &RegisterResponse { account_id }))
 }
 
 /// `POST /v1/auth`.
 pub(crate) fn auth(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
     let auth = decode::<AuthRequest>(&request.body)?;
     let now = shared.clock.now();
-    let mut bearer = [0_u8; 32];
-    shared.with_rng(|rng| rng.fill_bytes(&mut bearer));
-    let bearer = shared
+    let bearer = shared.with_rng(BearerToken::generate);
+    let _expires_at = shared
+        .quota
         .accounts
-        .authenticate(&auth, now, bearer)
-        .map_err(|_| Reply::status(StatusCode::FORBIDDEN))?;
+        .authenticate(&auth, &bearer)
+        .map_err(|error| refused(&error))?;
     Ok(encoded(
         StatusCode::OK,
         &AuthResponse {
-            bearer,
+            bearer: SecretText::new(hex::encode(bearer.expose_bytes())),
             server_time: now,
         },
     ))
@@ -121,7 +139,11 @@ pub(crate) fn delete_account(shared: &Shared, request: &BinaryRequest) -> Result
         .membership
         .remove(&account)
         .map_err(|error| refused(&error))?;
-    shared.accounts.delete(&account);
+    shared
+        .quota
+        .accounts
+        .delete(&account)
+        .map_err(|error| refused(&error))?;
     Ok(Reply::status(StatusCode::NO_CONTENT))
 }
 

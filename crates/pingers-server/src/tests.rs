@@ -1146,5 +1146,6 @@ fn live_frames_print_only_their_length() {
 mod credentials;
 mod live;
 mod pushes;
+mod restart;
 mod wallet;
 mod wired;

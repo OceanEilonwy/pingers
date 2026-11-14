@@ -769,7 +769,8 @@ A `Router` holds one transport per class. Anonymous and stream requests are neve
 Everything in **bold** is opaque ciphertext or random to the server.
 
 ```sql
-account      (account_id BLOB PK, sig_pk BLOB, created_at, disabled)    -- used only for registration, the membership leaf and token issuance
+account      (account_id BLOB PK, sig_pk BLOB, created_at)              -- used only for registration, the membership leaf and token issuance; created_at for the sign-up limit
+account_bearer (digest BLOB PK /*SHA-256("pingers/v1/bearer" || bearer)*/, account_id FK, expires_at)  -- at most 4 per account; never the bearer itself
 mailbox      (mailbox_id BLOB PK /*random*/, sealed_push BLOB NULL /*bold; NULL = no wake*/, relay_id, urgency, handle, expires_at)
 mailbox_msg  (mailbox_id FK, seq, body BLOB /*bold*/, expires_at)
 grp          (group_id BLOB PK /*random*/, auth_pk BLOB, head_epoch, lifetime /*meetup|party*/, created_at, idle_expires_at)
@@ -892,12 +893,16 @@ GET  /v1/params            -> Params { anon_auth: Vec<Rln|PP>, rln_slashing: boo
 
 // --- accounts (Acct) ---
 POST /v1/accounts          RegisterReq  { sig_pk: [u8;32], proof: Sig, reg_code: Option<String> } -> { account_id }
+                           // reg_code only for a new key; a known key re-registers on its proof alone.
+                           // At most signups_per_hour new accounts an hour (429 beyond). Accounts and bearer
+                           // digests persist, so a restart changes nothing for a device.
 POST /v1/auth              AuthReq      { account_id, nonce_sig: Sig }                             -> { bearer, server_time }
 DELETE /v1/accounts/me
 GET  /v1/ohttp/config                                                      -> KeyConfig
 
 // --- membership tree ---
 POST /v1/rln/leaf          (Acct) { id_commitment: [u8;32] }              -> { idx, live_from_root_epoch }
+                           // at most 4 per account per 24 root epochs (429 beyond): each takes a tree position
 GET  /v1/rln/leaves?after=n (no auth, cacheable)
                            -> { leaves: Vec<[u8;32]>, zeroed: Vec<u32>, roots: Vec<(u32 /*root_epoch*/, [u8;32])>, next: u32 }
 
