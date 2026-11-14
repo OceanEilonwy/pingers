@@ -50,7 +50,7 @@ pub use self_test::{SelfTestPlan, SelfTestReport, SelfTestVerdict, prover_self_t
 #[cfg(feature = "prover")]
 pub use token::{PendingIssuance, PrivacyPassToken, begin_token_issuance};
 #[cfg(any(feature = "prover", feature = "verifier"))]
-pub use tree::{LeafPosition, LeafUpdate, MembershipTree, MerklePath};
+pub use tree::{LeafPosition, LeafUpdate, MembershipTree, MerklePath, TREE_DEPTH};
 #[cfg(feature = "verifier")]
 pub use verify::{
     AcceptedRoots, NullifierOutcome, NullifierRecord, VerificationContext, VerifiedProof,
