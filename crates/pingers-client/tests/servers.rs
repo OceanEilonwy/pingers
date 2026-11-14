@@ -19,7 +19,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use pingers_client::ports::PartyDraft;
-use pingers_client::snapshot::{InviteUrl, KeyTrust, Name, PartyColour, PostQuantum};
+use pingers_client::snapshot::{
+    Host, InviteUrl, KeyTrust, Name, PartyColour, PostQuantum, PushRelayKind,
+};
 use pingers_client::{
     Client, ClientConfig, ClientError, Crates, Instance, KeyPins, Outside, ServerProblem, Trust,
 };
@@ -319,6 +321,12 @@ async fn one_device_holds_parties_on_two_servers_with_their_own_pins() -> TestRe
     assert_eq!(config(on_b)?.origin, b);
     assert_eq!(config(on_b)?.keys, KeyTrust::Confirmed);
     assert_eq!(config(on_b)?.server.operator.as_str(), "Server B");
+    // A uses the build's push relay; B its own, shown by its host.
+    assert_eq!(config(on_a)?.push_relay.kind, PushRelayKind::Official);
+    assert_eq!(
+        config(on_b)?.push_relay.kind,
+        PushRelayKind::Custom(Host::new(&world.b()?.endpoints().push_relay.to_string())?)
+    );
 
     // Each invite carries its own server's pins, and the code registered there.
     let link_a = ana.client.create_invite(on_a).await?;
