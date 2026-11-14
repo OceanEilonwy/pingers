@@ -501,6 +501,44 @@ fn play(
         Ok(format!("{PARTY:?} created; Invite people shown"))
     })?;
 
+    step(
+        report,
+        scene,
+        "a UnifiedPush message wakes A's core",
+        |scene| {
+            let a = &scene.a;
+            let endpoint = unifiedpush_endpoint(a, scene.package)?;
+            a.shell("logcat -c")?;
+            // A content-free push naming no handle of A's: the core wakes, reads nothing, shows
+            // nothing. What a real one leads to is checked at the Meetup and chat steps.
+            let sent = std::process::Command::new("curl")
+                .args(["-fsS", "-X", "POST", "-d", r#"{"v":1,"h":"AAAAAAAAAAA="}"#])
+                .arg(endpoint.replace("10.0.2.2", "127.0.0.1"))
+                .output()
+                .context("running curl")?;
+            if !sent.status.success() {
+                bail!(
+                    "ntfy refused the push: {}",
+                    String::from_utf8_lossy(&sent.stderr)
+                );
+            }
+            let deadline = Deadline::after(NETWORK);
+            loop {
+                let log = a.shell("logcat -d -s PingersCore")?;
+                if let Some(line) = log
+                    .lines()
+                    .find(|line| line.contains("onPush UNIFIED_PUSH"))
+                {
+                    return Ok(format!("A's logcat: {}", line.trim()));
+                }
+                if deadline.passed() {
+                    bail!("the push never reached A's core (no onPush in logcat)");
+                }
+                pause(Duration::from_secs(1));
+            }
+        },
+    )?;
+
     step(report, scene, "A shares the invite link", |scene| {
         let a = &scene.a;
         a.tap_when(&Find::tag("invite_share").enabled(), NETWORK)
@@ -804,6 +842,33 @@ fn play(
         }
     })?;
     Ok(())
+}
+
+/// The UnifiedPush endpoint the app on `device` registered (a debug build's preferences,
+/// read with run-as).
+fn unifiedpush_endpoint(device: &Device, package: &str) -> Result<String> {
+    let deadline = Deadline::after(NETWORK);
+    loop {
+        let prefs = device
+            .shell(&format!(
+                "run-as {package} cat shared_prefs/pingers.push.xml"
+            ))
+            .unwrap_or_default();
+        if let Some(endpoint) = prefs
+            .lines()
+            .find(|line| line.contains("name=\"unifiedpush.endpoint\""))
+            .and_then(|line| line.split('>').nth(1))
+            .and_then(|rest| rest.split('<').next())
+        {
+            return Ok(endpoint.replace("&amp;", "&"));
+        }
+        if deadline.passed() {
+            bail!(
+                "A never registered with a UnifiedPush distributor (no endpoint in its preferences)"
+            );
+        }
+        pause(Duration::from_secs(1));
+    }
 }
 
 /// Waits until one of Pingers' notifications on `device` contains `text` (title or body, as
