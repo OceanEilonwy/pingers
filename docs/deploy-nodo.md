@@ -16,17 +16,17 @@ variables (`PINGERS_SERVER_HOST`, `PINGERS_OHTTP_RELAY`, `PINGERS_PUSH_RELAY`,
 | `push.example.org` | pingers-push-relay |
 | `maps.example.org` | pingers-map-host |
 
-**Not yet done.** The package depends on work still in flight, marked `TODO(...)` in
-`packaging/nodo/`:
+**Not yet done.** The package depends on work still in flight:
 
 - nodo change **N1** (h2c upstreams with immediate flushing) and **N2** (third-party recipes and
   a configurable feed signer). Both are written as patches against monokulo-nodo; until they are
   merged there, nodo refuses the server's and relay's manifests (`upstream_protocol`) and the
-  feed workflow stops at its first check.
+  feed workflow stops at its first check. `xtask/tests/nodo_packaging.rs` marks the one
+  workaround with `TODO(N1)`.
 
+`cargo test -p xtask --test nodo_packaging` checks the packaging against nodo's own parsers
 (manifests, settings, rendering) and parses the rendered server, push relay and map host configs,
 and their dev configs, with those services' own parsers.
-their dev configs, with those services' own parsers, and the server's config likewise.
 
 ## 1. The four apps
 
@@ -96,9 +96,9 @@ config with the gateway keys and the registration code stays inside the volume)
 | `registration_code` | **secret**, generated (16 bytes, hex); 16 to 128 of `A-Z a-z 0-9 - _` if set by hand | | `registration_codes`: only a device presenting it can make an account (design B.1, section 1.3) |
 | `ohttp_key_a`, `ohttp_key_b` | **secret**, generated (32 bytes, hex) | | `[[ohttp.keys]] secret` |
 | `ohttp_key_a_id`, `ohttp_key_b_id` | int 1 to 255 | 1, 2 | `[[ohttp.keys]] key_id` |
-| `ohttp_served_key_id` | int 1 to 255 | 1 | `[ohttp] served_key_id` (TODO p-server) |
-| `push_relay_public_url` | url, required | | `[[push_relays]] public_url`, such as `https://push.example.org` (TODO p-server) |
-| `push_relay_key_config_hash` | string, a pin (43 base64url characters), required | | `[[push_relays]] key_config_hash` (TODO p-server) |
+| `ohttp_served_key_id` | int 1 to 255 | 1 | `[ohttp] served_key_id` |
+| `push_relay_public_url` | url, required | | `[[push_relays]] public_url`, such as `https://push.example.org` |
+| `push_relay_key_config_hash` | string, a pin (43 base64url characters), required | | `[[push_relays]] key_config_hash` |
 | `gateway_url`, `gateway_key_config_url` | url, public endpoints | `http://127.0.0.1:9471/...` | read by pingers-ohttp-relay |
 
 It also reads `pingers-push-relay.server_credential` (a sealed secret of the push relay) once the
