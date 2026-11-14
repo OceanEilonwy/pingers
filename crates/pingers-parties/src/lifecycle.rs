@@ -521,6 +521,8 @@ impl<'session> PartyLifecycle<'session> {
             let summary = group.merge_pending_commit()?;
             let added_profile = match &pending {
                 PendingCommit::Add(approval) => Some(AddedProfile {
+                    key: pingers_mls::inspect_key_package(&approval.request.key_package)?
+                        .signature_key,
                     name: MemberName::new(approval.request.display_name.as_str().to_owned())?,
                     subscription: approval.request.party_subscription.id,
                 }),
@@ -821,7 +823,10 @@ pub(crate) fn finish_commit(
     })
 }
 
+/// The added member's profile from their join request; `key` is their KeyPackage's signature
+/// key, so the name goes to the leaf that key holds.
 struct AddedProfile {
+    key: AccountPublicKey,
     name: MemberName,
     subscription: SubscriptionId,
 }
@@ -856,7 +861,10 @@ fn apply_roster_change(
     }
     if let Some(profile) = added_profile {
         for leaf in &summary.added {
-            if let Some(key) = roster.signature_key(*leaf) {
+            if let Some(key) = roster
+                .signature_key(*leaf)
+                .filter(|key| **key == profile.key)
+            {
                 session.members().put(&Member {
                     party: row.id,
                     leaf: *leaf,

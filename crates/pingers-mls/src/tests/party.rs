@@ -830,3 +830,26 @@ fn an_unused_key_package_leaves_no_private_keys_behind() -> TestResult {
     assert!(b.storage.rows_labelled(&[b"KeyPackage"]).is_empty());
     Ok(())
 }
+
+#[test]
+fn a_key_package_names_its_signature_key_and_suite_before_any_add() -> TestResult {
+    let mut rng = rng(31);
+    let b = Device::new(&mut rng);
+    let key_package = b.party_key_package(&mut rng)?;
+    let info = crate::inspect_key_package(&key_package)?;
+    assert_eq!(info.signature_key, b.public_key());
+    assert_eq!(info.suite, CipherSuitePolicy::Classical);
+    let mut tampered = key_package.as_bytes().to_vec();
+    if let Some(last) = tampered.last_mut() {
+        *last ^= 0x01;
+    }
+    assert!(matches!(
+        crate::inspect_key_package(&pingers_proto::KeyPackageBytes::from_bytes(tampered)),
+        Err(MlsError::InvalidMessage)
+    ));
+    assert!(matches!(
+        crate::inspect_key_package(&pingers_proto::KeyPackageBytes::from_bytes(vec![0, 1])),
+        Err(MlsError::InvalidMessage)
+    ));
+    Ok(())
+}

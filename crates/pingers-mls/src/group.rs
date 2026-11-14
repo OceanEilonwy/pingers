@@ -13,8 +13,8 @@ use openmls::schedule::{ExternalPsk, PreSharedKeyId, Psk};
 use openmls_traits::OpenMlsProvider as _;
 use openmls_traits::storage::StorageProvider as _;
 use pingers_crypto::{
-    AccountSigningKey, ExporterLabel, GrantPublicKey, LogAuthKeyPair, MeetupPsk, PresenceRoot,
-    StateKey,
+    AccountPublicKey, AccountSigningKey, ExporterLabel, GrantPublicKey, LogAuthKeyPair, MeetupPsk,
+    PresenceRoot, StateKey,
 };
 use pingers_proto::{
     Epoch, GroupId, KeyPackageBytes, LeafIndex, MlsMessageBytes, Padded, PartyId, SpotId,
@@ -1139,6 +1139,13 @@ pub(crate) fn parse_key_package<S: MlsStorage, R: openmls_traits::random::OpenMl
     bytes: &KeyPackageBytes,
     provider: &Provider<'_, S, R>,
 ) -> Result<KeyPackage, MlsError> {
+    validate_key_package(bytes, provider.crypto())
+}
+
+fn validate_key_package(
+    bytes: &KeyPackageBytes,
+    crypto: &impl openmls_traits::crypto::OpenMlsCrypto,
+) -> Result<KeyPackage, MlsError> {
     // `validate` checks the leaf signature with whatever suite the KeyPackage names, so an
     // untrusted KeyPackage could otherwise reach ECDSA P-256 code (deny.toml,
     // RUSTSEC-2026-0387). The suite is the second field: version (u16), then suite (u16).
@@ -1148,7 +1155,7 @@ pub(crate) fn parse_key_package<S: MlsStorage, R: openmls_traits::random::OpenMl
     }
     KeyPackageIn::tls_deserialize_exact_bytes(bytes.as_bytes())
         .map_err(|_| MlsError::InvalidMessage)?
-        .validate(provider.crypto(), ProtocolVersion::Mls10)
+        .validate(crypto, ProtocolVersion::Mls10)
         .map_err(|_| MlsError::InvalidMessage)
 }
 
@@ -1161,4 +1168,33 @@ fn parse_key_packages<S: MlsStorage>(
         .iter()
         .map(|bytes| parse_key_package(bytes, &provider))
         .collect()
+}
+
+/// What a validated KeyPackage says about the member it would add.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct KeyPackageInfo {
+    /// The leaf's signature key, which is the member's account key (design B.1).
+    pub signature_key: AccountPublicKey,
+    /// The suite the KeyPackage is for; a group of another suite cannot add it.
+    pub suite: CipherSuitePolicy,
+}
+
+/// Validates a KeyPackage (signature, lifetime, a suite this build runs) and returns its
+/// signature key and suite, so a caller can name or refuse a joiner before the Add is merged.
+///
+/// # Errors
+///
+/// [`MlsError::InvalidMessage`] for bytes that are not a valid KeyPackage of a supported
+/// suite, or whose signature key is not an Ed25519 key.
+pub fn inspect_key_package(key_package: &KeyPackageBytes) -> Result<KeyPackageInfo, MlsError> {
+    let crypto = openmls_rust_crypto::RustCrypto::default();
+    let parsed = validate_key_package(key_package, &crypto)?;
+    let signature_key = policy::leaf_account_key(parsed.leaf_node().signature_key().as_slice())
+        .ok_or(MlsError::InvalidMessage)?;
+    let suite = policy::policy_of(parsed.ciphersuite()).ok_or(MlsError::InvalidMessage)?;
+    Ok(KeyPackageInfo {
+        signature_key,
+        suite,
+    })
 }

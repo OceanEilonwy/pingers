@@ -21,6 +21,9 @@ A narrow wrapper over OpenMLS 0.9. No other crate touches OpenMLS types.
 - Values: `Commit { commit, welcome }`, `CommitSummary`, `SelfRemoval`, `ProcessedMessage`,
   `MemberGrantKey`, `MeetupPskId { party, epoch, spot, bucket }`, `MeetupPskBinding`,
   `CipherSuitePolicy::{Classical, QuantumResistant}`, `Roster` (implemented), `RosterEntry`.
+- `inspect_key_package(&KeyPackageBytes) -> KeyPackageInfo { signature_key, suite }` (added
+  2026-11-14 for pingers-parties): validates a KeyPackage like an Add would and names its
+  signature key and suite, so an inviter can name a joiner's leaf before the merge.
 - `MlsError` variants.
 - Exporter labels come from `pingers_crypto::ExporterLabel`; exporter outputs are wrapped in
   pingers-crypto's secret types (`PresenceRoot`, `StateKey`, `LogAuthKeyPair`).
