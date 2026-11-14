@@ -34,6 +34,9 @@ fn quantum_resistant_party_works_end_to_end() -> TestResult {
             .ok_or(TestError::Missing("a Welcome"))?,
     )?;
     assert_eq!(group_b.epoch(), Epoch::new(1));
+    // The joiner learns the Party's suite from the group it joined.
+    assert_eq!(group_b.suite()?, CipherSuitePolicy::QuantumResistant);
+    assert_eq!(group_a.suite()?, CipherSuitePolicy::QuantumResistant);
     let sealed = group_a.seal_application(&padded(b"pq")?, &mut rng)?;
     assert_eq!(application(group_b.process(&sealed)?)?.0, LeafIndex::new(0));
     Ok(())
@@ -103,5 +106,92 @@ fn quantum_resistant_meetup_carries_x_wing_grant_keys() -> TestResult {
         .map(|member| member.grant_key)
         .collect();
     assert_eq!(keys, vec![grant_a, grant_b]);
+    Ok(())
+}
+
+/// MLS variable-length integer (RFC 9420 §2.1.2), minimal form, for lengths below 16384.
+fn varint(length: usize) -> Result<Vec<u8>, TestError> {
+    let length = u16::try_from(length).map_err(|_| TestError::Missing("a short length"))?;
+    if length < 64 {
+        Ok(vec![
+            u8::try_from(length).map_err(|_| TestError::Missing("a short length"))?,
+        ])
+    } else if length < 0x4000 {
+        Ok((0x4000 | length).to_be_bytes().to_vec())
+    } else {
+        Err(TestError::Missing("a length below 16384"))
+    }
+}
+
+/// A validly signed X-Wing KeyPackage whose init key is cut short: the member re-signs it, so
+/// only a length check stands between it and the KEM decoder (RUSTSEC-2026-0331, fixed in the
+/// vendored libcrux-kem).
+fn key_package_with_short_init_key(
+    device: &Device,
+    rng: &mut rand_chacha::ChaCha20Rng,
+) -> Result<pingers_proto::KeyPackageBytes, TestError> {
+    use openmls_traits::signatures::Signer as _;
+
+    let bytes = device
+        .context()
+        .create_key_package(
+            KeyPackagePurpose::Party,
+            CipherSuitePolicy::QuantumResistant,
+            rng,
+        )?
+        .as_bytes()
+        .to_vec();
+    // version (2) || suite (2) || init key <V> || leaf node || extensions || signature <V>
+    let init_prefix = varint(1216)?;
+    assert_eq!(bytes.get(4..6), Some(init_prefix.as_slice()));
+    let signature_start = bytes
+        .len()
+        .checked_sub(66)
+        .ok_or(TestError::Missing("a signature"))?;
+    assert_eq!(
+        bytes.get(signature_start..).and_then(|tail| tail.get(..2)),
+        Some([0x40, 0x40].as_slice())
+    );
+    let middle = bytes
+        .get(6 + 1216..signature_start)
+        .ok_or(TestError::Missing("a leaf node"))?;
+    let mut tbs = bytes
+        .get(..4)
+        .ok_or(TestError::Missing("a header"))?
+        .to_vec();
+    tbs.extend(varint(100)?);
+    tbs.extend(bytes.get(6..106).ok_or(TestError::Missing("an init key"))?);
+    tbs.extend_from_slice(middle);
+    let label = b"MLS 1.0 KeyPackageTBS";
+    let mut content = varint(label.len())?;
+    content.extend_from_slice(label);
+    content.extend(varint(tbs.len())?);
+    content.extend_from_slice(&tbs);
+    let signature = crate::provider::leaf_signer(&device.key)
+        .sign(&content)
+        .map_err(|_| TestError::Missing("a signature"))?;
+    tbs.extend(varint(signature.len())?);
+    tbs.extend(signature);
+    Ok(pingers_proto::KeyPackageBytes::from_bytes(tbs))
+}
+
+#[test]
+fn a_short_x_wing_init_key_is_refused_without_a_panic() -> TestResult {
+    let mut rng = rng(63);
+    let (a, b) = (Device::new(&mut rng), Device::new(&mut rng));
+    let mut group_a = a.context().create_party_group(
+        group_id(1),
+        CipherSuitePolicy::QuantumResistant,
+        &mut rng,
+    )?;
+    let short = key_package_with_short_init_key(&b, &mut rng)?;
+    assert!(group_a.add_members(&[short], &mut rng).is_err());
+    // Nothing was staged: a well-formed member can still be added.
+    let good = b.context().create_key_package(
+        KeyPackagePurpose::Party,
+        CipherSuitePolicy::QuantumResistant,
+        &mut rng,
+    )?;
+    group_a.add_members(&[good], &mut rng)?;
     Ok(())
 }

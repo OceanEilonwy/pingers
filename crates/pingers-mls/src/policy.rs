@@ -52,6 +52,16 @@ pub(crate) fn ciphersuite(policy: CipherSuitePolicy) -> Result<Ciphersuite, MlsE
     }
 }
 
+/// The policy a suite belongs to, if this build runs it.
+pub(crate) fn policy_of(suite: Ciphersuite) -> Option<CipherSuitePolicy> {
+    [
+        CipherSuitePolicy::Classical,
+        CipherSuitePolicy::QuantumResistant,
+    ]
+    .into_iter()
+    .find(|policy| ciphersuite(*policy).is_ok_and(|candidate| candidate == suite))
+}
+
 /// Whether a big-endian suite code from the wire is one of the suites this build can run.
 pub(crate) fn is_supported_suite_code(code: &[u8]) -> bool {
     [

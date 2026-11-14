@@ -273,7 +273,7 @@ impl<'context, S: MlsStorage> MlsContext<'context, S> {
     /// [`MlsError::InvalidMessage`] if the bytes are not a valid KeyPackage of a supported
     /// suite; [`MlsError::Storage`]; [`MlsError::Internal`].
     pub fn delete_key_package(&self, key_package: &KeyPackageBytes) -> Result<(), MlsError> {
-        let provider = Provider::new(self.storage, NoRand);
+        let provider = Provider::new(self.storage, NoRand)?;
         let hash_ref = parse_key_package(key_package, &provider)?
             .hash_ref(provider.crypto())
             .map_err(|_| MlsError::Internal)?;
@@ -570,6 +570,17 @@ impl<S: MlsStorage, Kind: GroupKind> Group<'_, S, Kind> {
     #[must_use]
     pub fn epoch(&self) -> Epoch {
         Epoch::new(self.inner.epoch().as_u64())
+    }
+
+    /// The group's ciphersuite, so a member that joined by Welcome learns whether its Party is
+    /// quantum-resistant (design B.8).
+    ///
+    /// # Errors
+    ///
+    /// [`MlsError::UnsupportedSuite`] if the group's suite is not one this build runs (a stored
+    /// group cannot have one: creating or joining it would have failed).
+    pub fn suite(&self) -> Result<CipherSuitePolicy, MlsError> {
+        policy::policy_of(self.inner.ciphersuite()).ok_or(MlsError::UnsupportedSuite)
     }
 
     /// This device's leaf.

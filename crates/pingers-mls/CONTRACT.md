@@ -13,7 +13,8 @@ A narrow wrapper over OpenMLS 0.9. No other crate touches OpenMLS types.
   `join_party_group`, `party_group`, `create_meetup_group(&MeetupCreation) -> CreatedMeetup`,
   `join_meetup_group(welcome, &MeetupPskBinding, &Roster)`, `meetup_group`, `delete_group`.
 - `Group<'_, S, Party>` / `Group<'_, S, Meetup>` (typestate). Common: `group_id`, `epoch`,
-  `own_leaf`, `roster`, `process`, `seal_application(&Padded)`, `remove_member`,
+  `own_leaf`, `suite` (the group's `CipherSuitePolicy`, added 2026-11-14 so a joiner learns its
+  Party's suite from the Welcome), `roster`, `process`, `seal_application(&Padded)`, `remove_member`,
   `commit_pending_proposals`, `self_update`, `propose_leave`, `merge_pending_commit`,
   `discard_pending_commit`, `state_key`, `log_auth_key_pair`. Party only: `add_members`,
   `presence_root(&PartyId)`. Meetup only: `add_members(.., &Roster, ..)` with the roster check,
@@ -114,7 +115,17 @@ A narrow wrapper over OpenMLS 0.9. No other crate touches OpenMLS types.
   for both suites. `openmls`'s own PQ feature is not enabled: it names its optional SQLite
   storage, whose rusqlite `links` clash with the workspace's; `openmls` has no PQ code outside
   its tests. Added `openmls_libcrux_crypto = "0.4.0"` to the workspace dependencies. Tests
-  cover an X-Wing Party end to end and a Meetup with 1216-byte grant keys.
+  cover an X-Wing Party end to end, a joiner reading the suite with `Group::suite`, and a Meetup
+  with 1216-byte grant keys.
+- **libcrux advisories are patched, not ignored** (2026-11-14): `openmls_libcrux_crypto` 0.4.0
+  (latest) pins `libcrux-hmac-drbg` 0.0.1 (RUSTSEC-2026-0329) and, through `hpke-rs-libcrux`
+  0.7.0, `libcrux-kem` =0.0.9 (RUSTSEC-2026-0330, -0331). Fixed upstream in 0.0.2 and 0.0.10,
+  but the pins keep those out of reach, so `vendor/libcrux-hmac-drbg` and `vendor/libcrux-kem`
+  carry only the upstream fixes at the pinned versions, wired by `[patch.crates-io]`
+  (`vendor/*/PINGERS.md`; drop them when the provider moves). `cargo deny check` passes with no
+  ignore for them. Regression test `a_short_x_wing_init_key_is_refused_without_a_panic`: a
+  re-signed KeyPackage with a 100-byte X-Wing init key is refused by `add_members`; with the
+  unpatched 0.0.9 it panics in `XWingKemDraft06PublicKey::decode`.
 - **Storage failures**: the group handle may be ahead of the store after `MlsError::Storage`;
   callers drop it, roll back, and reload.
 - **`MlsError::NotImplemented`** is no longer returned; kept so the variant list is unchanged.

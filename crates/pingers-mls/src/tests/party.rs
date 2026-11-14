@@ -73,6 +73,7 @@ fn three_members_share_messages_roster_and_exports() -> TestResult {
     assert_eq!(group_b.own_leaf(), LeafIndex::new(1));
     assert_eq!(group_c.own_leaf(), LeafIndex::new(2));
     assert_eq!(group_c.group_id(), group_id(1));
+    assert_eq!(group_c.suite()?, CipherSuitePolicy::Classical);
     let roster = group_c.roster();
     assert_eq!(roster, group_a.roster());
     assert_eq!(roster.entries().len(), 3);
