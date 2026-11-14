@@ -285,3 +285,17 @@ path = "fuzz_targets/join_request.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "party_operation"
+path = "fuzz_targets/party_operation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "party_snapshot"
+path = "fuzz_targets/party_snapshot.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,28 @@
+{
+  "name": "party-snapshot-encoding",
+  "description": "Party state snapshot (design B.2, sealed under the next epoch's state key) as canonical CBOR: [1, [party id, name, [[member key, [name, subscription or null]], ...], [spot, ...]]], spots as in party-operation-encoding. Encoded by hand from the layout.",
+  "vectors": [
+    {
+      "name": "one-member-one-spot",
+      "inputs": {
+        "party": "404142434445464748494a4b4c4d4e4f",
+        "name": "Friends",
+        "member_key": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "member_name": "Alice",
+        "member_subscription": "6162636465666768696a6b6c6d6e6f70"
+      },
+      "expected": {
+        "encoding": "82018450404142434445464748494a4b4c4d4e4f67467269656e647381825820202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f8265416c696365506162636465666768696a6b6c6d6e6f70818650000102030405060708090a0b0c0d0e0f635075628400fb4049c00000000000fbbfb999999999999afb4062c000000000005820202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0300"
+      }
+    },
+    {
+      "name": "empty-party-name",
+      "inputs": {
+        "encoding": "82018450404142434445464748494a4b4c4d4e4f608080"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    }
+  ]
+}

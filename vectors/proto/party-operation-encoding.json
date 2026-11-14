@@ -1,0 +1,95 @@
+{
+  "name": "party-operation-encoding",
+  "description": "Party state operation (design B.2, Party group application message before padding) as canonical CBOR: [1, [0, [name, subscription or null]]] for a profile, [1, [1, [spot id, name, fence, created by, lamport, deleted]]] for a Spot; fences [0, lat, lon, radius] or [1, [[lat, lon], ...]] with eight-byte floats. Encoded by hand from the layout.",
+  "vectors": [
+    {
+      "name": "profile-with-subscription",
+      "inputs": {
+        "kind": "profile",
+        "name": "Bob",
+        "subscription": "6162636465666768696a6b6c6d6e6f70"
+      },
+      "expected": {
+        "encoding": "820182008263426f62506162636465666768696a6b6c6d6e6f70"
+      }
+    },
+    {
+      "name": "profile-without-subscription",
+      "inputs": {
+        "kind": "profile",
+        "name": "Bob",
+        "subscription": ""
+      },
+      "expected": {
+        "encoding": "820182008263426f62f6"
+      }
+    },
+    {
+      "name": "circle-spot",
+      "inputs": {
+        "kind": "circle",
+        "spot": "000102030405060708090a0b0c0d0e0f",
+        "name": "Pub",
+        "latitude": 51.5,
+        "longitude": -0.1,
+        "radius": 150.0,
+        "created_by": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "lamport": 3,
+        "deleted": 0
+      },
+      "expected": {
+        "encoding": "820182018650000102030405060708090a0b0c0d0e0f635075628400fb4049c00000000000fbbfb999999999999afb4062c000000000005820202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0300"
+      }
+    },
+    {
+      "name": "deleted-polygon-spot",
+      "inputs": {
+        "kind": "polygon",
+        "spot": "000102030405060708090a0b0c0d0e0f",
+        "name": "Park",
+        "created_by": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "lamport": 300,
+        "deleted": 1
+      },
+      "expected": {
+        "encoding": "820182018650000102030405060708090a0b0c0d0e0f645061726b82018382fb3ff0000000000000fb400000000000000082fb3ff8000000000000fb400000000000000082fb3ff8000000000000fb40040000000000005820202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f19012c01"
+      }
+    },
+    {
+      "name": "nan-latitude",
+      "inputs": {
+        "encoding": "820182018650000102030405060708090a0b0c0d0e0f635075628400fb7ff8000000000000fbbfb999999999999afb4062c000000000005820202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0300"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    },
+    {
+      "name": "half-float-radius",
+      "inputs": {
+        "encoding": "820182018650000102030405060708090a0b0c0d0e0f635075628400fb4049c00000000000fbbfb999999999999af958b05820202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0300"
+      },
+      "expected": {
+        "error": "Cbor"
+      }
+    },
+    {
+      "name": "unknown-operation",
+      "inputs": {
+        "encoding": "820182028263426f62f6"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    },
+    {
+      "name": "unknown-spot-life",
+      "inputs": {
+        "encoding": "820182018650000102030405060708090a0b0c0d0e0f635075628400fb4049c00000000000fbbfb999999999999afb4062c000000000005820202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0302"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    }
+  ]
+}
