@@ -672,6 +672,40 @@ mod tests {
         );
     }
 
+    /// What a listener heard.
+    #[derive(Default)]
+    struct Heard(std::sync::Mutex<Vec<(u64, u64)>>);
+
+    impl MapDownloadListener for Heard {
+        fn downloaded(&self, done: u64, total: u64) {
+            if let Ok(mut heard) = self.0.lock() {
+                heard.push((done, total));
+            }
+        }
+
+        fn preparing(&self, retry_after_seconds: u64) {
+            if let Ok(mut heard) = self.0.lock() {
+                heard.push((retry_after_seconds, 0));
+            }
+        }
+    }
+
+    #[test]
+    fn progress_reaches_the_apps_listener() {
+        let heard = Arc::new(Heard::default());
+        let adapter = ListenerAdapter(heard.clone());
+        adapter.downloaded(5, 10);
+        adapter.preparing(Duration::from_secs(30));
+        assert_eq!(
+            heard
+                .0
+                .lock()
+                .map(|heard| heard.clone())
+                .unwrap_or_default(),
+            [(5, 10), (30, 0)]
+        );
+    }
+
     #[test]
     fn words_come_from_pingers_words() {
         let words = maps_words("maps.example".into(), MapHostSource::UserOverride, false);

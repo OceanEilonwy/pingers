@@ -38,3 +38,11 @@ reason = "equivalent: is_end_stream is only a hint; with false, hyper polls the 
 [[mutant]]
 name = "crates/pingers-server/src/http.rs: replace >= with < in IdleWatch::serve"
 reason = "caught as a timeout, not missed: every connection is then closed as soon as it opens, and tests that wait on the manual clock for an answer hang until cargo-mutants gives up"
+
+[[mutant]]
+name = "crates/pingers-crypto/src/checksum.rs: replace | with ^ in ContentDigest::from_hex"
+reason = "equivalent: the high nibble is shifted left by four and the low one is below sixteen, so they share no set bits and OR and XOR agree for every input"
+
+[[mutant]]
+name = "crates/pingers-map-host/src/gateway.rs: replace match guard error.kind() == io::ErrorKind::NotFound with true in load_or_create_key"
+reason = "equivalent: a key file that exists but cannot be read is then made again with create_new, which fails because the file exists, so both report OhttpKeyFile and no key is replaced"

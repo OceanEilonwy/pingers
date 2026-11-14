@@ -772,6 +772,15 @@ async fn an_admission_the_client_cannot_carry_out_is_reported() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn a_direct_answer_holds_one_piece_and_its_headers() -> TestResult {
+    let piece = usize::try_from(pingers_map_downloads::fetch::DIRECT_PIECE)?;
+    assert!(super::maps::DIRECT_LIMIT >= piece + 64 * 1024);
+    assert!(super::maps::DIRECT_LIMIT <= piece + 2 * 1024 * 1024);
+    assert_eq!(super::maps::DIRECT_LIMIT, 5_242_880);
+    Ok(())
+}
+
 #[tokio::test]
 async fn map_host_pins_are_kept_for_their_host_and_forgotten_on_request() -> TestResult {
     use pingers_map_downloads::fetch::KeyPinStore as _;

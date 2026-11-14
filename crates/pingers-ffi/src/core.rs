@@ -1208,6 +1208,27 @@ mod tests {
             Some(CrateCall::DownloadMap(job)) if job.route == ports::MapRoute::Direct
         ));
         assert!(core.installed_maps(directory.clone()).await?.is_empty());
+        // A region on disk ("abc" as its pack, an empty index: the standard SHA-256 vectors).
+        let dir = std::path::PathBuf::from(&directory);
+        let io = |_: std::io::Error| CoreError::invalid("io");
+        std::fs::create_dir_all(&dir).map_err(io)?;
+        std::fs::write(dir.join("oceania.test.pmtiles"), b"abc").map_err(io)?;
+        std::fs::write(dir.join("oceania.test.places.tsv"), b"").map_err(io)?;
+        std::fs::write(
+            dir.join("oceania.test.json"),
+            r#"{"format":1,"id":"oceania/test","name":"Test","bbox":[1,1,2,2],"max_zoom":10,
+               "build_date":"2026-11-12",
+               "pack":{"file":"oceania.test.pmtiles","size":3,
+                       "sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+               "index":{"file":"oceania.test.places.tsv","size":0,
+                        "sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}"#,
+        )
+        .map_err(io)?;
+        let installed = core.installed_maps(directory.clone()).await?;
+        assert_eq!(
+            installed.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["oceania/test"]
+        );
         core.delete_map(directory.clone(), "oceania/test".into())
             .await?;
         assert!(matches!(

@@ -22,7 +22,7 @@ use crate::ClientError;
 use crate::ports::{MapDownload, MapHosts, MapRoute, MapsPort};
 
 /// The largest direct answer: one piece and its headers.
-const DIRECT_LIMIT: usize = 5 * 1024 * 1024;
+pub(super) const DIRECT_LIMIT: usize = 5 * 1024 * 1024;
 
 /// The maps port.
 pub(crate) struct Maps {
