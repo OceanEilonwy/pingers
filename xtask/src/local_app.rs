@@ -44,10 +44,20 @@ pub(crate) fn run(workspace: &Path, options: &StackOptions) -> Result<Outcome> {
 /// When the stack cannot be prepared or Gradle fails.
 pub(crate) fn build(workspace: &Path, options: &StackOptions) -> Result<PathBuf> {
     let layout = Layout::new(options.resolve_dir()?);
-    if !layout.app_env().is_file() || options.fresh {
+    build_with(workspace, options, &layout.app_env())
+}
+
+/// Builds the APK with the variables of `env` (`app.env` for the stack's server, or
+/// `second-server.env` for an APK whose built-in server is server B) and returns its path.
+///
+/// # Errors
+///
+/// When the stack cannot be prepared or Gradle fails.
+pub(crate) fn build_with(workspace: &Path, options: &StackOptions, env: &Path) -> Result<PathBuf> {
+    if !env.is_file() || options.fresh {
         stack::prepare(workspace, options)?;
     }
-    let variables = stack::read_app_env(&layout)?;
+    let variables = stack::read_env_file(env)?;
     let mut command = Command::new(workspace.join("android/gradlew"));
     command
         .current_dir(workspace.join("android"))
@@ -63,7 +73,7 @@ pub(crate) fn build(workspace: &Path, options: &StackOptions) -> Result<PathBuf>
         io::stdout(),
         "local-app: ./gradlew :app:assembleFossDebug with {} from {}",
         names.join(", "),
-        layout.app_env().display()
+        env.display()
     )?;
     if !command.status()?.success() {
         bail!("the foss debug build failed");

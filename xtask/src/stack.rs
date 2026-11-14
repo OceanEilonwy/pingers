@@ -301,6 +301,11 @@ pub(crate) fn run(workspace: &Path, options: &StackOptions) -> Result<Outcome> {
 }
 
 /// Whether the TLS front of a stack already answers on this machine.
+/// Server B's plain API listener, where its `/metrics` answers loopback callers.
+pub(crate) fn second_server_api() -> SocketAddr {
+    loopback(SECOND_SERVER_PORT)
+}
+
 pub(crate) fn front_is_up() -> bool {
     [FRONT_SERVER, FRONT_OHTTP, FRONT_PUSH, FRONT_MAPS]
         .into_iter()
@@ -641,8 +646,13 @@ fn app_env(layout: &Layout, pins: &str, registration_code: &str) -> Zeroizing<St
 /// # Errors
 ///
 /// When the file cannot be read or a line is not `NAME=value`.
-pub(crate) fn read_app_env(layout: &Layout) -> Result<Vec<(String, Zeroizing<String>)>> {
-    let path = layout.app_env();
+/// The `NAME=value` lines of an app environment file (`app.env`, `second-server.env`).
+///
+/// # Errors
+///
+/// When the file cannot be read or a line is not `NAME=value`.
+pub(crate) fn read_env_file(path: &Path) -> Result<Vec<(String, Zeroizing<String>)>> {
+    let path = path.to_path_buf();
     let text = Zeroizing::new(
         fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?,
     );

@@ -138,7 +138,7 @@ const USAGE: &str = "usage: cargo xtask <command>\n\n\
                      local-app [<local-stack options>]\n          \
                      the foss debug APK built against that stack (its app.env)\n  \
                      e2e-emulators [<local-stack options>] [--avd <name>] [--leases <dir>]\n          \
-                     [--apk <file>] [--ntfy-apk <file>] [--keep-going]\n          \
+                     [--apk <file>] [--ntfy-apk <file>] [--keep-going] [--cross-server]\n          \
                      the two-emulator scenario (invite to Meetup end) against that stack\n  \
                      tls-front <caddy.json>\n          \
                      serve a caddy.json of the dev shape (local-stack runs it without Caddy)";
