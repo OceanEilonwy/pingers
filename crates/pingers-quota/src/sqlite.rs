@@ -266,7 +266,7 @@ impl PrivacyPassStore for SqliteQuotaStore {
                     )?;
                     Ok(Allowance::Granted)
                 }
-                Some(_) | None => Ok(Allowance::Exceeded),
+                Some(_) | None => Ok(Allowance::Exceeded { issued }),
             }
         })
     }

@@ -14,21 +14,21 @@ use pingers_proto::{
     AccountId, AnonymousCredential, AuthRequest, AuthResponse, CoverReadRatio, CustomPushRelays,
     MembershipIndex, MembershipLeafRequest, Params, PrivacyPassIssueRequest,
     PrivacyPassIssueResponse, PrivacyPassKey, PrivacyPassKeys, RegisterRequest, RegisterResponse,
-    Slashing,
+    Slashing, TokenAllowance,
 };
-use pingers_quota::QuotaError;
+use pingers_quota::{DAILY_TOKEN_LIMIT, QuotaError};
 use pingers_time::Clock as _;
 use rand_core::Rng as _;
 
-use crate::Shared;
 use crate::accounts::AccountRefusal;
 use crate::credential::AUTHORIZATION;
 use crate::dispatch::Reply;
 use crate::wire::{decode, encoded, header, query};
+use crate::{MembershipProofs, Shared};
 
 fn status_of(error: &QuotaError) -> StatusCode {
     match error {
-        QuotaError::DailyLimit => StatusCode::TOO_MANY_REQUESTS,
+        QuotaError::DailyLimit(_) => StatusCode::TOO_MANY_REQUESTS,
         QuotaError::Anon(
             pingers_anon::AnonError::NotAFieldElement | pingers_anon::AnonError::BadIssuance,
         ) => StatusCode::UNPROCESSABLE_ENTITY,
@@ -46,7 +46,11 @@ fn status_of(error: &QuotaError) -> StatusCode {
     }
 }
 
+/// The answer to a refusal: a status, and for the daily limit what is left of the allowance.
 fn refused(error: &QuotaError) -> Reply {
+    if let QuotaError::DailyLimit(allowance) = error {
+        return encoded(status_of(error), allowance);
+    }
     Reply::status(status_of(error))
 }
 
@@ -66,10 +70,13 @@ pub(crate) fn params(shared: &Shared, _request: &BinaryRequest) -> Result<Reply,
     Ok(encoded(
         StatusCode::OK,
         &Params {
-            anonymous_credentials: vec![
-                AnonymousCredential::MembershipProof,
-                AnonymousCredential::PrivacyPass,
-            ],
+            anonymous_credentials: match shared.params.membership_proofs {
+                MembershipProofs::On => vec![
+                    AnonymousCredential::MembershipProof,
+                    AnonymousCredential::PrivacyPass,
+                ],
+                MembershipProofs::Off => vec![AnonymousCredential::PrivacyPass],
+            },
             rln_slashing: Slashing::Off,
             cover_read_ratio: CoverReadRatio::ALWAYS,
             board_page_records: u32::try_from(PageSize::MAX.get()).unwrap_or(u32::MAX),
@@ -79,6 +86,7 @@ pub(crate) fn params(shared: &Shared, _request: &BinaryRequest) -> Result<Reply,
             server_operator: shared.params.server_operator.clone(),
             server_time: shared.clock.now(),
             map_host: shared.params.map_host.clone(),
+            privacy_pass_daily_limit: TokenAllowance::new(DAILY_TOKEN_LIMIT),
         },
     ))
 }
@@ -155,7 +163,10 @@ pub(crate) fn rln_leaves(shared: &Shared, request: &BinaryRequest) -> Result<Rep
     Ok(encoded(StatusCode::OK, &leaves))
 }
 
-/// `POST /v1/pp/issue` (Acct): at most 300 tokens per account per day.
+/// `POST /v1/pp/issue` (Acct): at most [`DAILY_TOKEN_LIMIT`] tokens per account per day. A
+/// batch that would exceed it is refused whole with `429` and a
+/// [`pingers_proto::PrivacyPassAllowance`] body: what the account may still be issued today,
+/// and when the next day starts.
 pub(crate) fn issue(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
     let account = account(shared, request)?;
     let batch = decode::<PrivacyPassIssueRequest>(&request.body)?;

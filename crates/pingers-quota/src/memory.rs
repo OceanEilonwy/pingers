@@ -137,7 +137,7 @@ impl PrivacyPassStore for MemoryQuotaStore {
                 *issued = total;
                 Ok(Allowance::Granted)
             }
-            Some(_) | None => Ok(Allowance::Exceeded),
+            Some(_) | None => Ok(Allowance::Exceeded { issued: *issued }),
         }
     }
 

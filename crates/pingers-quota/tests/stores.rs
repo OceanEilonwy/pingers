@@ -66,7 +66,10 @@ fn issuance_counts_are_kept_for_today_only(store: &impl PrivacyPassStore) -> Res
     };
     assert_eq!(store.record_issuance(issuance, 3)?, Allowance::Granted);
     store.prune(at(T + DAY - 1))?;
-    assert_eq!(store.record_issuance(issuance, 3)?, Allowance::Exceeded);
+    assert_eq!(
+        store.record_issuance(issuance, 3)?,
+        Allowance::Exceeded { issued: 3 }
+    );
     store.prune(at(T + DAY))?;
     assert_eq!(store.record_issuance(issuance, 3)?, Allowance::Granted);
     Ok(())

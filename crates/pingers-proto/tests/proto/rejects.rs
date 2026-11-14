@@ -110,6 +110,7 @@ fn params(ratio: Vec<u8>, slashing: usize) -> Vec<u8> {
         tstr(b"op"),
         uint(0),
         null(),
+        uint(300),
     ]))
 }
 
@@ -609,6 +610,7 @@ fn unknown_credential_and_custom_relay_values_are_rejected() {
         tstr(b""),
         uint(0),
         null(),
+        uint(300),
     ]));
     assert!(matches!(
         Params::decode(&unknown_credential),
@@ -627,6 +629,7 @@ fn unknown_credential_and_custom_relay_values_are_rejected() {
         tstr(b""),
         uint(0),
         null(),
+        uint(300),
     ]));
     assert!(matches!(
         Params::decode(&unknown_custom),
@@ -746,6 +749,7 @@ fn map_host_must_be_https() {
         tstr(b""),
         uint(0),
         tstr(b"http://maps.example"),
+        uint(300),
     ]));
     assert!(matches!(
         Params::decode(&plain_http),
