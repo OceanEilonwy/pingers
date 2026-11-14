@@ -21,17 +21,18 @@ use crate::test_support::{
     FixedRng, TestError, error_kind, expected_error, input_array, input_text,
 };
 use crate::{
-    AccountSigningKey, BeaconHeader, GrantContext, GrantKeyPair, GrantSecretKey, GroupRequest,
-    InviteSecret, KeyedHashKey, KeyedHashPurpose, KnockKey, KnockPlaintext, KnockSignedFields,
-    LocationAad, LocationAsk, LocationGrant, LocationKey, LogAuthKeyPair, MailboxReadKey,
-    PresenceRoot, PushBind, PushRelayPrivateKey, PushTokenToOpen, RevokeKey, SealKey, StateKey,
-    account_id, derive_knock_key, derive_meetup_psk, derive_seal_key, derive_spot_key,
-    derive_tag_key, key_config_hash, keyed_hash, mailbox_id, open_board_beacon, open_join_request,
-    open_knock, open_location_ask, open_location_grant, open_state_snapshot, push_bind_for_mailbox,
-    push_bind_for_subscription, record_tag, revoke_commitment, revoke_key_matches,
-    seal_board_beacon, seal_join_request, seal_knock, seal_location_ask, seal_location_grant,
-    seal_state_snapshot, segment_hash, sign_group_request, sign_knock, sign_registration,
-    tag_matches, verify_group_request, verify_knock, verify_registration,
+    AccountSigningKey, BeaconHeader, BearerToken, GrantContext, GrantKeyPair, GrantSecretKey,
+    GroupRequest, InviteSecret, KeyedHashKey, KeyedHashPurpose, KnockKey, KnockPlaintext,
+    KnockSignedFields, LocationAad, LocationAsk, LocationGrant, LocationKey, LogAuthKeyPair,
+    MailboxReadKey, PresenceRoot, PushBind, PushRelayPrivateKey, PushTokenToOpen, RevokeKey,
+    SealKey, StateKey, account_id, bearer_digest, derive_knock_key, derive_meetup_psk,
+    derive_seal_key, derive_spot_key, derive_tag_key, key_config_hash, keyed_hash, mailbox_id,
+    open_board_beacon, open_join_request, open_knock, open_location_ask, open_location_grant,
+    open_state_snapshot, push_bind_for_mailbox, push_bind_for_subscription, record_tag,
+    revoke_commitment, revoke_key_matches, seal_board_beacon, seal_join_request, seal_knock,
+    seal_location_ask, seal_location_grant, seal_state_snapshot, segment_hash, sign_group_request,
+    sign_knock, sign_registration, tag_matches, verify_group_request, verify_knock,
+    verify_registration,
 };
 
 fn load(name: &str) -> Result<VectorFile, TestError> {
@@ -325,7 +326,13 @@ fn keyed_hashes() -> Result<(), TestError> {
 #[test]
 fn hashes() -> Result<(), TestError> {
     for vector in load("hashes")?.vectors {
-        if vector.inputs.contains_key("revoke_key") {
+        if vector.inputs.contains_key("bearer") {
+            let bearer = BearerToken::from_bytes(Zeroizing::new(input_array(&vector, "bearer")?));
+            assert_eq!(
+                bearer_digest(&bearer).as_bytes().as_slice(),
+                vector.expected_bytes("bearer_digest")?
+            );
+        } else if vector.inputs.contains_key("revoke_key") {
             let key = RevokeKey::from_bytes(Zeroizing::new(input_array(&vector, "revoke_key")?));
             assert_eq!(
                 revoke_commitment(&key).as_bytes().as_slice(),
@@ -628,6 +635,49 @@ fn board_cursor() -> Result<(), TestError> {
         assert!(rng.exhausted_exactly());
         assert_eq!(cursor.as_bytes(), vector.expected_bytes("cursor")?);
         assert_eq!(*crate::open_board_cursor(&key, &cursor)?, position);
+    }
+    Ok(())
+}
+
+#[test]
+fn join_code_vectors() -> Result<(), TestError> {
+    for vector in load("join-code")?.vectors {
+        let secret =
+            InviteSecret::from_bytes(Zeroizing::new(input_array(&vector, "invite_secret")?));
+        let classical = vector.input_bytes("key_package")?;
+        // `""`: the request carries no X-Wing key package.
+        let x_wing = vector.input_bytes("x_wing_key_package")?;
+        assert_eq!(
+            crate::invite::join_code_key(&secret)?.as_slice(),
+            vector.expected_bytes("join_code_key")?,
+            "vector {}",
+            vector.name
+        );
+        let length = |bytes: &[u8]| u32::try_from(bytes.len()).map(u32::to_be_bytes);
+        let mac_input = [
+            length(&classical)
+                .map_err(|_| TestError::Field("key_package"))?
+                .as_slice(),
+            &classical,
+            length(&x_wing)
+                .map_err(|_| TestError::Field("x_wing_key_package"))?
+                .as_slice(),
+            &x_wing,
+        ]
+        .concat();
+        assert_eq!(mac_input, vector.expected_bytes("mac_input")?);
+        let key = crate::invite::join_code_key(&secret)?;
+        assert_eq!(
+            crate::primitives::hmac_sha256(&key, &[&mac_input])?.as_slice(),
+            vector.expected_bytes("mac")?
+        );
+        let packages = crate::JoinKeyPackages {
+            classical: &classical,
+            quantum_resistant: (!x_wing.is_empty()).then_some(x_wing.as_slice()),
+        };
+        let code = crate::join_code(&secret, packages)?;
+        assert_eq!(code.value(), vector.expected_u64("code_value")?);
+        assert_eq!(code.to_string(), vector.expected_str("code")?);
     }
     Ok(())
 }

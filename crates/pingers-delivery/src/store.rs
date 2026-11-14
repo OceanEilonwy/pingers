@@ -55,6 +55,15 @@ pub struct GroupHead {
     pub lifetime: GroupLifetime,
 }
 
+/// An earlier epoch's log-auth key, with the epoch it signed requests in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PastAuthKey {
+    /// The epoch whose requests it signed.
+    pub epoch: Epoch,
+    /// The key.
+    pub key: GroupAuthKey,
+}
+
 /// A stored non-commit message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewEntry {
@@ -118,13 +127,14 @@ pub trait DeliveryStore: Send + Sync {
     /// [`DeliveryError::UnknownGroup`]; storage errors.
     fn head(&self, group: &GroupId) -> Result<GroupHead, DeliveryError>;
 
-    /// The log-auth keys of the group's earlier epochs, newest first: a member that missed a
-    /// commit still signs with one of them until it has read and applied that commit.
+    /// The log-auth keys of the group's earlier epochs with their epochs, newest first: a
+    /// member that missed a commit still signs with one of them until it has read and applied
+    /// that commit.
     ///
     /// # Errors
     ///
     /// [`DeliveryError::UnknownGroup`]; storage errors.
-    fn past_auth_keys(&self, group: &GroupId) -> Result<Vec<GroupAuthKey>, DeliveryError>;
+    fn past_auth_keys(&self, group: &GroupId) -> Result<Vec<PastAuthKey>, DeliveryError>;
 
     /// Moves the group's idle expiry to `idle_expires_at`.
     ///
@@ -170,6 +180,17 @@ pub trait DeliveryStore: Send + Sync {
         group: &GroupId,
         after: SequenceNumber,
     ) -> Result<Vec<GroupLogEntry>, DeliveryError>;
+
+    /// The position of the commit made in `epoch` (the one that ended it), if the log has one.
+    ///
+    /// # Errors
+    ///
+    /// [`DeliveryError::UnknownGroup`]; storage errors.
+    fn commit_position(
+        &self,
+        group: &GroupId,
+        epoch: Epoch,
+    ) -> Result<Option<SequenceNumber>, DeliveryError>;
 
     /// The latest snapshot, if any was uploaded.
     ///

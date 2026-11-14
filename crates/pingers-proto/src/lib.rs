@@ -57,7 +57,7 @@ pub use ids::{
     LocationRequestId, MailboxId, PartyId, PushHandle, RecordRandomness, RelayId, SequenceNumber,
     SpotId, SubscriptionId,
 };
-pub use invite::{DisplayName, InvitePayload, InviteUses, InviterFingerprint, JoinRequest};
+pub use invite::{DisplayName, InvitePayload, InvitePost, InviterFingerprint, JoinRequest};
 pub use key_config::SingleSuiteKeyConfig;
 pub use knock::{Knock, KnockSignature};
 pub use meetup::{

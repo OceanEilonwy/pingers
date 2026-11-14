@@ -1163,7 +1163,11 @@ impl Device {
             return Ok(0);
         };
         let group_id = meetup.group;
-        let log = stack.delivery().messages(&group_id, meetup.cursor)?;
+        let log = stack.delivery().messages(
+            &group_id,
+            meetup.cursor,
+            pingers_delivery::Reader::Current,
+        )?;
         let mut processed = 0_usize;
         let mut cursor = meetup.cursor;
         let mut leavers = Vec::new();

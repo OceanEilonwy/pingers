@@ -68,12 +68,16 @@ pub(crate) const LOCATION_GRANT: &[u8] = b"pingers/v1/lk-grant";
 pub(crate) const LOCATION_ASK: &[u8] = b"pingers/v1/lk-ask";
 /// HKDF info for the invite join key (design D: `HKDF(invite_secret, "join")`).
 pub(crate) const INVITE_JOIN: &[u8] = b"join";
+/// HKDF info for the join-code key. Decision: the design (canvas note j1) gives no label.
+pub(crate) const JOIN_CODE: &[u8] = b"pingers/v1/join-code";
 /// Signature prefix for group log requests. Decision: the design gives none.
 pub(crate) const GROUP_REQUEST: &[u8] = b"pingers/v1/grp-request";
 /// Signature prefix for account registration. Decision: the design gives none.
 pub(crate) const REGISTRATION: &[u8] = b"pingers/v1/register";
 /// Decision: the account challenge signed for `POST /v1/auth`.
 pub(crate) const AUTH_CHALLENGE: &[u8] = b"pingers/v1/auth";
+/// Decision: the prefix of the digest the server stores in place of an Acct bearer.
+pub(crate) const BEARER: &[u8] = b"pingers/v1/bearer";
 /// Prefix of the RLN external nullifier preimage (design B.4.8). Moved from pingers-anon.
 pub(crate) const RLN_EXTERNAL_NULLIFIER: &[u8] = b"pingers/v1/rln";
 /// Prefix of the RLN request digest `x` preimage (design B.4.8). Moved from pingers-anon.
@@ -83,9 +87,11 @@ pub(crate) const SAFETY_NUMBER: &[u8] = b"pingers/v1/safety-number";
 
 /// Every private label, so tests can check they are distinct and vectors can name them.
 #[cfg(test)]
-pub(crate) const ALL: [&[u8]; 23] = [
+pub(crate) const ALL: [&[u8]; 25] = [
     SAFETY_NUMBER,
+    JOIN_CODE,
     AUTH_CHALLENGE,
+    BEARER,
     RLN_EXTERNAL_NULLIFIER,
     RLN_REQUEST_DIGEST,
     SPOT,

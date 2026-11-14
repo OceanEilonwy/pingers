@@ -2,7 +2,8 @@
 # debug builds only, so the app's hosts are the .invalid defaults (android/docs/release.md).
 #
 # Jobs:
-#   rust     `cargo xtask ci`: fmt --check, clippy -D warnings, test, the layer rule, cargo deny.
+#   rust     `cargo xtask ci`: fmt --check, clippy -D warnings, test, the layer rule, no Python,
+#            cargo deny.
 #   android  for each flavour, the debug APK, lint and the unit tests (Robolectric). gms needs
 #            Firebase's google-services.json, from the GOOGLE_SERVICES_JSON secret; without it
 #            (a fork's pull request, or a repository that has not set it) gms is skipped and

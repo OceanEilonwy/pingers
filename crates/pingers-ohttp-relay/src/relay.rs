@@ -68,7 +68,7 @@ impl Body for RelayBody {
 }
 
 /// The forwarding state shared by every connection.
-pub(crate) struct Relay {
+pub struct Relay {
     config: Config,
     client: Client<HttpConnector, RelayBody>,
 }
@@ -80,7 +80,10 @@ fn status(code: StatusCode) -> Response<RelayBody> {
 }
 
 impl Relay {
-    pub(crate) fn new(config: Config) -> Self {
+    /// A relay forwarding as `config` says. It connects to the gateway only when a request
+    /// arrives.
+    #[must_use]
+    pub fn new(config: Config) -> Self {
         let mut connector = HttpConnector::new();
         connector.set_nodelay(true);
         connector.set_connect_timeout(Some(config.response_timeout));
@@ -174,7 +177,12 @@ impl Relay {
 
 /// Accepts HTTP/2 connections (prior knowledge, no TLS) until `shutdown` completes, then
 /// stops accepting and drops the connections it owns.
-pub(crate) async fn serve(
+///
+/// # Errors
+///
+/// None today: a failed accept affects only that connection. The `Result` leaves room for
+/// listener failures that should stop the relay.
+pub async fn serve(
     listener: TcpListener,
     relay: Arc<Relay>,
     shutdown: impl Future<Output = ()>,

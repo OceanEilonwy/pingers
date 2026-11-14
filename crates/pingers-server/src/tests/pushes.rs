@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Group wakes against deletes: a wake that comes due after its subscription was deleted is
-//! not sent, a delete waits for the push in flight, and after a `410 Gone` the subscription is
+//! Group wakes against removals: a wake that comes due after its subscription was deleted is
+//! not sent; a subscription delete, a commit's `subscriptions_removed` and a group delete each
+//! wait for the pushes in flight that they end; and after a `410 Gone` the subscription is
 //! never pushed again, even by a wake already queued behind it.
 
 use std::net::SocketAddr;
@@ -13,9 +14,9 @@ use axum::routing::post;
 use pingers_delivery::{Delivery, GroupLifetime, GroupStart, SqliteDeliveryStore, Wake};
 use pingers_mailbox::{PushRelayUrl, RelayAnswer, RelayCredential, RelayTarget};
 use pingers_proto::{
-    AppMessage, CreateGroup, Delivery as Mode, Epoch, GroupAuthKey, GroupId, MlsMessageBytes,
-    PushHandle, PushRelayKeyId, PushRequest, RelayId, RelayRef, SealedPush, SealedPushBlob,
-    Subscription, SubscriptionId, TimeToLive, Urgency, WireDecode as _,
+    AppMessage, CommitRequest, CreateGroup, Delivery as Mode, Epoch, GroupAuthKey, GroupId,
+    MlsMessageBytes, PushHandle, PushRelayKeyId, PushRequest, RelayId, RelayRef, SealedPush,
+    SealedPushBlob, Subscription, SubscriptionId, TimeToLive, Urgency, WireDecode as _,
 };
 use pingers_time::{ManualClock, UnixSeconds};
 use tokio::sync::{Notify, mpsc};
@@ -174,6 +175,172 @@ impl World {
             pusher.remove_subscription(&group, &SubscriptionId::from_bytes([tag; 16]))
         })
     }
+
+    /// Commits epoch 0 removing the subscriptions `removed`, as the commit route does, on the
+    /// blocking pool, and logs [`Event::Deleted`] the moment it returns.
+    fn commit(
+        &self,
+        removed: &[u8],
+        log: &Log,
+    ) -> tokio::task::JoinHandle<Result<(), pingers_delivery::DeliveryError>> {
+        let (pusher, group, log) = (self.pusher.clone(), self.group, Arc::clone(log));
+        let request = CommitRequest {
+            epoch: Epoch::new(0),
+            commit: MlsMessageBytes::from_bytes(vec![3; 8]),
+            next_auth_key: GroupAuthKey::from_bytes([2; 32]),
+            state: None,
+            subscriptions_added: Vec::new(),
+            subscriptions_removed: removed
+                .iter()
+                .map(|tag| SubscriptionId::from_bytes([*tag; 16]))
+                .collect(),
+            wake: Urgency::Quiet,
+        };
+        tokio::task::spawn_blocking(move || {
+            let _outcome = pusher.commit(&group, request, &mut rng(2))?;
+            record(&log, Event::Deleted);
+            Ok(())
+        })
+    }
+
+    /// Deletes the group as the DELETE route does, on the blocking pool, and logs
+    /// [`Event::Deleted`] the moment it returns.
+    fn delete_group(
+        &self,
+        log: &Log,
+    ) -> tokio::task::JoinHandle<Result<(), pingers_delivery::DeliveryError>> {
+        let (pusher, group, log) = (self.pusher.clone(), self.group, Arc::clone(log));
+        tokio::task::spawn_blocking(move || {
+            pusher.delete_group(&group)?;
+            record(&log, Event::Deleted);
+            Ok(())
+        })
+    }
+
+    /// Starts sending the wake for `tag` and returns once the relay holds it, unanswered.
+    async fn push_held_at_relay(
+        &self,
+        tag: u8,
+        arrivals: &mut mpsc::UnboundedReceiver<()>,
+    ) -> Result<tokio::task::JoinHandle<WakeOutcome>, TestError> {
+        let (pusher, group, target, wake) = (
+            self.pusher.clone(),
+            self.group,
+            self.target.clone(),
+            self.wake(tag)?,
+        );
+        let sending = tokio::spawn(async move { pusher.send(group, wake, &target).await });
+        tokio::time::timeout(STEP, arrivals.recv())
+            .await?
+            .ok_or("the relay stopped")?;
+        Ok(sending)
+    }
+}
+
+/// Waits until `count` hold or await the turn `waiting` reports.
+async fn until_waiting(count: usize, waiting: impl Fn() -> usize) -> TestResult {
+    tokio::time::timeout(STEP, async {
+        while waiting() < count {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_commit_removing_a_subscription_waits_for_its_push_in_flight() -> TestResult {
+    let log = Log::default();
+    let gate = Arc::new(Notify::new());
+    let (address, mut arrivals) =
+        relay(StatusCode::ACCEPTED, Some(Arc::clone(&gate)), &log).await?;
+    let world = World::new(address)?;
+    let sending = world.push_held_at_relay(1, &mut arrivals).await?;
+    // Member 1 is removed while its push is at the relay: the commit must not be answered
+    // before that push is.
+    let committing = world.commit(&[1, 1], &log);
+    until_waiting(2, || {
+        world
+            .pusher
+            .waiting(world.group, SubscriptionId::from_bytes([1; 16]))
+    })
+    .await?;
+    gate.notify_one();
+    tokio::time::timeout(STEP, committing).await???;
+    assert_eq!(
+        tokio::time::timeout(STEP, sending).await??,
+        WakeOutcome::Sent(Ok(RelayAnswer::Accepted))
+    );
+    assert_eq!(
+        events(&log),
+        vec![Event::Arrived(handle(1)), Event::Answered, Event::Deleted]
+    );
+    // The removed member is not woken again; the other still is.
+    assert_eq!(world.send(1).await?, WakeOutcome::NotSubscribed);
+    gate.notify_one();
+    assert_eq!(
+        world.send(2).await?,
+        WakeOutcome::Sent(Ok(RelayAnswer::Accepted))
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_commit_waits_only_for_the_subscriptions_it_removes() -> TestResult {
+    let log = Log::default();
+    let gate = Arc::new(Notify::new());
+    let (address, mut arrivals) =
+        relay(StatusCode::ACCEPTED, Some(Arc::clone(&gate)), &log).await?;
+    let world = World::new(address)?;
+    let sending = world.push_held_at_relay(1, &mut arrivals).await?;
+    // Removing member 2 does not wait for member 1's push, which is still at the relay.
+    tokio::time::timeout(STEP, world.commit(&[2], &log)).await???;
+    gate.notify_one();
+    assert_eq!(
+        tokio::time::timeout(STEP, sending).await??,
+        WakeOutcome::Sent(Ok(RelayAnswer::Accepted))
+    );
+    assert_eq!(
+        events(&log),
+        vec![Event::Arrived(handle(1)), Event::Deleted, Event::Answered]
+    );
+    assert_eq!(world.send(2).await?, WakeOutcome::NotSubscribed);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_group_delete_waits_for_every_push_in_flight() -> TestResult {
+    let log = Log::default();
+    let gate = Arc::new(Notify::new());
+    let (address, mut arrivals) =
+        relay(StatusCode::ACCEPTED, Some(Arc::clone(&gate)), &log).await?;
+    let world = World::new(address)?;
+    let first = world.push_held_at_relay(1, &mut arrivals).await?;
+    let second = world.push_held_at_relay(2, &mut arrivals).await?;
+    let deleting = world.delete_group(&log);
+    // Both pushes hold a share of the group's turn; the delete waits behind them.
+    until_waiting(3, || world.pusher.group_waiting(world.group)).await?;
+    gate.notify_one();
+    gate.notify_one();
+    tokio::time::timeout(STEP, deleting).await???;
+    for sending in [first, second] {
+        assert_eq!(
+            tokio::time::timeout(STEP, sending).await??,
+            WakeOutcome::Sent(Ok(RelayAnswer::Accepted))
+        );
+    }
+    let seen = events(&log);
+    assert_eq!(seen.last(), Some(&Event::Deleted));
+    assert_eq!(
+        seen.iter()
+            .filter(|event| **event == Event::Answered)
+            .count(),
+        2
+    );
+    // Nothing is pushed for the deleted group afterwards.
+    assert_eq!(world.send(1).await?, WakeOutcome::NotSubscribed);
+    assert_eq!(world.send(2).await?, WakeOutcome::NotSubscribed);
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

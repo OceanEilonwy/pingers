@@ -46,6 +46,8 @@ object Pc {
     val SystemPill = Color(0xFFEDEBE5)
     val Green = Color(0xFF1F8A4C)
     val GreenText = Color(0xFF1F7A45)
+    /** Withdraw request, Don't let in. */
+    val Red = Color(0xFFB42318)
     val Teal = Color(0xFF0F7B74)
     val Plum = Color(0xFF7A3E9D)
     val LockScreen = Color(0xFF1C2230)

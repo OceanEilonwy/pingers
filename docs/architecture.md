@@ -58,7 +58,7 @@ pingers/
     pingers-quota/           L3  server: RLN tree, nullifiers, Privacy Pass issuer, limits
     pingers-server/          L5  server binary: routes to the crates above, nothing else
     pingers-push-relay/      L5  push relay binary
-    pingers-ohttp-relay/     L5  reference relay binary
+    pingers-ohttp-relay/     L5  reference relay (library and binary)
     pingers-map-host/        L5  map host binary: serves whole region packs
     pingers-testkit/         dev fake platform, harness, vectors
     pingers-cli/             dev headless client and load generator
@@ -192,7 +192,7 @@ Server side (each crate owns its storage trait, with a SQLite implementation beh
 
 **pingers-delivery**: the MLS delivery service: group logs with one commit per epoch, sealed-push subscriptions, Welcome routing via mailboxes, live-channel fan-out registry, group expiry. Deps: pingers-proto.
 
-**pingers-quota**: who may post: RLN membership tree and roots, nullifier set, Privacy Pass issuance and the spent set, per-bucket limits. Deps: pingers-anon (`verifier`, `issuer`).
+**pingers-quota**: who may post: accounts and their bearers (registration, sign-up limit), RLN membership tree and roots, nullifier set, Privacy Pass issuance and the spent set, per-bucket limits. Deps: pingers-anon (`verifier`, `issuer`), pingers-crypto.
 
 ### L4: presentation (pure)
 
@@ -208,7 +208,7 @@ Server side (each crate owns its storage trait, with a SQLite implementation beh
 
 **pingers-push-relay**: the publisher-run push relay. Stateless: HPKE open, check the mailbox binding, send to APNs (`a2`), FCM HTTP v1, or a UnifiedPush endpoint; per-token and per-server rate limits; key config endpoint; logging off by default.
 
-**pingers-ohttp-relay**: a small reference relay (forward only, full-duplex streaming, no logs) so relay operators have something to run. Optional if an existing relay is used.
+**pingers-ohttp-relay**: a small reference relay (forward only, full-duplex streaming, no logs) so relay operators have something to run. Optional if an existing relay is used. Its library (`serve`) is what the binary runs and what testkit's harness and pingers-transport's integration tests run, so tests exercise the relay operators deploy.
 
 **pingers-map-host**: the map host, a separate public static service like the push relay (design B.12, "Map host"). Publisher-hosted by default; operators can run their own and Pingers servers can advertise one (`map_host` in `/v1/params`). Serves region manifests, PMTiles packs and search indexes from a directory: HTTP/2, `Range`, strong ETags from the SHA-256, immutable caching, no cookies, no client addresses, logging off by default (counts and disk use when on). Operators choose what they host with an allow-list of regions and a `max_disk` budget; an optional cache mode cuts allow-listed regions from the upstream Protomaps build on first request and evicts least-recently-served packs. Deps: pingers-map-packs, `axum`, `tokio`, `tokio-util`.
 

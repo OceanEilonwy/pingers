@@ -183,6 +183,12 @@ Configuration:
 
 **Server access control without membership knowledge**: each epoch all members derive an Ed25519 keypair from `MLS-Exporter("pingers/v1/log-auth", group_id, 32)`. The committer sends the next epoch's public key with the Commit; the server stores it and requires a signature by it on reads and writes of that group log. Removed members cannot derive the new key.
 
+**Reading with an earlier epoch's key** (decided 2026-11-14). The server keeps every earlier epoch's key, because a member that missed commits can only sign with the key it still has. Writes, subscription changes, deletes and the live channel take only the current key; a commit signed with an older key is answered `409` with the head epoch. Reads follow one rule: **a key of epoch `e` reads the log up to and including the commit that ended `e`, and nothing after it, whatever position it asks to read after.**
+
+- A lagging member reads with its old key, gets everything up to the commit that ended its epoch, applies it, and reads on from that position with the next epoch's key. Each key reads everything before its own boundary, so it misses nothing, including late messages a slower member wrote in an older epoch.
+- A removed member keeps only the key of the epoch it was removed in. It reads up to the commit that removed it (so it learns it was removed) and nothing written after, not even a late message in its old epoch that it could still open.
+- Such a reader is told the head epoch as at most one past its own (it learns its epoch ended, not how many followed), cannot fetch a snapshot of a later epoch (`GET /state` answers `403`), and its reads do not count as activity, so a removed member polling cannot keep a group from expiring.
+
 ### B.3 Private co-presence detection: options
 
 | Option | Server learns | Rounds / battery | Fit |
@@ -440,7 +446,7 @@ A **group subscription** is the same `SealedPush` without a message queue: the g
 | Knock mailbox | One lease; one per real board record | Location (iOS) or Standard/Alert | Party members who match the record |
 | Reply mailbox | One lease, one-time | Standard/Alert | The poster being knocked |
 | Meetup group subscription | Until the Meetup ends | Standard; urgency chosen per message | Carried in the knock; listed by whoever adds the member |
-| Party group subscription | 30 days, renewed | Standard; urgency chosen per message | Carried in the join request; renewed by the member under the group's log-auth key |
+| Party group subscription | 30 days, renewed | Standard; urgency chosen per message | Carried in the join request when the joiner has wake-up pushes on (optional: without it the member reads the group on its own wakes); renewed by the member under the group's log-auth key |
 | Invite mailbox | Until the invite expires | Standard/Alert | Holders of the invite link |
 
 **The push relay.** A small stateless service that holds the HPKE private key and the APNs and FCM credentials.
@@ -769,7 +775,8 @@ A `Router` holds one transport per class. Anonymous and stream requests are neve
 Everything in **bold** is opaque ciphertext or random to the server.
 
 ```sql
-account      (account_id BLOB PK, sig_pk BLOB, created_at, disabled)    -- used only for registration, the membership leaf and token issuance
+account      (account_id BLOB PK, sig_pk BLOB, created_at)              -- used only for registration, the membership leaf and token issuance; created_at for the sign-up limit
+account_bearer (digest BLOB PK /*SHA-256("pingers/v1/bearer" || bearer)*/, account_id FK, expires_at)  -- at most 4 per account; never the bearer itself
 mailbox      (mailbox_id BLOB PK /*random*/, sealed_push BLOB NULL /*bold; NULL = no wake*/, relay_id, urgency, handle, expires_at)
 mailbox_msg  (mailbox_id FK, seq, body BLOB /*bold*/, expires_at)
 grp          (group_id BLOB PK /*random*/, auth_pk BLOB, head_epoch, lifetime /*meetup|party*/, created_at, idle_expires_at)
@@ -865,7 +872,7 @@ HTTP/2 over TLS 1.3, bodies in CBOR unless noted, MLS objects TLS-serialised ins
 - **Anon**: no account. Privacy class `Anonymous`; sent via OHTTP at `POST /ohttp`. One of:
   - **Rln**: `Authorization: PingersRln <base64url(RlnAuth)>`. Main app.
   - **PP**: `Authorization: PrivateToken token=...` (RFC 9577). App extensions, and devices in fallback (B.4.8).
-- **Grp**: Ed25519 signature by the group's current log-auth key over `(method, path, body hash, timestamp)`, plus Anon. One Anon credential per group per bucket buys a session cookie for that group.
+- **Grp**: Ed25519 signature by the group's current log-auth key over `(method, path, body hash, timestamp)`, plus Anon. One Anon credential per group per bucket buys a session cookie for that group, good for at most 64 writes.
 - **Cap**: no credential; a secret in the request is the capability (a mailbox's `read_key`, a server-MACed board cursor). Sent via OHTTP.
 
 ```rust
@@ -892,12 +899,16 @@ GET  /v1/params            -> Params { anon_auth: Vec<Rln|PP>, rln_slashing: boo
 
 // --- accounts (Acct) ---
 POST /v1/accounts          RegisterReq  { sig_pk: [u8;32], proof: Sig, reg_code: Option<String> } -> { account_id }
+                           // reg_code only for a new key; a known key re-registers on its proof alone.
+                           // At most signups_per_hour new accounts an hour (429 beyond). Accounts and bearer
+                           // digests persist, so a restart changes nothing for a device.
 POST /v1/auth              AuthReq      { account_id, nonce_sig: Sig }                             -> { bearer, server_time }
 DELETE /v1/accounts/me
 GET  /v1/ohttp/config                                                      -> KeyConfig
 
 // --- membership tree ---
 POST /v1/rln/leaf          (Acct) { id_commitment: [u8;32] }              -> { idx, live_from_root_epoch }
+                           // at most 4 per account per 24 root epochs (429 beyond): each takes a tree position
 GET  /v1/rln/leaves?after=n (no auth, cacheable)
                            -> { leaves: Vec<[u8;32]>, zeroed: Vec<u32>, roots: Vec<(u32 /*root_epoch*/, [u8;32])>, next: u32 }
 
@@ -939,6 +950,7 @@ PUT  /v1/groups/{id}/subs/{sub_id} (Grp) Subscription                      // a 
 DELETE /v1/groups/{id}/subs/{sub_id} (Grp)
 POST /v1/groups/{id}/msgs  (Grp) AppMsg { epoch: u64, body: Bytes, ephemeral: bool, wake: None|Quiet|Alert } -> { seq }
 GET  /v1/groups/{id}/msgs?after=seq (Grp) -> { msgs: Vec<GrpMsg>, head_epoch }
+                           // signed with an earlier epoch's key: only up to the commit that ended it (B.2)
 GET  /v1/groups/{id}/state (Grp) -> { epoch, blob }
 DELETE /v1/groups/{id}     (Grp)
 POST /v1/groups/{id}/live?sub=<sub_id>  (Grp) chunked OHTTP exchange: request and response bodies are streams of Frame { epoch, body, ephemeral }   // privacy class Stream; reached only via POST /ohttp with message/ohttp-chunked-req
@@ -947,6 +959,27 @@ POST /v1/groups/{id}/live?sub=<sub_id>  (Grp) chunked OHTTP exchange: request an
 Welcome messages travel as mailbox posts. Invites reuse mailboxes (below). There is deliberately no KeyPackage endpoint, no user lookup endpoint, and no endpoint that takes a raw push token.
 
 **Wake rule.** A mailbox post forwards that mailbox's sealed push to its relay. A Commit, or an `AppMsg` with `wake` set, forwards each subscription's sealed push with the given urgency, skipping subscriptions connected to the group's live stream; `Quiet` forwards are delayed by a random 0 to 30 seconds each. If the relay answers `410 Gone` the server deletes the blob.
+
+**Removing a member's subscriptions.** A Commit's `subs_del` (the remover lists the removed member's subscription: a Party member's from its roster profile, a Meetup member's as in G.6) is applied in the same transaction as the Commit, so the Commit's own wake never reaches it. The server answers the Commit only after any push already on its way to those subscriptions has been answered, closes the live channels opened with them (the removed member receives nothing further and can send nothing more), and never forwards a later wake to them. `DELETE /v1/groups/{id}/subs/{sub_id}` waits the same way, and `DELETE /v1/groups/{id}` waits for every push to the group in flight: once the server has answered a removal, the push relay hears nothing more for what was removed.
+
+**Limits** (decided 2026-11-14). Every limit is enforced by the server, so no client has to be trusted to keep it:
+
+| What | Limit | Answer |
+|---|---|---|
+| Connections | 4096 on the public listener, 256 on the gateway (`max_connections`, `[ohttp] max_connections`); one more is closed on arrival | close |
+| Idle or slow connections | closed after `idle_timeout_s` (120 s) with no request in progress, including one that never completes a request head; a live channel is a request in progress; a public connection whose oldest request has taken three request timeouts (a client that stopped reading its answer) is dropped | GOAWAY, drop |
+| Request head | 16 KiB of header fields; 64 concurrent requests per public connection, 4096 per gateway connection | refused |
+| Request body | 64 KiB, complete within `request_timeout_s` (30 s); a chunked live channel's preamble 20 KiB | 413, 408 |
+| New accounts | `signups_per_hour` (60), counted in `quota_db`; plus the registration code, if set | 429 |
+| Bearers | 4 live per account | oldest dropped |
+| Membership leaves | 4 per account per 24 root epochs | 429 |
+| Privacy Pass | 300 tokens per account per day | 429 |
+| RLN proofs | 8 per identity per scope per bucket (the circuit's message limit) | 403 |
+| Group sessions | one credential buys 64 writes to one group, until the bucket ends | 401 |
+| Subscriptions | 1024 per group | 422 |
+| Live channels | 256 per group; 240 stored frames per channel per bucket (ephemeral frames are not stored or counted) | 429 |
+| Mailbox posts | `mailbox_posts_per_bucket` (60) per mailbox | 429 |
+| Push relay key configs | fetched from the relay at most once per 5 minutes (30 s after a failure), however many ask | cached |
 
 **Push relay API** (a separate service, B.4.9):
 
@@ -966,10 +999,14 @@ The relay opens `blob` with `info = "pingers/v1/push" ‖ bind`, reads `platform
 
 **Invite flow**
 
-- Link: `https://<host>/j#v1.<base64url(cbor{ server, invite_mailbox, invite_secret[32], inviter_fpr[8], expires, single_use, reg_code? })>`. The fragment never reaches the server. `reg_code` is the operator's registration code (B.1), present when the inviter registered with one, so the joiner's first `POST /v1/accounts` needs no typing; like the link it is a bearer capability. The QR code encodes the same string.
-- Joiner registers an account on that server, registers a one-time reply mailbox, then posts to `invite_mailbox`: `XChaCha20-Poly1305(HKDF(invite_secret,"join"), { key_package, display_name, reply_mailbox, party_sub })`, where `party_sub` is its sealed push subscription for the Party group.
-- Inviter's device wakes, decrypts (authenticates possession of the secret), shows "Bob wants to join" for multi-use links (single-use links auto-approve), commits `Add` with `subs_add = [party_sub]`, posts the Welcome to `reply_mailbox`.
-- Joiner checks that the group in the Welcome contains a leaf whose key matches `inviter_fpr`, fetches the state snapshot, publishes its roster profile, and is in.
+Join flow A (decided 2026-11-14): the link carries nothing about the Party, every joiner is let in by the inviter after comparing a code, and the link stops working once someone is let in.
+
+- Link: `https://<host>/j#v1.<base64url(cbor[ server, invite_mailbox, invite_secret[32], inviter_fpr[8], expires, reg_code? ])>`. No Party name, members, colour, suite or use count, so a link that leaks (forwarded, or read by the app that carried it) reveals only the server. `inviter_fpr` is `account_id(inviter_pk)[..8]`. `reg_code` is the operator's registration code (B.1), present when the inviter registered with one, so the joiner's first `POST /v1/accounts` needs no typing; like the link it is a bearer capability. The fragment never reaches the server. The QR code encodes the same string.
+- Joiner registers an account on that server, registers a one-time reply mailbox, then posts to `invite_mailbox` an invite post `[0, { key_package, key_package_xwing | null, display_name, reply_mailbox, party_sub | null }]`. The link does not name the Party's suite, so the joiner sends a classical key package and, when its build can make one, an X-Wing one; the inviter adds the one its Party's suite needs, and a quantum-resistant Party refuses a request without an X-Wing one, sealed as `nonce || XChaCha20-Poly1305(HKDF(invite_secret,"join"), …)` and padded to a mailbox size class. `party_sub` is its sealed push subscription for the Party group, or null with wake-up pushes off: such a member joins all the same and reads the group on its own wakes.
+- **Join code.** Both phones show `code = be64(HMAC-SHA256(HKDF-Expand(invite_secret, "pingers/v1/join-code", 32), be32(len(kp)) || kp || be32(len(kp_xwing)) || kp_xwing)[..8]) mod 10^12` (`kp_xwing` empty when the request carries none), 12 digits as `4821 0937 5512`, as soon as the request exists: the joiner computes it when it builds the request, the inviter when it opens it. It binds the request to the link and to both of the joiner's key packages (each carries, and is signed by, the joiner's signature key), so whichever one the inviter adds is covered. Someone who intercepted the link can post their own request, but cannot read the real joiner's (only the inviter holds the invite mailbox's read key), so their code matches by chance only, once in 10^12. Vectors: `vectors/crypto/join-code.json`.
+- Inviter's device reads the invite mailbox (on its push, or every wake with pushes off; posts are handled once, in order) and shows "Ben asked to join" with the code. The joiner reads its code out, in person or on a call. "Codes match · Let Ben in" commits `Add` (with `subs_add = [party_sub]` when there is one), posts the Welcome to `reply_mailbox`, marks the invite used, drops any other request through it and deletes the invite mailbox. "Don't let in" sends nothing; the joiner never hears back.
+- The joiner can withdraw ("Withdraw request"): it posts `[1, reply_mailbox]` under the same seal, deletes its reply mailbox and forgets the join; the inviter drops the waiting request. The pairing of request and reply mailbox is known only to the two phones; the server sees mailbox ids, so a server that also held the link could withdraw a request (denial only).
+- Joiner checks that the group in the Welcome contains a leaf whose key matches `inviter_fpr`, fetches the state snapshot, publishes its roster profile, and is in: only now does it learn the Party's name, members and Spots ("Ana let you in"), and it keeps the code that was checked.
 - Invite and reply mailboxes are anonymous like any other: the server sees them used and sees the group gain a subscription, without accounts.
 - A link is a bearer capability: revoke by deleting the invite mailbox.
 
@@ -997,7 +1034,8 @@ pub trait Platform: Send + Sync {
 #[uniffi::export(callback_interface)]
 pub trait Events: Send + Sync {
     fn parties_changed(&self);
-    fn join_request(&self, party: PartyId, req: JoinRequest);
+    fn join_requested(&self, party: PartyId);                        // "Ben asked to join"; details and the code in the snapshot
+    fn let_in(&self, party: PartyId);                                // the inviter let this device in ("Ana let you in")
     fn meetup_started(&self, m: MeetupSummary);
     fn meetup_updated(&self, id: MeetupId);                          // roster, meet point
     fn meetup_message(&self, id: MeetupId, msg: ChatMessage);
@@ -1037,8 +1075,10 @@ impl Core {
     // parties and spots
     pub async fn create_party(&self, name: String, my_name: String) -> Result<PartyId, CoreError>;
     pub async fn create_invite(&self, party: PartyId, opts: InviteOpts) -> Result<String, CoreError>;
-    pub async fn accept_invite(&self, link: String, my_name: String) -> Result<PartyId, CoreError>;
-    pub async fn resolve_join_request(&self, party: PartyId, req: JoinRequestId, approve: bool) -> Result<(), CoreError>;
+    pub async fn open_invite(&self, link: String, my_name: String) -> Result<(), CoreError>;   // "Ask to join"; the snapshot shows the code
+    pub async fn withdraw_join(&self) -> Result<(), CoreError>;
+    pub async fn let_in(&self, party: PartyId, request: JoinRequestId) -> Result<(), CoreError>;   // codes matched
+    pub async fn turn_away(&self, party: PartyId, request: JoinRequestId) -> Result<(), CoreError>;
     pub async fn remove_member(&self, party: PartyId, member: MemberId) -> Result<(), CoreError>;
     pub async fn leave_party(&self, party: PartyId) -> Result<(), CoreError>;
     pub fn parties(&self) -> Vec<Party>;
@@ -1183,13 +1223,17 @@ sequenceDiagram
   A-->>B: link or QR (out of band, secret in URL fragment)
   B->>S: register account, RLN leaf, Privacy Pass batch   (identified)
   B->>S: POST /mailboxes {reply mailbox Y, sealed push}   (Privacy Pass: leaf not live yet)
-  B->>S: POST /mailboxes/I/msgs  seal(invite_secret, {KeyPackage_B, name, Y, sub_B})
+  B->>B: code = join_code(invite_secret, KeyPackage_B), shown at once
+  B->>S: POST /mailboxes/I/msgs  seal(invite_secret, [0, {KeyPackage_B, name, Y, sub_B or null}])
   S->>PR: push {blob of I, bind, Alert, handle}
   PR-->>A: Alert push
   A->>S: GET /mailboxes/I/msgs (read_key)
-  A->>A: open, verify, (approve), Commit Add(B)
+  A->>A: open, compute the same code, show "Bob asked to join"
+  B-->>A: Bob reads his code out (in person or on a call)
+  A->>A: codes match: let in, Commit Add(B), invite used
   A->>S: POST /groups/P/commit {epoch 0, commit, next_auth_pk, state', subs_add=[sub_B]}
   A->>S: POST /mailboxes/Y/msgs  Welcome
+  A->>S: DELETE /mailboxes/I   (the link stops working)
   S->>PR: push {blob of Y}
   PR-->>B: Alert push
   B->>S: GET /mailboxes/Y/msgs, GET /groups/P/state

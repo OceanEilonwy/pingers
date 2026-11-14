@@ -12,6 +12,9 @@ pub enum ScreenError {
     /// The snapshot has no Party with this id.
     #[error("no such party")]
     UnknownParty,
+    /// The Party has no waiting join request with this id (decided or withdrawn).
+    #[error("no such join request")]
+    UnknownJoinRequest,
     /// The snapshot has no Meetup with this id.
     #[error("no such meetup")]
     UnknownMeetup,

@@ -27,6 +27,15 @@ object Notifications {
 
     const val RUNNING_ID = 0x5049_4E47 // "PING"
 
+    /** You're in's notification ("Ana let you in"); one at a time, a later one replaces it. */
+    const val LET_IN_ID = 0x4C45_5449 // "LETI"
+
+    /** The extra on a notification's intent saying which screen to open. */
+    const val EXTRA_OPEN = "org.pingers.app.OPEN"
+
+    /** [EXTRA_OPEN]'s value for You're in. */
+    const val OPEN_LET_IN = "let-in"
+
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannels(
@@ -72,6 +81,38 @@ object Notifications {
             // The permission was revoked between the check and the post.
         }
     }
+
+    /**
+     * This phone was let into a Party (`Events.let_in`): [title] and [body] are the core's
+     * words. Tapping it opens the app on You're in. Without the permission, nothing is shown.
+     */
+    fun letIn(context: Context, title: String, body: String) {
+        if (!canPost(context)) return
+        ensureChannels(context)
+        val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            ?.putExtra(EXTRA_OPEN, OPEN_LET_IN)
+            ?.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val open = launch?.let {
+            PendingIntent.getActivity(context, LET_IN_ID, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        }
+        val n = NotificationCompat.Builder(context, CHANNEL_ALERTS)
+            .setSmallIcon(R.drawable.ic_stat_pingers)
+            .setColor(ContextCompat.getColor(context, R.color.blue))
+            .setContentTitle(title)
+            .setContentText(body)
+            .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .build()
+        try {
+            NotificationManagerCompat.from(context).notify(LET_IN_ID, n)
+        } catch (_: SecurityException) {
+            // The permission was revoked between the check and the post.
+        }
+    }
+
+    fun cancelLetIn(context: Context) = NotificationManagerCompat.from(context).cancel(LET_IN_ID)
 
     /** The foreground service's notification. */
     fun running(context: Context, meetup: Boolean): Notification {

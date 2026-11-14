@@ -13,12 +13,13 @@ use pingers_screens::snapshot::ClientSnapshot;
 
 use crate::CoreError;
 use crate::geo::Coordinate;
-use crate::ids::{LocationRequestId, MeetupId, MessageId, PartyId};
+use crate::ids::{InviteId, LocationRequestId, MeetupId, MessageId, PartyId};
 use crate::views::{
-    AcceptInviteView, AdvancedView, AnswerDraft, ChatView, CoPresenceAlert, CompassSelection,
-    CompassView, DrawAreaView, ExclusionZonesView, HomeView, InviteView, LocationRequestView,
-    MeetPointDraft, MeetPointView, MeetupEndedView, MeetupView, NewPartyView, PartyDraft,
-    PartyView, PrivacyView, ServerSeesView, SpotDraft, SpotEditorView, YourNameView,
+    AdvancedView, AnswerDraft, AskedToJoinView, ChatView, CoPresenceAlert, CompassSelection,
+    CompassView, DrawAreaView, ExclusionZonesView, HomeView, InviteView, JoinRequestView,
+    LetInView, LocationRequestView, MeetPointDraft, MeetPointView, MeetupEndedView, MeetupView,
+    NewPartyView, OpenInviteView, PartyDraft, PartyView, PrivacyView, ServerSeesView, SpotDraft,
+    SpotEditorView, YourNameView,
 };
 
 /// The device's clock, for screens that print times or count down.
@@ -107,10 +108,42 @@ impl Snapshot {
         .into())
     }
 
-    /// Accept invite, while an opened link waits.
+    /// "Ben asked to join", for one request in a Party.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::NotFound`] once it was decided or withdrawn, or [`CoreError::Invalid`].
+    pub fn join_request(
+        &self,
+        party: &PartyId,
+        request: &InviteId,
+        clock: LocalClock,
+    ) -> Result<JoinRequestView, CoreError> {
+        Ok(screens::invite::join_request(
+            &self.0,
+            party.try_into()?,
+            request.try_into()?,
+            pingers_time::UnixSeconds::new(clock.now),
+        )?
+        .into())
+    }
+
+    /// Open invite, shown when the user opens a link.
     #[must_use]
-    pub fn accept_invite(&self) -> Option<AcceptInviteView> {
-        screens::invite::accept_invite(&self.0).map(Into::into)
+    pub fn open_invite(&self) -> OpenInviteView {
+        screens::invite::open_invite(&self.0).into()
+    }
+
+    /// Asked to join, while this device waits to be let in.
+    #[must_use]
+    pub fn asked_to_join(&self) -> Option<AskedToJoinView> {
+        screens::invite::asked_to_join(&self.0).map(Into::into)
+    }
+
+    /// You're in, once this device was let in and until `Core::dismiss_join`.
+    #[must_use]
+    pub fn let_in(&self) -> Option<LetInView> {
+        screens::invite::let_in(&self.0).map(Into::into)
     }
 
     /// The Spot editor, for what has been typed.
@@ -411,6 +444,36 @@ mod tests {
             reason: format!("{error:?}"),
         })?;
         Ok(Snapshot::new(std::sync::Arc::new(snapshot)))
+    }
+
+    #[test]
+    fn join_screens_carry_their_codes_and_words() -> Result<(), CoreError> {
+        let asked = snapshot()?
+            .asked_to_join()
+            .ok_or_else(|| CoreError::invalid("not asked"))?;
+        assert_eq!(asked.code, "4821 0937 5512");
+        assert_eq!(asked.withdraw, "Withdraw request");
+        assert_eq!(snapshot()?.open_invite().name, "Sam");
+        let request = snapshot()?.join_request(
+            &fixtures::climbing_crew().into(),
+            &fixtures::ben_request().into(),
+            super::LocalClock {
+                now: fixtures::at(19, 30).get(),
+                utc_offset_seconds: 0,
+            },
+        )?;
+        assert_eq!(request.id, fixtures::ben_request().into());
+        assert_eq!(request.let_in, "Codes match · Let Ben in");
+        let let_in_snapshot = fixtures::let_in_snapshot().map_err(|error| CoreError::Invalid {
+            reason: format!("{error:?}"),
+        })?;
+        let let_in = Snapshot::new(std::sync::Arc::new(let_in_snapshot))
+            .let_in()
+            .ok_or_else(|| CoreError::invalid("not let in"))?;
+        assert_eq!(let_in.party, fixtures::climbing_crew().into());
+        assert_eq!(let_in.notification_title, "Ana let you in");
+        assert_eq!(let_in.preview.len(), 3);
+        Ok(())
     }
 
     #[test]

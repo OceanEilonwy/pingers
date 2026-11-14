@@ -7,10 +7,10 @@ use core::time::Duration;
 use pingers_geo::{Coordinate, Fence, GeoError, Meters};
 use pingers_presence::{EpochTransition, RosterLookup as _};
 use pingers_proto::{
-    DisplayName, Epoch, GroupId, InviteUses, InviterFingerprint, LeafIndex, MailboxId,
-    MlsMessageBytes, Padded, PartyId, PushHandle, PushRelayKeyId, RelayId, RelayRef, RelayUrl,
-    SealedPush, SealedPushBlob, SealedSnapshot, SecretText, ServerId, SpotId, Subscription,
-    SubscriptionId, TimeToLive, Urgency,
+    DisplayName, Epoch, GroupId, InviterFingerprint, LeafIndex, MailboxId, MlsMessageBytes, Padded,
+    PartyId, PushHandle, PushRelayKeyId, RelayId, RelayRef, RelayUrl, SealedPush, SealedPushBlob,
+    SealedSnapshot, SecretText, SequenceNumber, ServerId, SpotId, Subscription, SubscriptionId,
+    TimeToLive, Urgency,
 };
 use pingers_store::{
     LocationVisibility, MailboxPurpose, MemberName, PartyName, SpotName, Verification,
@@ -20,18 +20,18 @@ use rand_chacha::ChaCha20Rng;
 
 use crate::test_support::{Device, NOW, SERVER, TestError, rng};
 use crate::{
-    ArrivedWelcome, CreatedInvite, INVITE_LIFETIME, Incoming, InviteId, InviteLink, InviteStatus,
-    JoinDetails, JoinId, JoinRequestOutcome, Myself, NewInvite, NewParty, NewSpot, Outbound,
-    OutgoingCommit, PartiesError, PartyLifecycle, PartySettings, PostQuantum, Refusal, RelayChoice,
-    SafetyCode, SpotEdit, SpotShape,
+    ArrivedWelcome, CreatedInvite, INVITE_LIFETIME, Ignored, Incoming, InviteId, InviteLink,
+    InviteStatus, JoinCode, JoinDetails, JoinId, JoinRequestOutcome, Myself, NewInvite, NewParty,
+    NewSpot, Outbound, OutgoingCommit, PartiesError, PartyLifecycle, PartySettings, PendingJoin,
+    PostQuantum, Refusal, RelayChoice, SafetyCode, SpotEdit, SpotShape,
 };
 
 const LEAF_ALICE: LeafIndex = LeafIndex::new(0);
 const LEAF_BOB: LeafIndex = LeafIndex::new(1);
 
-const fn single() -> NewInvite {
+/// An invite without a registration code.
+const fn no_code() -> NewInvite {
     NewInvite {
-        uses: InviteUses::Single,
         registration_code: None,
     }
 }
@@ -105,18 +105,10 @@ fn create_party(device: &Device, rng: &mut ChaCha20Rng) -> Result<Founded, TestE
 fn invite(
     device: &Device,
     party: &PartyId,
-    uses: InviteUses,
     rng: &mut ChaCha20Rng,
 ) -> Result<CreatedInvite, TestError> {
     device.pool_mailbox(MailboxPurpose::Invite, month()?)?;
-    Ok(device.parties().create_invite(
-        party,
-        NewInvite {
-            uses,
-            registration_code: None,
-        },
-        rng,
-    )?)
+    Ok(device.parties().create_invite(party, no_code(), rng)?)
 }
 
 /// A join request posted by a joiner.
@@ -124,13 +116,23 @@ struct Posted {
     join: JoinId,
     mailbox: MailboxId,
     body: Padded,
-    subscription: Subscription,
+    subscription: Option<Subscription>,
+    code: JoinCode,
 }
 
-/// The joiner prepares a join for `link` at its clock's time.
+/// The joiner, with wake-up pushes on, prepares a join for `link` at its clock's time.
 fn post_join(joiner: &Device, link: &str, rng: &mut ChaCha20Rng) -> Result<Posted, TestError> {
-    joiner.pool_mailbox(MailboxPurpose::Reply, month()?)?;
     let subscription = subscription(joiner.fill())?;
+    post_join_with(joiner, link, Some(subscription), rng)
+}
+
+fn post_join_with(
+    joiner: &Device,
+    link: &str,
+    subscription: Option<Subscription>,
+    rng: &mut ChaCha20Rng,
+) -> Result<Posted, TestError> {
+    joiner.pool_mailbox(MailboxPurpose::Reply, month()?)?;
     let prepared = joiner.parties().prepare_join(
         &InviteLink::from_text(link.to_owned()),
         JoinDetails {
@@ -147,16 +149,55 @@ fn post_join(joiner: &Device, link: &str, rng: &mut ChaCha20Rng) -> Result<Poste
         mailbox,
         body,
         subscription,
+        code: prepared.code,
     })
 }
 
-fn admitted(outcome: JoinRequestOutcome) -> Result<OutgoingCommit, TestError> {
-    match outcome {
-        JoinRequestOutcome::Admitted(commit) => Ok(commit),
-        JoinRequestOutcome::AwaitingApproval(_) | JoinRequestOutcome::Refused(_) => {
-            Err(TestError::Unexpected("expected an admitted join"))
-        }
-    }
+/// The inviter reads `posted` as post `sequence` of `invite`.
+fn receive(
+    inviter: &Device,
+    invite: InviteId,
+    sequence: u64,
+    posted: &Posted,
+) -> Result<JoinRequestOutcome, TestError> {
+    Ok(inviter.parties().receive_join_request(
+        invite,
+        SequenceNumber::new(sequence),
+        &posted.body,
+    )?)
+}
+
+/// The inviter reads `posted` and sees it waiting, with the code the joiner's phone shows.
+fn asked(
+    inviter: &Device,
+    invite: InviteId,
+    sequence: u64,
+    posted: &Posted,
+) -> Result<PendingJoin, TestError> {
+    let JoinRequestOutcome::AwaitingApproval(pending) = receive(inviter, invite, sequence, posted)?
+    else {
+        return Err(TestError::Unexpected("expected a waiting join request"));
+    };
+    assert_eq!(pending.join, posted.join);
+    assert_eq!(pending.invite, invite);
+    assert_eq!(pending.code, posted.code);
+    assert_eq!(pending.asked_at, pingers_time::Clock::now(&inviter.clock));
+    Ok(pending)
+}
+
+/// The inviter lets `posted` in: the Add commit, and the invite mailbox's deletion.
+fn let_in(
+    inviter: &Device,
+    party: &PartyId,
+    posted: &Posted,
+    rng: &mut ChaCha20Rng,
+) -> Result<OutgoingCommit, TestError> {
+    let admission = inviter.parties().approve_join(party, posted.join, rng)?;
+    assert!(matches!(
+        admission.close_invite,
+        Outbound::DeleteMailbox { mailbox } if mailbox == posted.mailbox
+    ));
+    Ok(admission.commit)
 }
 
 fn state(commit: &OutgoingCommit) -> Result<SealedSnapshot, TestError> {
@@ -207,6 +248,17 @@ fn complete_join(
         .welcome_access(welcome.join, &welcome.welcome)?;
     assert_eq!(access.group, again.group);
     let membership = joiner.parties().accept_welcome(&welcome, rng)?;
+    // The joiner knows who let it in and keeps the code that was checked.
+    assert_eq!(membership.via.inviter, LEAF_ALICE);
+    assert_eq!(membership.via.code, admission.posted.code);
+    assert_eq!(
+        joiner.parties().joined_via(&membership.party)?,
+        Some(membership.via)
+    );
+    assert!(matches!(
+        joiner.parties().asked_join(welcome.join),
+        Err(PartiesError::UnknownJoin)
+    ));
     assert_eq!(
         joiner
             .parties()
@@ -230,7 +282,7 @@ fn complete_join(
     Ok(membership.party)
 }
 
-/// Alice created a Party and admitted Bob through a single-use invite.
+/// Alice created a Party and let Bob in.
 struct TwoMembers {
     alice: Device,
     bob: Device,
@@ -247,17 +299,18 @@ fn two_members() -> Result<TwoMembers, TestError> {
     let bob = Device::new(2)?;
     let founded = create_party(&alice, &mut rng)?;
     let party = founded.party;
-    let created = invite(&alice, &party, InviteUses::Single, &mut rng)?;
+    let created = invite(&alice, &party, &mut rng)?;
     let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
     assert_eq!(posted.mailbox, created.invite.mailbox());
-    let commit = admitted(alice.parties().receive_join_request(
-        created.invite,
-        &posted.body,
-        &mut rng,
-    )?)?;
+    asked(&alice, created.invite, 1, &posted)?;
+    let commit = let_in(&alice, &party, &posted, &mut rng)?;
+    let bob_subscription = posted
+        .subscription
+        .clone()
+        .ok_or(TestError::Unexpected("Bob has wake-up pushes on"))?;
     assert_eq!(
         commit.request.subscriptions_added,
-        vec![posted.subscription.clone()]
+        vec![bob_subscription.clone()]
     );
     assert_eq!(commit.request.epoch, Epoch::new(0));
     let admission = Admission {
@@ -272,7 +325,7 @@ fn two_members() -> Result<TwoMembers, TestError> {
         party,
         group: commit.group,
         alice_subscription: founded.subscription,
-        bob_subscription: posted.subscription.id,
+        bob_subscription: bob_subscription.id,
         rng,
     })
 }
@@ -433,34 +486,107 @@ fn roster_lookup_epoch_tracks_own_and_incoming_commits() -> Result<(), TestError
 }
 
 #[test]
-fn single_use_invite_admits_once() -> Result<(), TestError> {
+fn both_phones_show_the_same_code_and_another_joiner_gets_another() -> Result<(), TestError> {
+    let mut rng = rng(2);
+    let alice = Device::new(1)?;
+    let bob = Device::new(2)?;
+    let mallory = Device::new(3)?;
+    let party = create_party(&alice, &mut rng)?.party;
+    let created = invite(&alice, &party, &mut rng)?;
+    let bob_post = post_join(&bob, created.link.as_str(), &mut rng)?;
+    // Before anyone is let in, Bob's phone has the code and Alice's shows the same one.
+    let asked_join = bob.parties().asked_join(bob_post.join)?;
+    assert_eq!(asked_join.code, bob_post.code);
+    assert_eq!(asked_join.asked_at, NOW);
+    let pending = asked(&alice, created.invite, 1, &bob_post)?;
+    assert_eq!(pending.name.as_str(), "Bob");
+    // Someone else who opened the same link shows Alice a different code.
+    let mallory_post = post_join(&mallory, created.link.as_str(), &mut rng)?;
+    let other = asked(&alice, created.invite, 2, &mallory_post)?;
+    assert_ne!(other.code, pending.code);
+    let waiting: Vec<_> = alice
+        .parties()
+        .pending_joins(&party)?
+        .into_iter()
+        .map(|pending| (pending.join, pending.code))
+        .collect();
+    assert_eq!(
+        waiting,
+        [
+            (bob_post.join, bob_post.code),
+            (mallory_post.join, mallory_post.code)
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn letting_one_in_closes_the_invite() -> Result<(), TestError> {
     let mut rng = rng(2);
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
     let carol = Device::new(3)?;
+    let dave = Device::new(4)?;
     let party = create_party(&alice, &mut rng)?.party;
-    let created = invite(&alice, &party, InviteUses::Single, &mut rng)?;
+    let created = invite(&alice, &party, &mut rng)?;
     assert_eq!(
         alice.parties().invite_status(created.invite)?,
         InviteStatus::Open
     );
     let bob_post = post_join(&bob, created.link.as_str(), &mut rng)?;
     let carol_post = post_join(&carol, created.link.as_str(), &mut rng)?;
-    admitted(
-        alice
-            .parties()
-            .receive_join_request(created.invite, &bob_post.body, &mut rng)?,
-    )?;
+    asked(&alice, created.invite, 1, &bob_post)?;
+    asked(&alice, created.invite, 2, &carol_post)?;
+    let commit = let_in(&alice, &party, &bob_post, &mut rng)?;
     assert_eq!(
         alice.parties().invite_status(created.invite)?,
         InviteStatus::Used
     );
+    // Carol's request went with the link; a later one is refused.
+    assert!(alice.parties().pending_joins(&party)?.is_empty());
     assert!(matches!(
         alice
             .parties()
-            .receive_join_request(created.invite, &carol_post.body, &mut rng)?,
-        JoinRequestOutcome::Refused(Refusal::AlreadyUsed)
+            .approve_join(&party, carol_post.join, &mut rng),
+        Err(PartiesError::UnknownJoin)
     ));
+    let dave_post = post_join(&dave, created.link.as_str(), &mut rng)?;
+    assert_eq!(
+        receive(&alice, created.invite, 3, &dave_post)?,
+        JoinRequestOutcome::Refused(Refusal::AlreadyUsed)
+    );
+    let admission = Admission {
+        posted: &bob_post,
+        commit: &commit,
+    };
+    complete_join(&alice, &bob, &admission, &mut rng)?;
+    assert_eq!(names(&alice.parties(), &party)?, ["Alice", "Bob"]);
+    Ok(())
+}
+
+#[test]
+fn posts_are_read_once_in_order() -> Result<(), TestError> {
+    let mut rng = rng(10);
+    let alice = Device::new(1)?;
+    let bob = Device::new(2)?;
+    let party = create_party(&alice, &mut rng)?.party;
+    let created = invite(&alice, &party, &mut rng)?;
+    assert_eq!(alice.parties().invite_read_position(created.invite)?, None);
+    let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
+    asked(&alice, created.invite, 4, &posted)?;
+    assert_eq!(
+        alice.parties().invite_read_position(created.invite)?,
+        Some(SequenceNumber::new(4))
+    );
+    for sequence in [3, 4] {
+        assert_eq!(
+            receive(&alice, created.invite, sequence, &posted)?,
+            JoinRequestOutcome::Ignored(Ignored::AlreadySeen)
+        );
+    }
+    // A request sent twice is still one request.
+    asked(&alice, created.invite, 5, &posted)?;
+    assert_eq!(alice.parties().pending_joins(&party)?.len(), 1);
     Ok(())
 }
 
@@ -470,7 +596,7 @@ fn invites_expire_after_24_hours() -> Result<(), TestError> {
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
     let party = create_party(&alice, &mut rng)?.party;
-    let created = invite(&alice, &party, InviteUses::Multiple, &mut rng)?;
+    let created = invite(&alice, &party, &mut rng)?;
     let deadline = NOW
         .checked_add(INVITE_LIFETIME)
         .ok_or(TestError::Unexpected("time overflow"))?;
@@ -497,19 +623,14 @@ fn invites_expire_after_24_hours() -> Result<(), TestError> {
     // A request posted in time but read late is refused by the inviter.
     bob.clock.set_wall(just_before);
     let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
-    assert!(matches!(
-        alice
-            .parties()
-            .receive_join_request(created.invite, &posted.body, &mut rng)?,
+    assert_eq!(
+        receive(&alice, created.invite, 1, &posted)?,
         JoinRequestOutcome::Refused(Refusal::Expired)
-    ));
-    let statuses: Vec<InviteStatus> = alice
-        .parties()
-        .invites(&party)?
-        .iter()
-        .map(|summary| summary.status)
-        .collect();
+    );
+    let invites = alice.parties().invites(&party)?;
+    let statuses: Vec<InviteStatus> = invites.iter().map(|summary| summary.status).collect();
     assert_eq!(statuses, [InviteStatus::Expired]);
+    assert_eq!(invites.first().map(|summary| summary.shared_at), Some(NOW));
     Ok(())
 }
 
@@ -520,12 +641,12 @@ fn invite_expires_with_a_shorter_lived_mailbox() -> Result<(), TestError> {
     let party = create_party(&alice, &mut rng)?.party;
     let mailbox_end = later(3_600)?;
     alice.pool_mailbox(MailboxPurpose::Invite, mailbox_end)?;
-    let created = alice.parties().create_invite(&party, single(), &mut rng)?;
+    let created = alice.parties().create_invite(&party, no_code(), &mut rng)?;
     assert_eq!(created.expires, mailbox_end);
     assert!(created.link.payload()?.registration_code.is_none());
     // No pooled mailbox left: pingers-sync must register one.
     assert!(matches!(
-        alice.parties().create_invite(&party, single(), &mut rng),
+        alice.parties().create_invite(&party, no_code(), &mut rng),
         Err(PartiesError::NoPooledMailbox)
     ));
     Ok(())
@@ -540,7 +661,6 @@ fn an_invite_passes_on_the_registration_code() -> Result<(), TestError> {
     let created = alice.parties().create_invite(
         &party,
         NewInvite {
-            uses: InviteUses::Multiple,
             registration_code: Some(SecretText::new("friends".to_owned())),
         },
         &mut rng,
@@ -550,18 +670,23 @@ fn an_invite_passes_on_the_registration_code() -> Result<(), TestError> {
         payload.registration_code.as_ref().map(SecretText::expose),
         Some("friends")
     );
-    assert_eq!(payload.uses, InviteUses::Multiple);
     Ok(())
 }
 
 #[test]
-fn revoked_invite_refuses_and_deletes_its_mailbox() -> Result<(), TestError> {
+fn cancelled_invite_refuses_drops_waiting_requests_and_deletes_its_mailbox() -> Result<(), TestError>
+{
     let mut rng = rng(5);
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
+    let carol = Device::new(3)?;
     let party = create_party(&alice, &mut rng)?.party;
-    let created = invite(&alice, &party, InviteUses::Multiple, &mut rng)?;
-    let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
+    let created = invite(&alice, &party, &mut rng)?;
+    let other = invite(&alice, &party, &mut rng)?;
+    let bob_post = post_join(&bob, created.link.as_str(), &mut rng)?;
+    let carol_post = post_join(&carol, other.link.as_str(), &mut rng)?;
+    asked(&alice, created.invite, 1, &bob_post)?;
+    asked(&alice, other.invite, 1, &carol_post)?;
     let outbound = alice.parties().revoke_invite(created.invite)?;
     assert!(matches!(
         outbound,
@@ -571,35 +696,44 @@ fn revoked_invite_refuses_and_deletes_its_mailbox() -> Result<(), TestError> {
         alice.parties().invite_status(created.invite)?,
         InviteStatus::Revoked
     );
-    assert!(matches!(
-        alice
-            .parties()
-            .receive_join_request(created.invite, &posted.body, &mut rng)?,
+    // Only the request through the other invite still waits.
+    let waiting: Vec<JoinId> = alice
+        .parties()
+        .pending_joins(&party)?
+        .iter()
+        .map(|pending| pending.join)
+        .collect();
+    assert_eq!(waiting, [carol_post.join]);
+    assert_eq!(
+        receive(&alice, created.invite, 2, &bob_post)?,
         JoinRequestOutcome::Refused(Refusal::Revoked)
-    ));
+    );
     Ok(())
 }
 
 #[test]
-fn join_request_under_another_secret_is_rejected() -> Result<(), TestError> {
+fn a_post_under_another_secret_is_ignored() -> Result<(), TestError> {
     let mut rng = rng(6);
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
     let party = create_party(&alice, &mut rng)?.party;
-    let first = invite(&alice, &party, InviteUses::Single, &mut rng)?;
-    let second = invite(&alice, &party, InviteUses::Single, &mut rng)?;
+    let first = invite(&alice, &party, &mut rng)?;
+    let second = invite(&alice, &party, &mut rng)?;
     let posted = post_join(&bob, first.link.as_str(), &mut rng)?;
-    assert!(matches!(
-        alice
-            .parties()
-            .receive_join_request(second.invite, &posted.body, &mut rng),
-        Err(PartiesError::Crypto(_))
-    ));
-    // The failed request did not use up the second invite.
+    assert_eq!(
+        receive(&alice, second.invite, 1, &posted)?,
+        JoinRequestOutcome::Ignored(Ignored::Unreadable)
+    );
+    // It is not read again, and the second invite is still open.
+    assert_eq!(
+        alice.parties().invite_read_position(second.invite)?,
+        Some(SequenceNumber::new(1))
+    );
     assert_eq!(
         alice.parties().invite_status(second.invite)?,
         InviteStatus::Open
     );
+    assert!(alice.parties().pending_joins(&party)?.is_empty());
     let unknown = InviteId::for_mailbox(MailboxId::from_bytes([0; 16]));
     assert!(matches!(
         alice.parties().invite_status(unknown),
@@ -609,27 +743,17 @@ fn join_request_under_another_secret_is_rejected() -> Result<(), TestError> {
 }
 
 #[test]
-fn multi_use_invite_waits_for_approval() -> Result<(), TestError> {
+fn turning_one_away_keeps_the_others_waiting() -> Result<(), TestError> {
     let mut rng = rng(7);
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
     let carol = Device::new(3)?;
     let party = create_party(&alice, &mut rng)?.party;
-    let created = invite(&alice, &party, InviteUses::Multiple, &mut rng)?;
+    let created = invite(&alice, &party, &mut rng)?;
     let bob_post = post_join(&bob, created.link.as_str(), &mut rng)?;
     let carol_post = post_join(&carol, created.link.as_str(), &mut rng)?;
-    for posted in [&bob_post, &carol_post] {
-        let outcome =
-            alice
-                .parties()
-                .receive_join_request(created.invite, &posted.body, &mut rng)?;
-        assert!(matches!(
-            outcome,
-            JoinRequestOutcome::AwaitingApproval(ref pending)
-                if pending.join == posted.join && pending.name.as_str() == "Bob"
-        ));
-    }
-    assert_eq!(alice.parties().pending_joins(&party)?.len(), 2);
+    asked(&alice, created.invite, 1, &bob_post)?;
+    asked(&alice, created.invite, 2, &carol_post)?;
     alice.parties().decline_join(&party, carol_post.join)?;
     let waiting: Vec<JoinId> = alice
         .parties()
@@ -642,21 +766,49 @@ fn multi_use_invite_waits_for_approval() -> Result<(), TestError> {
         alice.parties().decline_join(&party, carol_post.join),
         Err(PartiesError::UnknownJoin)
     ));
-    let commit = alice
-        .parties()
-        .approve_join(&party, bob_post.join, &mut rng)?;
-    assert!(alice.parties().pending_joins(&party)?.is_empty());
-    // A multi-use invite stays open after admitting someone.
+    // Turning someone away leaves the link working.
     assert_eq!(
         alice.parties().invite_status(created.invite)?,
         InviteStatus::Open
     );
-    let admission = Admission {
-        posted: &bob_post,
-        commit: &commit,
+    Ok(())
+}
+
+#[test]
+fn withdrawing_cancels_the_waiting_request() -> Result<(), TestError> {
+    let mut rng = rng(11);
+    let alice = Device::new(1)?;
+    let bob = Device::new(2)?;
+    let party = create_party(&alice, &mut rng)?.party;
+    let created = invite(&alice, &party, &mut rng)?;
+    let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
+    asked(&alice, created.invite, 1, &posted)?;
+    let mut outbound = bob
+        .parties()
+        .withdraw_join(posted.join, &mut rng)?
+        .into_iter();
+    let Some(Outbound::MailboxPost { mailbox, body }) = outbound.next() else {
+        return Err(TestError::Unexpected("expected the withdrawal"));
     };
-    complete_join(&alice, &bob, &admission, &mut rng)?;
-    assert_eq!(names(&alice.parties(), &party)?, ["Alice", "Bob"]);
+    assert_eq!(mailbox, created.invite.mailbox());
+    assert!(matches!(
+        outbound.next(),
+        Some(Outbound::DeleteMailbox { mailbox }) if mailbox == posted.join.reply_mailbox()
+    ));
+    assert!(matches!(
+        bob.parties().asked_join(posted.join),
+        Err(PartiesError::UnknownJoin)
+    ));
+    let withdrawal = Posted { body, ..posted };
+    assert_eq!(
+        receive(&alice, created.invite, 2, &withdrawal)?,
+        JoinRequestOutcome::Withdrawn(withdrawal.join)
+    );
+    assert!(alice.parties().pending_joins(&party)?.is_empty());
+    assert_eq!(
+        receive(&alice, created.invite, 3, &withdrawal)?,
+        JoinRequestOutcome::Ignored(Ignored::NotPending)
+    );
     Ok(())
 }
 
@@ -666,17 +818,15 @@ fn approval_after_the_invite_expired_is_refused() -> Result<(), TestError> {
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
     let party = create_party(&alice, &mut rng)?.party;
-    let created = invite(&alice, &party, InviteUses::Multiple, &mut rng)?;
+    let created = invite(&alice, &party, &mut rng)?;
     let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
-    alice
-        .parties()
-        .receive_join_request(created.invite, &posted.body, &mut rng)?;
+    asked(&alice, created.invite, 1, &posted)?;
     alice.clock.set_wall(created.expires);
     assert!(matches!(
         alice.parties().approve_join(&party, posted.join, &mut rng),
         Err(PartiesError::InviteExpired)
     ));
-    // Still waiting, so the inviter can decline it.
+    // Still waiting, so the inviter can turn it away.
     assert_eq!(alice.parties().pending_joins(&party)?.len(), 1);
     Ok(())
 }
@@ -687,13 +837,10 @@ fn rejected_commit_returns_the_join_to_approval() -> Result<(), TestError> {
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
     let party = create_party(&alice, &mut rng)?.party;
-    let created = invite(&alice, &party, InviteUses::Single, &mut rng)?;
+    let created = invite(&alice, &party, &mut rng)?;
     let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
-    admitted(
-        alice
-            .parties()
-            .receive_join_request(created.invite, &posted.body, &mut rng)?,
-    )?;
+    asked(&alice, created.invite, 1, &posted)?;
+    let_in(&alice, &party, &posted, &mut rng)?;
     // One commit at a time.
     assert!(matches!(
         alice.parties().self_update(&party, &mut rng),
@@ -712,21 +859,16 @@ fn rejected_commit_returns_the_join_to_approval() -> Result<(), TestError> {
         alice.parties().roster_view(&party)?.current_epoch(),
         Epoch::new(0)
     );
-    let pending: Vec<JoinId> = alice
-        .parties()
-        .pending_joins(&party)?
-        .iter()
-        .map(|join| join.join)
-        .collect();
-    assert_eq!(pending, [posted.join]);
-    // The single-use invite is used up, but its claimed joiner can still be approved.
+    let pending = alice.parties().pending_joins(&party)?;
+    let joins: Vec<JoinId> = pending.iter().map(|join| join.join).collect();
+    assert_eq!(joins, [posted.join]);
+    assert_eq!(pending.first().map(|join| join.code), Some(posted.code));
+    // The invite is used by this joiner, who can still be let in.
     assert_eq!(
         alice.parties().invite_status(created.invite)?,
         InviteStatus::Used
     );
-    let commit = alice
-        .parties()
-        .approve_join(&party, posted.join, &mut rng)?;
+    let commit = let_in(&alice, &party, &posted, &mut rng)?;
     let admission = Admission {
         posted: &posted,
         commit: &commit,
@@ -736,22 +878,44 @@ fn rejected_commit_returns_the_join_to_approval() -> Result<(), TestError> {
 }
 
 #[test]
+fn joining_with_wake_up_pushes_off_adds_no_subscription() -> Result<(), TestError> {
+    let mut rng = rng(15);
+    let alice = Device::new(1)?;
+    let bob = Device::new(2)?;
+    let party = create_party(&alice, &mut rng)?.party;
+    let created = invite(&alice, &party, &mut rng)?;
+    let posted = post_join_with(&bob, created.link.as_str(), None, &mut rng)?;
+    asked(&alice, created.invite, 1, &posted)?;
+    let commit = let_in(&alice, &party, &posted, &mut rng)?;
+    assert!(commit.request.subscriptions_added.is_empty());
+    let admission = Admission {
+        posted: &posted,
+        commit: &commit,
+    };
+    complete_join(&alice, &bob, &admission, &mut rng)?;
+    // Leaving later has no subscription to delete.
+    let outbound = bob.parties().leave_party(&party, &mut rng)?;
+    let Some(Outbound::Leave(leave)) = outbound.into_iter().next() else {
+        return Err(TestError::Unexpected("expected a leave request"));
+    };
+    assert_eq!(leave.subscription, None);
+    Ok(())
+}
+
+#[test]
 fn welcome_from_a_group_without_the_inviter_is_refused() -> Result<(), TestError> {
     let mut rng = rng(9);
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
     let party = create_party(&alice, &mut rng)?.party;
-    let created = invite(&alice, &party, InviteUses::Single, &mut rng)?;
+    let created = invite(&alice, &party, &mut rng)?;
     // Bob holds a link naming someone else as the inviter.
     let mut payload = created.link.payload()?;
     payload.inviter_fingerprint = InviterFingerprint::from_bytes([0; 8]);
     let forged = InviteLink::new(&payload)?;
     let posted = post_join(&bob, forged.as_str(), &mut rng)?;
-    let commit = admitted(alice.parties().receive_join_request(
-        created.invite,
-        &posted.body,
-        &mut rng,
-    )?)?;
+    asked(&alice, created.invite, 1, &posted)?;
+    let commit = let_in(&alice, &party, &posted, &mut rng)?;
     alice.parties().commit_accepted(&party)?;
     assert!(matches!(
         bob.parties()
@@ -759,6 +923,8 @@ fn welcome_from_a_group_without_the_inviter_is_refused() -> Result<(), TestError
         Err(PartiesError::InviterNotInGroup)
     ));
     assert!(bob.session.parties().list()?.is_empty());
+    // The join is still recorded, so a real Welcome could still complete it.
+    assert_eq!(bob.parties().asked_join(posted.join)?.code, posted.code);
     Ok(())
 }
 
@@ -796,16 +962,26 @@ fn leaving_proposes_removal_and_forgets_the_party() -> Result<(), TestError> {
 }
 
 #[test]
-fn leaving_deletes_the_party_invites() -> Result<(), TestError> {
+fn leaving_deletes_the_party_s_open_invites() -> Result<(), TestError> {
     let mut rng = rng(13);
     let alice = Device::new(1)?;
     let party = create_party(&alice, &mut rng)?.party;
-    let created = invite(&alice, &party, InviteUses::Multiple, &mut rng)?;
+    let created = invite(&alice, &party, &mut rng)?;
+    let cancelled = invite(&alice, &party, &mut rng)?;
+    alice.parties().revoke_invite(cancelled.invite)?;
     let outbound = alice.parties().leave_party(&party, &mut rng)?;
-    assert!(outbound.iter().any(|request| matches!(
-        request,
-        Outbound::DeleteMailbox { mailbox } if *mailbox == created.invite.mailbox()
-    )));
+    // The cancelled invite's mailbox was deleted when it was cancelled.
+    let deleted: Vec<MailboxId> = outbound
+        .iter()
+        .filter_map(|request| {
+            if let Outbound::DeleteMailbox { mailbox } = request {
+                Some(*mailbox)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(deleted, [created.invite.mailbox()]);
     assert!(matches!(
         alice.parties().invite_status(created.invite),
         Err(PartiesError::UnknownInvite)
@@ -1054,6 +1230,35 @@ fn per_party_settings_are_kept_and_changed() -> Result<(), TestError> {
 
 #[test]
 #[cfg(not(feature = "x-wing"))]
+fn a_quantum_resistant_party_refuses_a_request_without_an_x_wing_key_package()
+-> Result<(), TestError> {
+    use crate::settings::StoredSettings;
+
+    let mut rng = rng(16);
+    let alice = Device::new(1)?;
+    let bob = Device::new(2)?;
+    let party = create_party(&alice, &mut rng)?.party;
+    let created = invite(&alice, &party, &mut rng)?;
+    // This build cannot make X-Wing key packages, so Bob's request carries the slot empty.
+    let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
+    // A classical Party takes it; make this one quantum-resistant (as an X-Wing build would
+    // have created it) and the same request is refused.
+    let quantum = StoredSettings {
+        server: ServerId::new(SERVER.into())?,
+        relays: RelayChoice::ServerDefault,
+        post_quantum: PostQuantum::QuantumResistant,
+    };
+    quantum.write(&alice.session, &party)?;
+    assert_eq!(
+        receive(&alice, created.invite, 1, &posted)?,
+        JoinRequestOutcome::Refused(Refusal::NoQuantumResistantKeyPackage)
+    );
+    assert!(alice.parties().pending_joins(&party)?.is_empty());
+    Ok(())
+}
+
+#[test]
+#[cfg(not(feature = "x-wing"))]
 fn quantum_resistant_party_needs_the_x_wing_build() -> Result<(), TestError> {
     let mut rng = rng(11);
     let alice = Device::new(1)?;
@@ -1097,13 +1302,10 @@ fn third_member_learns_every_name_from_the_snapshot() -> Result<(), TestError> {
         ..
     } = two_members()?;
     let carol = Device::new(3)?;
-    let created = invite(&alice, &party, InviteUses::Single, &mut rng)?;
+    let created = invite(&alice, &party, &mut rng)?;
     let posted = post_join(&carol, created.link.as_str(), &mut rng)?;
-    let commit = admitted(alice.parties().receive_join_request(
-        created.invite,
-        &posted.body,
-        &mut rng,
-    )?)?;
+    asked(&alice, created.invite, 1, &posted)?;
+    let commit = let_in(&alice, &party, &posted, &mut rng)?;
     alice.parties().commit_accepted(&party)?;
     bob.parties()
         .process_group_message(&group, &commit.request.commit)?;
@@ -1452,13 +1654,12 @@ fn a_later_member_drops_a_removed_members_subscription() -> Result<(), TestError
         ..
     } = two_members()?;
     let carol = Device::new(3)?;
-    let created = invite(&alice, &party, InviteUses::Single, &mut rng)?;
+    let created = invite(&alice, &party, &mut rng)?;
     let posted = post_join(&carol, created.link.as_str(), &mut rng)?;
-    let add = admitted(alice.parties().receive_join_request(
-        created.invite,
-        &posted.body,
-        &mut rng,
-    )?)?;
+    let add = {
+        asked(&alice, created.invite, 1, &posted)?;
+        let_in(&alice, &party, &posted, &mut rng)?
+    };
     alice.parties().commit_accepted(&party)?;
     bob.parties()
         .process_group_message(&group, &add.request.commit)?;
@@ -1555,26 +1756,27 @@ fn quantum_resistant_party_runs_the_x_wing_suite() -> Result<(), TestError> {
 
 #[test]
 #[cfg(feature = "x-wing")]
-fn a_classical_key_package_cannot_join_a_quantum_resistant_party() -> Result<(), TestError> {
+fn a_joiner_enters_a_quantum_resistant_party_with_its_x_wing_key_package() -> Result<(), TestError>
+{
     let mut rng = rng(22);
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
     let party = quantum_resistant_party(&alice, &mut rng)?;
-    let created = invite(&alice, &party, InviteUses::Single, &mut rng)?;
+    let created = invite(&alice, &party, &mut rng)?;
     let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
-    assert!(matches!(
-        alice
-            .parties()
-            .receive_join_request(created.invite, &posted.body, &mut rng),
-        Err(PartiesError::Mls(_))
-    ));
-    // Nothing changed: one member, no commit waiting, the invite still open.
-    assert_eq!(names(&alice.parties(), &party)?, ["Alice"]);
+    asked(&alice, created.invite, 1, &posted)?;
+    let commit = let_in(&alice, &party, &posted, &mut rng)?;
+    alice.parties().commit_accepted(&party)?;
+    let joined = bob
+        .parties()
+        .accept_welcome(&arrived(&posted, &commit)?, &mut rng)?;
+    // The joiner takes the suite from the group it joined, and both see both.
     assert_eq!(
-        alice.parties().invite_status(created.invite)?,
-        InviteStatus::Open
+        bob.parties().settings(&joined.party)?.post_quantum,
+        PostQuantum::QuantumResistant
     );
-    alice.parties().self_update(&party, &mut rng)?;
+    assert_eq!(names(&bob.parties(), &party)?, ["Alice", "Bob"]);
+    assert_eq!(names(&alice.parties(), &party)?, ["Alice", "Bob"]);
     Ok(())
 }
 
@@ -1635,13 +1837,10 @@ fn the_inviter_names_the_added_leaf_before_the_joiners_profile_arrives() -> Resu
     let alice = Device::new(1)?;
     let bob = Device::new(2)?;
     let party = create_party(&alice, &mut rng)?.party;
-    let created = invite(&alice, &party, InviteUses::Single, &mut rng)?;
+    let created = invite(&alice, &party, &mut rng)?;
     let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
-    admitted(
-        alice
-            .parties()
-            .receive_join_request(created.invite, &posted.body, &mut rng)?,
-    )?;
+    asked(&alice, created.invite, 1, &posted)?;
+    let_in(&alice, &party, &posted, &mut rng)?;
     alice.parties().commit_accepted(&party)?;
     // From the join request, matched to the leaf by the KeyPackage's signature key.
     assert_eq!(names(&alice.parties(), &party)?, ["Alice", "Bob"]);
@@ -1654,8 +1853,8 @@ fn leaving_one_party_keeps_the_other_partys_invites() -> Result<(), TestError> {
     let alice = Device::new(1)?;
     let first = create_party(&alice, &mut rng)?.party;
     let second = create_party(&alice, &mut rng)?.party;
-    let gone = invite(&alice, &first, InviteUses::Single, &mut rng)?;
-    let kept = invite(&alice, &second, InviteUses::Single, &mut rng)?;
+    let gone = invite(&alice, &first, &mut rng)?;
+    let kept = invite(&alice, &second, &mut rng)?;
     alice.parties().leave_party(&first, &mut rng)?;
     assert!(alice.parties().invite_status(gone.invite).is_err());
     assert_eq!(

@@ -15,12 +15,19 @@ Parties as long-lived things (client, L3). Sans network: every request for the s
   `safety_code`, `verify_member`, `log_auth_key`, `remove_member`, `commit_pending_proposals`,
   `self_update` (each `-> OutgoingCommit`), `commit_accepted -> CommitApplied`,
   `commit_rejected`, `process_group_message(&GroupId, &MlsMessageBytes) -> Incoming`.
-- Invites (inviter): `create_invite(&PartyId, NewInvite { uses, registration_code }, rng) -> CreatedInvite { invite,
-  link, expires }`, `invite_status`, `invites`, `revoke_invite -> DeleteMailbox`,
-  `receive_join_request(InviteId, &Padded, rng) -> JoinRequestOutcome::{Admitted,
-  AwaitingApproval, Refused(Refusal)}`, `pending_joins`, `approve_join`, `decline_join`.
-- Joins (joiner): `prepare_join(&InviteLink, JoinDetails, rng) -> PreparedJoin { join,
-  outbound: MailboxPost }`, `accept_welcome(&ArrivedWelcome, rng) -> Joined`.
+- Invites (inviter, join flow A): `create_invite(&PartyId, NewInvite { registration_code }, rng) -> CreatedInvite { invite,
+  link, expires }`, `invite_status`, `invites` (with `shared_at`), `revoke_invite ->
+  DeleteMailbox` (drops its waiting requests), `invite_read_position(InviteId) ->
+  Option<SequenceNumber>`, `receive_join_request(InviteId, SequenceNumber, &Padded) ->
+  JoinRequestOutcome::{AwaitingApproval(PendingJoin), Withdrawn(JoinId), Refused(Refusal),
+  Ignored(Ignored)}`, `pending_joins -> Vec<PendingJoin { join, invite, name, code,
+  asked_at }>`, `approve_join -> Admission { commit, close_invite: DeleteMailbox }`,
+  `decline_join`.
+- Joins (joiner): `prepare_join(&InviteLink, JoinDetails { display_name, subscription:
+  Option }, rng) -> PreparedJoin { join, code, outbound: MailboxPost }`, `asked_join ->
+  AskedJoin { join, code, asked_at }`, `withdraw_join -> [MailboxPost, DeleteMailbox]`,
+  `welcome_access`, `accept_welcome(&ArrivedWelcome, rng) -> Joined { party, via, outbound }`,
+  `joined_via(&PartyId) -> Option<JoinedVia { inviter, code }>`.
 - Spots: `create_spot(&PartyId, NewSpot, rng)`, `edit_spot(&PartyId, SpotEdit, rng)`,
   `delete_spot` (each `-> SpotChange { spot, outbound: GroupMessage }`), `spots`;
   `SpotShape::{Circle, Polygon}::into_fence`.
@@ -42,7 +49,8 @@ Parties as long-lived things (client, L3). Sans network: every request for the s
 | `Outbound::DeleteMailbox` | `DELETE /v1/mailboxes/{id}` with the row's read key | delete the store row |
 | `Outbound::Leave` | the proposal to `/msgs`, then `DELETE /subs/{id}`, both signed with `auth` | — |
 
-Inputs: posts to an invite mailbox go to `receive_join_request`; the Welcome in a reply
+Inputs: posts to an invite mailbox, read after `invite_read_position`, go to
+`receive_join_request` in order; the Welcome in a reply
 mailbox plus `GET /v1/groups/{id}/state` go to `accept_welcome`; every group log entry goes
 to `process_group_message` in log order, except entries this device posted itself (their
 `seq` came back from the post): an own commit is already merged by `commit_accepted` and
@@ -53,10 +61,20 @@ pooled `Reply` one; with none, `NoPooledMailbox`.
 ## Decisions
 
 - **One commit in flight per Party.** A second is `CommitInFlight`. A rejected Add puts the
-  join request back in `pending_joins` (even for a used single-use invite) so it can be
+  join request back in `pending_joins` (the invite stays used by that joiner) so it can be
   committed again after catching up.
-- **Single-use invites are used up when the request is admitted**, before the server accepts
-  the commit, so a second joiner is refused at once. Expiry is 24 h or the mailbox's own
+- **Join flow A** (2026-11-14): the link carries nothing about the Party. Every request waits
+  for the inviter with its join code (pingers-crypto `join_code` over the invite secret and
+  the key package), which both phones show at once. Letting one joiner in uses the invite
+  up before the server accepts the commit, drops the other requests through it and deletes
+  its mailbox, so later joiners are refused at once. Turning someone away sends nothing.
+- **Invite posts are read once**: the invite record keeps the last sequence number handed
+  in; a post that does not open (anyone who knows the mailbox id can post) is ignored and
+  not read again. A withdrawal names the reply mailbox; only the joiner and inviter know
+  which request it belongs to (the server sees mailbox ids, so server plus link holder could
+  withdraw a request: denial only).
+- **Joining without wake-up pushes**: the request carries no subscription, the Add commit
+  adds none, and the member's profile names none. Expiry is 24 h or the mailbox's own
   expiry, whichever is sooner; `now >= expires` is expired.
 - **Inviter fingerprint** = `account_id(pk)[..8]` (design gives no formula); the joiner refuses
   a Welcome whose group has no such leaf, and keeps nothing.
@@ -92,8 +110,8 @@ pooled `Reply` one; with none, `NoPooledMailbox`.
   link and the suite from the group it joined (`Group::suite`).
 - **Quantum-resistant Parties** (feature `x-wing`, over pingers-mls's): the group runs X-Wing
   (0x004D) and its Meetups use X-Wing grant keys. Without the feature the option fails with
-  `UnsupportedSuite` and keeps nothing. pingers-ffi does not enable it by default, because a
-  joiner cannot yet make an X-Wing KeyPackage (request 4).
+  `UnsupportedSuite` and keeps nothing. pingers-ffi enables it by default; join requests then
+  carry an X-Wing key package as well (request 4).
 - **Clock injected**; `now` is read once per operation.
 - **Per-Party state in store tables** (2026-11-14): settings, roster history, members' subscription
   ids, the in-flight commit and a waiting profile live in pingers-store's schema-v5 tables
@@ -112,11 +130,12 @@ pooled `Reply` one; with none, `NoPooledMailbox`.
    (`Presence::clear`). Invites, waiting join requests and joins in progress move once join
    flow A has landed on main.
 3. **pingers-crypto** `safety_number` and `inviter_fingerprint`: done (2026-11-14).
-4. **A joiner's suite for a quantum-resistant Party**: open, owner's decision. Join flow A
-   keeps the suite out of the link. The choices are: put the suite in the link; have the
-   joiner always send both a classical and an X-Wing KeyPackage; or have the inviter ask
-   back for an X-Wing KeyPackage. Until then, a classical KeyPackage sent to an X-Wing Party
-   is refused, and nothing changes.
+4. **A joiner's suite** (owner decision 2026-11-14): the link keeps the suite out, so a join
+   request carries a classical key package and, where the build can make one, an X-Wing one;
+   the inviter adds the one its Party's suite needs, and a quantum-resistant Party refuses a
+   request without one (`Refusal::NoQuantumResistantKeyPackage`). Done: with the `x-wing`
+   feature, which pingers-ffi enables by default, pingers-mls makes X-Wing key packages, so
+   every app build fills the slot.
 5. **pingers-mls** `inspect_key_package`, `pending_removals`, `Group::suite`, and the X-Wing
    suite (libcrux; two vendored, patched libcrux crates until openmls_libcrux_crypto releases
    on the fixed versions): done (2026-11-14).

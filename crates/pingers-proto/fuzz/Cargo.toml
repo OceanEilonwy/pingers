@@ -287,6 +287,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "invite_post"
+path = "fuzz_targets/invite_post.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "party_operation"
 path = "fuzz_targets/party_operation.rs"
 test = false

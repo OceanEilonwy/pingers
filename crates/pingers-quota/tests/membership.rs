@@ -9,8 +9,8 @@ use std::sync::Arc;
 use pingers_anon::{AnonError, IdCommitment, LeafUpdate, LeafValue, MembershipTree, RlnSecret};
 use pingers_proto::{AccountId, HourlyRoot, MembershipIndex, RootEpoch};
 use pingers_quota::{
-    LEAVES_PER_PAGE, Membership, MembershipStore, MemoryQuotaStore, QuotaError, ROOT_EPOCH_LENGTH,
-    root_epoch,
+    DAILY_LEAF_LIMIT, LEAVES_PER_PAGE, Membership, MembershipStore, MemoryQuotaStore, QuotaError,
+    ROOT_EPOCH_LENGTH, root_epoch,
 };
 use pingers_testkit::{ManualClock, TEST_START, seeded_rng, test_clock};
 use pingers_time::{Clock as _, UnixSeconds};
@@ -241,6 +241,31 @@ fn the_list_reads_from_a_position(store: impl MembershipStore) -> Result<(), Tes
     Ok(())
 }
 
+fn an_account_registers_a_few_leaves_a_day(store: impl MembershipStore) -> Result<(), TestError> {
+    let (clock, membership) = service(store)?;
+    let limit = u64::try_from(DAILY_LEAF_LIMIT).map_err(|_| QuotaError::TimeOutOfRange)?;
+    for seed in 0..limit {
+        membership.register(account(1), &identity(seed)?)?;
+    }
+    assert!(matches!(
+        membership.register(account(1), &identity(limit)?),
+        Err(QuotaError::LeafLimit)
+    ));
+    // Others are not held back by it.
+    membership.register(account(2), &identity(limit)?)?;
+    // Twenty-three hours on, the day's leaves still count; at twenty-four, one is free again.
+    for _hour in 0..23 {
+        next_hour(&clock)?;
+    }
+    assert!(matches!(
+        membership.register(account(1), &identity(limit)?),
+        Err(QuotaError::LeafLimit)
+    ));
+    next_hour(&clock)?;
+    membership.register(account(1), &identity(limit)?)?;
+    Ok(())
+}
+
 fn a_non_canonical_commitment_is_refused(store: impl MembershipStore) -> Result<(), TestError> {
     let (_clock, membership) = service(store)?;
     let refused = membership.register(account(1), &IdCommitment::from_bytes([0xFF; 32]));
@@ -327,6 +352,7 @@ for_each_store!(
     removal_zeroes_the_leaf_at_the_next_root,
     a_leaf_removed_before_it_went_live_never_counts,
     the_list_reads_from_a_position,
+    an_account_registers_a_few_leaves_a_day,
     a_non_canonical_commitment_is_refused,
     the_tree_is_rebuilt_from_the_store,
     a_stored_root_that_does_not_match_the_leaves_is_detected,

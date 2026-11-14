@@ -61,6 +61,7 @@ async fn g4_a_stale_poster_declines_and_nothing_forms() -> TestResult {
             .messages(
                 &pingers_proto::GroupId::from_bytes([0; 32]),
                 pingers_proto::SequenceNumber::new(0),
+                pingers_delivery::Reader::Current,
             )
             .is_err(),
         "no group exists",
@@ -134,7 +135,11 @@ async fn g7_everyone_leaves_and_the_meetup_ends() -> TestResult {
         world
             .stack
             .delivery()
-            .messages(&group, pingers_proto::SequenceNumber::new(0))
+            .messages(
+                &group,
+                pingers_proto::SequenceNumber::new(0),
+                pingers_delivery::Reader::Current,
+            )
             .is_err(),
         "the delivery service no longer knows the group",
     )
