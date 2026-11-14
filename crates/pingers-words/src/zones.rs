@@ -39,7 +39,7 @@ pub struct ExclusionZonesText {
     pub hide_trail_on: bool,
 }
 
-fn times(language: Language, times: ZoneTimes) -> Option<String> {
+pub(crate) fn times(language: Language, times: ZoneTimes) -> Option<String> {
     let Language::English = language;
     match times {
         ZoneTimes::Always => None,
@@ -58,7 +58,7 @@ fn times(language: Language, times: ZoneTimes) -> Option<String> {
     }
 }
 
-fn applies_to(language: Language, applies: &ZoneAppliesTo) -> String {
+pub(crate) fn applies_to(language: Language, applies: &ZoneAppliesTo) -> String {
     let Language::English = language;
     match applies {
         ZoneAppliesTo::AllParties => "all parties".into(),
@@ -71,6 +71,15 @@ fn applies_to(language: Language, applies: &ZoneAppliesTo) -> String {
                 list(language, &names)
             }
         }
+    }
+}
+
+/// A zone's shape inside a sentence: "150 m circle", "drawn area".
+pub(crate) fn shape(language: Language, shape: &ZoneShape) -> String {
+    let Language::English = language;
+    match shape {
+        ZoneShape::Circle(radius) => format!("{} circle", distance(language, *radius)),
+        ZoneShape::Area(_) => "drawn area".into(),
     }
 }
 

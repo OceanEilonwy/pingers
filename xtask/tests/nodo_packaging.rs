@@ -11,7 +11,7 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use nodo_manifest::Manifest;
+use nodo_manifest::{Manifest, UpstreamProtocol};
 use nodo_settings::{
     Grant, Installed, InstalledPackage, Limits, LoadedSettings, SecretString, SettingValue, Value,
     load_settings,
@@ -54,31 +54,9 @@ fn manifest_text(id: &str) -> TestResult<String> {
     Ok(read(&app_dir(id).join("manifest.toml"))?.replace("@VERSION@", VERSION))
 }
 
-/// Parses a manifest with nodo's feed checks.
-///
-/// TODO(N1): until the pinned nodo commit has `WebService.upstream_protocol`, a manifest that
-/// nodo-manifest refuses only for that field is checked again without it, after checking its
-/// value. Once the dependency is bumped past N1 the strict parse succeeds and this falls away.
+/// Parses a manifest with nodo's feed checks, `upstream_protocol` (N1) included.
 fn parse_manifest(text: &str) -> TestResult<Manifest> {
-    match Manifest::parse(text) {
-        Ok(manifest) => Ok(manifest),
-        Err(error) if error.to_string().contains("upstream_protocol") => {
-            let mut table: toml::Table = toml::from_str(text)?;
-            if let Some(webs) = table.get_mut("web").and_then(toml::Value::as_array_mut) {
-                for web in webs.iter_mut().filter_map(toml::Value::as_table_mut) {
-                    if let Some(protocol) = web.remove("upstream_protocol") {
-                        let protocol = protocol.as_str().unwrap_or_default().to_owned();
-                        assert!(
-                            protocol == "h1" || protocol == "h2c",
-                            "upstream_protocol {protocol:?} is neither h1 nor h2c"
-                        );
-                    }
-                }
-            }
-            Ok(Manifest::parse(&toml::to_string(&table)?)?)
-        }
-        Err(error) => Err(error.into()),
-    }
+    Ok(Manifest::parse(text)?)
 }
 
 fn settings(id: &str) -> TestResult<LoadedSettings> {
@@ -86,21 +64,6 @@ fn settings(id: &str) -> TestResult<LoadedSettings> {
         &read(&app_dir(id).join("settings.lua"))?,
         Limits::default(),
     )?)
-}
-
-fn upstream_protocols(text: &str) -> TestResult<Vec<Option<String>>> {
-    let table: toml::Table = toml::from_str(text)?;
-    Ok(table
-        .get("web")
-        .and_then(toml::Value::as_array)
-        .into_iter()
-        .flatten()
-        .map(|web| {
-            web.get("upstream_protocol")
-                .and_then(toml::Value::as_str)
-                .map(str::to_owned)
-        })
-        .collect())
 }
 
 #[test]
@@ -137,14 +100,15 @@ fn every_manifest_passes_the_feeds_install_review() -> TestResult {
 fn the_http2_only_services_ask_caddy_for_h2c() -> TestResult {
     for (id, _) in APPS {
         let expected = match id {
-            "pingers-server" | "pingers-ohttp-relay" => Some("h2c".to_owned()),
-            _ => None,
+            "pingers-server" | "pingers-ohttp-relay" => UpstreamProtocol::H2c,
+            _ => UpstreamProtocol::H1,
         };
-        assert_eq!(
-            upstream_protocols(&manifest_text(id)?)?,
-            vec![expected],
-            "{id}"
-        );
+        let protocols: Vec<UpstreamProtocol> = parse_manifest(&manifest_text(id)?)?
+            .web
+            .iter()
+            .map(|web| web.upstream_protocol)
+            .collect();
+        assert_eq!(protocols, vec![expected], "{id}");
     }
     Ok(())
 }

@@ -17,6 +17,12 @@
 //!   time ([`GroupLifetime`]: two hours for a Meetup, 180 days for a Party, stated at creation)
 //!   is deleted, as is one a member deletes; its live channels are closed with it.
 //!
+//! - **Who reads the log.** A request signed with an earlier epoch's log-auth key comes from a
+//!   member that has not applied the later commits, or from one those commits removed: it reads
+//!   the log up to and including the commit that ended its epoch, never past it, so a lagging
+//!   member catches up one commit at a time and a removed member reads nothing written after
+//!   its removal ([`Reader`]).
+//!
 //! Welcomes are not handled here: they travel as mailbox posts (pingers-mailbox).
 //!
 //! Storage is the [`DeliveryStore`] trait, with [`MemoryDeliveryStore`] and, behind the
@@ -37,11 +43,13 @@ pub use lifetime::{GroupLifetime, GroupStart, MEETUP_IDLE_LIFETIME, PARTY_IDLE_L
 pub use live::ChannelId;
 pub use memory::MemoryDeliveryStore;
 pub use service::{
-    CommitOutcome, Delivery, Forwarded, MAX_QUIET_DELAY, MAX_SUBSCRIPTION_LIFETIME, Posted, Wake,
+    CommitOutcome, Delivery, Forwarded, MAX_LIVE_CHANNELS_PER_GROUP, MAX_QUIET_DELAY,
+    MAX_SUBSCRIPTION_LIFETIME, MAX_SUBSCRIPTIONS_PER_GROUP, Posted, Reader,
+    STORED_LIVE_FRAMES_PER_BUCKET, Wake,
 };
 #[cfg(feature = "sqlite")]
 pub use sqlite::SqliteDeliveryStore;
 pub use store::{
     CommitWrite, DeliveryStore, GroupHead, NewCommit, NewEntry, NewGroup, PAGE_ENTRIES,
-    StoredSubscription,
+    PastAuthKey, StoredSubscription,
 };

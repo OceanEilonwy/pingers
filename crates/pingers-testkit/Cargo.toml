@@ -33,6 +33,7 @@ harness = [
   "dep:pingers-push-relay",
   "dep:pingers-mailbox",
   "dep:pingers-ohttp",
+  "dep:pingers-ohttp-relay",
   "dep:pingers-crypto",
   "dep:axum",
   "dep:hyper",
@@ -65,6 +66,7 @@ pingers-mailbox = { workspace = true, optional = true }
 # The binaries' library targets have no workspace entry (nothing else depends on them).
 pingers-push-relay = { path = "../pingers-push-relay", optional = true }
 pingers-server = { path = "../pingers-server", optional = true }
+pingers-ohttp-relay = { path = "../pingers-ohttp-relay", optional = true }
 axum = { workspace = true, optional = true }
 hyper = { workspace = true, optional = true }
 hyper-util = { workspace = true, optional = true, features = ["server", "service"] }
@@ -85,6 +87,8 @@ zeroize = { workspace = true }
 [dev-dependencies]
 # An HTTPS client trusting the test CA, for the harness tests that call the push relay.
 reqwest = { workspace = true }
+# A runtime for the fake maps port's real directory (crates/tests.rs).
+tokio = { workspace = true, features = ["fs"] }
 
 [lints]
 workspace = true

@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! An in-memory store for both quota traits, for tests and for servers that keep nothing on
+//! An in-memory store for every quota trait, for tests and for servers that keep nothing on
 //! disk.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, MutexGuard};
 
 use pingers_anon::IssuerKey;
+use pingers_crypto::{AccountPublicKey, BearerDigest};
 use pingers_proto::{AccountId, HourlyRoot};
 use pingers_time::UnixSeconds;
 use zeroize::Zeroizing;
 
 use crate::QuotaError;
 use crate::store::{
-    Allowance, Issuance, IssuanceDay, IssuerKeyRecord, MembershipStore, PrivacyPassStore, Spend,
-    StoredLeaf, TokenNonce, Zeroing,
+    AccountInsert, AccountStore, Allowance, Issuance, IssuanceDay, IssuerKeyRecord,
+    MembershipStore, NewAccount, PrivacyPassStore, SignupWindow, Spend, StoredBearer, StoredLeaf,
+    TokenNonce, Zeroing,
 };
 
 /// Keeps everything behind one lock.
@@ -32,6 +34,8 @@ struct KeyRow {
 
 #[derive(Default)]
 struct Inner {
+    accounts: HashMap<AccountId, NewAccount>,
+    bearers: HashMap<BearerDigest, StoredBearer>,
     leaves: Vec<StoredLeaf>,
     roots: Vec<HourlyRoot>,
     keys: Vec<KeyRow>,
@@ -156,6 +160,81 @@ impl PrivacyPassStore for MemoryQuotaStore {
         inner.spent.retain(|_, expires_at| *expires_at > now);
         let today = IssuanceDay::containing(now);
         inner.issued.retain(|(_, day), _| *day >= today);
+        Ok(())
+    }
+}
+
+impl AccountStore for MemoryQuotaStore {
+    fn insert_account(
+        &self,
+        account: &NewAccount,
+        window: SignupWindow,
+    ) -> Result<AccountInsert, QuotaError> {
+        let mut inner = self.lock()?;
+        if inner.accounts.contains_key(&account.id) {
+            return Ok(AccountInsert::Existing);
+        }
+        let recent = inner
+            .accounts
+            .values()
+            .filter(|stored| stored.created_at >= window.since)
+            .count();
+        if recent >= usize::try_from(window.max).unwrap_or(usize::MAX) {
+            return Ok(AccountInsert::WindowFull);
+        }
+        inner.accounts.insert(account.id, *account);
+        Ok(AccountInsert::Created)
+    }
+
+    fn account_key(&self, account: &AccountId) -> Result<Option<AccountPublicKey>, QuotaError> {
+        Ok(self.lock()?.accounts.get(account).map(|stored| stored.key))
+    }
+
+    fn delete_account(&self, account: &AccountId) -> Result<(), QuotaError> {
+        let mut inner = self.lock()?;
+        inner.accounts.remove(account);
+        inner.bearers.retain(|_, bearer| bearer.account != *account);
+        Ok(())
+    }
+
+    fn insert_bearer(&self, bearer: &StoredBearer, keep: usize) -> Result<(), QuotaError> {
+        let mut inner = self.lock()?;
+        inner.bearers.insert(bearer.digest, *bearer);
+        // The new bearer always stays; of the others, those that expire last.
+        let mut others: Vec<StoredBearer> = inner
+            .bearers
+            .values()
+            .filter(|stored| stored.account == bearer.account && stored.digest != bearer.digest)
+            .copied()
+            .collect();
+        others.sort_by_key(|stored| {
+            core::cmp::Reverse((stored.expires_at, *stored.digest.as_bytes()))
+        });
+        for dropped in others.iter().skip(keep.saturating_sub(1)) {
+            inner.bearers.remove(&dropped.digest);
+        }
+        Ok(())
+    }
+
+    fn bearer_account(
+        &self,
+        digest: &BearerDigest,
+        now: UnixSeconds,
+    ) -> Result<Option<AccountId>, QuotaError> {
+        let inner = self.lock()?;
+        Ok(inner
+            .bearers
+            .get(digest)
+            .filter(|bearer| {
+                now < bearer.expires_at && inner.accounts.contains_key(&bearer.account)
+            })
+            .map(|bearer| bearer.account))
+    }
+
+    fn prune_bearers(&self, now: UnixSeconds) -> Result<(), QuotaError> {
+        self.lock()?
+            .bearers
+            .retain(|_, bearer| now < bearer.expires_at);
         Ok(())
     }
 }

@@ -12,7 +12,6 @@
     <string name="privacy_full">Full privacy</string>
     <string name="privacy_checking">Checking…</string>
     <string name="privacy_reduced">Reduced privacy</string>
-    <string name="server_and_privacy">%1$s · %2$s</string>
     <plurals name="members">
         <item quantity="one">%1$d member</item>
         <item quantity="other">%1$d members</item>
@@ -74,40 +73,12 @@
     <string name="tab_parties">Parties</string>
     <string name="tab_meetups">Meetups</string>
     <string name="tab_privacy">Privacy</string>
-    <string name="menu_privacy">Privacy settings</string>
     <string name="menu_preview">Preview events (fake data)</string>
     <string name="menu_invite_link">Open an invite link</string>
     <string name="menu_alert">Co-presence alert</string>
     <string name="menu_location_request">Exact location request</string>
     <string name="menu_meetup_ended">Meetup ended</string>
 
-    <!-- New party, Advanced -->
-    <string name="new_party_title">New party</string>
-    <string name="new_party_name">Party name</string>
-    <string name="new_party_colour">Colour</string>
-    <string name="new_party_later">You\'ll invite people and add Spots once the party is created.</string>
-    <string name="new_party_create">Create party</string>
-    <string name="colour_blue">Blue</string>
-    <string name="colour_orange">Orange</string>
-    <string name="colour_ink">Ink</string>
-    <string name="colour_teal">Teal</string>
-    <string name="colour_plum">Plum</string>
-    <string name="advanced_title">Advanced</string>
-    <string name="advanced_full_detail">Server, privacy relay and push relay are run by three different operators.</string>
-    <string name="advanced_server">Server</string>
-    <string name="advanced_server_help">The server that hosts this party. Everyone who joins uses it, and it can\'t be changed later.</string>
-    <string name="advanced_relay">Privacy relay</string>
-    <string name="advanced_relay_help">Hides your IP address from the server. Suggested by the server; each member can choose their own.</string>
-    <string name="advanced_push">Push relay</string>
-    <string name="advanced_push_official">Pingers (official app)</string>
-    <string name="advanced_push_custom">Custom URL (UnifiedPush or own build)</string>
-    <string name="advanced_push_help">Sees when a phone is woken, never why or by whom.</string>
-    <string name="advanced_pq">Post-quantum encryption</string>
-    <string name="advanced_pq_help">Protects against future quantum computers. Larger messages; every member needs a recent app.</string>
-    <string name="server_reachable">Server reachable</string>
-    <string name="server_checking">Checking server</string>
-    <string name="relay_reachable">Privacy relay reachable</string>
-    <string name="relay_checking">Checking privacy relay</string>
 
     <!-- Invite people, Accept invite -->
     <string name="invite_title">Invite people</string>
@@ -121,15 +92,6 @@
     <string name="invite_link_shared">Link shared %1$d h ago</string>
     <string name="invite_not_opened">Not opened yet · expires in %1$d h</string>
     <string name="invite_joined">Joined · code verified</string>
-    <string name="accept_invited_by">%1$s invited you to</string>
-    <string name="accept_what_joining">What joining means</string>
-    <string name="word_spot">Spot</string>
-    <string name="accept_point_spot">Members find out you\'re nearby only when you\'re in the same %1$s at the same time.</string>
-    <string name="accept_point_e2e">Your location is end-to-end encrypted. The server can\'t see where you are or which Spot you\'re in.</string>
-    <string name="accept_point_focus">Nothing is sent while you\'re in Focus or inside your exclusion zones.</string>
-    <string name="accept_check_code">Check this code matches %1$s\'s screen</string>
-    <string name="accept_join">Codes match · Join</string>
-    <string name="accept_decline">Decline</string>
 
     <!-- Party -->
     <string name="party_spots_private">Spots visible only to members</string>
@@ -137,7 +99,6 @@
     <string name="party_add_spot">Add spot</string>
     <string name="party_in_meetup">You\'re in a meetup</string>
     <string name="party_meetups_note">You only see meetups you were part of. Members who weren\'t there won\'t know one happened.</string>
-    <string name="party_server_subtitle">What this party\'s server can see</string>
 
     <!-- Spot editor, Draw area -->
     <string name="spot_search">Search a place</string>
@@ -190,21 +151,6 @@
 
     <!-- Sharing + Focus -->
     <string name="privacy_title">Privacy</string>
-    <string name="privacy_paused">Paused · %1$s</string>
-    <string name="privacy_paused_detail">Nobody can tell you\'ve paused. Resumes when Focus ends.</string>
-    <string name="privacy_when">When to share</string>
-    <string name="privacy_sharing">Location sharing</string>
-    <string name="privacy_pause_focus">Pause during Focus</string>
-    <string name="privacy_pause_focus_help">Do Not Disturb, Sleep, any Focus</string>
-    <string name="privacy_quiet">Quiet hours</string>
-    <string name="privacy_who">Who sees my exact spot in meetups</string>
-    <string name="vis_ask">Ask me each time</string>
-    <string name="vis_ask_help">Others see you\'re here, not where</string>
-    <string name="vis_everyone">Everyone in the meetup</string>
-    <string name="vis_nobody">Nobody</string>
-    <string name="privacy_delivery">Delivery</string>
-    <string name="privacy_no_wake">No wake-up pushes</string>
-    <string name="privacy_no_wake_help">Nobody, not even Apple or Google, sees when you\'re woken. Meetups can take up to an hour to start.</string>
 
     <!-- What your server sees -->
     <string name="server_title">What your server sees</string>
@@ -357,17 +303,6 @@
     <!-- Maps: region packs (android/docs/maps.md) -->
     <string name="map_attribution">© OpenStreetMap contributors</string>
     <string name="map_download_prompt">Download map for this area</string>
-    <string name="maps_title">Maps</string>
-    <string name="maps_intro">Maps are downloaded whole, one area at a time, and shown from this phone. Nobody learns which part of the map you look at or what you search for.</string>
-    <string name="maps_this_area">This area</string>
-    <string name="maps_from_host">From %1$s</string>
-    <string name="maps_data_from">Map data from %1$s</string>
-    <string name="maps_update_available">Update available</string>
-    <string name="maps_download">Download</string>
-    <string name="maps_update">Update</string>
-    <string name="maps_delete">Delete</string>
-    <string name="maps_retry">Try again</string>
-    <string name="maps_downloading">Downloading %1$s of %2$s</string>
     <string name="maps_preparing">The map host is preparing this area. Trying again in %1$d s</string>
     <string name="maps_prepared_on_request">Prepared when you ask for it</string>
     <string name="maps_failed_network">Couldn\'t download. Check your connection and try again.</string>
@@ -386,8 +321,6 @@
     <string name="maps_loading">Getting the list of areas</string>
     <string name="maps_none">No map host answered. Check your connection, or the map host in Advanced.</string>
     <string name="maps_host_failed">%1$s didn\'t answer</string>
-    <string name="maps_installed">On this phone</string>
-    <string name="maps_available">Available</string>
     <string name="maps_host_label">Map host</string>
     <string name="maps_host_hint">Leave empty to use your server\'s or the app\'s</string>
     <string name="maps_regions_link">Downloaded maps</string>

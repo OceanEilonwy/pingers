@@ -19,10 +19,12 @@ uniffi::setup_scaffolding!();
 
 mod callbacks;
 mod core;
+mod device_views;
 mod error;
 mod geo;
 mod ids;
 mod maps;
+mod party_views;
 mod snapshot;
 mod views;
 #[cfg(feature = "wipe-freed")]
@@ -36,16 +38,21 @@ pub use core::{
     Core, GeofenceEvent, InstanceConfig, MeetPointChoice, NewPartyDraft, QuietHoursDraft,
     SettingChange, SpotToSave,
 };
+pub use device_views::{
+    DevicePlatform, PushServiceInfo, QuietHoursEditorView, SetupStep, SetupView, WakePlatform,
+    quiet_hours_editor, setup_view,
+};
 pub use error::CoreError;
 pub use geo::{Coordinate, Fence, Fix};
 pub use ids::{
     InviteId, LocationRequestId, MeetupId, MemberId, MessageId, PartyId, SpotId, ZoneId,
 };
 pub use maps::{
-    MapCatalog, MapDownloadListener, MapDownloadRequest, MapEntry, MapFailure, MapFile,
-    MapHostFailure, MapHostInfo, MapHostProblem, MapHostSource, MapManifest, MapOffer, MapSettings,
-    MapsWords, maps_words,
+    DownloadedMapsWords, MapCatalog, MapDownloadListener, MapDownloadRequest, MapEntry, MapFailure,
+    MapFile, MapHostFailure, MapHostInfo, MapHostProblem, MapHostSource, MapManifest, MapOffer,
+    MapSettings, MapsWords, downloaded_maps_words, downloading_words, maps_words, size_words,
 };
+pub use party_views::{CodeAnswer, PartySettingsView, SafetyCodesView};
 pub use snapshot::{AreaEditor, LocalClock, Snapshot};
 pub use views::*;
 

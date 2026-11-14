@@ -71,6 +71,8 @@ object PIcons {
         "servers", 2f, rect(3f, 4f, 18f, 7f, 2f), rect(3f, 13f, 18f, 7f, 2f), "M7 7.5h.01M7 16.5h.01",
     )
     val Bell = icon("bell", 2.2f, "M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9", "M13.7 21a2 2 0 0 1-3.4 0")
+    val Mail = icon("mail", 2f, "M4 7h16v12H4z", "M4 7l8 6 8-6")
+    val Clock = icon("clock", 2f, circle(12f, 12f, 9f), "M12 7v5l3 2")
     val Globe = icon("globe", 2.2f, circle(12f, 12f, 9f), "M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18")
     val Trash = icon("trash", 2f, "M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14")
     val Signal = icon(
@@ -78,6 +80,22 @@ object PIcons {
         "M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2",
     )
     val Send = icon("send", 2.2f, "M12 19V5M5 12l7-7 7 7")
+
+    // Section 4: settings, wake-ups, notices, Party settings.
+    /** A bell struck through: wake-ups off or failing. */
+    val BellOff = icon(
+        "bell-off", 2f, "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9", "M10.3 21a1.9 1.9 0 0 0 3.4 0", "M3 3l18 18",
+    )
+    /** A shield with an exclamation mark: reduced privacy, a relay key that changed. */
+    val ShieldAlert = icon("shield-alert", 2.2f, SHIELD, "M12 8v4.5M12 16h.01")
+    /** An exclamation mark in a circle: an error or a warning line. */
+    val AlertCircle = icon("alert-circle", 2.2f, circle(12f, 12f, 9f), "M12 7.5v5.5M12 16.5h.01")
+    /** A person and a minus: leaving a Party. */
+    val PersonMinus = icon("person-minus", 2f, circle(10f, 8f, 3.5f), "M3.5 20c.8-3.5 3.4-5.5 6.5-5.5s5.7 2 6.5 5.5M16 11h6")
+    /** The chain link of "This server needs a code". */
+    val LinkSmall = icon(
+        "link-small", 2f, "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1", "M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
+    )
 
     /** The filled green tick in a circle ("reachable", "joined"). */
     val CheckCircle: ImageVector = ImageVector.Builder("check-circle", 24.dp, 24.dp, 24f, 24f).apply {

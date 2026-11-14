@@ -188,6 +188,25 @@ pub struct ServerOperators {
     pub server: Operator,
     /// The push relay's operator, if the server lists the instance's push relay.
     pub push_relay: Option<Operator>,
+    /// The first privacy relay the server lists (`ohttp_relays`), which Parties on the server
+    /// default to.
+    pub relay_host: Option<Host>,
+    /// Where the instance's push relay is, if the server lists it.
+    pub push_relay_host: Option<Host>,
+}
+
+impl PartyConfig {
+    /// Fills in who runs what from the server's published parameters. An OHTTP privacy relay
+    /// publishes no operator of its own, so its operator stays unknown; the screens count it
+    /// as the server's, the cautious reading.
+    pub fn declare(&mut self, operators: &ServerOperators) {
+        self.server.operator = Some(operators.server.clone());
+        if let Some(host) = &operators.relay_host {
+            self.relay.host = host.clone();
+        }
+        self.push_relay.operator.clone_from(&operators.push_relay);
+        self.push_relay.host.clone_from(&operators.push_relay_host);
+    }
 }
 
 /// Everything the screens read, at one moment.
@@ -210,8 +229,8 @@ pub struct ClientSnapshot {
     /// The summary of the Meetup that ended last, kept until the user dismisses it. Its keys
     /// and content are already deleted.
     pub ended_meetup: Option<EndedMeetup>,
-    /// An invite link opened on this device, waiting for the user to compare codes.
-    pub join_preview: Option<JoinPreview>,
+    /// The join this device started from an invite link: asked and waiting, or just let in.
+    pub joining: Option<Joining>,
     /// The name this device's user goes by in Parties they create or join from now on, once
     /// they set one.
     pub display_name: Option<Name>,
@@ -327,6 +346,8 @@ pub struct Party {
     pub invites: Vec<Invite>,
     /// The current invite link to share, if one has been made.
     pub invite_link: Option<InviteLink>,
+    /// People who asked to join through this device's invites, oldest first.
+    pub join_requests: Vec<JoinRequest>,
 }
 
 /// A member of a Party.
@@ -338,6 +359,17 @@ pub struct Member {
     pub name: Name,
     /// Whether it is this device.
     pub me: Me,
+    /// Whether this device compared safety codes with them.
+    pub checked: SafetyCheck,
+}
+
+/// Whether this device compared safety codes with a member and they matched (design B.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SafetyCheck {
+    /// "Checked".
+    Checked,
+    /// "Not checked", the default.
+    NotChecked,
 }
 
 /// A Spot.
@@ -371,8 +403,8 @@ pub struct PartyConfig {
 pub struct Service {
     /// Where it is.
     pub host: Host,
-    /// Who declares to run it.
-    pub operator: Operator,
+    /// Who declares to run it, once the server's parameters were read.
+    pub operator: Option<Operator>,
 }
 
 /// How a Party's server is run.
@@ -389,8 +421,10 @@ pub enum Hosting {
 pub struct PushRelay {
     /// Which relay.
     pub kind: PushRelayKind,
-    /// Who declares to run it.
-    pub operator: Operator,
+    /// Who declares to run it, once the server's parameters were read.
+    pub operator: Option<Operator>,
+    /// Where it is, once the server's parameters were read.
+    pub host: Option<Host>,
 }
 
 /// Which push relay.
@@ -429,13 +463,6 @@ pub enum InviteStatus {
         shared_at: UnixSeconds,
         /// When it stops working.
         expires_at: UnixSeconds,
-    },
-    /// Someone opened the link; the codes must be compared before they join.
-    Opened {
-        /// The name they gave.
-        name: Name,
-        /// The code both screens show.
-        code: SafetyCode,
     },
     /// They joined after the codes were verified.
     Joined {
@@ -483,7 +510,7 @@ impl fmt::Debug for InviteUrl {
     }
 }
 
-/// The safety code two people compare when one joins ("4729 1836").
+/// The code two people compare when one joins ("4821 0937 5512").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SafetyCode(String);
 
@@ -512,21 +539,41 @@ impl SafetyCode {
     }
 }
 
-/// What an opened invite link shows before joining.
+/// A join this device started from an invite link (join flow A). The link says nothing about
+/// the Party, so nothing about it shows until the inviter lets this device in.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct JoinPreview {
-    /// Who invited.
-    pub inviter: Name,
-    /// The Party's name.
-    pub party_name: Name,
-    /// Its colour.
-    pub colour: PartyColour,
-    /// Its members' names, in roster order.
-    pub members: Vec<Name>,
-    /// How many Spots it has.
-    pub spot_count: usize,
-    /// The code to compare with the inviter's screen.
-    pub safety_code: SafetyCode,
+pub enum Joining {
+    /// Asked to join, waiting for the inviter ("Asked to join").
+    Asked {
+        /// The code to read to the inviter.
+        code: SafetyCode,
+        /// When this device asked.
+        asked_at: UnixSeconds,
+    },
+    /// Let in ("You're in"), until the user opens the Party.
+    LetIn {
+        /// The Party, now in [`ClientSnapshot::parties`].
+        party: PartyId,
+        /// Who let this device in.
+        inviter: Name,
+        /// The code that was checked.
+        code: SafetyCode,
+    },
+}
+
+/// Someone who asked to join through this device's invite ("Ben asked to join").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JoinRequest {
+    /// The request, to let in or turn away.
+    pub id: MailboxId,
+    /// The name they gave.
+    pub name: Name,
+    /// The code their phone shows; it must match.
+    pub code: SafetyCode,
+    /// When this device read the request.
+    pub asked_at: UnixSeconds,
+    /// When the link they used was shared.
+    pub shared_at: UnixSeconds,
 }
 
 /// A local identifier for an exclusion zone. Zones never leave the device, so this is a row id,
@@ -895,7 +942,7 @@ mod tests {
         )?);
         let service = Service {
             host: Host::new("pingers.test")?,
-            operator: Operator::new("Flat 7")?,
+            operator: Some(Operator::new("Flat 7")?),
         };
         Ok(Party {
             id: PartyId::from_bytes([id; 16]),
@@ -919,11 +966,13 @@ mod tests {
                 push_relay: PushRelay {
                     kind: PushRelayKind::Official,
                     operator: service.operator,
+                    host: None,
                 },
                 post_quantum: PostQuantum::Off,
             },
             invites: Vec::new(),
             invite_link: None,
+            join_requests: Vec::new(),
         })
     }
 
@@ -948,7 +997,7 @@ mod tests {
             alert: None,
             location_requests: Vec::new(),
             ended_meetup: None,
-            join_preview: None,
+            joining: None,
             display_name: None,
             own_position: None,
             fallbacks: Vec::new(),
@@ -956,6 +1005,40 @@ mod tests {
             map_host: None,
             operators: None,
         })
+    }
+
+    #[test]
+    fn declared_operators_leave_the_relays_unknown() -> Result<(), TestError> {
+        let mut config = party(1, &[])?.config;
+        config.server.operator = None;
+        config.relay.operator = None;
+        config.push_relay.operator = None;
+        let operators = ServerOperators {
+            server: Operator::new("Pingers")?,
+            push_relay: Some(Operator::new("Pingers")?),
+            relay_host: Some(Host::new("relay.pingers.org")?),
+            push_relay_host: Some(Host::new("push.pingers.org")?),
+        };
+        config.declare(&operators);
+        assert_eq!(config.server.operator, Some(Operator::new("pingers")?));
+        assert_eq!(config.relay.operator, None);
+        assert_eq!(config.relay.host.as_str(), "relay.pingers.org");
+        assert_eq!(config.push_relay.operator, Some(Operator::new("Pingers")?));
+        assert_eq!(
+            config.push_relay.host.as_ref().map(Host::as_str),
+            Some("push.pingers.org")
+        );
+        // A server that lists no relay keeps the Party's own relay host.
+        let mut unlisted = party(1, &[])?.config;
+        unlisted.declare(&ServerOperators {
+            relay_host: None,
+            push_relay: None,
+            push_relay_host: None,
+            ..operators
+        });
+        assert_eq!(unlisted.relay.host.as_str(), "pingers.test");
+        assert_eq!(unlisted.push_relay.operator, None);
+        Ok(())
     }
 
     #[test]

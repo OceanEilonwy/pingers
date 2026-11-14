@@ -5,6 +5,27 @@ use pingers_screens::ScreenError;
 
 use crate::Language;
 
+/// New party on another server, which this version cannot create yet.
+#[must_use]
+pub fn other_server(language: Language) -> String {
+    let Language::English = language;
+    "This version of Pingers can only create Parties on the app's server.".into()
+}
+
+/// The chosen server needs a registration code before it makes an account.
+#[must_use]
+pub fn code_needed(language: Language) -> String {
+    let Language::English = language;
+    "This server needs a code".into()
+}
+
+/// The server refused the registration code.
+#[must_use]
+pub fn code_refused(language: Language) -> String {
+    let Language::English = language;
+    "The server didn't accept this code.".into()
+}
+
 /// A screen error, as the user is told it.
 #[must_use]
 pub fn screen_error(language: Language, error: &ScreenError) -> String {
@@ -15,6 +36,7 @@ pub fn screen_error(language: Language, error: &ScreenError) -> String {
         ScreenError::UnknownMember => "That person has left the meetup.",
         ScreenError::NoMeetPoint => "There's no meet point yet.",
         ScreenError::UnknownLocationRequest => "This request has expired.",
+        ScreenError::UnknownJoinRequest => "This request is no longer waiting.",
         ScreenError::InvalidName => "Give it a name of up to 80 characters.",
         ScreenError::InvalidHost => "Enter an address like pingers.example.org.",
         ScreenError::InvalidOperator => "This server or relay doesn't say who runs it.",
@@ -55,6 +77,7 @@ mod tests {
             ScreenError::UnknownMember,
             ScreenError::NoMeetPoint,
             ScreenError::UnknownLocationRequest,
+            ScreenError::UnknownJoinRequest,
             ScreenError::InvalidName,
             ScreenError::InvalidHost,
             ScreenError::InvalidOperator,

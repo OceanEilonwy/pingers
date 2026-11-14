@@ -14,10 +14,18 @@
 //! - `cargo xtask ci --full [--base <ref>] [--fuzz-seconds <n>]`: `ci`, then `cargo mutants`
 //!   on the crates changed since `<ref>` (default `main`) and every fuzz target for `<n>`
 //!   seconds (default 10). See [`full`].
+//! - `cargo xtask vectors [--check]`: writes the generated vector files, or checks them. See
+//!   [`vectors`].
+//! - `cargo xtask no-python`: fails if a Python file is in the repository (also a `ci` step).
+//!   See [`no_python`].
 //! - `cargo xtask pins <server.toml> <push-relay.toml>`: the app's two key pin build
-//!   variables from the deployed configurations. See [`pins`].
-//! - `cargo xtask release-android [--flavour gms|foss]...`: the signed release build CI's
-//!   `release.yml` runs, from the same environment variables. See [`release_android`].
+//!   variables from the deployed configurations; `cargo xtask pins --relay <url> --push <url>`:
+//!   the same from the running services. See [`pins`].
+//! - `cargo xtask release-android [--flavour gms|foss]... [--tag <v-tag>]`: the signed release
+//!   build CI's `release.yml` runs, from the same environment variables, named for Obtainium.
+//!   See [`release_android`]. `cargo xtask release-version <v-tag>` and `cargo xtask
+//!   release-notes`: the version numbers and the GitHub Release body. See [`release_version`]
+//!   and [`release_notes`].
 //! - `cargo xtask nodo-dist [<commit>] [--nodo <checkout>]`: the vendored source tarball and
 //!   filled-in xbps recipes for monokulo-nodo's builder; `cargo xtask dev-ca`: a throwaway CA
 //!   for the tier-1 local stack. See [`nodo`].
@@ -32,13 +40,17 @@ mod device;
 mod emulator;
 mod full;
 mod local_app;
+mod no_python;
 mod nodo;
 mod pins;
 mod release_android;
+mod release_notes;
+mod release_version;
 mod scenario;
 mod stack;
 mod supervise;
 mod tls_front;
+mod vectors;
 mod wait;
 
 use std::collections::BTreeMap;
@@ -96,18 +108,32 @@ enum Outcome {
 const USAGE: &str = "usage: cargo xtask <command>\n\n\
                      commands:\n  \
                      layers  check the layer rule and the I/O ban below L2\n  \
-                     ci      fmt --check, clippy -D warnings, test, layers, deny\n  \
+                     ci      fmt --check, clippy -D warnings, test, layers, no-python, deny\n  \
                      ci --full [--base <ref>] [--fuzz-seconds <n>]\n          \
                      ci, then cargo mutants on crates changed since <ref> (main) and\n          \
                      every fuzz target for <n> seconds (10); survivors must be listed\n          \
                      with a reason in mutants-allow.toml\n  \
+                     vectors [--check]\n          \
+                     write vectors/proto/ and vectors/meetup/ from their generator, or\n          \
+                     with --check fail if a committed file differs (cargo test checks too)\n  \
+                     no-python\n          \
+                     fail if the repository holds a Python file (extension or shebang)\n  \
                      pins <server.toml> <push-relay.toml>\n          \
                      print PINGERS_GATEWAY_KEY_PINS and PINGERS_PUSH_RELAY_KEY_PINS\n          \
                      from the deployed configurations (public values only)\n  \
-                     release-android [--flavour gms|foss]...\n          \
+                     pins --relay <ohttp relay url> --push <push relay url>\n          \
+                     the same lines from the running services: the served gateway key\n          \
+                     through the relay, the push relay's published and next keys\n  \
+                     release-android [--flavour gms|foss]... [--tag <v-tag>]\n          \
                      signed release APKs and AABs from PINGERS_KEYSTORE_PATH,\n          \
                      PINGERS_KEYSTORE_PASSWORD and PINGERS_KEY_ALIAS, checked with\n          \
-                     apksigner (android/docs/release.md)\n  \
+                     apksigner, versioned from the tag (default: HEAD's v* tag), copied\n          \
+                     to target/release-android/pingers-<version>-<flavour>.apk|.aab\n  \
+                     release-version <v-tag>\n          \
+                     versionName, versionCode and prerelease for a tag, refusing one\n          \
+                     that does not come after every other v* tag\n  \
+                     release-notes --tag <v-tag> --dir <dir> [--repository <owner/name>]\n          \
+                     the GitHub Release body for the files in <dir>, and its SHA256SUMS\n  \
                      nodo-dist [<commit>] [--nodo <checkout>]\n          \
                      vendored source tarball (prints its SHA-256) and filled-in xbps\n          \
                      recipes in target/nodo/ (docs/deploy-nodo.md)\n  \
@@ -149,16 +175,34 @@ fn run() -> Result<Outcome> {
             }
             None => usage(),
         },
-        Some("pins") => match options {
-            [server, push_relay] => {
-                let output = pins::run(Path::new(server), Path::new(push_relay))?;
-                io::stdout().write_all(output.as_bytes())?;
-                Ok(Outcome::Passed)
-            }
-            _ => usage(),
+        Some("vectors") => match vectors::Mode::parse(options) {
+            Some(mode) => vectors::run(&workspace_root()?, mode),
+            None => usage(),
         },
+        Some("no-python") if options.is_empty() => no_python::run(&workspace_root()?),
+        Some("pins") => {
+            let output = match options {
+                [server, push_relay] if !server.starts_with("--") => {
+                    pins::run(Path::new(server), Path::new(push_relay))?
+                }
+                _ => match pins::LiveOptions::parse(options) {
+                    Some(live) => pins::run_live(&live)?,
+                    None => return usage(),
+                },
+            };
+            io::stdout().write_all(output.as_bytes())?;
+            Ok(Outcome::Passed)
+        }
         Some("release-android") => match release_android::parse_options(options) {
             Some(choice) => release_android::run(&workspace_root()?, &choice),
+            None => usage(),
+        },
+        Some("release-version") => match options {
+            [tag] => release_version::run(&workspace_root()?, tag),
+            _ => usage(),
+        },
+        Some("release-notes") => match release_notes::NotesOptions::parse(options) {
+            Some(notes) => release_notes::run(&workspace_root()?, &notes),
             None => usage(),
         },
         Some("nodo-dist") => match nodo::parse_dist_options(options) {
@@ -601,6 +645,11 @@ fn run_ci(root: &Path) -> Result<Outcome> {
 
     announce("cargo xtask layers")?;
     if check_layers(root)? == Outcome::Failed {
+        return Ok(Outcome::Failed);
+    }
+
+    announce("cargo xtask no-python")?;
+    if no_python::run(root)? == Outcome::Failed {
         return Ok(Outcome::Failed);
     }
 

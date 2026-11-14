@@ -31,6 +31,19 @@ pub enum DeliveryError {
     /// A time computed from the clock does not fit in `UnixSeconds`.
     #[error("time out of range")]
     TimeOutOfRange,
+    /// A reader behind the head asked for what its epoch's key may not read: the snapshot
+    /// of a later epoch. HTTP 403.
+    #[error("not readable with an earlier epoch's key")]
+    LaterEpoch,
+    /// The group would hold more than [`crate::MAX_SUBSCRIPTIONS_PER_GROUP`] subscriptions.
+    #[error("too many subscriptions in the group")]
+    TooManySubscriptions,
+    /// The group already has [`crate::MAX_LIVE_CHANNELS_PER_GROUP`] live channels open.
+    #[error("too many live channels in the group")]
+    TooManyChannels,
+    /// The channel has stored [`crate::STORED_LIVE_FRAMES_PER_BUCKET`] frames this bucket.
+    #[error("live channel over its stored-frame allowance")]
+    LiveRateLimited,
     /// No live channel with this id is attached to the group.
     #[error("no such live channel")]
     UnknownChannel,

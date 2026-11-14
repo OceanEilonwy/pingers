@@ -15,6 +15,7 @@ use std::sync::Arc;
 use pingers_client::ports::{self, Foreground, GeofenceTransition};
 use pingers_client::{Client, ClientConfig, ClientError};
 use pingers_screens as screens;
+use pingers_words::Language;
 
 use crate::CoreError;
 use crate::callbacks::{Events, EventsAdapter, Platform, PlatformAdapter};
@@ -70,6 +71,10 @@ pub struct NewPartyDraft {
     pub colour: PartyColour,
     /// Whether it uses the X-Wing suite.
     pub post_quantum: bool,
+    /// "Another server", by host; `None` for the app's own server.
+    pub other_server: Option<String>,
+    /// A registration code the user typed ("This server needs a code").
+    pub registration_code: Option<String>,
 }
 
 impl TryFrom<NewPartyDraft> for ports::PartyDraft {
@@ -282,6 +287,19 @@ pub struct Core {
 }
 
 impl Core {
+    /// Lets in or turns away a join request.
+    async fn decide(
+        &self,
+        party: PartyId,
+        request: InviteId,
+        decision: ports::JoinDecision,
+    ) -> Result<(), CoreError> {
+        Ok(self
+            .client
+            .decide_join((&party).try_into()?, (&request).try_into()?, decision)
+            .await?)
+    }
+
     /// Opens the client with the L3 crates `build` makes from the database (tests).
     #[cfg(test)]
     async fn open_with(
@@ -351,7 +369,82 @@ impl Core {
     ///
     /// [`CoreError::Invalid`] for an empty name; [`CoreError::Network`].
     pub async fn create_party(&self, draft: NewPartyDraft) -> Result<PartyId, CoreError> {
-        Ok(self.client.create_party(draft.try_into()?).await?.into())
+        if draft.other_server.is_some() {
+            return Err(CoreError::Unavailable {
+                reason: pingers_words::errors::other_server(Language::English),
+            });
+        }
+        let code = draft
+            .registration_code
+            .clone()
+            .filter(|code| !code.trim().is_empty());
+        let offered = code.is_some();
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "ClientError is non-exhaustive; every other error keeps its usual mapping"
+        )]
+        let refused = |error: ClientError| match error {
+            ClientError::RegistrationRefused if offered => CoreError::CodeRefused {
+                reason: pingers_words::errors::code_refused(Language::English),
+            },
+            ClientError::RegistrationRefused => CoreError::CodeNeeded {
+                reason: pingers_words::errors::code_needed(Language::English),
+            },
+            other => CoreError::from(other),
+        };
+        if let Some(code) = code {
+            self.client
+                .register_with_code(pingers_proto::SecretText::new(code.trim().to_owned()))
+                .await
+                .map_err(refused)?;
+        }
+        let draft = draft.try_into()?;
+        Ok(self
+            .client
+            .create_party(draft)
+            .await
+            .map_err(refused)?
+            .into())
+    }
+
+    /// The safety code between this device and a member (Safety codes): twelve groups of
+    /// five digits.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Invalid`] for an id that is not one; [`CoreError::Network`] for a Party
+    /// or member this device does not hold.
+    pub async fn safety_code(&self, party: PartyId, member: MemberId) -> Result<String, CoreError> {
+        let code = self
+            .client
+            .safety_code((&party).try_into()?, member.into())
+            .await?;
+        Ok(code.as_str().to_owned())
+    }
+
+    /// Marks a member checked once the codes matched ("Codes match · Mark Ana as checked").
+    ///
+    /// # Errors
+    ///
+    /// As [`Core::safety_code`].
+    pub async fn mark_checked(&self, party: PartyId, member: MemberId) -> Result<(), CoreError> {
+        Ok(self
+            .client
+            .mark_checked((&party).try_into()?, member.into())
+            .await?)
+    }
+
+    /// Deletes an exclusion zone ("Delete zone").
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::NotFound`] for a zone that is gone; [`CoreError::Storage`].
+    pub async fn delete_zone(&self, zone: ZoneId) -> Result<(), CoreError> {
+        let zones = screens::zones::without(&self.client.snapshot(), zone.into())?;
+        Ok(self
+            .client
+            .change_setting(ports::SettingChange::Zones(zones))
+            .await?)
     }
 
     /// Makes an invite link for a Party; returns the link.
@@ -364,8 +457,8 @@ impl Core {
         Ok(link.url.as_str().to_owned())
     }
 
-    /// Opens an invite link, giving the name this device's user goes by in that Party: the
-    /// preview then shows on Accept invite.
+    /// Asks to join through an invite link, under the name this device's user goes by in that
+    /// Party (Open invite's "Ask to join"): `Snapshot::asked_to_join` then shows the code.
     ///
     /// # Errors
     ///
@@ -376,31 +469,45 @@ impl Core {
         Ok(self.client.open_invite(link, name).await?)
     }
 
-    /// Joins the opened invite's Party once the codes matched.
+    /// Withdraws the join this device asked for (Asked to join's "Withdraw request").
     ///
     /// # Errors
     ///
-    /// [`CoreError::Network`].
-    pub async fn accept_invite(&self) -> Result<PartyId, CoreError> {
-        Ok(self.client.accept_invite().await?.into())
+    /// [`CoreError::Network`] with no join under way, or if the withdrawal cannot be stored.
+    pub async fn withdraw_join(&self) -> Result<(), CoreError> {
+        Ok(self.client.withdraw_join().await?)
     }
 
-    /// Admits the person who opened `invite`, once the inviter saw the same code on both
-    /// screens (Invite people's "Verify").
+    /// Forgets You're in once the user opened the Party (its "Open" button).
     ///
     /// # Errors
     ///
-    /// [`CoreError::Invalid`] for an id that is not one; [`CoreError::Unavailable`] until
-    /// pingers-sync delivers join requests; [`CoreError::Network`].
-    pub async fn verify_invite(&self, party: PartyId, invite: InviteId) -> Result<(), CoreError> {
-        Ok(self
-            .client
-            .decide_join(
-                (&party).try_into()?,
-                (&invite).try_into()?,
-                ports::JoinDecision::Admit,
-            )
-            .await?)
+    /// [`CoreError::Storage`].
+    pub async fn dismiss_join(&self) -> Result<(), CoreError> {
+        Ok(self.client.dismiss_join().await?)
+    }
+
+    /// Lets in the person who asked to join with `request`, once they read out the code the
+    /// screen shows ("Codes match · Let Ben in").
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Invalid`] for an id that is not one; [`CoreError::Network`] once it was
+    /// decided or withdrawn, or the invite expired.
+    pub async fn let_in(&self, party: PartyId, request: InviteId) -> Result<(), CoreError> {
+        self.decide(party, request, ports::JoinDecision::Admit)
+            .await
+    }
+
+    /// Turns away the person who asked to join with `request` ("Don't let in"); nothing is
+    /// sent to them.
+    ///
+    /// # Errors
+    ///
+    /// As [`Core::let_in`].
+    pub async fn turn_away(&self, party: PartyId, request: InviteId) -> Result<(), CoreError> {
+        self.decide(party, request, ports::JoinDecision::Refuse)
+            .await
     }
 
     /// Cancels an invite that has not been opened yet (Invite people's ✕).
@@ -859,9 +966,52 @@ mod tests {
         }
     }
 
+    /// Records the join events that reach the app.
+    #[derive(Default)]
+    struct JoinEvents(Mutex<Vec<&'static str>>);
+
+    impl Events for JoinEvents {
+        fn parties_changed(&self) {}
+        fn join_requested(&self, _: PartyId) {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push("join_requested");
+        }
+        fn let_in(&self, _: PartyId) {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push("let_in");
+        }
+        fn meetup_started(&self, _: MeetupId) {}
+        fn meetup_updated(&self, _: MeetupId) {}
+        fn meetup_message(&self, _: MeetupId) {}
+        fn peer_location(&self, _: MeetupId, _: MemberId) {}
+        fn location_request(&self, _: MeetupId, _: MemberId, _: LocationRequestId) {}
+        fn location_access_changed(&self, _: MeetupId, _: MemberId) {}
+        fn meetup_ended(&self, _: MeetupId) {}
+        fn notice(&self, _: Notice) {}
+        fn privacy_status_changed(&self) {}
+    }
+
+    #[test]
+    fn join_events_reach_the_app() {
+        let events = Arc::new(JoinEvents::default());
+        let adapter = crate::callbacks::EventsAdapter(events.clone());
+        let party = pingers_proto::PartyId::from_bytes([1; 16]);
+        pingers_client::Events::join_requested(&adapter, party);
+        pingers_client::Events::let_in(&adapter, party);
+        assert_eq!(
+            *events.0.lock().unwrap_or_else(PoisonError::into_inner),
+            ["join_requested", "let_in"]
+        );
+    }
+
     impl Events for App {
         fn parties_changed(&self) {}
         fn join_requested(&self, _: PartyId) {}
+        fn let_in(&self, _: PartyId) {}
         fn meetup_started(&self, _: MeetupId) {}
         fn meetup_updated(&self, _: MeetupId) {}
         fn meetup_message(&self, _: MeetupId) {}
@@ -1070,7 +1220,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invites_are_verified_and_cancelled_through_the_client() -> Result<(), CoreError> {
+    async fn join_requests_are_decided_and_invites_cancelled_through_the_client()
+    -> Result<(), CoreError> {
         let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
         let core = open_on("invites", &fakes).await?;
         let party = PartyId {
@@ -1081,7 +1232,7 @@ mod tests {
         };
         let mailbox = pingers_proto::MailboxId::from_bytes([9; 16]);
         let party_id = pingers_proto::PartyId::from_bytes([0xa1; 16]);
-        core.verify_invite(party.clone(), invite.clone()).await?;
+        core.let_in(party.clone(), invite.clone()).await?;
         assert_eq!(
             fakes.calls().last(),
             Some(&CrateCall::DecideJoin(
@@ -1090,6 +1241,26 @@ mod tests {
                 JoinDecision::Admit
             ))
         );
+        core.turn_away(party.clone(), invite.clone()).await?;
+        assert_eq!(
+            fakes.calls().last(),
+            Some(&CrateCall::DecideJoin(
+                party_id,
+                mailbox,
+                JoinDecision::Refuse
+            ))
+        );
+        core.withdraw_join().await?;
+        assert_eq!(fakes.calls().last(), Some(&CrateCall::WithdrawJoin));
+        core.dismiss_join().await?;
+        assert_eq!(fakes.calls().last(), Some(&CrateCall::DismissJoin));
+        core.open_invite("https://pingers.test/j#k".into(), "Ben".into())
+            .await?;
+        assert!(matches!(
+            fakes.calls().last(),
+            Some(CrateCall::OpenInvite(link, name))
+                if link.as_str() == "https://pingers.test/j#k" && name.as_str() == "Ben"
+        ));
         core.cancel_invite(party.clone(), invite).await?;
         assert_eq!(
             fakes.calls().last(),
@@ -1099,6 +1270,44 @@ mod tests {
         assert!(matches!(
             core.cancel_invite(party, short).await,
             Err(CoreError::Invalid { .. })
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn safety_codes_and_registration_codes_reach_the_client() -> Result<(), CoreError> {
+        let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
+        let core = open_on("safety", &fakes).await?;
+        let party = PartyId {
+            hex: PARTY_HEX.into(),
+        };
+        let party_id = pingers_proto::PartyId::from_bytes([0xa1; 16]);
+        let ana = MemberId { leaf: 0 };
+        let digits = core.safety_code(party.clone(), ana).await?;
+        assert_eq!(digits, FakeCrates::SAFETY_CODE);
+        core.mark_checked(party, ana).await?;
+        assert_eq!(
+            fakes.calls().last(),
+            Some(&CrateCall::MarkChecked(
+                party_id,
+                pingers_proto::LeafIndex::new(0)
+            ))
+        );
+        core.create_party(NewPartyDraft {
+            name: "Climbing crew".into(),
+            my_name: "Sam".into(),
+            colour: PartyColour::Blue,
+            post_quantum: false,
+            other_server: None,
+            registration_code: Some(" spring-otter-4471 ".into()),
+        })
+        .await?;
+        let calls = fakes.calls();
+        let last_two = calls.get(calls.len().saturating_sub(2)..);
+        assert!(matches!(
+            last_two,
+            Some([CrateCall::RegisterWithCode(typed), CrateCall::CreateParty(_)])
+                if typed == "spring-otter-4471"
         ));
         Ok(())
     }
@@ -1140,6 +1349,8 @@ mod tests {
                     pingers_client::snapshot::Operator::new("Push Co")
                         .map_err(|_| CoreError::invalid("operator"))?,
                 ),
+                relay_host: None,
+                push_relay_host: None,
             }),
         });
         let check = core.check_reachability().await?;
@@ -1246,6 +1457,8 @@ mod tests {
                 my_name: "Sam".into(),
                 colour: PartyColour::Blue,
                 post_quantum: false,
+                other_server: None,
+                registration_code: None,
             })
             .await?;
         assert_eq!(party.hex, "a1".repeat(16), "FakeCrates' party id");
@@ -1266,7 +1479,18 @@ mod tests {
             my_name: "Sam".into(),
             colour: PartyColour::Blue,
             post_quantum: false,
+            other_server: None,
+            registration_code: None,
         };
+        let elsewhere = NewPartyDraft {
+            name: "Crew".into(),
+            other_server: Some("pingers.flat7.org".into()),
+            ..empty.clone()
+        };
+        assert!(matches!(
+            core.create_party(elsewhere).await,
+            Err(CoreError::Unavailable { .. })
+        ));
         assert!(matches!(
             core.create_party(empty).await,
             Err(CoreError::Invalid { .. })
@@ -1296,9 +1520,10 @@ mod tests {
         let invite = InviteId {
             hex: "09".repeat(16),
         };
+        // Nobody asked to join, so there is nothing to let in.
         assert!(matches!(
-            core.verify_invite(party, invite).await,
-            Err(CoreError::Unavailable { .. })
+            core.let_in(party, invite).await,
+            Err(CoreError::Network { .. })
         ));
         core.set_display_name("Sam".into()).await?;
         assert_eq!(core.snapshot().your_name().name.as_deref(), Some("Sam"));

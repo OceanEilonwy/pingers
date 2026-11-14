@@ -29,10 +29,9 @@ pingers-testkit = { workspace = true }
 pingers-time = { workspace = true, features = ["test-util"] }
 rcgen = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "net"] }
-# The reference relay's own source is compiled into the integration tests (tests/integration);
-# its configuration parser needs these.
-serde = { workspace = true }
-toml = { workspace = true }
+# The reference relay the integration tests (tests/integration) run. Its library target has no
+# workspace entry (pingers-testkit does the same for the binaries).
+pingers-ohttp-relay = { path = "../pingers-ohttp-relay" }
 
 [lints]
 workspace = true

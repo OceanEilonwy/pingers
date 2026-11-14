@@ -1,6 +1,12 @@
 package org.pingers.app.ui.screens
 
 import org.pingers.app.ui.map.LocalMaps
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import org.pingers.app.data.CreateOutcome
+import org.pingers.app.ui.components.PField
+import uniffi.pingers.ServerChoice
 import android.content.Intent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -21,7 +27,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -51,9 +56,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -62,7 +64,6 @@ import androidx.compose.ui.platform.testTag
 import org.pingers.app.ui.E2eTags
 import org.pingers.app.R
 import org.pingers.app.Route
-import org.pingers.app.data.AcceptInviteState
 import org.pingers.app.data.AdvancedState
 import org.pingers.app.data.Fence
 import org.pingers.app.data.Invitation
@@ -76,7 +77,6 @@ import org.pingers.app.data.PushRelayChoice
 import org.pingers.app.data.Reachability
 import org.pingers.app.data.SpotRow
 import org.pingers.app.ui.components.Avatar
-import org.pingers.app.ui.components.AvatarStack
 import org.pingers.app.ui.components.Card
 import org.pingers.app.ui.components.IconAction
 import org.pingers.app.ui.components.IconBadge
@@ -148,51 +148,84 @@ fun Page(
 
 @Composable
 fun NewPartyScreen(state: NewPartyState, repo: PingersRepository, nav: Navigator) {
+    // Every word is the core's (canvas CreateParty); nothing shows until it has answered.
+    val text = state.text ?: return Waiting()
     Page(
-        top = { TopBar(stringResource(R.string.new_party_title), { nav.back() }, stringResource(R.string.cd_back)) },
+        top = { TopBar(text.title, { nav.back() }, stringResource(R.string.cd_back)) },
         bottom = {
             state.error?.let { Text(it, style = body(14.sp, color = Pc.OrangeText)) }
-            PillButton(stringResource(R.string.new_party_create), {
-                repo.createParty()
-                nav.replace(Route.Party)
-                nav.go(Route.Invite)
+            PillButton(text.create, {
+                repo.createParty { outcome ->
+                    when (outcome) {
+                        CreateOutcome.Created -> {
+                            nav.replace(Route.Party)
+                            nav.go(Route.Invite)
+                        }
+                        CreateOutcome.CodeNeeded -> nav.go(Route.PartyCode)
+                        CreateOutcome.CodeRefused, CreateOutcome.Failed -> {}
+                    }
+                }
             }, enabled = state.canCreate, modifier = Modifier.testTag(E2eTags.NEW_PARTY_CREATE))
         },
         spacing = 18,
     ) {
         Spacer(Modifier.height(0.dp))
         LabeledField(
-            stringResource(R.string.new_party_name), state.name, repo::setNewPartyName,
+            text.nameLabel, state.name, repo::setNewPartyName,
             background = Pc.Card, border = Pc.Blue, borderWidth = 1.5.dp, fontSize = 17,
         )
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(stringResource(R.string.new_party_colour), style = body(13.sp, 600, Pc.Muted))
+            Text(text.colourLabel, style = body(13.sp, 600, Pc.Muted))
             Row(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                PartyColour.entries.forEach { c ->
-                    ColourSwatch(c, c == state.colour) { repo.setNewPartyColour(c) }
+                PartyColour.entries.forEachIndexed { i, c ->
+                    ColourSwatch(c, text.colourNames.getOrElse(i) { "" }, c == state.colour) { repo.setNewPartyColour(c) }
                 }
             }
         }
-        ServerCard(
-            stringResource(R.string.advanced_title),
-            stringResource(R.string.server_and_privacy, state.server, privacyLabel(state.privacy)),
-            onClick = { nav.go(Route.Advanced) },
-        )
-        Text(stringResource(R.string.new_party_later), style = body(14.sp, color = Pc.Muted, lineHeight = 1.5f))
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(text.serverLabel, style = body(13.sp, 600, Pc.Muted), modifier = Modifier.semantics { heading() })
+            Card(radius = 16.dp, modifier = Modifier.selectableGroup()) {
+                ServerChoiceRow(text.builtIn, text.builtInDetail, state.serverChoice == ServerChoice.BUILT_IN, E2eTags.NEW_PARTY_BUILT_IN) {
+                    repo.setServerChoice(ServerChoice.BUILT_IN)
+                }
+                RowDivider()
+                ServerChoiceRow(text.another, text.anotherDetail, state.serverChoice == ServerChoice.ANOTHER, E2eTags.NEW_PARTY_ANOTHER) {
+                    repo.setServerChoice(ServerChoice.ANOTHER)
+                }
+            }
+            if (state.serverChoice == ServerChoice.ANOTHER) {
+                PField(
+                    state.server, repo::setServer, text.another, Modifier.testTag(E2eTags.NEW_PARTY_SERVER),
+                    background = Pc.Card, height = 48.dp, placeholder = text.anotherPlaceholder,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Uri),
+                )
+            }
+        }
+        ServerCard(text.advanced, text.advancedDetail, onClick = { nav.go(Route.Advanced) }, privacy = state.privacy)
+        Text(text.later, style = body(14.sp, color = Pc.Muted, lineHeight = 1.5f))
+    }
+}
+
+/** "The app's server" or "Another server", with its line and a radio button on the right. */
+@Composable
+private fun ServerChoiceRow(title: String, detail: String, selected: Boolean, tag: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .testTag(tag)
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        TwoLines(title, detail, Modifier.weight(1f), body(15.sp, 500), body(12.sp, color = Pc.Muted))
+        RadioButton(selected = selected, onClick = null, colors = RadioButtonDefaults.colors(selectedColor = Pc.Blue))
     }
 }
 
 @Composable
-private fun ColourSwatch(c: PartyColour, selected: Boolean, onClick: () -> Unit) {
-    val name = stringResource(
-        when (c) {
-            PartyColour.Blue -> R.string.colour_blue
-            PartyColour.Orange -> R.string.colour_orange
-            PartyColour.Ink -> R.string.colour_ink
-            PartyColour.Teal -> R.string.colour_teal
-            PartyColour.Plum -> R.string.colour_plum
-        },
-    )
+private fun ColourSwatch(c: PartyColour, name: String, selected: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
             .size(48.dp)
@@ -216,52 +249,71 @@ private fun ColourSwatch(c: PartyColour, selected: Boolean, onClick: () -> Unit)
 fun AdvancedScreen(state: AdvancedState, repo: PingersRepository, nav: Navigator) {
     // Check the server and relay each time the screen opens, as the canvas does.
     LaunchedEffect(Unit) { repo.openAdvanced() }
+    // Every word is the core's (canvas PartyAdvanced); nothing shows until it has answered.
+    val text = state.text ?: return Waiting()
+    val another = state.serverChoice == ServerChoice.ANOTHER
     Page(
-        top = { TopBar(stringResource(R.string.advanced_title), { nav.back() }, stringResource(R.string.cd_back_new_party)) },
-        bottom = { PillButton(stringResource(R.string.done), { nav.go(Route.NewParty) }, background = Pc.Ink) },
+        top = { TopBar(text.title, { nav.back() }, stringResource(R.string.cd_back_new_party)) },
+        bottom = { PillButton(text.done, { nav.go(Route.NewParty) }, background = Pc.Ink) },
+        spacing = 10,
     ) {
+        val reduced = state.privacy == PrivacyLevel.Reduced
+        val shape = RoundedCornerShape(16.dp)
         Row(
             Modifier
-                .padding(top = 8.dp)
+                .padding(top = 8.dp, bottom = 2.dp)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(Pc.BlueTint)
+                .clip(shape)
+                .background(if (reduced) Pc.OrangeTintSoft else Pc.BlueTint)
+                .then(if (reduced) Modifier.border(1.dp, Pc.OrangeLine, shape) else Modifier)
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Icon(PIcons.ShieldCheck, null, tint = Pc.BlueDark, modifier = Modifier.size(22.dp))
+            Icon(if (reduced) PIcons.ShieldAlert else PIcons.ShieldCheck, null, tint = if (reduced) Pc.OrangeText else Pc.BlueDark, modifier = Modifier.size(22.dp))
             TwoLines(
-                privacyLabel(state.privacy), stringResource(R.string.advanced_full_detail),
-                titleStyle = body(15.sp, 600, Pc.BlueDark),
-                subtitleStyle = body(13.sp, color = Pc.BlueInk, lineHeight = 1.4f),
+                text.privacy, text.privacyDetail,
+                titleStyle = body(15.sp, 600, if (reduced) Pc.OrangeText else Pc.BlueDark),
+                subtitleStyle = body(13.sp, color = if (reduced) Pc.OrangeBrown else Pc.BlueInk, lineHeight = 1.4f),
             )
         }
-        Spacer(Modifier.height(2.dp))
-        LabeledField(
-            stringResource(R.string.advanced_server), state.server, repo::setServer,
-            background = Pc.Card, height = 52.dp,
-            trailing = { ReachabilityMark(state.serverCheck, R.string.server_reachable, R.string.server_checking) },
-            helper = stringResource(R.string.advanced_server_help),
-        )
-        LabeledField(
-            stringResource(R.string.advanced_relay), state.relay, repo::setRelay,
-            background = Pc.Card, height = 52.dp,
-            trailing = { ReachabilityMark(state.relayCheck, R.string.relay_reachable, R.string.relay_checking) },
-            helper = stringResource(R.string.advanced_relay_help),
-        )
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(stringResource(R.string.advanced_push), style = body(13.sp, 600, Pc.Muted), modifier = Modifier.semantics { heading() })
+            Text(text.serverLabel, style = body(13.sp, 600, Pc.Muted))
+            Segments(
+                text.serverChoices, if (another) 1 else 0,
+                { repo.setServerChoice(if (it == 1) ServerChoice.ANOTHER else ServerChoice.BUILT_IN) },
+                Modifier.semantics { contentDescription = text.serverChoiceLabel },
+                height = 34.dp, outer = 12.dp, inner = 9.dp, pad = 3.dp, fontSize = 13,
+            )
+            PField(
+                if (another) state.server else state.builtIn, repo::setServer, text.serverLabel,
+                background = Pc.Card, height = 48.dp, enabled = another,
+                trailing = { ReachabilityMark(state.serverCheck, text.serverCheck) },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Uri),
+            )
+            Text(text.serverHelp, style = body(12.sp, color = Pc.Muted, lineHeight = 1.4f))
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(text.relayLabel, style = body(13.sp, 600, Pc.Muted))
+            PField(
+                state.relay, repo::setRelay, text.relayLabel, background = Pc.Card, height = 48.dp,
+                trailing = { ReachabilityMark(state.relayCheck, text.relayCheck) },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Uri),
+            )
+            Text(text.relayHelp, style = body(12.sp, color = Pc.Muted, lineHeight = 1.4f))
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(text.pushLabel, style = body(13.sp, 600, Pc.Muted), modifier = Modifier.semantics { heading() })
             Card(radius = 14.dp, modifier = Modifier.selectableGroup()) {
-                RadioRow(stringResource(R.string.advanced_push_official), state.pushRelay == PushRelayChoice.Official) {
+                RadioRow(text.pushOfficial, state.pushRelay == PushRelayChoice.Official) {
                     repo.setPushRelay(PushRelayChoice.Official)
                 }
                 RowDivider()
-                RadioRow(stringResource(R.string.advanced_push_custom), state.pushRelay == PushRelayChoice.Custom) {
+                RadioRow(text.pushCustom, state.pushRelay == PushRelayChoice.Custom) {
                     repo.setPushRelay(PushRelayChoice.Custom)
                 }
             }
-            Text(stringResource(R.string.advanced_push_help), style = body(12.sp, color = Pc.Muted, lineHeight = 1.4f))
+            Text(text.pushHelp, style = body(12.sp, color = Pc.Muted, lineHeight = 1.4f))
         }
         LocalMaps.current?.let { maps -> MapsAdvancedSection(maps) { nav.go(Route.MapRegions) } }
         Card(radius = 14.dp) {
@@ -273,7 +325,7 @@ fun AdvancedScreen(state: AdvancedState, repo: PingersRepository, nav: Navigator
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 TwoLines(
-                    stringResource(R.string.advanced_pq), stringResource(R.string.advanced_pq_help), Modifier.weight(1f),
+                    text.postQuantum, text.postQuantumHelp, Modifier.weight(1f),
                     body(15.sp, 500), body(12.sp, color = Pc.Muted, lineHeight = 1.4f),
                 )
                 PSwitch(state.postQuantum, null)
@@ -282,9 +334,9 @@ fun AdvancedScreen(state: AdvancedState, repo: PingersRepository, nav: Navigator
     }
 }
 
+/** A field's check: a spinner, the green tick, or a cross; [label] is the core's words for it. */
 @Composable
-private fun ReachabilityMark(r: Reachability, ok: Int, checking: Int) {
-    val label = stringResource(if (r == Reachability.Reachable) ok else checking)
+private fun ReachabilityMark(r: Reachability, label: String) {
     Box(
         Modifier.size(24.dp).semantics {
             contentDescription = label
@@ -362,14 +414,14 @@ fun InviteScreen(state: InviteState, repo: PingersRepository, nav: Navigator) {
         Card {
             state.invitations.forEachIndexed { i, inv ->
                 if (i > 0) RowDivider()
-                InvitationRow(inv, repo)
+                InvitationRow(inv, repo, nav)
             }
         }
     }
 }
 
 @Composable
-private fun InvitationRow(inv: Invitation, repo: PingersRepository) {
+private fun InvitationRow(inv: Invitation, repo: PingersRepository, nav: Navigator) {
     ListRow(null, padding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
         when (inv) {
             is Invitation.Opened -> {
@@ -378,7 +430,10 @@ private fun InvitationRow(inv: Invitation, repo: PingersRepository) {
                 Box(
                     Modifier
                         .height(48.dp)
-                        .clickable(role = Role.Button) { repo.verifyInvite(inv.id) },
+                        .clickable(role = Role.Button) {
+                            repo.openJoinRequest(inv.id)
+                            nav.go(Route.JoinRequest)
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
@@ -408,76 +463,6 @@ private fun InvitationRow(inv: Invitation, repo: PingersRepository) {
                 Icon(PIcons.CheckCircle, null, tint = Color.Unspecified, modifier = Modifier.size(22.dp))
             }
         }
-    }
-}
-
-// ---------------------------------------------------------------- Accept invite
-
-@Composable
-fun AcceptInviteScreen(state: AcceptInviteState, repo: PingersRepository, nav: Navigator) {
-    Page(
-        top = { Spacer(Modifier.statusBarsPadding().height(28.dp)) },
-        bottom = {
-            PillButton(stringResource(R.string.accept_join), { repo.acceptInvite(); nav.reset(Route.Party) }, Modifier.testTag(E2eTags.ACCEPT_JOIN))
-            PillButton(
-                stringResource(R.string.accept_decline), { repo.declineInvite(); nav.reset(Route.Home) },
-                background = Color.Transparent, content = Pc.Ink, height = 48.dp,
-            )
-        },
-        bodyPadding = PaddingValues(horizontal = 24.dp),
-        spacing = 22,
-    ) {
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Box(
-                Modifier.size(76.dp).clip(RoundedCornerShape(24.dp)).background(state.colour.color()),
-                contentAlignment = Alignment.Center,
-            ) { Text(state.partyInitials, style = heading(30.sp, 700).copy(color = Color.White)) }
-            Text(stringResource(R.string.accept_invited_by, state.inviter), style = body(15.sp, color = Pc.Muted))
-            Text(state.partyName, style = heading(30.sp, 700), modifier = Modifier.semantics { heading() })
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AvatarStack(state.preview, 30.dp, 11, ring = Pc.Paper, extra = "+${state.moreMembers}")
-                Text(
-                    partyCounts(state.members, state.spots),
-                    style = body(14.sp, color = Pc.Muted),
-                    modifier = Modifier.padding(start = 0.dp),
-                )
-            }
-        }
-        Card(radius = 20.dp, padding = PaddingValues(18.dp)) {
-            Text(stringResource(R.string.accept_what_joining), style = body(15.sp, 600), modifier = Modifier.semantics { heading() })
-            Spacer(Modifier.height(14.dp))
-            val spot = stringResource(R.string.word_spot)
-            val first = stringResource(R.string.accept_point_spot, spot)
-            val at = first.indexOf(spot)
-            JoinPoint(PIcons.Pin) {
-                Text(
-                    buildAnnotatedString {
-                        append(first)
-                        if (at >= 0) addStyle(SpanStyle(fontWeight = FontWeight.Bold), at, at + spot.length)
-                    },
-                    style = body(14.sp, lineHeight = 1.45f),
-                )
-            }
-            Spacer(Modifier.height(14.dp))
-            JoinPoint(PIcons.Lock) { Text(stringResource(R.string.accept_point_e2e), style = body(14.sp, lineHeight = 1.45f)) }
-            Spacer(Modifier.height(14.dp))
-            JoinPoint(PIcons.Moon) { Text(stringResource(R.string.accept_point_focus), style = body(14.sp, lineHeight = 1.45f)) }
-        }
-        Column(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Pc.BlueTint).padding(horizontal = 18.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(stringResource(R.string.accept_check_code, state.inviter), style = body(13.sp, 600, Pc.BlueDark))
-            Text(state.safetyCode, style = heading(28.sp, 600, 2.sp))
-        }
-    }
-}
-
-@Composable
-private fun JoinPoint(icon: ImageVector, text: @Composable () -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Icon(icon, null, tint = Pc.Blue, modifier = Modifier.padding(top = 1.dp).size(20.dp))
-        text()
     }
 }
 
@@ -567,11 +552,16 @@ fun PartyScreen(state: PartyState, repo: PingersRepository, nav: Navigator) {
             style = body(13.sp, color = Pc.Muted, lineHeight = 1.45f),
             modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 14.dp),
         )
+        // The server and its privacy, in the core's words; opens Party settings.
         ServerCard(
-            stringResource(R.string.server_and_privacy, state.server, privacyLabel(state.privacy)),
-            stringResource(R.string.party_server_subtitle),
-            onClick = { nav.go(Route.ServerView) },
-            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp),
+            state.settingsRow,
+            state.settingsDetail,
+            onClick = {
+                repo.openPartySettings(state.id)
+                nav.go(Route.PartySettings)
+            },
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp).testTag(E2eTags.PARTY_SETTINGS_OPEN),
+            privacy = state.privacy,
         )
     }
 }

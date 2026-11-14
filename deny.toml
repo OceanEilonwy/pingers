@@ -60,15 +60,17 @@ confidence-threshold = 0.9
 # SQLite's public-domain blessing and libtomcrypt's WTFPL, inside the bundled SQLCipher.
 exceptions = [
   { crate = "sqlcipher-src", allow = ["blessing", "WTFPL"] },
-  # monokulo-nodo's manifest and settings parsers: dev-dependencies of xtask only, for the test
-  # that checks packaging/nodo as a device would. Never in a shipped binary. GPL-3.0-or-later is
-  # compatible with AGPL-3.0 (GPLv3 §13).
-  { crate = "nodo-manifest", allow = ["GPL-3.0-or-later"] },
-  { crate = "nodo-settings", allow = ["GPL-3.0-or-later"] },
 ]
 
 [licenses.private]
 # Our own crates are unpublished; they carry AGPL-3.0-only through the workspace.
+#
+# This also skips monokulo-nodo's nodo-manifest and nodo-settings (git dependencies with
+# `publish = false`), so a licence exception for them could never match and cargo deny reported
+# the old ones as unmatched. Checked by hand at the pinned commit (4ad5661, Cargo.toml): both are
+# GPL-3.0-or-later, compatible with AGPL-3.0 (GPLv3 §13). They are dev-dependencies of xtask
+# only, for the test that checks packaging/nodo as a device would, never in a shipped binary.
+# Re-check the licence whenever the pin in the workspace Cargo.toml moves.
 ignore = true
 
 [bans]

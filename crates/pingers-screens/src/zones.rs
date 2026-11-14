@@ -140,6 +140,77 @@ pub fn with_times(
     Ok(zones)
 }
 
+/// The Zone times editor (canvas `ZoneTimes`), opened from a zone row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ZoneTimesEditor {
+    /// The zone, its shape and who it hides this device from.
+    pub zone: ZoneRow,
+    /// The times picked so far.
+    pub draft: ZoneTimesDraft,
+    /// Why "Save" is off: a window that starts where it ends.
+    pub problem: Option<ScreenError>,
+}
+
+impl ZoneTimesDraft {
+    /// The draft a zone's stored times start the editor with.
+    #[must_use]
+    pub fn of(times: ZoneTimes) -> Self {
+        match times {
+            ZoneTimes::Always => Self::Always,
+            ZoneTimes::Window { days, window } => Self::Window {
+                days,
+                from: LocalTime::from_minute_of_day(window.start()),
+                to: LocalTime::from_minute_of_day(window.end()),
+            },
+        }
+    }
+}
+
+/// The Zone times editor for `zone`, with `draft` picked so far, or the zone's stored times.
+///
+/// # Errors
+///
+/// [`ScreenError::UnknownZone`].
+pub fn zone_times_editor(
+    snapshot: &ClientSnapshot,
+    zone: ZoneId,
+    draft: Option<ZoneTimesDraft>,
+) -> Result<ZoneTimesEditor, ScreenError> {
+    let row = exclusion_zones(snapshot)
+        .zones
+        .into_iter()
+        .find(|row| row.id == zone)
+        .ok_or(ScreenError::UnknownZone)?;
+    let draft = draft.unwrap_or_else(|| ZoneTimesDraft::of(row.times));
+    let problem = match draft {
+        ZoneTimesDraft::Window { from, to, .. } if from == to => Some(ScreenError::EmptyWindow),
+        ZoneTimesDraft::Window { .. } | ZoneTimesDraft::Always => None,
+    };
+    Ok(ZoneTimesEditor {
+        zone: row,
+        draft,
+        problem,
+    })
+}
+
+/// Every exclusion zone but `zone` ("Delete zone"): the whole list, as pingers-client stores
+/// it.
+///
+/// # Errors
+///
+/// [`ScreenError::UnknownZone`].
+pub fn without(snapshot: &ClientSnapshot, zone: ZoneId) -> Result<Vec<ExclusionZone>, ScreenError> {
+    if !snapshot.zones.iter().any(|candidate| candidate.id == zone) {
+        return Err(ScreenError::UnknownZone);
+    }
+    Ok(snapshot
+        .zones
+        .iter()
+        .filter(|candidate| candidate.id != zone)
+        .cloned()
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
@@ -255,6 +326,50 @@ mod tests {
         assert_eq!(
             with_times(&snapshot, ZoneId::new(1), empty),
             Err(ScreenError::EmptyWindow)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_editor_starts_from_the_stored_times_and_flags_equal_ones() -> Result<(), FixtureError> {
+        let snapshot = fixtures::snapshot()?;
+        let work = zone_times_editor(&snapshot, ZoneId::new(2), None)?;
+        assert_eq!(work.zone.name.as_str(), "Work");
+        assert_eq!(
+            work.draft,
+            ZoneTimesDraft::Window {
+                days: Days::Weekdays,
+                from: LocalTime::new(8, 0)?,
+                to: LocalTime::new(18, 0)?
+            }
+        );
+        assert_eq!(work.problem, None);
+        let eight = LocalTime::new(8, 0)?;
+        let equal = ZoneTimesDraft::Window {
+            days: Days::Weekends,
+            from: eight,
+            to: eight,
+        };
+        let flagged = zone_times_editor(&snapshot, ZoneId::new(2), Some(equal))?;
+        assert_eq!(flagged.problem, Some(ScreenError::EmptyWindow));
+        let home = zone_times_editor(&snapshot, ZoneId::new(1), None)?;
+        assert_eq!(home.draft, ZoneTimesDraft::Always);
+        assert_eq!(
+            zone_times_editor(&snapshot, ZoneId::new(9), None).map(|editor| editor.draft),
+            Err(ScreenError::UnknownZone)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deleting_a_zone_keeps_the_others() -> Result<(), FixtureError> {
+        let snapshot = fixtures::snapshot()?;
+        let left = without(&snapshot, ZoneId::new(1))?;
+        let names: Vec<_> = left.iter().map(|zone| zone.name.as_str()).collect();
+        assert_eq!(names, ["Work"]);
+        assert_eq!(
+            without(&snapshot, ZoneId::new(9)),
+            Err(ScreenError::UnknownZone)
         );
         Ok(())
     }

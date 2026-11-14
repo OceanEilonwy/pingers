@@ -18,6 +18,11 @@
 //! the relay use (pingers-ohttp's `GatewayKey`, pingers-crypto's `PushRelayPrivateKey`), so
 //! this needs neither binary built. The tests check the push relay half against
 //! `pingers_push_relay::command::pin_set`.
+//!
+//! `cargo xtask pins --relay <url> --push <url>` prints the same lines from the running
+//! services instead (see [`live`]).
+
+mod live;
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -28,6 +33,8 @@ use pingers_ohttp::GatewayKey;
 use pingers_proto::{KeyConfigHash, PushRelayKeyConfig, PushRelayKeyId};
 use toml::{Table, Value};
 use zeroize::{Zeroize as _, Zeroizing};
+
+pub(crate) use live::{LiveOptions, run as run_live};
 
 /// The app build's variable for the OHTTP gateway's key pins.
 pub(crate) const GATEWAY_VARIABLE: &str = "PINGERS_GATEWAY_KEY_PINS";

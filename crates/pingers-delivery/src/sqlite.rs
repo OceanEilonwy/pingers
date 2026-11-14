@@ -14,7 +14,7 @@ use rusqlite::{Connection, OptionalExtension as _, Transaction, TransactionBehav
 
 use crate::store::{
     CommitWrite, DeliveryStore, GroupHead, NewCommit, NewEntry, NewGroup, PAGE_ENTRIES,
-    StoredSubscription,
+    PastAuthKey, StoredSubscription,
 };
 use crate::{DeliveryError, GroupLifetime};
 
@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS grp_msg (
     body         BLOB NOT NULL,
     PRIMARY KEY (group_id, seq)
 ) STRICT;
+CREATE INDEX IF NOT EXISTS grp_msg_epoch ON grp_msg (group_id, epoch);
 CREATE TABLE IF NOT EXISTS grp_sub (
     group_id     BLOB NOT NULL,
     sub_id       BLOB NOT NULL,
@@ -283,20 +284,25 @@ impl DeliveryStore for SqliteDeliveryStore {
         self.transact(|transaction| head_of(transaction, group))
     }
 
-    fn past_auth_keys(&self, group: &GroupId) -> Result<Vec<GroupAuthKey>, DeliveryError> {
+    fn past_auth_keys(&self, group: &GroupId) -> Result<Vec<PastAuthKey>, DeliveryError> {
         self.transact(|transaction| {
             head_of(transaction, group)?;
             let mut statement = transaction.prepare(
-                "SELECT auth_pk FROM grp_past_key WHERE group_id = ?1 ORDER BY epoch DESC",
+                "SELECT epoch, auth_pk FROM grp_past_key WHERE group_id = ?1 ORDER BY epoch DESC",
             )?;
             let rows = statement.query_map([group.as_bytes().as_slice()], |row| {
-                row.get::<_, Vec<u8>>(0)
+                Ok((row.get::<_, u64>(0)?, row.get::<_, Vec<u8>>(1)?))
             })?;
             rows.map(|row| {
-                let bytes = row?;
-                Ok(GroupAuthKey::from_bytes(bytes.try_into().map_err(
-                    |_| DeliveryError::CorruptField { field: "auth_pk" },
-                )?))
+                let (epoch, bytes) = row?;
+                Ok(PastAuthKey {
+                    epoch: Epoch::new(epoch),
+                    key: GroupAuthKey::from_bytes(
+                        bytes
+                            .try_into()
+                            .map_err(|_| DeliveryError::CorruptField { field: "auth_pk" })?,
+                    ),
+                })
             })
             .collect()
         })
@@ -379,6 +385,29 @@ impl DeliveryStore for SqliteDeliveryStore {
                 put_subscription_row(transaction, group, added)?;
             }
             Ok(CommitWrite::Appended { sequence })
+        })
+    }
+
+    fn commit_position(
+        &self,
+        group: &GroupId,
+        epoch: Epoch,
+    ) -> Result<Option<SequenceNumber>, DeliveryError> {
+        self.transact(|transaction| {
+            head_of(transaction, group)?;
+            let sequence: Option<u64> = transaction
+                .query_row(
+                    "SELECT seq FROM grp_msg
+                     WHERE group_id = ?1 AND epoch = ?2 AND content_type = ?3",
+                    params![
+                        group.as_bytes().as_slice(),
+                        epoch.get(),
+                        content_type_to_column(ContentType::Commit)
+                    ],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(sequence.map(SequenceNumber::new))
         })
     }
 

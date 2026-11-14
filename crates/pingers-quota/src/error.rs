@@ -28,6 +28,19 @@ pub enum QuotaError {
     /// The account has been issued its daily allowance of tokens.
     #[error("daily token allowance used up")]
     DailyLimit,
+    /// A registration proof or auth challenge does not verify, or names an unknown account.
+    #[error("signature does not verify")]
+    BadSignature,
+    /// The server requires a registration code for new accounts and this one is missing or
+    /// wrong.
+    #[error("registration code missing or wrong")]
+    RegistrationCode,
+    /// The server has taken its new accounts for this hour.
+    #[error("sign-up limit reached")]
+    SignupLimit,
+    /// The account has registered its daily allowance of membership leaves.
+    #[error("daily leaf allowance used up")]
+    LeafLimit,
     /// A time computed from the clock does not fit its type.
     #[error("time out of range")]
     TimeOutOfRange,

@@ -16,17 +16,9 @@ variables (`PINGERS_SERVER_HOST`, `PINGERS_OHTTP_RELAY`, `PINGERS_PUSH_RELAY`,
 | `push.example.org` | pingers-push-relay |
 | `maps.example.org` | pingers-map-host |
 
-**Not yet done.** The package depends on work still in flight, marked `TODO(...)` in
-`packaging/nodo/`:
-
-- nodo change **N1** (h2c upstreams with immediate flushing) and **N2** (third-party recipes and
-  a configurable feed signer). Both are written as patches against monokulo-nodo; until they are
-  merged there, nodo refuses the server's and relay's manifests (`upstream_protocol`) and the
-  feed workflow stops at its first check.
-
+`cargo test -p xtask --test nodo_packaging` checks the packaging against nodo's own parsers
 (manifests, settings, rendering) and parses the rendered server, push relay and map host configs,
 and their dev configs, with those services' own parsers.
-their dev configs, with those services' own parsers, and the server's config likewise.
 
 ## 1. The four apps
 
@@ -99,9 +91,9 @@ config with the gateway keys and the registration code stays inside the volume)
 | `registration_code` | **secret**, generated (16 bytes, hex); 16 to 128 of `A-Z a-z 0-9 - _` if set by hand | | `registration_codes`: only a device presenting it can make an account (design B.1, section 1.3) |
 | `ohttp_key_a`, `ohttp_key_b` | **secret**, generated (32 bytes, hex) | | `[[ohttp.keys]] secret` |
 | `ohttp_key_a_id`, `ohttp_key_b_id` | int 1 to 255 | 1, 2 | `[[ohttp.keys]] key_id` |
-| `ohttp_served_key_id` | int 1 to 255 | 1 | `[ohttp] served_key_id` (TODO p-server) |
-| `push_relay_public_url` | url, required | | `[[push_relays]] public_url`, such as `https://push.example.org` (TODO p-server) |
-| `push_relay_key_config_hash` | string, a pin (43 base64url characters), required | | `[[push_relays]] key_config_hash` (TODO p-server) |
+| `ohttp_served_key_id` | int 1 to 255 | 1 | `[ohttp] served_key_id` |
+| `push_relay_public_url` | url, required | | `[[push_relays]] public_url`, such as `https://push.example.org` |
+| `push_relay_key_config_hash` | string, a pin (43 base64url characters), required | | `[[push_relays]] key_config_hash` |
 | `gateway_url`, `gateway_key_config_url` | url, public endpoints | `http://127.0.0.1:9471/...` | read by pingers-ohttp-relay |
 
 It also reads `pingers-push-relay.server_credential` (a sealed secret of the push relay) once the
@@ -150,10 +142,14 @@ reaches phones:
   (a new invite link, or another build), so a phone never retries a 403 in a loop.
 
 To stop new accounts from old invite links, Reset `registration_code` in nodo-tui, and give the
-new code to phones that should keep inviting (today: a new debug build). Caution: the server keeps
-accounts in memory for now, so after it restarts every phone registers again with the code it
-first used. Until accounts persist, a reset locks out phones registered with the old code at the
-server's next restart.
+new code to phones that should keep inviting (today: a new debug build). Phones that already
+have an account are not affected: accounts live in `quota_db`
+(`/var/lib/apps/pingers-server/quota.sqlite`, on the encrypted volume), and a registered phone
+proves its key without any code. A restart keeps every account and every bearer: a bearer is
+still accepted until the hour it was issued for ends, a deleted account stays deleted, and the
+database holds only each account's public key, when it registered, and a digest of each bearer
+(never a usable bearer). The code only gates new accounts, which the server also limits to
+`signups_per_hour` (default 60) whatever the code.
 
 ### 1.2 Keys and rotation
 
@@ -303,9 +299,11 @@ gh release create feed --repo OceanEilonwy/pingers --target main --latest=false 
   --notes "Signed xbps feed. Address: https://github.com/OceanEilonwy/pingers/releases/download/feed  Key fingerprint: 9d:c4:00:6e:53:d8:99:c4:f9:5d:9c:96:b0:e9:1a:07"
 ```
 
-Then set `NODO_REV` in `feed.yml` to a monokulo-nodo commit that has N1 and N2.
+`NODO_REV` in `feed.yml` names the monokulo-nodo commit the feed is built with; it must have N1
+and N2, which monokulo-nodo merged in #12 (4ad5661, also the commit `cargo test -p xtask` parses
+the packaging with).
 
-**Building locally** (Docker, a monokulo-nodo checkout with N1 and N2 at `$NODO`):
+**Building locally** (Docker, a monokulo-nodo checkout at 4ad5661 or later, which has N1 and N2, at `$NODO`):
 
 ```sh
 cargo xtask nodo-dist HEAD --nodo "$NODO"     # prints version, sha256; fills target/nodo/srcpkgs
@@ -357,7 +355,7 @@ tests, `crates/pingers-e2e`, and the push relay's ntfy script.
    `push-relay.toml`, `relay.toml`, `map-host.toml`. Cut the Melbourne CBD test pack into
    `target/dev-stack/maps` first.
 3. `caddy run --config packaging/nodo/dev/caddy.json` puts Caddy in front exactly as nodo-web
-   will after N1: h2c and `flush_interval: -1` for the server (9443) and relay (9444), HTTP/1.1
+   does (N1): h2c and `flush_interval: -1` for the server (9443) and relay (9444), HTTP/1.1
    for the push relay (9445) and map host (9446), `/ohttp`, `/metrics` and `/v1/push` hidden.
 4. Build debug APKs with `PINGERS_SERVER_HOST=https://10.0.2.2:9443`,
    `PINGERS_OHTTP_RELAY=https://10.0.2.2:9444/ohttp`, `PINGERS_PUSH_RELAY=https://10.0.2.2:9445`,
@@ -370,7 +368,7 @@ tests, `crates/pingers-e2e`, and the push relay's ntfy script.
    channel both ways, and chat.
 
 **Tier 2: the real packages in nodo's x86-kvm VM** (`scripts/dev-vm.sh up` in a nodo checkout
-with N1 and N2): build x86_64 packages, sign a test feed with a throwaway key, copy it into the
+at 4ad5661 or later): build x86_64 packages, sign a test feed with a throwaway key, copy it into the
 VM as a directory feed, `AddFeed`, then install in dependency order (push relay, map host, server,
 relay). Check the firewall (`_pingers-server` reaches nothing but 9472 and 9474; only
 `_pingers-ohttp-relay` reaches 9471), reboot (services wait for the unlock), and restore a backup
@@ -408,18 +406,22 @@ to a fresh VM and check the gateway key hash is unchanged.
      `curl -s https://maps.example.org/ohttp-keys | wc -c` prints 41 (the gateway's key config).
    - `curl -s https://ohttp.example.org/v1/ohttp/config | openssl dgst -sha256 -binary | basenc
      --base64url | tr -d =` equals the served key's pin from `pingers-server pins
-     /run/nodo/volumes/pingers-server/config/server.toml`.| sha256sum` equals the served key's hash
-     from `pingers-server pins /run/nodo/volumes/pingers-server/config/server.toml`.
+     /run/nodo/volumes/pingers-server/config/server.toml`.
    - `curl -s -o /dev/null -w '%{http_code}' -X POST https://pingers.example.org/ohttp` gives
      404: the gateway is not reachable directly.
    - `curl -s -o /dev/null -w '%{http_code}' -X POST https://push.example.org/v1/push` gives 404.
    - The `openssl s_client -groups X25519MLKEM768` check of section 2.1, for each name.
 9. **Pins into CI.** Over the owner's SSH, run `pingers-server pins` and `pingers-push-relay pins`
    on the rendered configs (paths in steps 5 and 8); each prints one pin per line. Join each
-   pair with a comma into `PINGERS_GATEWAY_KEY_PINS` and `PINGERS_PUSH_RELAY_KEY_PINS`, check the
-   served ones against the curl checks above, and build the release APKs. (`cargo xtask pins
-   <server.toml> <push-relay.toml>` prints both lines from copies of the configs, but those hold
-   the private keys: on nodo, keep them on the device and use the binaries.)
+   pair with a comma into `PINGERS_GATEWAY_KEY_PINS` and `PINGERS_PUSH_RELAY_KEY_PINS`. From
+   outside, `cargo xtask pins --relay https://ohttp.example.org --push https://push.example.org`
+   prints the same two lines from the running services: the served gateway key (fetched through
+   the relay, as the app fetches it) and the push relay's published and next keys. Its gateway
+   pin must be one of the two from `pingers-server pins` (the next slot is not served, so it only
+   comes from there), and each of its push relay pins must be one `pingers-push-relay pins`
+   prints. Then build the release APKs. (`cargo xtask pins <server.toml>
+   <push-relay.toml>` prints both lines from copies of the configs, but those hold the private
+   keys: on nodo, keep them on the device and use the binaries.)
 10. **Two real phones** on mobile data, once with FCM and once with UnifiedPush: the tier-1
     scenario, including a ten-minute Meetup (streaming through the router).
 11. **Backup.** A USB backup with the device passphrase (so it includes the device key), stored

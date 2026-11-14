@@ -2,12 +2,20 @@ package org.pingers.app.data
 
 import kotlin.math.PI
 import kotlin.math.cos
+import uniffi.pingers.AdvancedText
+import uniffi.pingers.JoinAs
+import uniffi.pingers.NewPartyText
+import uniffi.pingers.ServerChoice
 
 /*
  * What each screen shows: one plain data class per screen, no behaviour. They follow the
  * view models of the Rust crate pingers-screens field for field (typed ids, coordinates,
  * enums, the can* and problem fields), so CoreRepository maps the generated UniFFI records
  * onto them one to one and FakeRepository fills them with the canvas's example.
+ *
+ * The screens of the canvas's section 4 (Settings, Wake-ups, notices, Party settings and the
+ * rest) take pingers-ffi's records as they are instead: they are words and flags only, written
+ * by pingers-words, so a copy here would add nothing.
  *
  * Positions are WGS84 coordinates. The placeholder map still draws in its own units (the
  * canvas's 390-wide artboard); each map screen carries a MapFrame that places coordinates
@@ -139,6 +147,10 @@ data class NewPartyState(
     val canCreate: Boolean,
     /** Why the last Create failed, worded by the core. */
     val error: String? = null,
+    /** The app's own server, or another one typed in. */
+    val serverChoice: ServerChoice = ServerChoice.BUILT_IN,
+    /** Every word on the screen (pingers-words); null until the core has answered. */
+    val text: NewPartyText? = null,
 )
 
 enum class Reachability { Checking, Reachable, Unreachable }
@@ -154,7 +166,27 @@ data class AdvancedState(
     val relayCheck: Reachability,
     val pushRelay: PushRelayChoice,
     val postQuantum: Boolean,
+    val serverChoice: ServerChoice = ServerChoice.BUILT_IN,
+    /** The app's own server, as the build names it. */
+    val builtIn: String = "",
+    /** Every word on the screen (pingers-words); null until the core has answered. */
+    val text: AdvancedText? = null,
 )
+
+/** How Create party ended, for New party and "This server needs a code" to route. */
+enum class CreateOutcome {
+    /** Made: on to Invite people. */
+    Created,
+
+    /** The chosen server asks for a registration code: "This server needs a code". */
+    CodeNeeded,
+
+    /** The code typed was refused: stay, with the refusal shown. */
+    CodeRefused,
+
+    /** Anything else; the screen shows why. */
+    Failed,
+}
 
 sealed interface Invitation {
     val id: InviteId
@@ -172,16 +204,66 @@ data class InviteState(
     val invitations: List<Invitation>,
 )
 
-data class AcceptInviteState(
-    val inviter: String,
-    val partyName: String,
-    val partyInitials: String,
+/** Open invite (canvas JoinA1): nothing about the Party yet, only the name to go by. */
+data class OpenInviteState(
+    val title: String,
+    val subtitle: String,
+    val whatJoiningMeans: String,
+    val points: List<String>,
+    /** "You'll join as Ben · Change", once a name is set; the name field shows only without it. */
+    val joinAs: JoinAs?,
+    /** "Your name": what is typed here becomes Your name. */
+    val nameLabel: String,
+    val nameHelp: String,
+    val ask: String,
+    val notNow: String,
+    /** Why the last "Ask to join" failed, if it did. */
+    val error: String? = null,
+)
+
+/** Asked to join (canvas JoinA2): the code to read to the inviter. */
+data class AskedToJoinState(
+    val title: String,
+    val subtitle: String,
+    val readCode: String,
+    val code: String,
+    val warning: String,
+    val leaveNote: String,
+    val done: String,
+    val withdraw: String,
+)
+
+/** You're in (canvas JoinA3), once the inviter let this phone in. */
+data class LetInState(
+    val party: PartyId,
     val colour: PartyColour,
+    val partyInitials: String,
+    val letInBy: String,
+    val partyName: String,
     val preview: List<Person>,
-    val moreMembers: Int,
-    val members: Int,
-    val spots: Int,
-    val safetyCode: String,
+    /** "+2", when there are more members than avatars. */
+    val more: String?,
+    val counts: String,
+    val checked: String,
+    val open: String,
+    val leave: String,
+    val notificationTitle: String,
+    val notificationBody: String,
+)
+
+/** "Ben asked to join" (canvas InviteApprove), on the inviter's phone. */
+data class JoinRequestState(
+    val id: InviteId,
+    val avatar: String,
+    val title: String,
+    val subtitle: String,
+    val ask: String,
+    val code: String,
+    val warning: String,
+    val whenHeading: String,
+    val whenBody: String,
+    val letIn: String,
+    val turnAway: String,
 )
 
 sealed interface SpotShape {
@@ -201,6 +283,10 @@ data class PartyState(
     val server: String,
     val privacy: PrivacyLevel,
     val meetup: MeetupId?,
+    /** The bottom row: "pingers.flat7.org · Full privacy", in the core's words. */
+    val settingsRow: String = "",
+    /** "Party settings: server, invites, leave". */
+    val settingsDetail: String = "",
 )
 
 // ---------------------------------------------------------------- Spots and privacy

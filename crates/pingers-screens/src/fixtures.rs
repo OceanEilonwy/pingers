@@ -22,11 +22,11 @@ use crate::clock::{LocalClock, UtcOffset};
 use crate::common::{Host, Me, Name, Operator, PartyColour};
 use crate::snapshot::{
     ChatEntry, ChatMessage, ChatReply, ClientSnapshot, DailyWindow, Days, EndedMeetup,
-    ExclusionZone, HideTrail, Hosting, Invite, InviteLink, InviteStatus, InviteUrl, JoinPreview,
-    LocationRequest, MeetPlace, MeetPointSnapshot, Meetup, MeetupPeer, MeetupSelf, Member,
+    ExclusionZone, HideTrail, Hosting, Invite, InviteLink, InviteStatus, InviteUrl, JoinRequest,
+    Joining, LocationRequest, MeetPlace, MeetPointSnapshot, Meetup, MeetupPeer, MeetupSelf, Member,
     OwnPosition, Party, PartyConfig, PauseInFocus, PeerAccess, PostQuantum, PushRelay,
-    PushRelayKind, QuietHoursPreference, RelayStatus, SafetyCode, Service, Settings, Spot, Toggle,
-    WakePushes, ZoneId, ZoneParties, ZoneSchedule, ZoneTimes,
+    PushRelayKind, QuietHoursPreference, RelayStatus, SafetyCheck, SafetyCode, Service, Settings,
+    Spot, Toggle, WakePushes, ZoneId, ZoneParties, ZoneSchedule, ZoneTimes,
 };
 
 /// Why a fixture could not be built (it always can; the constructors are fallible).
@@ -74,6 +74,12 @@ pub const fn clock() -> LocalClock {
 #[must_use]
 pub const fn climbing_crew() -> PartyId {
     PartyId::from_bytes([1; 16])
+}
+
+/// Ben's request to join the Climbing crew.
+#[must_use]
+pub const fn ben_request() -> MailboxId {
+    MailboxId::from_bytes([50; 16])
 }
 
 /// Uni flat.
@@ -201,6 +207,12 @@ fn members(names: &[&str], me_at: u32) -> Result<Vec<Member>, ScreenError> {
             leaf: LeafIndex::new(leaf),
             name: name(text)?,
             me: if leaf == me_at { Me::Me } else { Me::Other },
+            // The canvas: Ben and Chloé compared safety codes with this device.
+            checked: if matches!(*text, "Ben" | "Chloé") {
+                SafetyCheck::Checked
+            } else {
+                SafetyCheck::NotChecked
+            },
         });
     }
     Ok(members)
@@ -222,16 +234,17 @@ pub fn full_privacy_config() -> Result<PartyConfig, ScreenError> {
     Ok(PartyConfig {
         server: Service {
             host: Host::new("pingers.flat7.org")?,
-            operator: Operator::new("Flat 7")?,
+            operator: Some(Operator::new("Flat 7")?),
         },
         hosting: Hosting::SelfHosted,
         relay: Service {
             host: Host::new("relay.quietpath.net")?,
-            operator: Operator::new("Quietpath")?,
+            operator: Some(Operator::new("Quietpath")?),
         },
         push_relay: PushRelay {
             kind: PushRelayKind::Official,
-            operator: Operator::new("Pingers")?,
+            operator: Some(Operator::new("Pingers")?),
+            host: Some(Host::new("push.pingers.org")?),
         },
         post_quantum: PostQuantum::Off,
     })
@@ -264,13 +277,6 @@ fn climbing_crew_party() -> Result<Party, FixtureError> {
         config: full_privacy_config()?,
         invites: vec![
             Invite {
-                id: MailboxId::from_bytes([50; 16]),
-                status: InviteStatus::Opened {
-                    name: name("Ben")?,
-                    code: SafetyCode::new("4821")?,
-                },
-            },
-            Invite {
                 id: MailboxId::from_bytes([51; 16]),
                 status: InviteStatus::Pending {
                     shared_at: at(17, 30),
@@ -292,6 +298,13 @@ fn climbing_crew_party() -> Result<Party, FixtureError> {
                 .checked_add(core::time::Duration::from_hours(24))
                 .ok_or(FixtureError::Missing)?,
         }),
+        join_requests: vec![JoinRequest {
+            id: ben_request(),
+            name: name("Ben")?,
+            code: SafetyCode::new("4821 0937 5512")?,
+            asked_at: at(19, 25),
+            shared_at: at(17, 30),
+        }],
     })
 }
 
@@ -318,6 +331,7 @@ fn other_parties() -> Result<Vec<Party>, FixtureError> {
             config: full_privacy_config()?,
             invites: Vec::new(),
             invite_link: None,
+            join_requests: Vec::new(),
         },
         Party {
             id: five_a_side(),
@@ -337,6 +351,7 @@ fn other_parties() -> Result<Vec<Party>, FixtureError> {
             config: full_privacy_config()?,
             invites: Vec::new(),
             invite_link: None,
+            join_requests: Vec::new(),
         },
     ])
 }
@@ -461,6 +476,21 @@ fn zones() -> Result<Vec<ExclusionZone>, FixtureError> {
     ])
 }
 
+/// The example just after Ana let Sam into the Climbing crew (You're in).
+///
+/// # Errors
+///
+/// Never in practice.
+pub fn let_in_snapshot() -> Result<ClientSnapshot, FixtureError> {
+    let mut snapshot = snapshot()?;
+    snapshot.joining = Some(Joining::LetIn {
+        party: climbing_crew(),
+        inviter: name("Ana")?,
+        code: SafetyCode::new("4821 0937 5512")?,
+    });
+    Ok(snapshot)
+}
+
 /// The whole example.
 ///
 /// # Errors
@@ -489,16 +519,9 @@ pub fn snapshot() -> Result<ClientSnapshot, FixtureError> {
             people: 3,
             messages: 24,
         }),
-        join_preview: Some(JoinPreview {
-            inviter: name("Ana")?,
-            party_name: name("Climbing crew")?,
-            colour: PartyColour::Blue,
-            members: ["Ana", "Chloé", "Dev", "Ben", "Eli"]
-                .iter()
-                .map(|text| name(text))
-                .collect::<Result<_, _>>()?,
-            spot_count: 3,
-            safety_code: SafetyCode::new("4821 0937 5512")?,
+        joining: Some(Joining::Asked {
+            code: SafetyCode::new("4821 0937 5512")?,
+            asked_at: at(19, 25),
         }),
         display_name: Some(name("Sam")?),
         own_position: Some(OwnPosition {

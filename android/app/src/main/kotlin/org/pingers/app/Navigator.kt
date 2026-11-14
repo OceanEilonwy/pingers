@@ -8,7 +8,12 @@ enum class Route(val dark: Boolean = false) {
     NewParty,
     Advanced,
     Invite,
-    AcceptInvite,
+    /** "Ben asked to join", from an opened invite on Invite people. */
+    JoinRequest,
+    /** Join flow A on the joiner's phone: a link opened, then the code, then You're in. */
+    OpenInvite,
+    AskedToJoin,
+    LetIn,
     Party,
     SpotEditor,
     DrawArea,
@@ -23,8 +28,26 @@ enum class Route(val dark: Boolean = false) {
     Compass(dark = true),
     LocationRequest,
     MeetupEnded,
-    /** Downloaded maps and the areas on offer (the region picker). */
+    /** Downloaded maps and the areas on offer (the region picker, canvas DownloadedMaps). */
     MapRegions,
+
+    // Section 4 of the canvas.
+    /** First run (SetupWelcome, SetupBackground and the notifications step). */
+    Setup,
+    /** Settings for this phone, the Home cog. */
+    Settings,
+    YourName,
+    QuietHours,
+    /** When an exclusion zone applies, from a zone row in Exclusion zones. */
+    ZoneTimes,
+    /** Wake-ups: WakeupsOn, Wakeups or WakeupsDelayed, as the core's view says. */
+    Wakeups,
+    PartySettings,
+    SafetyCodes,
+    /** The Leave party sheet over Party settings. */
+    LeaveParty,
+    /** "This server needs a code" (PartyCode, PartyCodeRefused). */
+    PartyCode,
 }
 
 /**

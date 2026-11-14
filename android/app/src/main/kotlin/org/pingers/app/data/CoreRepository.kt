@@ -1,5 +1,6 @@
 package org.pingers.app.data
 
+import android.content.Context
 import android.content.res.Resources
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -13,12 +14,32 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.pingers.app.BuildConfig
 import org.pingers.app.R
+import org.pingers.app.platform.PhoneLog
 import uniffi.pingers.AreaEditor
+import uniffi.pingers.CodeAnswer
 import uniffi.pingers.Core
 import uniffi.pingers.CoreException
+import uniffi.pingers.DeviceSettingsView
 import uniffi.pingers.Events
+import uniffi.pingers.HomeWakeupsView
+import uniffi.pingers.LeavePartyView
+import uniffi.pingers.NoticeView
+import uniffi.pingers.PartyCodeView
+import uniffi.pingers.PartySettingsView
+import uniffi.pingers.PrivacyText
+import uniffi.pingers.QuietHoursDraft
+import uniffi.pingers.QuietHoursEditorView
+import uniffi.pingers.SafetyCodesView
+import uniffi.pingers.ServerChoice
 import uniffi.pingers.SettingChange
+import uniffi.pingers.SetupStep
+import uniffi.pingers.SetupView
 import uniffi.pingers.Snapshot
+import uniffi.pingers.TimeOfDay
+import uniffi.pingers.WakeupsView
+import uniffi.pingers.YourNameView
+import uniffi.pingers.ZoneTimes
+import uniffi.pingers.ZoneTimesEditorView
 
 /**
  * The repository over the Rust core (pingers-ffi). It takes the process's [Core] from
@@ -30,11 +51,15 @@ import uniffi.pingers.Snapshot
  * Every event from the core takes a fresh [Snapshot] and republishes the flows. Calls run on
  * [scope] (the activity's, so the main thread); the core's suspend calls run on its own tokio
  * runtime.
+ *
+ * The section-4 screens also need the phone's own facts (PhoneFacts): they are read when the
+ * repository starts and again on [refreshPhone], which the activity calls on each resume.
  */
 class CoreRepository(
-    private val res: Resources,
+    private val context: Context,
     private val scope: CoroutineScope,
 ) : PingersRepository {
+    private val res: Resources = context.resources
 
     /** What the core raised that the UI should act on (a route, a notification). */
     sealed interface Event {
@@ -49,6 +74,9 @@ class CoreRepository(
     private val sink = object : Events {
         override fun partiesChanged() = refreshLater()
         override fun joinRequested(party: uniffi.pingers.PartyId) = refreshLater()
+        // The refresh publishes [letIn]; MainActivity routes to You're in when it appears, and
+        // CoreHost posts the notification (it also runs with no activity).
+        override fun letIn(party: uniffi.pingers.PartyId) = refreshLater()
         override fun meetupStarted(meetup: uniffi.pingers.MeetupId) = refreshLater {
             currentMeetup = meetup.toUi()
             _events.tryEmit(Event.MeetupStarted(_home.value.alert))
@@ -65,10 +93,8 @@ class CoreRepository(
             }
         override fun locationAccessChanged(meetup: uniffi.pingers.MeetupId, peer: uniffi.pingers.MemberId) = refreshLater()
         override fun meetupEnded(meetup: uniffi.pingers.MeetupId) = refreshLater { _events.tryEmit(Event.MeetupEnded) }
-        override fun notice(notice: uniffi.pingers.Notice) {
-            Log.i(TAG, "notice: ${notice::class.simpleName}")
-            refreshLater()
-        }
+        // CoreHost has kept it (PhoneFacts.record); Home's notice and Wake-ups read it from there.
+        override fun notice(notice: uniffi.pingers.Notice) = refreshLater()
         override fun privacyStatusChanged() = refreshLater()
     }
 
@@ -88,9 +114,31 @@ class CoreRepository(
     private var compassSelection: CompassSelection = CompassSelection.MeetPoint
     private var createError: String? = null
 
+    // Join flow A: the link opened (kept until "Ask to join"), why asking failed, and the
+    // request "Ben asked to join" is showing.
+    private var inviteLink: String? = null
+    private var askError: String? = null
+    private var currentJoinRequest: InviteId? = null
+
+    // Section 4: the phone's facts, the drafts on Quiet hours and Zone times, the safety code
+    // shown, and "This server needs a code".
+    private var phoneDevice = PhoneFacts.device(context)
+    private var phoneWake = PhoneFacts.wake(context)
+    private var quietDraft: QuietHoursDraft? = null
+    private var zoneEditing: ZoneId? = null
+    private var zoneDraft: ZoneTimes? = null
+    private var safetyMember: uniffi.pingers.MemberId? = null
+    private var safetyCode: String? = null
+    private var codeAsked = false
+    private val _registrationCode = MutableStateFlow("")
+    override val registrationCode: StateFlow<String> = _registrationCode.asStateFlow()
+    private var codeAnswer = CodeAnswer.NOT_TRIED
+
     private var partyDraft = uniffi.pingers.PartyDraft(
         name = "",
         colour = uniffi.pingers.PartyColour.BLUE,
+        serverChoice = ServerChoice.BUILT_IN,
+        builtIn = host(BuildConfig.SERVER_HOST),
         // The instance from the build (CoreHost.instance); checked when New party opens.
         server = uniffi.pingers.ServiceDraft(host(BuildConfig.SERVER_HOST), uniffi.pingers.Reachability.Checking),
         relay = uniffi.pingers.ServiceDraft(host(BuildConfig.OHTTP_RELAY), uniffi.pingers.Reachability.Checking),
@@ -122,8 +170,14 @@ class CoreRepository(
     override val advanced: StateFlow<AdvancedState> = _advanced.asStateFlow()
     private val _invite = MutableStateFlow(InviteState("", null, null, emptyList()))
     override val invite: StateFlow<InviteState> = _invite.asStateFlow()
-    private val _acceptInvite = MutableStateFlow(AcceptInviteState("", "", "", PartyColour.Blue, emptyList(), 0, 0, 0, ""))
-    override val acceptInvite: StateFlow<AcceptInviteState> = _acceptInvite.asStateFlow()
+    private val _openInvite = MutableStateFlow(OpenInviteState("", "", "", emptyList(), null, "", "", "", ""))
+    override val openInvite: StateFlow<OpenInviteState> = _openInvite.asStateFlow()
+    private val _askedToJoin = MutableStateFlow<AskedToJoinState?>(null)
+    override val askedToJoin: StateFlow<AskedToJoinState?> = _askedToJoin.asStateFlow()
+    private val _letIn = MutableStateFlow<LetInState?>(null)
+    override val letIn: StateFlow<LetInState?> = _letIn.asStateFlow()
+    private val _joinRequest = MutableStateFlow<JoinRequestState?>(null)
+    override val joinRequest: StateFlow<JoinRequestState?> = _joinRequest.asStateFlow()
     private val _party = MutableStateFlow(
         PartyState(PartyId(""), "", emptyList(), emptyList(), cardFrame(emptyList()), "", PrivacyLevel.Full, null),
     )
@@ -154,6 +208,33 @@ class CoreRepository(
     override val locationRequest: StateFlow<LocationRequestState> = _locationRequest.asStateFlow()
     private val _meetupEnded = MutableStateFlow(MeetupEndedState("", 0, "", "", 0, 0))
     override val meetupEnded: StateFlow<MeetupEndedState> = _meetupEnded.asStateFlow()
+
+    private val _deviceSettings = MutableStateFlow<DeviceSettingsView?>(null)
+    override val deviceSettings: StateFlow<DeviceSettingsView?> = _deviceSettings.asStateFlow()
+    private val _yourName = MutableStateFlow<YourNameView?>(null)
+    override val yourName: StateFlow<YourNameView?> = _yourName.asStateFlow()
+    private val _quietHours = MutableStateFlow<QuietHoursEditorView?>(null)
+    override val quietHours: StateFlow<QuietHoursEditorView?> = _quietHours.asStateFlow()
+    private val _zoneTimes = MutableStateFlow<ZoneTimesEditorView?>(null)
+    override val zoneTimes: StateFlow<ZoneTimesEditorView?> = _zoneTimes.asStateFlow()
+    private val _wakeups = MutableStateFlow<WakeupsView?>(null)
+    override val wakeups: StateFlow<WakeupsView?> = _wakeups.asStateFlow()
+    private val _homeWakeups = MutableStateFlow<HomeWakeupsView>(HomeWakeupsView.Nothing)
+    override val homeWakeups: StateFlow<HomeWakeupsView> = _homeWakeups.asStateFlow()
+    private val _notice = MutableStateFlow<NoticeView?>(null)
+    override val notice: StateFlow<NoticeView?> = _notice.asStateFlow()
+    private val _privacyText = MutableStateFlow<PrivacyText?>(null)
+    override val privacyText: StateFlow<PrivacyText?> = _privacyText.asStateFlow()
+    private val _partySettings = MutableStateFlow<PartySettingsView?>(null)
+    override val partySettings: StateFlow<PartySettingsView?> = _partySettings.asStateFlow()
+    private val _safetyCodes = MutableStateFlow<SafetyCodesView?>(null)
+    override val safetyCodes: StateFlow<SafetyCodesView?> = _safetyCodes.asStateFlow()
+    private val _leaveParty = MutableStateFlow<LeavePartyView?>(null)
+    override val leaveParty: StateFlow<LeavePartyView?> = _leaveParty.asStateFlow()
+    private val _pendingJoin = MutableStateFlow<uniffi.pingers.PendingJoinView?>(null)
+    override val pendingJoin: StateFlow<uniffi.pingers.PendingJoinView?> = _pendingJoin.asStateFlow()
+    private val _partyCode = MutableStateFlow<PartyCodeView?>(null)
+    override val partyCode: StateFlow<PartyCodeView?> = _partyCode.asStateFlow()
 
     init {
         scope.launch {
@@ -202,18 +283,192 @@ class CoreRepository(
         publishNewParty()
         read("zones") { it.exclusionZones().toUi() }?.let { _exclusionZones.value = it }
         read("privacy") { it.privacy().toUi() }?.let { _privacy.value = it }
-        read("accept invite") { it.acceptInvite()?.toUi() }?.let { _acceptInvite.value = it }
+        publishJoin()
         read("meetup ended") { it.meetupEnded(localClock())?.toUi() }?.let { _meetupEnded.value = it }
         publishParty()
         publishSpotEditor()
         publishMeetup()
         publishLocationRequest()
+        publishDevice()
+        publishPartySettings()
+    }
+
+    // ------------------------------------------------------------ Section 4
+
+    private fun nowSeconds() = (System.currentTimeMillis() / 1000).toULong()
+
+    /** Settings, Your name, Quiet hours, Zone times, Wake-ups, Home's line and notice, Privacy's words. */
+    private fun publishDevice() {
+        if (snapshot == null) return
+        val now = nowSeconds()
+        read("settings") { it.deviceSettings(phoneDevice) }?.let { _deviceSettings.value = it }
+        read("your name") { it.yourName() }?.let { _yourName.value = it }
+        read("wake-ups") { it.wakeups(phoneWake, localClock()) }?.let { _wakeups.value = it }
+        _homeWakeups.value = read("home wake-ups") { it.homeWakeups(phoneWake, now) } ?: HomeWakeupsView.Nothing
+        _notice.value = read("notice") { it.topNotice(PhoneFacts.raised(context), now) }
+        read("privacy text") { it.privacyText(phoneDevice.pushService) }?.let { _privacyText.value = it }
+        _pendingJoin.value = read("pending join") { it.pendingJoin() }
+        publishQuietHours()
+        publishZoneTimes()
+    }
+
+    private fun publishQuietHours() {
+        val draft = quietDraft
+        _quietHours.value = if (draft == null) {
+            read("quiet hours") { it.quietHoursStart() }
+        } else {
+            try {
+                uniffi.pingers.quietHoursEditor(draft.on, draft.from, draft.to)
+            } catch (e: CoreException) {
+                Log.i(TAG, "quiet hours: ${e.message}")
+                _quietHours.value
+            }
+        }
+    }
+
+    private fun publishZoneTimes() {
+        val zone = zoneEditing ?: return
+        read("zone times") { it.zoneTimesEditor(zone.toFfi(), zoneDraft) }?.let { _zoneTimes.value = it }
+    }
+
+    /** The Party Party settings is about: the one opened, else the first (as publishParty). */
+    private fun settingsParty(): PartyId? = currentParty ?: _home.value.parties.firstOrNull()?.id
+
+    /** Party settings, Safety codes, the Leave party sheet and "This server needs a code". */
+    private fun publishPartySettings() {
+        val party = settingsParty()
+        if (party != null) {
+            val ffi = party.toFfi()
+            read("party settings") { it.partySettings(ffi, PhoneLog.relayCheckedAt(context)?.toULong(), nowSeconds()) }
+                ?.let { _partySettings.value = it }
+            read("safety codes") { it.safetyCodes(ffi, safetyMember, safetyCode) }?.let { _safetyCodes.value = it }
+            read("leave party") { it.leaveParty(ffi) }?.let { _leaveParty.value = it }
+        }
+        publishPartyCode()
+    }
+
+    private fun publishPartyCode() {
+        _partyCode.value = if (codeAsked) {
+            read("party code") { it.partyCode(partyDraft, _registrationCode.value, codeAnswer) } ?: _partyCode.value
+        } else {
+            null
+        }
+    }
+
+    override fun setupStep(step: SetupStep): SetupView = uniffi.pingers.setupView(step)
+
+    override fun refreshPhone() {
+        phoneDevice = PhoneFacts.device(context)
+        phoneWake = PhoneFacts.wake(context)
+        publishDevice()
+    }
+
+    override fun saveDisplayName(name: String, onSaved: () -> Unit) =
+        call("your name") { core ->
+            core.setDisplayName(name.trim())
+            refresh()
+            onSaved()
+        }
+
+    override fun openQuietHours() {
+        quietDraft = null
+        publishQuietHours()
+        _quietHours.value?.let { quietDraft = QuietHoursDraft(it.on, it.from, it.to) }
+    }
+
+    override fun setQuietHoursDraft(on: Boolean, from: TimeOfDay, to: TimeOfDay) {
+        quietDraft = QuietHoursDraft(on, from, to)
+        publishQuietHours()
+    }
+
+    override fun saveQuietHours(onSaved: () -> Unit) {
+        val draft = quietDraft ?: return onSaved()
+        call("quiet hours") { core ->
+            core.setQuietHours(draft)
+            quietDraft = null
+            refresh()
+            onSaved()
+        }
+    }
+
+    override fun openZoneTimes(zone: ZoneId) {
+        zoneEditing = zone
+        zoneDraft = null
+        _zoneTimes.value = null
+        publishZoneTimes()
+    }
+
+    override fun setZoneTimesDraft(times: ZoneTimes) {
+        zoneDraft = times
+        publishZoneTimes()
+    }
+
+    override fun saveZoneTimes(onSaved: () -> Unit) {
+        val view = _zoneTimes.value ?: return
+        call("zone times") { core ->
+            core.setZoneTimes(view.zone, view.times)
+            refresh()
+            onSaved()
+        }
+    }
+
+    override fun deleteZone(onDeleted: () -> Unit) {
+        val zone = zoneEditing ?: return
+        call("delete zone") { core ->
+            core.deleteZone(zone.toFfi())
+            zoneEditing = null
+            refresh()
+            onDeleted()
+        }
+    }
+
+    override fun openPartySettings(party: PartyId) {
+        currentParty = party
+        safetyMember = null
+        safetyCode = null
+        publishParty()
+        publishPartySettings()
+    }
+
+    override fun checkRelayAgain() = checkReachability()
+
+    override fun openSafetyCodes() {
+        val party = settingsParty() ?: return
+        val first = read("first to check") { it.firstToCheck(party.toFfi()) } ?: return publishPartySettings()
+        showSafetyCode(first.toUi())
+    }
+
+    override fun showSafetyCode(member: MemberId) {
+        val party = settingsParty() ?: return
+        call("safety code") { core ->
+            val code = core.safetyCode(party.toFfi(), member.toFfi())
+            safetyMember = member.toFfi()
+            safetyCode = code
+        }
+    }
+
+    override fun markChecked() {
+        val party = settingsParty() ?: return
+        val member = safetyMember ?: return
+        call("mark checked") { it.markChecked(party.toFfi(), member) }
+    }
+
+    override fun leaveParty(onLeft: () -> Unit) {
+        // The Party the sheet named, never a guess.
+        val party = _leaveParty.value?.party ?: return
+        call("leave party") { core ->
+            core.leaveParty(party)
+            currentParty = null
+            refresh()
+            onLeft()
+        }
     }
 
     private fun publishNewParty() {
         val view = read("new party") { it.newParty(partyDraft) }
         _newParty.value = view?.toUi(createError) ?: NewPartyState(
             partyDraft.name, partyDraft.colour.toUi(), partyDraft.server.host, null, canCreate = false, error = createError,
+            serverChoice = partyDraft.serverChoice, text = _newParty.value.text,
         )
         read("advanced") { it.advanced(partyDraft).toUi() }?.let { _advanced.value = it }
             ?: _advanced.update {
@@ -223,6 +478,25 @@ class CoreRepository(
                     postQuantum = partyDraft.postQuantum,
                 )
             }
+    }
+
+    /** Join flow A: Open invite, Asked to join, You're in, and the request the inviter opened. */
+    private fun publishJoin() {
+        if (snapshot == null) return
+        publishOpenInvite()
+        _askedToJoin.value = read("asked to join") { it.askedToJoin()?.toUi() }
+        _letIn.value = read("let in") { it.letIn()?.toUi() }
+        val party = invitingParty()
+        val request = currentJoinRequest
+        _joinRequest.value = if (party != null && request != null) {
+            read("join request") { it.joinRequest(party.toFfi(), request.toFfi(), localClock()).toUi() }
+        } else {
+            null
+        }
+    }
+
+    private fun publishOpenInvite() {
+        read("open invite") { it.openInvite().toUi(askError) }?.let { _openInvite.value = it }
     }
 
     private fun publishParty() {
@@ -315,17 +589,65 @@ class CoreRepository(
         publishNewParty()
     }
 
-    override fun createParty() {
+    override fun setServerChoice(choice: ServerChoice) {
+        val builtIn = choice == ServerChoice.BUILT_IN
+        partyDraft = partyDraft.copy(
+            serverChoice = choice,
+            // The core has no check for a typed server (only the build's instance is checked),
+            // so another server stays unreachable and Create stays off until it can be checked.
+            server = uniffi.pingers.ServiceDraft(
+                if (builtIn) partyDraft.builtIn else "",
+                if (builtIn) uniffi.pingers.Reachability.Checking else uniffi.pingers.Reachability.Unreachable,
+            ),
+        )
+        createError = null
+        publishNewParty()
+        // The app's server is checked again; another one once its address is typed.
+        if (choice == ServerChoice.BUILT_IN) checkServices()
+    }
+
+    override fun setRegistrationCode(code: String) {
+        _registrationCode.value = code
+        publishPartyCode()
+    }
+
+    override fun createParty(onResult: (CreateOutcome) -> Unit) {
         val draft = partyDraft
-        call("create party", onError = { createError = it; publishNewParty() }) { core ->
+        val code = _registrationCode.value.takeIf { codeAsked && it.isNotBlank() }
+        val failed = { why: String ->
+            createError = why
+            publishNewParty()
+            onResult(CreateOutcome.Failed)
+        }
+        call("create party", onError = failed) { core ->
             val created = uniffi.pingers.NewPartyDraft(
                 name = draft.name,
                 myName = myName(),
                 colour = draft.colour,
                 postQuantum = draft.postQuantum,
+                otherServer = draft.server.host.takeIf { draft.serverChoice == ServerChoice.ANOTHER },
+                registrationCode = code,
             )
-            val id = core.createParty(created).toUi()
+            val id = try {
+                core.createParty(created).toUi()
+            } catch (e: CoreException.CodeNeeded) {
+                // "This server needs a code": nothing was created; ask for one.
+                codeAsked = true
+                codeAnswer = CodeAnswer.NOT_TRIED
+                publishPartyCode()
+                return@call onResult(CreateOutcome.CodeNeeded)
+            } catch (e: CoreException.CodeRefused) {
+                codeAnswer = CodeAnswer.REFUSED
+                publishPartyCode()
+                return@call onResult(CreateOutcome.CodeRefused)
+            }
             currentParty = id
+            codeAsked = false
+            _registrationCode.value = ""
+            codeAnswer = CodeAnswer.NOT_TRIED
+            createError = null
+            publishPartyCode()
+            onResult(CreateOutcome.Created)
             core.createInvite(id.toFfi())
         }
     }
@@ -344,6 +666,7 @@ class CoreRepository(
         publishNewParty()
         call("reachability", onError = { markServices(null) }) { core ->
             val check = core.checkReachability()
+            PhoneLog.recordRelayCheck(context)
             refresh()
             val operator = snapshot?.serverOperator()
             markServices(operator.takeIf { check.status == uniffi.pingers.RelayStatus.REACHABLE })
@@ -358,7 +681,8 @@ class CoreRepository(
         val check = operator?.let { uniffi.pingers.Reachability.Reachable(it) }
             ?: uniffi.pingers.Reachability.Unreachable
         partyDraft = partyDraft.copy(
-            server = partyDraft.server.copy(check = check),
+            // The check reaches the app's server only; another server has nothing to check it yet.
+            server = if (partyDraft.serverChoice == ServerChoice.BUILT_IN) partyDraft.server.copy(check = check) else partyDraft.server,
             relay = partyDraft.relay.copy(check = check),
             pushRelayOperator = snapshot?.pushRelayOperator() ?: partyDraft.pushRelayOperator,
         )
@@ -393,28 +717,69 @@ class CoreRepository(
     /** The Party Invite people is showing (publishParty's choice). */
     private fun invitingParty(): PartyId? = currentParty ?: _home.value.parties.firstOrNull()?.id
 
-    // Verifying admits whoever opened the invite. The core answers Unavailable until
-    // pingers-sync delivers join requests, so no invite shows as opened before then.
-    override fun verifyInvite(invitationId: InviteId) {
-        val party = invitingParty() ?: return
-        call("verify invite") { it.verifyInvite(party.toFfi(), invitationId.toFfi()) }
-    }
-
     override fun cancelInvite(invitationId: InviteId) {
         val party = invitingParty() ?: return
         call("cancel invite") { it.cancelInvite(party.toFfi(), invitationId.toFfi()) }
     }
 
-    override fun acceptInvite() = call("accept invite") { core ->
-        currentParty = core.acceptInvite().toUi()
+    // ------------------------------------------------------------ Join flow A, the joiner
+
+    override fun showInvite(link: String) {
+        inviteLink = link
+        askError = null
+        publishOpenInvite()
     }
 
-    override fun declineInvite() = Unit
+    override fun askToJoin(name: String, onAsked: () -> Unit) {
+        val link = inviteLink ?: return
+        askError = null
+        // No name set yet: what was typed on Open invite becomes Your name, then the join uses it.
+        val needsName = _openInvite.value.joinAs == null
+        call("ask to join", onError = { askError = it; publishOpenInvite() }) { core ->
+            if (needsName) core.setDisplayName(name.trim())
+            core.openInvite(link, if (needsName) name.trim() else myName())
+            inviteLink = null
+            // Asked to join reads its code from the snapshot, so take it before going there.
+            refresh()
+            onAsked()
+        }
+    }
 
-    /** Opens an invite link: Accept invite then shows its preview. */
-    fun openInvite(link: String) = call("open invite") { it.openInvite(link, myName()) }
+    override fun withdrawJoin() = call("withdraw join") { it.withdrawJoin() }
 
-    /** The name set on this phone, or the default until one is (no screen sets it yet). */
+    override fun openJoinedParty() {
+        val party = _letIn.value?.party ?: return
+        currentParty = party
+        publishParty()
+        call("dismiss join") { it.dismissJoin() }
+    }
+
+    override fun leaveJoinedParty() {
+        val party = _letIn.value?.party ?: return
+        if (currentParty == party) currentParty = null
+        call("leave party") { it.leaveParty(party.toFfi()) }
+        call("dismiss join") { it.dismissJoin() }
+    }
+
+    // ------------------------------------------------------------ Join flow A, the inviter
+
+    override fun openJoinRequest(requestId: InviteId) {
+        currentJoinRequest = requestId
+        publishJoin()
+    }
+
+    override fun letIn() = decide("let in") { core, party, request -> core.letIn(party, request) }
+
+    override fun turnAway() = decide("turn away") { core, party, request -> core.turnAway(party, request) }
+
+    private fun decide(what: String, block: suspend (Core, uniffi.pingers.PartyId, uniffi.pingers.InviteId) -> Unit) {
+        val party = invitingParty() ?: return
+        val request = currentJoinRequest ?: return
+        currentJoinRequest = null
+        call(what) { block(it, party.toFfi(), request.toFfi()) }
+    }
+
+    /** The name set on this phone (Your name), or the default until one is. */
     private fun myName(): String =
         read("your name") { it.yourName().name } ?: res.getString(R.string.core_my_name)
 
@@ -521,7 +886,11 @@ class CoreRepository(
 
     // The answer lands in the snapshot's relay status, which What your server sees shows as a
     // note; until pingers-sync merges the core answers Unavailable and the call only logs it.
-    override fun checkReachability() = call("reachability") { it.checkReachability() }
+    // Party settings dates it from when it returned.
+    override fun checkReachability() = call("reachability") {
+        it.checkReachability()
+        PhoneLog.recordRelayCheck(context)
+    }
 
     override fun setVisibility(visibility: Visibility) = change(
         SettingChange.Visibility(

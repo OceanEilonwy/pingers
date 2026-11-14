@@ -18,7 +18,7 @@ use pingers_client::ports::{
 };
 use pingers_client::snapshot::{
     DailyWindow, HideTrail, InviteLink, InviteUrl, Name, PauseInFocus, QuietHoursPreference,
-    RelayStatus, Settings, SnapshotError, Toggle, WakePushes,
+    RelayStatus, SafetyCode, Settings, SnapshotError, Toggle, WakePushes,
 };
 use pingers_client::{ClientError, Crates, PushTokens};
 use pingers_gate::{FocusState, GateDecision, GateError, LocationSharing, MinuteOfDay};
@@ -27,7 +27,8 @@ use pingers_map_downloads::install::DownloadProgress;
 use pingers_map_downloads::{MapsError, RegionManifest};
 use pingers_meetup::{LocationAnswer, LocationVisibility, MeetPointDraft};
 use pingers_proto::{
-    ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, PartyId, SpotId,
+    ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, PartyId, SecretText,
+    SpotId,
 };
 use pingers_time::UnixSeconds;
 
@@ -67,7 +68,8 @@ pub enum CrateCall {
     CreateParty(PartyDraft),
     CreateInvite(PartyId),
     OpenInvite(InviteUrl, Name),
-    AcceptInvite,
+    WithdrawJoin,
+    DismissJoin,
     DecideJoin(PartyId, MailboxId, JoinDecision),
     CancelInvite(PartyId, MailboxId),
     SetDisplayName(Name),
@@ -76,6 +78,10 @@ pub enum CrateCall {
     SaveSpot(PartyId, SpotDraft),
     DeleteSpot(PartyId, SpotId),
     SetAlwaysAllow(PartyId, LeafIndex, AllowListChange),
+    SafetyCode(PartyId, LeafIndex),
+    MarkChecked(PartyId, LeafIndex),
+    /// The code, exposed: the fake keeps no secrets.
+    RegisterWithCode(String),
     PushTokensChanged(Option<PushTokens>),
     SetWakePushes(WakePushes, Option<PushTokens>),
     CheckReachability,
@@ -113,8 +119,11 @@ struct State {
 }
 
 impl FakeCrates {
-    /// The id every `create_party` and `accept_invite` returns.
+    /// The id every `create_party` returns.
     pub const PARTY: PartyId = PartyId::from_bytes([0xa1; 16]);
+    /// The code every `safety_code` returns.
+    pub const SAFETY_CODE: &str =
+        "48210 93755 12064 38817 70459 21386 66102 94573 15028 83941 57260 30694";
     /// The id every `save_spot` returns.
     pub const SPOT: SpotId = SpotId::from_bytes([0xb2; 16]);
     /// The id every `send_chat` returns.
@@ -328,17 +337,21 @@ impl PartiesPort for FakeCrates {
         self.answer(CrateName::Parties, CrateCall::OpenInvite(link, my_name), ())
     }
 
-    async fn accept_invite(&self) -> Result<PartyId, ClientError> {
-        self.answer(CrateName::Parties, CrateCall::AcceptInvite, Self::PARTY)
+    async fn withdraw_join(&self) -> Result<(), ClientError> {
+        self.answer(CrateName::Parties, CrateCall::WithdrawJoin, ())
+    }
+
+    async fn dismiss_join(&self) -> Result<(), ClientError> {
+        self.answer(CrateName::Parties, CrateCall::DismissJoin, ())
     }
 
     async fn decide_join(
         &self,
         party: PartyId,
-        invite: MailboxId,
+        request: MailboxId,
         decision: JoinDecision,
     ) -> Result<(), ClientError> {
-        let call = CrateCall::DecideJoin(party, invite, decision);
+        let call = CrateCall::DecideJoin(party, request, decision);
         self.answer(CrateName::Parties, call, ())
     }
 
@@ -389,6 +402,27 @@ impl PartiesPort for FakeCrates {
         self.answer(CrateName::Parties, call, ())
     }
 
+    async fn safety_code(
+        &self,
+        party: PartyId,
+        member: LeafIndex,
+    ) -> Result<SafetyCode, ClientError> {
+        let code = SafetyCode::new(Self::SAFETY_CODE).map_err(|_invalid| ClientError::Internal)?;
+        self.answer(
+            CrateName::Parties,
+            CrateCall::SafetyCode(party, member),
+            code,
+        )
+    }
+
+    async fn mark_checked(&self, party: PartyId, member: LeafIndex) -> Result<(), ClientError> {
+        self.answer(
+            CrateName::Parties,
+            CrateCall::MarkChecked(party, member),
+            (),
+        )
+    }
+
     async fn section(&self) -> Result<PartiesSection, ClientError> {
         self.section(CrateName::Parties, |state| state.parties.clone())
     }
@@ -413,6 +447,11 @@ impl SyncPort for FakeCrates {
     async fn check_reachability(&self) -> Result<RelayStatus, ClientError> {
         let relay = self.lock().server.relay;
         self.answer(CrateName::Sync, CrateCall::CheckReachability, relay)
+    }
+
+    async fn register_with_code(&self, code: SecretText) -> Result<(), ClientError> {
+        let call = CrateCall::RegisterWithCode(code.expose().to_owned());
+        self.answer(CrateName::Sync, call, ())
     }
 
     async fn section(&self) -> Result<ServerSection, ClientError> {
@@ -495,3 +534,6 @@ impl MeetupsPort for FakeCrates {
         self.section(CrateName::Meetups, |state| state.meetups.clone())
     }
 }
+
+#[cfg(test)]
+mod tests;

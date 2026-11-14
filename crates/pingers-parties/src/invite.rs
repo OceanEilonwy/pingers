@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Invite records and the values the invite API returns.
+//! Invite records and the values the invite API returns (join flow A).
 
 use core::time::Duration;
 
-use pingers_proto::{DisplayName, InviteUses, MailboxId};
+use pingers_crypto::JoinCode;
+use pingers_proto::{DisplayName, MailboxId, SequenceNumber};
 use pingers_time::UnixSeconds;
 use zeroize::Zeroizing;
 
@@ -36,11 +37,11 @@ impl InviteId {
 pub enum InviteStatus {
     /// Join requests are accepted.
     Open,
-    /// A single-use invite admitted its one joiner.
+    /// Someone was let in; the link stopped working.
     Used,
     /// The 24 hours (or the mailbox's lifetime, if shorter) are over.
     Expired,
-    /// The inviter revoked it.
+    /// The inviter cancelled it.
     Revoked,
 }
 
@@ -49,16 +50,16 @@ pub enum InviteStatus {
 pub struct InviteSummary {
     /// The invite.
     pub invite: InviteId,
-    /// Single or multiple use.
-    pub uses: InviteUses,
+    /// When the link was made ("from the link you shared 2 h ago").
+    pub shared_at: UnixSeconds,
     /// When it stops accepting join requests.
     pub expires: UnixSeconds,
     /// Its status now.
     pub status: InviteStatus,
 }
 
-/// A join request waiting for the inviter's approval (multi-use invites), named by the
-/// joiner's reply mailbox. On the joiner's side, the join this device started.
+/// A join request waiting for the inviter, named by the joiner's reply mailbox. On the
+/// joiner's side, the join this device started.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct JoinId(MailboxId);
 
@@ -81,31 +82,53 @@ impl JoinId {
     }
 }
 
-/// A join request shown as "Bob wants to join".
+/// A join request shown as "Ben asked to join", with the code Ben reads out.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingJoin {
-    /// Approve or decline it by this id.
+    /// Let in or turn away by this id.
     pub join: JoinId,
+    /// The invite it came through.
+    pub invite: InviteId,
     /// The name the joiner gave.
     pub name: DisplayName,
+    /// The code the joiner's phone shows; they must match.
+    pub code: JoinCode,
+    /// When this device read the request.
+    pub asked_at: UnixSeconds,
 }
 
-/// Why a join request was turned away without a commit.
+/// Why a join request was turned away without asking the inviter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Refusal {
     /// The invite expired.
     Expired,
-    /// The single-use invite was already used.
+    /// Someone was already let in through it.
     AlreadyUsed,
-    /// The inviter revoked the invite.
+    /// The inviter cancelled the invite.
     Revoked,
+    /// The Party is quantum-resistant and the request carries no X-Wing key package (the
+    /// joiner's build cannot make one).
+    NoQuantumResistantKeyPackage,
+}
+
+/// Why a post to an invite mailbox changed nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Ignored {
+    /// It was read before (its sequence number is not past the invite's read position).
+    AlreadySeen,
+    /// It does not open under the invite's secret, or does not decode: not from a link
+    /// holder. Anyone who knows the mailbox id can post to it.
+    Unreadable,
+    /// A withdrawal of a request that is not waiting (turned away, let in, or never seen).
+    NotPending,
 }
 
 /// The stored part of an invite's status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StoredStatus {
     Open,
-    Used,
+    /// Let in the joiner whose Welcome goes to this reply mailbox.
+    Used(MailboxId),
     Revoked,
 }
 
@@ -113,17 +136,19 @@ pub(crate) enum StoredStatus {
 /// its Party; the store is encrypted at rest.
 pub(crate) struct InviteRecord {
     pub(crate) secret: Zeroizing<[u8; 32]>,
-    pub(crate) uses: InviteUses,
+    pub(crate) shared_at: UnixSeconds,
     pub(crate) expires: UnixSeconds,
     pub(crate) status: StoredStatus,
+    /// The last post read from the invite mailbox, so a read resumes after it.
+    pub(crate) read_position: Option<SequenceNumber>,
 }
 
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 
 impl InviteRecord {
     pub(crate) fn status_at(&self, now: UnixSeconds) -> InviteStatus {
         match self.status {
-            StoredStatus::Used => InviteStatus::Used,
+            StoredStatus::Used(_) => InviteStatus::Used,
             StoredStatus::Revoked => InviteStatus::Revoked,
             StoredStatus::Open if now >= self.expires => InviteStatus::Expired,
             StoredStatus::Open => InviteStatus::Open,
@@ -134,16 +159,23 @@ impl InviteRecord {
         let mut writer = Writer::new();
         writer.byte(VERSION);
         writer.fixed(self.secret.as_slice());
-        writer.byte(match self.uses {
-            InviteUses::Multiple => 0,
-            InviteUses::Single => 1,
-        });
+        writer.u64(self.shared_at.get());
         writer.u64(self.expires.get());
-        writer.byte(match self.status {
-            StoredStatus::Open => 0,
-            StoredStatus::Used => 1,
-            StoredStatus::Revoked => 2,
-        });
+        match self.status {
+            StoredStatus::Open => writer.byte(0),
+            StoredStatus::Used(reply) => {
+                writer.byte(1);
+                writer.fixed(reply.as_bytes());
+            }
+            StoredStatus::Revoked => writer.byte(2),
+        }
+        match self.read_position {
+            None => writer.byte(0),
+            Some(position) => {
+                writer.byte(1);
+                writer.u64(position.get());
+            }
+        }
         Zeroizing::new(writer.finish())
     }
 
@@ -153,24 +185,26 @@ impl InviteRecord {
             return Err(reader.malformed());
         }
         let secret = Zeroizing::new(reader.fixed()?);
-        let uses = match reader.byte()? {
-            0 => InviteUses::Multiple,
-            1 => InviteUses::Single,
-            _ => return Err(reader.malformed()),
-        };
+        let shared_at = UnixSeconds::new(reader.u64()?);
         let expires = UnixSeconds::new(reader.u64()?);
         let status = match reader.byte()? {
             0 => StoredStatus::Open,
-            1 => StoredStatus::Used,
+            1 => StoredStatus::Used(MailboxId::from_bytes(reader.fixed()?)),
             2 => StoredStatus::Revoked,
+            _ => return Err(reader.malformed()),
+        };
+        let read_position = match reader.byte()? {
+            0 => None,
+            1 => Some(SequenceNumber::new(reader.u64()?)),
             _ => return Err(reader.malformed()),
         };
         reader.end()?;
         Ok(Self {
             secret,
-            uses,
+            shared_at,
             expires,
             status,
+            read_position,
         })
     }
 }
@@ -185,9 +219,10 @@ mod tests {
     fn record(status: StoredStatus) -> InviteRecord {
         InviteRecord {
             secret: Zeroizing::new([9; 32]),
-            uses: InviteUses::Single,
+            shared_at: UnixSeconds::new(40),
             expires: UnixSeconds::new(100),
             status,
+            read_position: None,
         }
     }
 
@@ -195,21 +230,23 @@ mod tests {
     fn records_round_trip() -> Result<(), TestError> {
         for status in [
             StoredStatus::Open,
-            StoredStatus::Used,
+            StoredStatus::Used(MailboxId::from_bytes([3; 16])),
             StoredStatus::Revoked,
         ] {
-            for uses in [InviteUses::Single, InviteUses::Multiple] {
+            for read_position in [None, Some(SequenceNumber::new(7))] {
                 let mut original = record(status);
-                original.uses = uses;
+                original.read_position = read_position;
                 let decoded = InviteRecord::decode(&original.encode())?;
                 assert_eq!(*decoded.secret, *original.secret);
-                assert_eq!(decoded.uses, uses);
+                assert_eq!(decoded.shared_at, original.shared_at);
                 assert_eq!(decoded.expires, original.expires);
                 assert_eq!(decoded.status, status);
+                assert_eq!(decoded.read_position, read_position);
             }
         }
         let bytes = record(StoredStatus::Open).encode();
-        for index in [0, 33, bytes.len().saturating_sub(1)] {
+        // The version, status and read-position bytes.
+        for index in [0, 49, bytes.len().saturating_sub(1)] {
             let mut changed = bytes.to_vec();
             if let Some(byte) = changed.get_mut(index) {
                 *byte = 7;
@@ -225,7 +262,8 @@ mod tests {
         assert_eq!(open.status_at(UnixSeconds::new(99)), InviteStatus::Open);
         assert_eq!(open.status_at(UnixSeconds::new(100)), InviteStatus::Expired);
         assert_eq!(
-            record(StoredStatus::Used).status_at(UnixSeconds::new(500)),
+            record(StoredStatus::Used(MailboxId::from_bytes([1; 16])))
+                .status_at(UnixSeconds::new(500)),
             InviteStatus::Used
         );
         assert_eq!(

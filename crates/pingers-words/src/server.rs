@@ -437,8 +437,8 @@ mod tests {
         let mut snapshot = fixtures::snapshot()?;
         for party in &mut snapshot.parties {
             party.config.hosting = Hosting::Public;
-            party.config.relay.operator = Operator::new("Flat 7")?;
-            party.config.push_relay.operator = Operator::new("Flat 7")?;
+            party.config.relay.operator = Some(Operator::new("Flat 7")?);
+            party.config.push_relay.operator = Some(Operator::new("Flat 7")?);
         }
         snapshot.fallbacks = vec![Fallback::PrivacyPassOnly];
         let view = screen(&snapshot, fixtures::climbing_crew())?;
@@ -462,7 +462,8 @@ mod tests {
                 NeverSees::Pauses
             ]
         );
-        assert_eq!(facts.notes, [Note::RelaysShareOperator]);
+        // The server's operator runs both relays: the can-see lines already say so.
+        assert_eq!(facts.notes, []);
         let text = server_sees(EN, &view);
         assert_eq!(text.hosting, None);
         assert_eq!(text.can_see.len(), 5);
