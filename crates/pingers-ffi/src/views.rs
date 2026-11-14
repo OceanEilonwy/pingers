@@ -946,8 +946,8 @@ impl From<screens::draw::DrawArea> for DrawAreaView {
 
 // ------------------------------------------------------------------------------ Exclusion zones
 
-/// An exclusion zone's size.
-#[derive(Clone, Copy, Debug, PartialEq, uniffi::Enum)]
+/// An exclusion zone's shape, for its row and the map.
+#[derive(Clone, Debug, PartialEq, uniffi::Enum)]
 pub enum ZoneShape {
     /// A circle.
     Circle {
@@ -955,7 +955,10 @@ pub enum ZoneShape {
         radius_m: f64,
     },
     /// A drawn area.
-    Area,
+    Area {
+        /// Its vertices in order (not repeating the first), so the map draws it exactly.
+        points: Vec<Coordinate>,
+    },
 }
 
 /// An exclusion zone row.
@@ -1082,11 +1085,13 @@ impl From<screens::zones::ExclusionZones> for ExclusionZonesView {
                 .map(|(zone, text)| ZoneRow {
                     id: zone.id.into(),
                     name: zone.name.as_str().to_owned(),
-                    shape: match zone.shape {
+                    shape: match &zone.shape {
                         screens::zones::ZoneShape::Circle(radius) => ZoneShape::Circle {
                             radius_m: radius.get(),
                         },
-                        screens::zones::ZoneShape::Area => ZoneShape::Area,
+                        screens::zones::ZoneShape::Area(points) => ZoneShape::Area {
+                            points: points.iter().copied().map(Into::into).collect(),
+                        },
                     },
                     fence: (&zone.fence).into(),
                     detail: text.detail,

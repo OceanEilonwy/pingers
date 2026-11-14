@@ -254,7 +254,8 @@ data class DrawAreaState(
 
 sealed interface ZoneShape {
     data class Circle(val radiusM: Int) : ZoneShape
-    data object Area : ZoneShape
+    /** A drawn area: its vertices in order, so the map draws exactly what was drawn. */
+    data class Area(val points: List<Coordinate>) : ZoneShape
 }
 
 data class ZoneRow(

@@ -49,7 +49,7 @@ with a **Download map for this area** prompt that opens the region picker.
 | Party | real map behind the Spot circles and areas |
 | Spot editor | real map; drag to move the Spot; "Search a place" moves it to a found place |
 | Draw area | real map under the point-by-point editor |
-| Exclusion zones | real map; circle zones drawn from their centre and radius. The zones view model has no vertices for drawn areas yet, so those are a fixed-size hatched block at their label |
+| Exclusion zones | real map; circle zones drawn from their centre and radius, drawn areas through their own vertices (the view model's `ZoneShape.Area` carries them) |
 | Meetup, Meet point | real map under members, the meet point and the pin |
 | Location request | stays the placeholder: a dimmed background, and its view model has no frame |
 

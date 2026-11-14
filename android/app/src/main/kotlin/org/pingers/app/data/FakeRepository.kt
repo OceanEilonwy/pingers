@@ -171,7 +171,7 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
         ExclusionZonesState(
             zones = listOf(
                 ZoneRow(ZoneId(1), "Home", ZoneShape.Circle(150), schedule = null, labelAt = at(50f, 52f)),
-                ZoneRow(ZoneId(2), "Work", ZoneShape.Area, schedule = "weekdays 08:00–18:00", labelAt = at(245f, 50f)),
+                ZoneRow(ZoneId(2), "Work", ZoneShape.Area(listOf(at(205f, 20f), at(290f, 28f), at(282f, 82f), at(212f, 76f))), schedule = "weekdays 08:00–18:00", labelAt = at(245f, 50f)),
             ),
             hideTrail = true,
             me = at(160f, 160f),

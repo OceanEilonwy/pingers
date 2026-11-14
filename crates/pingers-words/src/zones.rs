@@ -87,9 +87,9 @@ pub fn exclusion_zones(language: Language, view: &ExclusionZones) -> ExclusionZo
             .zones
             .iter()
             .map(|zone| {
-                let shape = match zone.shape {
-                    ZoneShape::Circle(radius) => format!("{} circle", distance(language, radius)),
-                    ZoneShape::Area => "Drawn area".into(),
+                let shape = match &zone.shape {
+                    ZoneShape::Circle(radius) => format!("{} circle", distance(language, *radius)),
+                    ZoneShape::Area(_) => "Drawn area".into(),
                 };
                 let parts: Vec<String> = [
                     Some(shape),

@@ -272,7 +272,7 @@ internal fun uniffi.pingers.ExclusionZonesView.toUi() = ExclusionZonesState(
             it.id.toUi(), it.name,
             when (val s = it.shape) {
                 is uniffi.pingers.ZoneShape.Circle -> ZoneShape.Circle(s.radiusM.metres())
-                uniffi.pingers.ZoneShape.Area -> ZoneShape.Area
+                is uniffi.pingers.ZoneShape.Area -> ZoneShape.Area(s.points.map { p -> p.toUi() })
             },
             it.detail, it.labelAt.toUi(),
         )
