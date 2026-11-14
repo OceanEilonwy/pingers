@@ -445,6 +445,9 @@ mod tests {
         assert!(filled.contains("version=0.1.0pre20261113.1930\n"));
         assert!(filled.contains("_commit=c0ffee\n"));
         assert!(filled.contains("checksum=\"ab\n"));
+        // The manifest's own @VERSION@ is filled at install time by the recipe, so its sed
+        // pattern must survive.
+        assert!(filled.contains("sed -i \"s/@\"\"VERSION@/${version}/\""));
         Ok(())
     }
 }

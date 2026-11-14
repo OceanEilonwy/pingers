@@ -5,8 +5,8 @@
 # per package, so there are four apps; one recipe compiles the shared crates once. Everything
 # lands in /opt/nodo/apps/<id>/ (docs/deploy-nodo.md, "Package layout").
 #
-# This file is a template of the template: `cargo xtask nodo-dist` replaces @VERSION@,
-# @COMMIT@ and @SOURCE_SHA256@ and writes the result to target/nodo/srcpkgs/, next to the source
+# This file is a template of the template: `cargo xtask nodo-dist` fills in the version, commit
+# and source checksum placeholders and writes the result to target/nodo/srcpkgs/, next to the source
 # tarball it describes. Build from there, never from packaging/nodo/srcpkgs/ directly.
 #
 # The source is `git archive` of one commit plus `cargo vendor` output and a .cargo/config.toml
@@ -117,7 +117,8 @@ _install_app() {
 	install -m 644 "${files}/manifest.toml" "${DESTDIR}/${app}/manifest.toml"
 	# The licence goes with each app: nodo refuses package files outside /opt/nodo/apps/<id>/.
 	install -m 644 LICENSE "${DESTDIR}/${app}/LICENSE"
-	sed -i "s/@VERSION@/${version}/" "${DESTDIR}/${app}/manifest.toml"
+	# Split so nodo-dist, which fills every version placeholder in this file, leaves the pattern alone.
+	sed -i "s/@""VERSION@/${version}/" "${DESTDIR}/${app}/manifest.toml"
 	for f in "${files}"/settings.lua "${files}"/*.toml.in; do
 		[ -f "$f" ] || continue
 		install -m 644 "$f" "${DESTDIR}/${app}/${f##*/}"
