@@ -7,7 +7,7 @@ use pingers_crypto::key_config_hash;
 use pingers_proto::SecretText;
 use pingers_store::AccountRegistration;
 use pingers_sync::{
-    CredentialChoice, Delivered, LeafStanding, Prepared, Refill, SyncError, WakeBudget,
+    CodeSource, CredentialChoice, Delivered, LeafStanding, Prepared, Refill, SyncError, WakeBudget,
 };
 use pingers_testkit::HarnessConfig;
 
@@ -170,7 +170,12 @@ async fn a_refused_code_is_not_tried_again_until_another_is_offered() -> TestRes
     let device = world.account_device()?;
     device
         .engine
-        .offer_registration_code(code("strangers"))
+        .offer_registration_code(code("strangers"), CodeSource::Invite)
+        .await?;
+    // A build's code does not replace one the user brought in.
+    device
+        .engine
+        .offer_registration_code(code("friends"), CodeSource::Build)
         .await?;
     for _ in 0..2 {
         assert!(matches!(
@@ -190,9 +195,12 @@ async fn a_refused_code_is_not_tried_again_until_another_is_offered() -> TestRes
     // The same code again changes nothing; an empty one offers nothing.
     device
         .engine
-        .offer_registration_code(code("strangers"))
+        .offer_registration_code(code("strangers"), CodeSource::Invite)
         .await?;
-    device.engine.offer_registration_code(code("")).await?;
+    device
+        .engine
+        .offer_registration_code(code(""), CodeSource::Invite)
+        .await?;
     assert!(matches!(
         device.engine.ensure_registered(WakeBudget::UNLIMITED).await,
         Err(SyncError::RegistrationRefused)
@@ -201,7 +209,7 @@ async fn a_refused_code_is_not_tried_again_until_another_is_offered() -> TestRes
 
     device
         .engine
-        .offer_registration_code(code("friends"))
+        .offer_registration_code(code("friends"), CodeSource::Build)
         .await?;
     let _ = device
         .engine
@@ -221,7 +229,10 @@ async fn a_refused_code_is_not_tried_again_until_another_is_offered() -> TestRes
         Some("friends")
     );
     // A registered account keeps its code whatever is offered later.
-    device.engine.offer_registration_code(code("other")).await?;
+    device
+        .engine
+        .offer_registration_code(code("other"), CodeSource::Invite)
+        .await?;
     assert_eq!(
         device
             .engine

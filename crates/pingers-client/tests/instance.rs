@@ -172,6 +172,7 @@ async fn rig(
         gateway_pins: Some(pins.gateway),
         push_relay_pins: pins.push_relay,
         trust: Trust::Mozilla,
+        registration_code: None,
     };
     let clock = config.clock.clone();
     let platform = FakePlatform::new(clock.clone());

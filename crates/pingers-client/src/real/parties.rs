@@ -71,6 +71,8 @@ impl Parties {
 #[async_trait]
 impl PartiesPort for Parties {
     async fn create_party(&self, draft: PartyDraft) -> Result<PartyId, ClientError> {
+        // The first Party makes the account (design B.1).
+        self.net.ready().await?;
         let created = self
             .backend
             .store(move |session, clock, rng| {
@@ -101,6 +103,8 @@ impl PartiesPort for Parties {
     }
 
     async fn create_invite(&self, party: PartyId) -> Result<InviteLink, ClientError> {
+        // The code this device registered with travels in the link (design B.1).
+        let registration_code = self.net.shared_registration_code().await?;
         let created = self
             .backend
             .store(move |session, clock, rng| {
@@ -108,7 +112,7 @@ impl PartiesPort for Parties {
                     &party,
                     NewInvite {
                         uses: InviteUses::Multiple,
-                        registration_code: None,
+                        registration_code,
                     },
                     rng,
                 )?)

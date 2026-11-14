@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use pingers_ohttp::KeyPins;
-use pingers_proto::ServerId;
+use pingers_proto::{SecretText, ServerId};
 use pingers_time::Timer;
 use pingers_transport::{
     DirectConfig, DirectTransport, KeyPin, OhttpConfig, OhttpTransport, Relay, Router, Routes,
@@ -29,7 +29,7 @@ use crate::ClientError;
 /// Official builds carry pin sets for the gateway and the push relay (the key served now and
 /// the next one, design B.12 and proposal §2.1); with a set, first-use pinning is off. The
 /// Privacy Pass issuer key is not pinned at build time: it rotates weekly.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Instance {
     /// The server origin (`https://...`), also the OHTTP gateway.
     pub server: ServerId,
@@ -45,6 +45,11 @@ pub struct Instance {
     pub push_relay_pins: Option<KeyPins>,
     /// Which certificate authorities HTTPS trusts.
     pub trust: Trust,
+    /// The operator's registration code for this device's first registration (design B.1),
+    /// for the first owner of a server that requires one: a debug build's
+    /// `PINGERS_DEV_REGISTRATION_CODE`. Release builds pass `None`; other devices get their
+    /// code from the invite link.
+    pub registration_code: Option<SecretText>,
 }
 
 /// Which certificate authorities HTTPS connections trust.

@@ -22,7 +22,7 @@ use crate::snapshot::{ClientSnapshot, InviteLink, InviteUrl, Name, RelayStatus, 
 use crate::{ClientError, Events, Instance, Outside, Platform, SecureStoreKey};
 
 /// Where the client keeps its data.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct ClientConfig {
     /// The SQLCipher database file.
     pub database: PathBuf,

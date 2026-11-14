@@ -22,13 +22,13 @@ use pingers_parties::{LeaveRequest, Outbound, OutgoingCommit, PartiesError, Part
 use pingers_presence::{MailboxPurpose, OutgoingKnock};
 use pingers_proto::{
     AppMessage, BoardCursor, BoardPage, CommitRequest, CommitResponse, CreateGroup, Epoch, GroupId,
-    GroupLogEntry, MailboxId, Padded, SequenceNumber, SizeClass, SubscriptionId, TimeToLive,
-    WelcomeBytes,
+    GroupLogEntry, MailboxId, Padded, SecretText, SequenceNumber, SizeClass, SubscriptionId,
+    TimeToLive, WelcomeBytes,
 };
 use pingers_store::{MailboxPurpose as StoredPurpose, WakePushes as StoredPushes};
 use pingers_sync::{
-    ApiRequest, Committed, Delivered, GroupCall, GroupError, GroupLifetime, GroupSigner,
-    GroupStart, NewLease, PoolTarget, Sending, SyncEngine, SyncError, WakeBudget,
+    ApiRequest, CodeSource, Committed, Delivered, GroupCall, GroupError, GroupLifetime,
+    GroupSigner, GroupStart, NewLease, PoolTarget, Sending, SyncEngine, SyncError, WakeBudget,
 };
 use pingers_time::{Bucket, UnixSeconds};
 use pingers_wake::PortError;
@@ -54,6 +54,13 @@ const KEEP_FOR: Duration = Duration::from_hours(1);
 const KNOCK_POOL: u32 = 4;
 const MAILBOX_LIFETIME: Duration = Duration::from_hours(24);
 
+/// What a client with an instance talks through: the engine, and the build's registration
+/// code for the first registration.
+pub(crate) struct Online {
+    pub(crate) engine: Arc<SyncEngine>,
+    pub(crate) registration_code: Option<SecretText>,
+}
+
 /// The engine and the outbox.
 pub(crate) struct Net {
     pub(super) backend: Arc<Backend>,
@@ -64,14 +71,20 @@ pub(crate) struct Net {
     pub(super) key_mismatch: AtomicBool,
     /// The server's parameters and the push relay's key, once fetched (`push.rs`).
     pub(super) learned: super::push::Learned,
+    /// The build's registration code for this device's first registration, if any.
+    registration_code: Option<SecretText>,
 }
 
 impl Net {
     pub(crate) fn new(
         backend: Arc<Backend>,
-        engine: Option<Arc<SyncEngine>>,
+        online: Option<Online>,
         learned: super::push::Learned,
     ) -> Self {
+        let (engine, registration_code) = match online {
+            Some(online) => (Some(online.engine), online.registration_code),
+            None => (None, None),
+        };
         Self {
             backend,
             engine,
@@ -80,6 +93,7 @@ impl Net {
             clock_skew: AtomicBool::new(false),
             key_mismatch: AtomicBool::new(false),
             learned,
+            registration_code,
         }
     }
 
@@ -138,6 +152,71 @@ impl Net {
         Sending::or_keep_until(until, WakeBudget::UNLIMITED)
     }
 
+    /// pingers-sync's `prepare_credentials`, with the build's registration code on offer: the
+    /// account registered, its leaf, and the token stock. Once done it costs a few store reads.
+    /// Only a store failure is an error; a network failure or a refusal leaves credentialed
+    /// requests waiting for a later call (each command's flush and each wake).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Sync`] with a store failure; [`Unavailable::Sync`] without an instance.
+    pub(crate) async fn prepare_credentials(&self) -> Result<(), ClientError> {
+        let engine = self.engine()?;
+        if let Some(code) = &self.registration_code {
+            engine
+                .offer_registration_code(code.clone(), CodeSource::Build)
+                .await?;
+        }
+        self.credentials(engine.prepare_credentials(WakeBudget::UNLIMITED).await)
+    }
+
+    /// [`Net::prepare_credentials`] when there is an instance; offline, nothing to do. Commands
+    /// that need the account (a new Party, a join) call it first: the first one makes it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Net::prepare_credentials`].
+    pub(crate) async fn ready(&self) -> Result<(), ClientError> {
+        if self.engine.is_none() {
+            return Ok(());
+        }
+        self.prepare_credentials().await
+    }
+
+    /// What a credential step's result says: observed, and only a store failure kept.
+    fn credentials<T>(&self, result: Result<T, SyncError>) -> Result<(), ClientError> {
+        self.observe(&result);
+        match result {
+            Err(SyncError::Store(error)) => Err(SyncError::Store(error).into()),
+            Ok(_) | Err(_) => Ok(()),
+        }
+    }
+
+    /// Offers the registration code an invite link carries for the first registration, and
+    /// prepares the credentials with it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Net::prepare_credentials`].
+    pub(crate) async fn offer_invite_code(&self, code: SecretText) -> Result<(), ClientError> {
+        self.engine()?
+            .offer_registration_code(code, CodeSource::Invite)
+            .await?;
+        self.prepare_credentials().await
+    }
+
+    /// The registration code this device registered with, for its invite links.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Sync`] with a store failure. Without an instance there is none.
+    pub(crate) async fn shared_registration_code(&self) -> Result<Option<SecretText>, ClientError> {
+        match &self.engine {
+            Some(engine) => Ok(engine.shared_registration_code().await?),
+            None => Ok(None),
+        }
+    }
+
     /// Sends every waiting request. One that could not be sent now stays for the next flush;
     /// one the server refused is dropped. Returns whether a Party changed (a merged commit).
     ///
@@ -148,6 +227,7 @@ impl Net {
         if self.engine.is_none() {
             return Ok(false);
         }
+        self.ready().await?;
         let waiting = std::mem::take(&mut *self.outbox());
         let mut changed = false;
         let mut kept = Vec::new();
@@ -211,6 +291,7 @@ impl Net {
                 SyncError::NoRelay { .. }
                 | SyncError::BudgetExhausted { .. }
                 | SyncError::ClockSkew { .. }
+                | SyncError::NoCredential
                 | SyncError::Transport(_),
             ) => Ok(Sent::Later(Box::new(outbound))),
             Err(error) => Err(error.into()),
@@ -270,6 +351,7 @@ impl Net {
                     SyncError::NoRelay { .. }
                         | SyncError::BudgetExhausted { .. }
                         | SyncError::ClockSkew { .. }
+                        | SyncError::NoCredential
                         | SyncError::Transport(_)
                 );
                 self.observe::<()>(&Err(error));

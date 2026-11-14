@@ -41,6 +41,16 @@ const REPLY_LIFETIME: Duration = Duration::from_hours(24);
 /// sealed; [`ClientError::Parties`] for a bad or expired link; [`ClientError::Sync`].
 pub(crate) async fn open_invite(net: &Net, link: InviteUrl, name: Name) -> Result<(), ClientError> {
     let engine = net.engine()?;
+    // A registration code in the link is for the first registration on the link's own server
+    // (design B.1): offered before the reply mailbox needs a credential.
+    if let Ok(payload) = InviteLink::from_text(link.as_str().to_owned()).payload()
+        && let Some(code) = payload.registration_code
+        && payload.server == engine.server()
+    {
+        net.offer_invite_code(code).await?;
+    } else {
+        net.ready().await?;
+    }
     net.ensure_wake_push().await?;
     let subscription = engine
         .party_subscription(TimeToLive::new(PARTY_SUBSCRIPTION).map_err(|_never| corrupt())?)?

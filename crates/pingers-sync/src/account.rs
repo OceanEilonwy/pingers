@@ -52,6 +52,15 @@ const UNAUTHORIZED: u16 = 401;
 /// The status of a refused registration or challenge.
 const FORBIDDEN: u16 = 403;
 
+/// Where an offered registration code comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CodeSource {
+    /// The app's build configuration (a debug build's `PINGERS_DEV_REGISTRATION_CODE`).
+    Build,
+    /// An invite link the user opened.
+    Invite,
+}
+
 /// This device's membership leaf.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use]
@@ -116,15 +125,20 @@ const fn needs_fresh_bearer(response: &Response) -> bool {
 }
 
 impl SyncEngine {
-    /// Offers the operator's registration code (from an invite link, or a debug build's
-    /// configuration) for the account's registration. An account already registered keeps its
-    /// standing; one refused with another code becomes pending again with this one. An empty
-    /// code offers nothing.
+    /// Offers the operator's registration code for the account's registration. An account
+    /// already registered keeps its standing, and a code already refused is not taken again.
+    /// Otherwise a code from an invite link replaces whatever waits; a code from the build
+    /// configuration is taken only when no other code waits, so a code the user brought in
+    /// later is not overwritten at the next start. An empty code offers nothing.
     ///
     /// # Errors
     ///
     /// [`SyncError::Store`].
-    pub async fn offer_registration_code(&self, code: SecretText) -> Result<(), SyncError> {
+    pub async fn offer_registration_code(
+        &self,
+        code: SecretText,
+        source: CodeSource,
+    ) -> Result<(), SyncError> {
         if code.expose().is_empty() {
             return Ok(());
         }
@@ -135,6 +149,9 @@ impl SyncEngine {
                 AccountRegistration::Refused {
                     code: Some(refused),
                 } if bool::from(refused.ct_eq(&code)) => return Ok(()),
+                AccountRegistration::Pending { code: Some(_) } if source == CodeSource::Build => {
+                    return Ok(());
+                }
                 AccountRegistration::Pending { .. } | AccountRegistration::Refused { .. } => {
                     AccountRegistration::Pending { code: Some(code) }
                 }
