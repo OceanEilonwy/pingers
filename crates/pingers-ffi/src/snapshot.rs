@@ -477,7 +477,11 @@ mod tests {
         assert_eq!(asked.code, "4821 0937 5512");
         assert_eq!(asked.withdraw, "Withdraw request");
         assert_eq!(
-            snapshot()?.open_invite().join_as.map(|join_as| join_as.title).as_deref(),
+            snapshot()?
+                .open_invite()
+                .join_as
+                .map(|join_as| join_as.title)
+                .as_deref(),
             Some("You'll join as Sam")
         );
         let request = snapshot()?.join_request(
