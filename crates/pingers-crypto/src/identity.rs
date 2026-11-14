@@ -245,6 +245,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_bearer_digest_does_not_print() {
+        let printed = format!("{:?}", BearerDigest::from_bytes([0xAB; 32]));
+        assert_eq!(printed, "BearerDigest(redacted)");
+    }
+
+    #[test]
     fn account_id_is_the_first_16_bytes_of_the_key_hash() {
         // SHA-256 of 32 zero bytes begins 66 68 7a ad f8 62 bd 77 6c 8f c1 8b 8e 9f 8e 20.
         let id = account_id(&AccountPublicKey::from_bytes([0; 32]));

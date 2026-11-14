@@ -20,7 +20,9 @@ use super::{
 };
 use crate::live::next_data;
 
-const IDLE: Duration = Duration::from_secs(120);
+/// Shorter than the public listener's overdue limit (three 30 s request timeouts), so an
+/// idle close cannot be mistaken for an overdue one.
+const IDLE: Duration = Duration::from_secs(60);
 
 /// A server with the idle timeout [`IDLE`] and the given connection limits.
 async fn limited(public: u32, gateway: u32) -> Result<Running, TestError> {
@@ -96,18 +98,25 @@ async fn an_idle_connection_closes_but_a_live_channel_keeps_its_own_open() -> Te
     // A client that made one request and then went quiet is closed.
     let mut client = connect(server.address, LOOPBACK).await?;
     assert_eq!(params(&mut client).await?, StatusCode::OK);
+    // The request is over, so the idle timeout runs from its end: closed well before the
+    // overdue limit (90 s) could have applied.
     server.clock.advance(IDLE);
-    let closed = tokio::time::timeout(STEP, async {
-        loop {
-            if client.is_closed() {
-                return;
+    let mut closed = false;
+    for _ in 0..20 {
+        if tokio::time::timeout(Duration::from_millis(100), async {
+            while !client.is_closed() {
+                tokio::task::yield_now().await;
             }
-            server.clock.advance(Duration::from_secs(1));
-            tokio::task::yield_now().await;
+        })
+        .await
+        .is_ok()
+        {
+            closed = true;
+            break;
         }
-    })
-    .await;
-    assert!(closed.is_ok(), "the idle connection stayed open");
+        server.clock.advance(Duration::from_secs(1));
+    }
+    assert!(closed, "the idle connection stayed open");
 
     // A live channel is a request in progress for as long as it lasts.
     let (sender, mut live, mut body) = open_live(&server, "/v1/groups/00/live").await?;
@@ -186,9 +195,21 @@ async fn an_oversized_request_head_is_refused() -> TestResult {
         Ok(response) => response.status() == StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
     };
     assert!(refused);
-    // A head within the limit is served on a fresh connection.
+    // A head within the limit (a few KiB) is served on a fresh connection, its answer still
+    // sized up front.
     let mut fresh = connect(server.address, LOOPBACK).await?;
-    assert_eq!(params(&mut fresh).await?, StatusCode::OK);
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("http://server/v1/params")
+        .header("x-padding", "x".repeat(4 * 1024))
+        .body(Body::empty())?;
+    let response = send(&mut fresh, request).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response
+            .headers()
+            .contains_key(axum::http::header::CONTENT_LENGTH)
+    );
     server.stop().await
 }
 

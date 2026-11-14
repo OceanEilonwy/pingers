@@ -149,8 +149,8 @@ fn pruning_drops_expired_bearers_only(store: &impl AccountStore) -> Result<(), T
     store.insert_bearer(&ending, 4)?;
     store.insert_bearer(&lasting, 4)?;
     store.prune_bearers(at(T + 1))?;
-    // Expired bearers are refused anyway; after pruning, keeping 2 must not evict `lasting`.
-    store.insert_bearer(&bearer(3, 1, T + 3), 2)?;
+    // Asked about an earlier moment, a pruned bearer is gone while the other stays.
+    assert_eq!(store.bearer_account(&ending.digest, at(T))?, None);
     assert!(store.bearer_account(&lasting.digest, at(T))?.is_some());
     Ok(())
 }
@@ -409,6 +409,24 @@ fn the_previous_bucket_counts_only_just_after_a_rollover() -> Result<(), TestErr
         accounts.authenticate(&signed_before, &token(2)),
         Err(QuotaError::BadSignature)
     ));
+    Ok(())
+}
+
+#[test]
+fn the_sweep_forgets_expired_bearers() -> Result<(), TestError> {
+    let store = Arc::new(MemoryQuotaStore::new());
+    let (clock, accounts) = service(Arc::clone(&store), &[])?;
+    accounts.register(&registration(&key(1), None)?)?;
+    let start = clock.now();
+    let _ = accounts.authenticate(&auth(&key(1), start.bucket())?, &token(1))?;
+    clock.advance(BEARER_LIFETIME);
+    accounts.expire()?;
+    // Gone from the store, not merely refused: asked about a moment it was valid, it is
+    // not found.
+    assert_eq!(
+        store.bearer_account(&pingers_crypto::bearer_digest(&token(1)), start)?,
+        None
+    );
     Ok(())
 }
 

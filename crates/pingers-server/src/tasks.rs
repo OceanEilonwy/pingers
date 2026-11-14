@@ -543,3 +543,23 @@ impl Tasks {
             .abort_all();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_group_turn_nobody_holds_is_forgotten() {
+        let turns = GroupTurns::default();
+        drop(turns.of(GroupId::from_bytes([1; 32])));
+        let held = turns.of(GroupId::from_bytes([2; 32]));
+        // Taking any turn clears the ones nobody holds or awaits, so the map stays small.
+        let listed = turns
+            .turns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len();
+        assert_eq!(listed, 1);
+        drop(held);
+    }
+}
