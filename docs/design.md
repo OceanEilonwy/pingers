@@ -966,7 +966,7 @@ The relay opens `blob` with `info = "pingers/v1/push" ‖ bind`, reads `platform
 
 **Invite flow**
 
-- Link: `https://<host>/j#v1.<base64url(cbor{ server, invite_mailbox, invite_secret[32], inviter_fpr[8], expires, single_use })>`. The fragment never reaches the server. The QR code encodes the same string.
+- Link: `https://<host>/j#v1.<base64url(cbor{ server, invite_mailbox, invite_secret[32], inviter_fpr[8], expires, single_use, reg_code? })>`. The fragment never reaches the server. `reg_code` is the operator's registration code (B.1), present when the inviter registered with one, so the joiner's first `POST /v1/accounts` needs no typing; like the link it is a bearer capability. The QR code encodes the same string.
 - Joiner registers an account on that server, registers a one-time reply mailbox, then posts to `invite_mailbox`: `XChaCha20-Poly1305(HKDF(invite_secret,"join"), { key_package, display_name, reply_mailbox, party_sub })`, where `party_sub` is its sealed push subscription for the Party group.
 - Inviter's device wakes, decrypts (authenticates possession of the secret), shows "Bob wants to join" for multi-use links (single-use links auto-approve), commits `Add` with `subs_add = [party_sub]`, posts the Welcome to `reply_mailbox`.
 - Joiner checks that the group in the Welcome contains a leaf whose key matches `inviter_fpr`, fetches the state snapshot, publishes its roster profile, and is in.
