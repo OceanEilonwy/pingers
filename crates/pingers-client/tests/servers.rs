@@ -233,6 +233,23 @@ impl Device {
     }
 }
 
+/// The hash of a harness push relay's key config.
+fn push_relay_hash(harness: &InProcessHarness) -> Result<KeyConfigHash, TestError> {
+    let public_key: [u8; 32] = harness
+        .endpoints()
+        .push_relay_key
+        .as_slice()
+        .try_into()
+        .map_err(|_length| TestError::Setup("push relay key length"))?;
+    Ok(pingers_crypto::key_config_hash(
+        &pingers_proto::PushRelayKeyConfig {
+            key_id: pingers_proto::PushRelayKeyId::new(1),
+            public_key,
+        }
+        .to_bytes(),
+    ))
+}
+
 fn payload(url: &InviteUrl) -> Result<pingers_proto::InvitePayload, TestError> {
     Ok(pingers_parties::InviteLink::from_text(url.as_str().to_owned()).payload()?)
 }
@@ -326,6 +343,8 @@ async fn one_device_holds_parties_on_two_servers_with_their_own_pins() -> TestRe
         invite_b.registration_code.as_ref().map(SecretText::expose),
         Some(B_CODE)
     );
+    // B's own push relay (not the build's): its key, as Ana trusted it, goes in B's invites.
+    assert_eq!(invite_b.push_relay_pins, [push_relay_hash(world.b()?)?]);
     Ok(())
 }
 
