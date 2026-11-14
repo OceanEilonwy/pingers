@@ -548,7 +548,10 @@ fn play(
 
     step(report, scene, "A shares the invite link", |scene| {
         let a = &scene.a;
-        a.tap_when(&Find::tag("invite_share").enabled(), NETWORK)
+        // The first invite on a server registers its mailbox, and the first Party there fetched a
+        // whole token batch: on an emulator's debug build that can take minutes, while the
+        // "Making an invite link" animation keeps uiautomator from dumping the screen.
+        a.tap_when(&Find::tag("invite_share").enabled(), PRESENCE)
             .context("the invite link was never made (Share invite link stayed disabled)")?;
         // The share sheet previews the text it shares: the link itself.
         let preview = a.wait_for(&Find::text(Text::Contains("pingers://join".into())), UI)?;
