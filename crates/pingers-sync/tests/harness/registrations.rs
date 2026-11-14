@@ -310,3 +310,44 @@ async fn the_next_relay_key_comes_through_the_server_with_its_activation() -> Te
     assert_eq!(published.key.key_id(), 2);
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_mailbox_the_server_forgot_is_forgotten_instead_of_tried_again() -> TestResult {
+    let world = World::start()?;
+    let device = world.device()?;
+    let _ = device.stock_tokens().await?;
+    device
+        .engine
+        .set_wake_push(Some(wake_push(&world, "https://push.example/a")?));
+    let _ = step(&device, &[]).await?;
+    let _ = step(&device, &[]).await?;
+    let mailbox = device
+        .engine
+        .take_mailbox(MailboxPurpose::Knock)
+        .await?
+        .ok_or(TestError::Unexpected("no pooled mailbox"))?;
+    let stored = device
+        .session()?
+        .mailboxes()
+        .get(&mailbox)?
+        .ok_or(TestError::Unexpected("not stored"))?;
+    // Deleted on the server behind the engine's back.
+    let deleted = device
+        .engine
+        .send(
+            pingers_sync::ApiRequest::delete_mailbox(&mailbox, &stored.read_key),
+            Sending::or_drop(WakeBudget::UNLIMITED),
+        )
+        .await?
+        .answered(pingers_sync::Route::DeleteMailbox)?;
+    assert_eq!(deleted.status(), 204);
+    device
+        .engine
+        .set_wake_push(Some(wake_push(&world, "https://push.example/b")?));
+    // The empty pool comes first; then the forgotten mailbox, once.
+    assert!(matches!(step(&device, &[]).await?, Maintained::Pool(_)));
+    assert_eq!(step(&device, &[]).await?, Maintained::Forgotten);
+    assert!(device.session()?.mailboxes().get(&mailbox)?.is_none());
+    assert_eq!(step(&device, &[]).await?, Maintained::UpToDate);
+    Ok(())
+}

@@ -86,6 +86,9 @@ pub enum Maintained {
     MailboxPushRemoved,
     /// The pool was refilled (or found full) instead.
     Pool(PoolRefill),
+    /// The server no longer holds the registration (the mailbox expired, the group is gone):
+    /// it was forgotten here too, so it is not tried again.
+    Forgotten,
     /// The request was not sent; the registration stays stale for a later wake.
     NotSent(NotSentReason),
 }
@@ -350,6 +353,10 @@ impl SyncEngine {
             desired: desired.as_ref(),
         };
         match self.perform(task, &step, budget).await {
+            Err(SyncError::Status { status: 404, .. }) => {
+                self.forget(task).await?;
+                Ok(Maintained::Forgotten)
+            }
             Err(SyncError::NoRelay { .. }) => Ok(Maintained::NotSent(NotSentReason::NoRelay)),
             Err(SyncError::BudgetExhausted { .. }) => {
                 Ok(Maintained::NotSent(NotSentReason::BudgetExhausted))
@@ -438,6 +445,22 @@ impl SyncEngine {
                 None,
             ) => Err(SyncError::Internal),
         }
+    }
+
+    /// Forgets the registration `task` is about, which the server answered 404 for.
+    async fn forget(&self, task: Task) -> Result<(), SyncError> {
+        blocking(&self.database, move |session| {
+            match task {
+                Task::AddSubscription(group)
+                | Task::ResealSubscription(group)
+                | Task::RemoveSubscription(group) => session.subscriptions().delete(&group)?,
+                Task::ResealMailbox(mailbox) | Task::RemoveMailboxPush(mailbox) => {
+                    session.mailboxes().delete(&mailbox)?;
+                }
+            }
+            Ok(())
+        })
+        .await
     }
 
     async fn refill(&self, pool: &PoolTarget, budget: WakeBudget) -> Result<Maintained, SyncError> {
