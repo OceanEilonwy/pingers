@@ -27,6 +27,15 @@ impl PostQuantum {
             Self::QuantumResistant => CipherSuitePolicy::QuantumResistant,
         }
     }
+
+    /// The setting a group's suite stands for, so a joiner takes its Party's suite from the
+    /// group it joined.
+    pub(crate) fn of_suite(suite: CipherSuitePolicy) -> Result<Self, PartiesError> {
+        [Self::Classical, Self::QuantumResistant]
+            .into_iter()
+            .find(|setting| setting.suite() == suite)
+            .ok_or(PartiesError::Internal)
+    }
 }
 
 /// Which OHTTP relays this Party's anonymous requests go through.

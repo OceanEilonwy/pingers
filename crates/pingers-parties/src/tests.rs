@@ -1053,6 +1053,7 @@ fn per_party_settings_are_kept_and_changed() -> Result<(), TestError> {
 }
 
 #[test]
+#[cfg(not(feature = "x-wing"))]
 fn quantum_resistant_party_needs_the_x_wing_build() -> Result<(), TestError> {
     let mut rng = rng(11);
     let alice = Device::new(1)?;
@@ -1499,5 +1500,85 @@ fn committing_a_leave_drops_the_leavers_subscription() -> Result<(), TestError> 
     alice.parties().commit_accepted(&party)?;
     let update = alice.parties().self_update(&party, &mut rng)?;
     assert!(update.request.subscriptions_removed.is_empty());
+    Ok(())
+}
+
+// --- quantum-resistant Parties (feature x-wing) ---
+
+#[cfg(feature = "x-wing")]
+fn quantum_resistant_party(device: &Device, rng: &mut ChaCha20Rng) -> Result<PartyId, TestError> {
+    Ok(device
+        .parties()
+        .create_party(
+            new_party(
+                PartySettings {
+                    post_quantum: PostQuantum::QuantumResistant,
+                    ..settings()?
+                },
+                Some(subscription(device.fill())?),
+            )?,
+            rng,
+        )?
+        .party)
+}
+
+#[test]
+#[cfg(feature = "x-wing")]
+fn quantum_resistant_party_runs_the_x_wing_suite() -> Result<(), TestError> {
+    let mut rng = rng(21);
+    let alice = Device::new(1)?;
+    let party = quantum_resistant_party(&alice, &mut rng)?;
+    assert_eq!(
+        alice.parties().settings(&party)?.post_quantum,
+        PostQuantum::QuantumResistant
+    );
+    let row = alice
+        .session
+        .parties()
+        .get(&party)?
+        .ok_or(TestError::Unexpected("no Party row"))?;
+    let identity = alice
+        .session
+        .identity()
+        .load()?
+        .ok_or(TestError::Unexpected("no account"))?;
+    let group = pingers_mls::MlsContext::new(&alice.session, &identity.signing_key)
+        .party_group(&row.group)?;
+    assert_eq!(
+        group.suite()?,
+        pingers_mls::CipherSuitePolicy::QuantumResistant
+    );
+    drop(group);
+    // Party operations and commits work in the X-Wing group.
+    alice
+        .parties()
+        .create_spot(&party, new_spot("Pub", circle(150.0)?)?, &mut rng)?;
+    alice.parties().self_update(&party, &mut rng)?;
+    alice.parties().commit_accepted(&party)?;
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "x-wing")]
+fn a_classical_key_package_cannot_join_a_quantum_resistant_party() -> Result<(), TestError> {
+    let mut rng = rng(22);
+    let alice = Device::new(1)?;
+    let bob = Device::new(2)?;
+    let party = quantum_resistant_party(&alice, &mut rng)?;
+    let created = invite(&alice, &party, InviteUses::Single, &mut rng)?;
+    let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
+    assert!(matches!(
+        alice
+            .parties()
+            .receive_join_request(created.invite, &posted.body, &mut rng),
+        Err(PartiesError::Mls(_))
+    ));
+    // Nothing changed: one member, no commit waiting, the invite still open.
+    assert_eq!(names(&alice.parties(), &party)?, ["Alice"]);
+    assert_eq!(
+        alice.parties().invite_status(created.invite)?,
+        InviteStatus::Open
+    );
+    alice.parties().self_update(&party, &mut rng)?;
     Ok(())
 }

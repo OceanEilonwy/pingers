@@ -523,7 +523,7 @@ impl PartyLifecycle<'_> {
             let settings = StoredSettings {
                 server: joining.payload.server.clone(),
                 relays: RelayChoice::ServerDefault,
-                post_quantum: PostQuantum::Classical,
+                post_quantum: PostQuantum::of_suite(group.suite()?)?,
             };
             records::write(session, &Key::Settings(&party), &settings.encode()?)?;
             records::record_roster(session, &party, group.epoch(), &roster)?;

@@ -17,7 +17,7 @@ use pingers_store::StoreError;
 use pingers_time::{Clock, ManualClock, UnixSeconds};
 
 use super::{TestError, TestResult};
-use crate::live::{Reconnect, sleep_until};
+use crate::live::{Reconnect, grant_key_pair, sleep_until};
 use crate::{ChannelState, MAX_RECONNECT_DELAY, MeetupView, NetworkError, PeerView, SessionError};
 
 #[test]
@@ -230,5 +230,18 @@ fn compass_follows_the_meet_point() -> TestResult {
         cleared.compass(CompassTarget::MeetPoint, &observer, NOW),
         None
     );
+    Ok(())
+}
+
+#[test]
+fn grant_keys_follow_the_party_suite() -> TestResult {
+    let mut rng: crate::SessionRng = Box::new(pingers_testkit::seeded_rng(5));
+    let classical = grant_key_pair(pingers_mls::CipherSuitePolicy::Classical, &mut rng)?;
+    assert_eq!(classical.public.as_bytes().len(), 32);
+    let quantum = grant_key_pair(pingers_mls::CipherSuitePolicy::QuantumResistant, &mut rng)?;
+    // X-Wing public keys are 1216 bytes; without the feature the Party's MLS calls refuse the
+    // suite before a grant key is used.
+    let expected = if cfg!(feature = "x-wing") { 1216 } else { 32 };
+    assert_eq!(quantum.public.as_bytes().len(), expected);
     Ok(())
 }

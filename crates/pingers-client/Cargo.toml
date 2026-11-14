@@ -10,6 +10,14 @@ publish.workspace = true
 [package.metadata.pingers]
 layer = 3
 
+[features]
+# Quantum-resistant Parties (design B.8): the X-Wing MLS suite and X-Wing grant keys.
+x-wing = [
+  "pingers-mls/x-wing",
+  "pingers-parties/x-wing",
+  "pingers-meetup-session/x-wing",
+]
+
 [dependencies]
 async-trait = { workspace = true }
 getrandom = { workspace = true }

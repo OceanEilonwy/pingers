@@ -28,6 +28,10 @@ bindgen = ["uniffi/cli"]
 # Zero every block of memory as it is freed (src/wiping.rs), as fob-ffi does. Off only to
 # measure what it costs.
 wipe-freed = []
+# Quantum-resistant Parties (design B.8). Off by default until a joiner can make an X-Wing
+# KeyPackage for such a Party (crates/pingers-parties/CONTRACT.md, request 4); until then the
+# option fails with UnsupportedSuite instead of making a Party nobody can join.
+x-wing = ["pingers-client/x-wing"]
 
 [dependencies]
 hex = { workspace = true }

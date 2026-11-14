@@ -164,7 +164,7 @@ pub async fn knock_key_package(
     mut rng: SessionRng,
 ) -> Result<KnockKeyPackage, SessionError> {
     run_blocking(database, move |local| {
-        let grant = GrantKeyPair::generate(&mut rng)?;
+        let grant = grant_key_pair(suite, &mut rng)?;
         let key_package = local.mls().create_key_package(
             KeyPackagePurpose::Meetup {
                 grant_key: &grant.public,
@@ -178,6 +178,22 @@ pub async fn knock_key_package(
         })
     })
     .await
+}
+
+/// A member's grant key pair for a Meetup of `suite` (design B.6.1): X25519, or X-Wing in a
+/// quantum-resistant Party (feature `x-wing`; without it such a Party's MLS calls fail first,
+/// with `UnsupportedSuite`).
+pub(crate) fn grant_key_pair(
+    suite: CipherSuitePolicy,
+    rng: &mut SessionRng,
+) -> Result<GrantKeyPair, pingers_crypto::CryptoError> {
+    #[cfg(feature = "x-wing")]
+    if suite == CipherSuitePolicy::QuantumResistant {
+        return GrantKeyPair::generate_x_wing(rng);
+    }
+    #[cfg(not(feature = "x-wing"))]
+    let _: CipherSuitePolicy = suite;
+    GrantKeyPair::generate(rng)
 }
 
 /// Creates a Meetup with the knocker: the group with the external PSK, the group on the
@@ -203,7 +219,7 @@ pub async fn create(
     } = request;
     let SpotRef { party, spot } = key.id().spot;
     let prepared = run_blocking(&runtime.database, move |local| {
-        let grant = GrantKeyPair::generate(&mut rng)?;
+        let grant = grant_key_pair(suite, &mut rng)?;
         let roster = group::party_context(local, &party)?.roster;
         let created = local.mls().create_meetup_group(
             &MeetupCreation {
