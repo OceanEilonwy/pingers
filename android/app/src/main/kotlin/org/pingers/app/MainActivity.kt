@@ -33,6 +33,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
@@ -94,7 +96,10 @@ class MainActivity : ComponentActivity() {
             PingersTheme {
                 // First run: permissions before anything else (not for the fake screenshots).
                 var onboarded by remember { mutableStateOf(fake || Onboarding.done(this)) }
-                if (onboarded) App(repo, nav, pending) { pending = null } else OnboardingScreen { onboarded = true }
+                // Test tags as view resource ids, so UI Automator on the host finds them (ui/E2eTags.kt).
+                Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
+                    if (onboarded) App(repo, nav, pending) { pending = null } else OnboardingScreen { onboarded = true }
+                }
             }
         }
     }
