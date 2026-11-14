@@ -478,7 +478,10 @@ fn play(
         for device in [&scene.a, &scene.b] {
             install_pingers(device, apk, scene.package)?;
         }
-        Ok("foss debug build, permissions granted, Home shown on both".to_owned())
+        Ok(format!(
+            "{} installed, permissions granted, Home shown on both",
+            scene.package
+        ))
     })?;
 
     // 1. Create a Party and invite.
