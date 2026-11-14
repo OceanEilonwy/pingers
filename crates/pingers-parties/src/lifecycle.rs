@@ -195,6 +195,7 @@ impl<'session> PartyLifecycle<'session> {
                 own_leaf: group.own_leaf(),
                 created_at: now,
                 location_visibility: new.settings.location_visibility,
+                server: new.settings.server.clone(),
             })?;
             session.members().put(&Member {
                 party: party_id,

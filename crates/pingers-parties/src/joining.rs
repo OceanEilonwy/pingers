@@ -134,6 +134,7 @@ impl PartyLifecycle<'_> {
             let identity = identity(session)?;
             let settings = stored_settings(session, party)?;
             let mailbox = session
+                .server(&settings.server)?
                 .mailboxes()
                 .take_pooled(MailboxPurpose::Invite, now)?
                 .ok_or(PartiesError::NoPooledMailbox)?;
@@ -370,6 +371,7 @@ impl PartyLifecycle<'_> {
         self.session.transaction(|session| {
             let identity = identity(session)?;
             let reply = session
+                .server(&payload.server)?
                 .mailboxes()
                 .take_pooled(MailboxPurpose::Reply, now)?
                 .ok_or(PartiesError::NoPooledMailbox)?;
@@ -485,6 +487,7 @@ impl PartyLifecycle<'_> {
                 own_leaf: group.own_leaf(),
                 created_at: now,
                 location_visibility: None,
+                server: joining.payload.server.clone(),
             })?;
             session.members().put(&Member {
                 party,

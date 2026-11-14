@@ -7,9 +7,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use pingers_crypto::{AccountSigningKey, MailboxReadKey, account_id};
 use pingers_geo::{Circle, Coordinate, Fence, Meters};
-use pingers_proto::{KeyConfigHash, ServerId};
+use pingers_proto::ServerId;
 use pingers_store::{
-    Database, DatabaseKey, Identity, Mailbox, MailboxPurpose, MailboxState, Session,
+    Database, DatabaseKey, Identity, Mailbox, MailboxPurpose, MailboxState, ServerRecord,
+    ServerTrust, Session,
 };
 use pingers_time::{ManualClock, UnixSeconds};
 use rand_chacha::ChaCha20Rng;
@@ -86,8 +87,14 @@ impl Device {
         session.identity().save(&Identity {
             account: account_id(&signing_key.public_key()),
             signing_key,
+        })?;
+        session.servers().put(&ServerRecord {
             server: ServerId::new(SERVER.into())?,
-            server_pin: KeyConfigHash::from_bytes([0; 32]),
+            ohttp_relays: Vec::new(),
+            push_relay: None,
+            gateway_pins: Vec::new(),
+            push_relay_pins: Vec::new(),
+            trust: ServerTrust::BuiltIn,
         })?;
         Ok(Self {
             session,
@@ -117,13 +124,16 @@ impl Device {
         expires_at: UnixSeconds,
     ) -> Result<(), TestError> {
         let fill = self.fill();
-        self.session.mailboxes().insert(&Mailbox {
-            read_key: MailboxReadKey::from_bytes(Zeroizing::new([fill; 32])),
-            purpose,
-            state: MailboxState::Pooled,
-            push: None,
-            expires_at,
-        })?;
+        self.session
+            .server(&ServerId::new(SERVER.into())?)?
+            .mailboxes()
+            .insert(&Mailbox {
+                read_key: MailboxReadKey::from_bytes(Zeroizing::new([fill; 32])),
+                purpose,
+                state: MailboxState::Pooled,
+                push: None,
+                expires_at,
+            })?;
         Ok(())
     }
 }

@@ -245,7 +245,10 @@ async fn a_server_with_codes_refusing_no_code_asks_for_one_and_takes_a_typed_one
         .engine
         .offer_registration_code(code("friends"), CodeSource::User)
         .await?;
-    device.engine.ensure_registered(WakeBudget::UNLIMITED).await?;
+    device
+        .engine
+        .ensure_registered(WakeBudget::UNLIMITED)
+        .await?;
     assert_eq!(
         device
             .engine
