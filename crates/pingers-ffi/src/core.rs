@@ -1029,6 +1029,8 @@ mod tests {
                     pingers_client::snapshot::Operator::new("Push Co")
                         .map_err(|_| CoreError::invalid("operator"))?,
                 ),
+                relay_host: None,
+                push_relay_host: None,
             }),
         });
         let check = core.check_reachability().await?;

@@ -188,6 +188,26 @@ pub struct ServerOperators {
     pub server: Operator,
     /// The push relay's operator, if the server lists the instance's push relay.
     pub push_relay: Option<Operator>,
+    /// The first privacy relay the server lists (`ohttp_relays`), which Parties on the server
+    /// default to.
+    pub relay_host: Option<Host>,
+    /// Where the instance's push relay is, if the server lists it.
+    pub push_relay_host: Option<Host>,
+}
+
+impl PartyConfig {
+    /// Fills in who runs what from the server's published parameters. An OHTTP privacy relay
+    /// publishes no operator of its own, so it is counted as the server's: the cautious
+    /// reading, which then reports one operator running both.
+    pub fn declare(&mut self, operators: &ServerOperators) {
+        self.server.operator = Some(operators.server.clone());
+        self.relay.operator = Some(operators.server.clone());
+        if let Some(host) = &operators.relay_host {
+            self.relay.host = host.clone();
+        }
+        self.push_relay.operator.clone_from(&operators.push_relay);
+        self.push_relay.host.clone_from(&operators.push_relay_host);
+    }
 }
 
 /// Everything the screens read, at one moment.
@@ -340,6 +360,17 @@ pub struct Member {
     pub name: Name,
     /// Whether it is this device.
     pub me: Me,
+    /// Whether this device compared safety codes with them.
+    pub checked: SafetyCheck,
+}
+
+/// Whether this device compared safety codes with a member and they matched (design B.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SafetyCheck {
+    /// "Checked".
+    Checked,
+    /// "Not checked", the default.
+    NotChecked,
 }
 
 /// A Spot.
@@ -373,8 +404,8 @@ pub struct PartyConfig {
 pub struct Service {
     /// Where it is.
     pub host: Host,
-    /// Who declares to run it.
-    pub operator: Operator,
+    /// Who declares to run it, once the server's parameters were read.
+    pub operator: Option<Operator>,
 }
 
 /// How a Party's server is run.
@@ -391,8 +422,10 @@ pub enum Hosting {
 pub struct PushRelay {
     /// Which relay.
     pub kind: PushRelayKind,
-    /// Who declares to run it.
-    pub operator: Operator,
+    /// Who declares to run it, once the server's parameters were read.
+    pub operator: Option<Operator>,
+    /// Where it is, once the server's parameters were read.
+    pub host: Option<Host>,
 }
 
 /// Which push relay.
@@ -910,7 +943,7 @@ mod tests {
         )?);
         let service = Service {
             host: Host::new("pingers.test")?,
-            operator: Operator::new("Flat 7")?,
+            operator: Some(Operator::new("Flat 7")?),
         };
         Ok(Party {
             id: PartyId::from_bytes([id; 16]),
@@ -934,6 +967,7 @@ mod tests {
                 push_relay: PushRelay {
                     kind: PushRelayKind::Official,
                     operator: service.operator,
+                    host: None,
                 },
                 post_quantum: PostQuantum::Off,
             },
@@ -972,6 +1006,40 @@ mod tests {
             map_host: None,
             operators: None,
         })
+    }
+
+    #[test]
+    fn declared_operators_count_the_relay_as_the_servers() -> Result<(), TestError> {
+        let mut config = party(1, &[])?.config;
+        config.server.operator = None;
+        config.relay.operator = None;
+        config.push_relay.operator = None;
+        let operators = ServerOperators {
+            server: Operator::new("Pingers")?,
+            push_relay: Some(Operator::new("Pingers")?),
+            relay_host: Some(Host::new("relay.pingers.org")?),
+            push_relay_host: Some(Host::new("push.pingers.org")?),
+        };
+        config.declare(&operators);
+        assert_eq!(config.server.operator, Some(Operator::new("pingers")?));
+        assert_eq!(config.relay.operator, Some(Operator::new("Pingers")?));
+        assert_eq!(config.relay.host.as_str(), "relay.pingers.org");
+        assert_eq!(config.push_relay.operator, Some(Operator::new("Pingers")?));
+        assert_eq!(
+            config.push_relay.host.as_ref().map(Host::as_str),
+            Some("push.pingers.org")
+        );
+        // A server that lists no relay keeps the Party's own relay host.
+        let mut unlisted = party(1, &[])?.config;
+        unlisted.declare(&ServerOperators {
+            relay_host: None,
+            push_relay: None,
+            push_relay_host: None,
+            ..operators
+        });
+        assert_eq!(unlisted.relay.host.as_str(), "pingers.test");
+        assert_eq!(unlisted.push_relay.operator, None);
+        Ok(())
     }
 
     #[test]

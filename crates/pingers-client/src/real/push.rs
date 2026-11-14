@@ -21,7 +21,7 @@ use pingers_sync::{PushSeal, VerifiedPushRelay, WakeBudget, WakePush};
 
 use super::records::{self, Key, corrupt};
 use super::sync::Net;
-use crate::snapshot::{Operator, ServerOperators};
+use crate::snapshot::{Host, Operator, ServerOperators};
 use crate::{ClientError, Platform, PushTokens, Unavailable};
 
 /// The longest a sealed token is good for: a Party subscription lives 30 days (design B.4.9),
@@ -72,6 +72,15 @@ fn same_origin(first: &str, second: &str) -> bool {
     first.trim_end_matches('/') == second.trim_end_matches('/')
 }
 
+/// A URL's host (and port), as screens name a server: "relay.quietpath.net".
+fn host_of(url: &str) -> Option<Host> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    Host::new(rest.split('/').next().unwrap_or(rest)).ok()
+}
+
 impl Net {
     /// The server's parameters, fetched through the relay once per process. The map host is
     /// kept in a record for the next start.
@@ -99,29 +108,35 @@ impl Net {
         Ok(params)
     }
 
+    /// Who runs the server and the instance's push relay, and where the default privacy relay
+    /// and the push relay are, from the parameters this process read; `None` before they were
+    /// read or if the server declares no operator.
+    pub(crate) fn operators(&self) -> Option<ServerOperators> {
+        let params = lock(&self.learned.params);
+        let params = params.as_ref()?;
+        let listed = self.learned.push_relay.as_ref().and_then(|setup| {
+            params
+                .push_relays
+                .iter()
+                .find(|relay| same_origin(relay.url.as_str(), &setup.origin))
+        });
+        Some(ServerOperators {
+            server: Operator::new(&params.server_operator).ok()?,
+            push_relay: listed.and_then(|relay| Operator::new(&relay.operator).ok()),
+            relay_host: params
+                .ohttp_relays
+                .first()
+                .and_then(|relay| host_of(relay.as_str())),
+            push_relay_host: listed.and_then(|relay| host_of(relay.url.as_str())),
+        })
+    }
+
     /// The map host the server advertises: from this process's `/v1/params`, or as last
     /// recorded.
     ///
     /// # Errors
     ///
     /// A storage failure, or a corrupt record.
-    /// Who runs the server and the instance's push relay, from the parameters this process
-    /// read; `None` before they were read or if the server declares no operator.
-    pub(crate) fn operators(&self) -> Option<ServerOperators> {
-        let params = lock(&self.learned.params);
-        let params = params.as_ref()?;
-        let push_relay = self.learned.push_relay.as_ref().and_then(|setup| {
-            params
-                .push_relays
-                .iter()
-                .find(|relay| same_origin(relay.url.as_str(), &setup.origin))
-                .and_then(|relay| Operator::new(&relay.operator).ok())
-        });
-        Some(ServerOperators {
-            server: Operator::new(&params.server_operator).ok()?,
-            push_relay,
-        })
-    }
 
     pub(crate) async fn map_host(&self) -> Result<Option<MapHostUrl>, ClientError> {
         if let Some(params) = lock(&self.learned.params).as_ref() {
@@ -290,6 +305,21 @@ mod tests {
     use super::*;
 
     type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
+
+    #[test]
+    fn hosts_are_read_from_relay_urls() {
+        let host = |url| host_of(url).map(|host| host.as_str().to_owned());
+        assert_eq!(
+            host("https://relay.quietpath.net/"),
+            Some("relay.quietpath.net".into())
+        );
+        assert_eq!(
+            host("http://10.0.2.2:8443/relay"),
+            Some("10.0.2.2:8443".into())
+        );
+        assert_eq!(host("push.pingers.org"), Some("push.pingers.org".into()));
+        assert_eq!(host("https://"), None);
+    }
 
     fn relay(max_days: u64) -> TestResult<VerifiedPushRelay> {
         Ok(VerifiedPushRelay {

@@ -437,8 +437,8 @@ mod tests {
         let mut snapshot = fixtures::snapshot()?;
         for party in &mut snapshot.parties {
             party.config.hosting = Hosting::Public;
-            party.config.relay.operator = Operator::new("Flat 7")?;
-            party.config.push_relay.operator = Operator::new("Flat 7")?;
+            party.config.relay.operator = Some(Operator::new("Flat 7")?);
+            party.config.push_relay.operator = Some(Operator::new("Flat 7")?);
         }
         snapshot.fallbacks = vec![Fallback::PrivacyPassOnly];
         let view = screen(&snapshot, fixtures::climbing_crew())?;

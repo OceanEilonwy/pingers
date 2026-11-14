@@ -138,7 +138,7 @@ mod tests {
         assert_eq!(view.configuration.overlaps, [Overlap::ServerRunsPushRelay]);
         assert_eq!(view.privacy, PrivacyLevel::Reduced);
         for party in &mut snapshot.parties {
-            party.config.push_relay.operator = Operator::new("Flat 7")?;
+            party.config.push_relay.operator = Some(Operator::new("Flat 7")?);
         }
         let view = server_sees(&snapshot, fixtures::climbing_crew())?;
         assert_eq!(view.configuration.overlaps, [Overlap::ServerRunsPushRelay]);

@@ -36,9 +36,9 @@ impl<'a> Operators<'a> {
     #[must_use]
     pub const fn of(config: &'a PartyConfig) -> Self {
         Self {
-            server: Some(&config.server.operator),
-            relay: Some(&config.relay.operator),
-            push_relay: Some(&config.push_relay.operator),
+            server: config.server.operator.as_ref(),
+            relay: config.relay.operator.as_ref(),
+            push_relay: config.push_relay.operator.as_ref(),
         }
     }
 }
@@ -528,7 +528,7 @@ mod tests {
     fn a_shared_operator_reduces_a_partys_privacy() -> Result<(), FixtureError> {
         let mut snapshot = fixtures::snapshot()?;
         for party in &mut snapshot.parties {
-            party.config.relay.operator = Operator::new("Flat 7")?;
+            party.config.relay.operator = Some(Operator::new("Flat 7")?);
         }
         assert_eq!(
             party(&snapshot, fixtures::climbing_crew())?.privacy,
