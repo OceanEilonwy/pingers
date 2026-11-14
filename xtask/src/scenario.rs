@@ -962,7 +962,9 @@ fn set_ntfy_server(device: &Device, server: &str) -> Result<()> {
         UI,
     )?;
     device.wait_for(&Find::text(Text::Is(server.to_owned())), UI)?;
-    device.shell(&format!("am force-stop {NTFY_PACKAGE}"))?;
+    // Leave ntfy running in the background, not force-stopped: Android delivers no broadcast to
+    // a stopped app, so Pingers' UnifiedPush registration would never get an endpoint.
+    device.shell("input keyevent KEYCODE_HOME")?;
     Ok(())
 }
 
