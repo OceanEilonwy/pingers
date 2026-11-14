@@ -6472,6 +6472,7 @@ dependencies = [
  "pingers-push-relay",
  "pingers-server",
  "rcgen",
+ "reqwest",
  "rustls",
  "serde_json",
  "sha2 0.11.1",

@@ -19,7 +19,8 @@
 //! - `cargo xtask no-python`: fails if a Python file is in the repository (also a `ci` step).
 //!   See [`no_python`].
 //! - `cargo xtask pins <server.toml> <push-relay.toml>`: the app's two key pin build
-//!   variables from the deployed configurations. See [`pins`].
+//!   variables from the deployed configurations; `cargo xtask pins --relay <url> --push <url>`:
+//!   the same from the running services. See [`pins`].
 //! - `cargo xtask release-android [--flavour gms|foss]...`: the signed release build CI's
 //!   `release.yml` runs, from the same environment variables. See [`release_android`].
 //! - `cargo xtask nodo-dist [<commit>] [--nodo <checkout>]`: the vendored source tarball and
@@ -115,6 +116,9 @@ const USAGE: &str = "usage: cargo xtask <command>\n\n\
                      pins <server.toml> <push-relay.toml>\n          \
                      print PINGERS_GATEWAY_KEY_PINS and PINGERS_PUSH_RELAY_KEY_PINS\n          \
                      from the deployed configurations (public values only)\n  \
+                     pins --relay <ohttp relay url> --push <push relay url>\n          \
+                     the same lines from the running services: the served gateway key\n          \
+                     through the relay, the push relay's published and next keys\n  \
                      release-android [--flavour gms|foss]...\n          \
                      signed release APKs and AABs from PINGERS_KEYSTORE_PATH,\n          \
                      PINGERS_KEYSTORE_PASSWORD and PINGERS_KEY_ALIAS, checked with\n          \
@@ -165,14 +169,19 @@ fn run() -> Result<Outcome> {
             None => usage(),
         },
         Some("no-python") if options.is_empty() => no_python::run(&workspace_root()?),
-        Some("pins") => match options {
-            [server, push_relay] => {
-                let output = pins::run(Path::new(server), Path::new(push_relay))?;
-                io::stdout().write_all(output.as_bytes())?;
-                Ok(Outcome::Passed)
-            }
-            _ => usage(),
-        },
+        Some("pins") => {
+            let output = match options {
+                [server, push_relay] if !server.starts_with("--") => {
+                    pins::run(Path::new(server), Path::new(push_relay))?
+                }
+                _ => match pins::LiveOptions::parse(options) {
+                    Some(live) => pins::run_live(&live)?,
+                    None => return usage(),
+                },
+            };
+            io::stdout().write_all(output.as_bytes())?;
+            Ok(Outcome::Passed)
+        }
         Some("release-android") => match release_android::parse_options(options) {
             Some(choice) => release_android::run(&workspace_root()?, &choice),
             None => usage(),

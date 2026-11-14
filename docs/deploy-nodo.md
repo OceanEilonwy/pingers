@@ -399,18 +399,22 @@ to a fresh VM and check the gateway key hash is unchanged.
    - `curl -sI https://maps.example.org/catalog.json` gives 200.
    - `curl -s https://ohttp.example.org/v1/ohttp/config | openssl dgst -sha256 -binary | basenc
      --base64url | tr -d =` equals the served key's pin from `pingers-server pins
-     /run/nodo/volumes/pingers-server/config/server.toml`.| sha256sum` equals the served key's hash
-     from `pingers-server pins /run/nodo/volumes/pingers-server/config/server.toml`.
+     /run/nodo/volumes/pingers-server/config/server.toml`.
    - `curl -s -o /dev/null -w '%{http_code}' -X POST https://pingers.example.org/ohttp` gives
      404: the gateway is not reachable directly.
    - `curl -s -o /dev/null -w '%{http_code}' -X POST https://push.example.org/v1/push` gives 404.
    - The `openssl s_client -groups X25519MLKEM768` check of section 2.1, for each name.
 9. **Pins into CI.** Over the owner's SSH, run `pingers-server pins` and `pingers-push-relay pins`
    on the rendered configs (paths in steps 4 and 8); each prints one pin per line. Join each
-   pair with a comma into `PINGERS_GATEWAY_KEY_PINS` and `PINGERS_PUSH_RELAY_KEY_PINS`, check the
-   served ones against the curl checks above, and build the release APKs. (`cargo xtask pins
-   <server.toml> <push-relay.toml>` prints both lines from copies of the configs, but those hold
-   the private keys: on nodo, keep them on the device and use the binaries.)
+   pair with a comma into `PINGERS_GATEWAY_KEY_PINS` and `PINGERS_PUSH_RELAY_KEY_PINS`. From
+   outside, `cargo xtask pins --relay https://ohttp.example.org --push https://push.example.org`
+   prints the same two lines from the running services: the served gateway key (fetched through
+   the relay, as the app fetches it) and the push relay's published and next keys. Its gateway
+   pin must be one of the two from `pingers-server pins` (the next slot is not served, so it only
+   comes from there), and each of its push relay pins must be one `pingers-push-relay pins`
+   prints. Then build the release APKs. (`cargo xtask pins <server.toml>
+   <push-relay.toml>` prints both lines from copies of the configs, but those hold the private
+   keys: on nodo, keep them on the device and use the binaries.)
 10. **Two real phones** on mobile data, once with FCM and once with UnifiedPush: the tier-1
     scenario, including a ten-minute Meetup (streaming through the router).
 11. **Backup.** A USB backup with the device passphrase (so it includes the device key), stored
