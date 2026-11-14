@@ -222,8 +222,10 @@ pub(crate) fn commit(shared: &Shared, request: &BinaryRequest) -> Result<Reply, 
         body: commit.commit.clone(),
         delivery: Mode::Stored,
     };
+    // Through the pusher, which first waits for any push to a removed subscription.
     let outcome = shared
-        .groups
+        .tasks
+        .pusher()
         .commit(&group, commit, &mut shared.forked_rng())
         .map_err(|error| refused(&error))?;
     let response = outcome.response();
@@ -333,8 +335,10 @@ pub(crate) fn state(shared: &Shared, request: &BinaryRequest) -> Result<Reply, R
 /// `DELETE /v1/groups/{id}`.
 pub(crate) fn delete(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
     let (group, anon) = authorise(shared, request, &request.body, Anon::NotRequired)?;
+    // Through the pusher, which first waits for every push to the group in flight.
     shared
-        .groups
+        .tasks
+        .pusher()
         .delete_group(&group)
         .map_err(|error| refused(&error))?;
     Ok(with_session(Reply::status(StatusCode::NO_CONTENT), anon))
