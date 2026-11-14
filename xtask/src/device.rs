@@ -163,6 +163,8 @@ impl Device {
         {
             bail!("type_text takes letters, digits, spaces and :/._- only");
         }
+        // A field tapped a moment ago may not have focus yet; the first letters would be lost.
+        pause(Duration::from_millis(600));
         self.shell(&format!("input text '{}'", text.replace(' ', "%s")))?;
         Ok(())
     }
@@ -433,15 +435,21 @@ impl Find {
     }
 
     fn matches(&self, node: &Node) -> bool {
-        if self.field && !node.class.ends_with("EditText") {
-            return false;
-        }
         if self.enabled && !node.enabled {
             return false;
         }
         let tagged = self.tag.is_some_and(|tag| {
             node.resource_id == tag || node.resource_id.ends_with(&format!(":id/{tag}"))
         });
+        if self.field && !node.class.ends_with("EditText") {
+            // Compose puts a field's content description on a View laid exactly over its
+            // EditText, so the description (never the label text beside it) finds the field.
+            return tagged
+                || self
+                    .texts
+                    .iter()
+                    .any(|text| text.matches(&node.description));
+        }
         tagged
             || self
                 .texts
@@ -503,12 +511,12 @@ mod tests {
 
     use super::*;
 
-    const DUMP: &str = r#"<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation="0"><node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="org.pingers.app.foss.debug" content-desc="" enabled="true" bounds="[0,0][1280,2856]"><node index="0" text="Create party" resource-id="new_party_create" class="android.view.View" content-desc="" enabled="false" bounds="[56,2500][1224,2640]" /><node index="1" text="" resource-id="" class="android.widget.EditText" content-desc="Party name" enabled="true" bounds="[56,400][1224,540]" /><node index="2" text="Ana &amp; Ben &quot;crew&quot;" resource-id="" class="android.widget.TextView" content-desc="" enabled="true" bounds="[0,0][0,0]" /><node index="3" text="4821 0937 5512" resource-id="" class="android.widget.TextView" content-desc="" enabled="true" bounds="[10,10][20,20]" /></node></hierarchy>UI hierchary dumped to: /dev/tty"#;
+    const DUMP: &str = r#"<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation="0"><node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="org.pingers.app.foss.debug" content-desc="" enabled="true" bounds="[0,0][1280,2856]"><node index="0" text="Create party" resource-id="new_party_create" class="android.view.View" content-desc="" enabled="false" bounds="[56,2500][1224,2640]" /><node index="1" text="" resource-id="" class="android.widget.EditText" content-desc="Party name" enabled="true" bounds="[56,400][1224,540]" /><node index="2" text="Ana &amp; Ben &quot;crew&quot;" resource-id="" class="android.widget.TextView" content-desc="" enabled="true" bounds="[0,0][0,0]" /><node index="3" text="4821 0937 5512" resource-id="" class="android.widget.TextView" content-desc="" enabled="true" bounds="[10,10][20,20]" /><node index="4" text="Spot name" resource-id="" class="android.widget.TextView" content-desc="" enabled="true" bounds="[60,700][275,740]" /><node index="5" text="" resource-id="" class="android.view.View" content-desc="Spot name" enabled="true" bounds="[60,760][1220,900]" /></node></hierarchy>UI hierchary dumped to: /dev/tty"#;
 
     #[test]
     fn a_dump_parses_into_nodes_with_unescaped_attributes() -> Result<()> {
         let screen = Screen::parse(DUMP).context("no hierarchy")?;
-        assert_eq!(screen.nodes.len(), 5);
+        assert_eq!(screen.nodes.len(), 7);
         let create = screen.find(&Find::tag("new_party_create")).context("tag")?;
         assert_eq!(create.bounds.centre(), (640, 2570));
         assert!(!create.enabled);
@@ -540,6 +548,11 @@ mod tests {
                 .is_none()
         );
         assert!(screen.find(&Find::text(Text::SafetyCode)).is_some());
+        // A field's description overlay, not the label above it.
+        let overlay = screen
+            .find(&Find::text(Text::Is("Spot name".into())).field())
+            .context("overlay")?;
+        assert_eq!(overlay.class, "android.view.View");
         Ok(())
     }
 

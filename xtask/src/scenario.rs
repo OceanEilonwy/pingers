@@ -818,7 +818,9 @@ fn set_ntfy_server(device: &Device, server: &str) -> Result<()> {
     device.shell(&format!("input keyevent {}", "KEYCODE_DEL ".repeat(40)))?;
     device.type_text(server)?;
     device.tap_when(
-        &Find::text(Text::Is("OK".into())).or(Text::Is("Save".into())),
+        &Find::text(Text::Is("OK".into()))
+            .or(Text::Is("Save".into()))
+            .or(Text::Is("SAVE".into())),
         UI,
     )?;
     device.wait_for(&Find::text(Text::Is(server.to_owned())), UI)?;
