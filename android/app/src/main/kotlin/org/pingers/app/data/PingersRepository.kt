@@ -13,7 +13,13 @@ interface PingersRepository {
     val newParty: StateFlow<NewPartyState>
     val advanced: StateFlow<AdvancedState>
     val invite: StateFlow<InviteState>
-    val acceptInvite: StateFlow<AcceptInviteState>
+    val openInvite: StateFlow<OpenInviteState>
+    /** Null unless this phone asked to join a Party and waits to be let in. */
+    val askedToJoin: StateFlow<AskedToJoinState?>
+    /** Null unless this phone was let in and You're in has not been dismissed. */
+    val letIn: StateFlow<LetInState?>
+    /** The request [openJoinRequest] chose; null once it was decided or withdrawn. */
+    val joinRequest: StateFlow<JoinRequestState?>
     val party: StateFlow<PartyState>
     val spotEditor: StateFlow<SpotEditorState>
     val drawArea: StateFlow<DrawAreaState>
@@ -40,10 +46,24 @@ interface PingersRepository {
     fun setRelay(url: String)
     fun setPushRelay(choice: PushRelayChoice)
     fun setPostQuantum(on: Boolean)
-    fun verifyInvite(invitationId: InviteId)
     fun cancelInvite(invitationId: InviteId)
-    fun acceptInvite()
-    fun declineInvite()
+
+    // Join flow A, the joiner's side
+    /** A join link was opened: Open invite shows, and nothing reaches the core until [askToJoin]. */
+    fun showInvite(link: String)
+    /** Open invite's "Ask to join" with the name typed; [onAsked] runs once the core took it. */
+    fun askToJoin(name: String, onAsked: () -> Unit)
+    fun withdrawJoin()
+    /** You're in's "Open <party>": dismisses You're in and opens the Party. */
+    fun openJoinedParty()
+    /** You're in's "Leave Party": leaves the Party just joined and dismisses You're in. */
+    fun leaveJoinedParty()
+
+    // Join flow A, the inviter's side
+    /** An opened invite was tapped on Invite people: "Ben asked to join" shows that request. */
+    fun openJoinRequest(requestId: InviteId)
+    fun letIn()
+    fun turnAway()
 
     // Spots
     fun editSpot(spotId: SpotId?)

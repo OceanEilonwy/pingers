@@ -1,0 +1,56 @@
+{
+  "name": "invite-post-encoding",
+  "description": "What a joiner posts to an invite mailbox (sealed with seal_join_request) as canonical CBOR: [0, join request body] to ask to join, or [1, reply mailbox] to withdraw the request whose Welcome would go to that mailbox (design D, invite flow; join flow A). The join request body is as in join-request-encoding.",
+  "vectors": [
+    {
+      "name": "join-without-subscription",
+      "inputs": {
+        "kind": "join",
+        "key_package": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6061626364656667",
+        "display_name": "Bob",
+        "reply_mailbox": "5152535455565758595a5b5c5d5e5f60",
+        "subscription_id": ""
+      },
+      "expected": {
+        "encoding": "82018200845828404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666763426f62505152535455565758595a5b5c5d5e5f60f6"
+      }
+    },
+    {
+      "name": "withdraw",
+      "inputs": {
+        "kind": "withdraw",
+        "reply_mailbox": "5152535455565758595a5b5c5d5e5f60"
+      },
+      "expected": {
+        "encoding": "82018201505152535455565758595a5b5c5d5e5f60"
+      }
+    },
+    {
+      "name": "unknown-kind",
+      "inputs": {
+        "encoding": "82018202505152535455565758595a5b5c5d5e5f60"
+      },
+      "expected": {
+        "error": "OutOfRange"
+      }
+    },
+    {
+      "name": "withdraw-short-mailbox",
+      "inputs": {
+        "encoding": "820182014f5152535455565758595a5b5c5d5e5f"
+      },
+      "expected": {
+        "error": "WrongLength"
+      }
+    },
+    {
+      "name": "bare-join-request-is-not-a-post",
+      "inputs": {
+        "encoding": "8201845828404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666763426f62505152535455565758595a5b5c5d5e5f60f6"
+      },
+      "expected": {
+        "error": "Cbor"
+      }
+    }
+  ]
+}

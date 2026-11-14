@@ -469,6 +469,40 @@ async fn a_wake_confirmed_inside_a_spot_ends_at_the_sync_stub() -> TestResult {
 }
 
 #[tokio::test]
+async fn join_decisions_and_withdrawals_need_a_request() -> TestResult {
+    let store = store()?;
+    let parties = Parties::new(Arc::clone(&store.backend), offline(&store));
+    let draft = PartyDraft {
+        name: Name::new("Crew")?,
+        my_name: Name::new("Sam")?,
+        colour: PartyColour::Blue,
+        post_quantum: PostQuantum::Off,
+    };
+    let party = parties.create_party(draft).await?;
+    // Nobody asked to join, and this device asked nothing.
+    let unknown = [
+        parties
+            .decide_join(party, MailboxId::from_bytes([1; 16]), JoinDecision::Admit)
+            .await,
+        parties
+            .decide_join(party, MailboxId::from_bytes([1; 16]), JoinDecision::Refuse)
+            .await,
+        parties.withdraw_join().await,
+    ];
+    for result in unknown {
+        assert!(matches!(
+            result,
+            Err(ClientError::Parties(
+                pingers_parties::PartiesError::UnknownJoin
+            ))
+        ));
+    }
+    // Nothing to show while no join is under way.
+    assert_eq!(parties.section().await?.joining, None);
+    Ok(())
+}
+
+#[tokio::test]
 async fn party_commands_reach_pingers_parties_and_the_store() -> TestResult {
     let store = store()?;
     let parties = Parties::new(Arc::clone(&store.backend), offline(&store));
@@ -531,20 +565,10 @@ async fn party_commands_reach_pingers_parties_and_the_store() -> TestResult {
     );
 
     let link = crate::snapshot::InviteUrl::new("https://pingers.test/j#x")?;
-    let unavailable = [
+    assert!(matches!(
         parties.open_invite(link, Name::new("Al")?).await,
-        parties
-            .decide_join(party, MailboxId::from_bytes([1; 16]), JoinDecision::Admit)
-            .await,
-        parties.accept_invite().await.map(drop),
-    ];
-    for result in unavailable {
-        assert!(matches!(
-            result,
-            Err(ClientError::Unavailable(crate::Unavailable::Sync))
-        ));
-    }
-
+        Err(ClientError::Unavailable(crate::Unavailable::Sync))
+    ));
     // Without an instance nothing is sent: the relay is unreachable by definition.
     let sync = super::sync::Sync(offline(&store));
     assert_eq!(

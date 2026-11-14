@@ -68,6 +68,7 @@ pub(crate) fn emit(events: &dyn Events, event: ClientEvent) {
     match event {
         ClientEvent::PartiesChanged => events.parties_changed(),
         ClientEvent::JoinRequested(party) => events.join_requested(party),
+        ClientEvent::LetIn(party) => events.let_in(party),
         ClientEvent::MeetupStarted(meetup) => events.meetup_started(meetup),
         ClientEvent::MeetupUpdated(meetup) => events.meetup_updated(meetup),
         ClientEvent::MeetupMessage(meetup) => events.meetup_message(meetup),

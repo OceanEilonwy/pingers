@@ -181,6 +181,12 @@ impl Shared {
         }
         let view = handle.view();
         let timeline = Arc::new(Mutex::new(Timeline::starting(&view.borrow())));
+        let board_seen = self
+            .backend
+            .store(|session, _clock, _rng| Ok(session.board_seen().list()?))
+            .await
+            .unwrap_or_default();
+        let handle = Arc::new(handle);
         let watch = meetup_watch::watch(
             Watched {
                 group,
@@ -189,11 +195,13 @@ impl Shared {
                 timeline: Arc::clone(&timeline),
                 clock: Arc::clone(&self.backend.outside.clock),
                 sink: self.events.clone(),
+                handle: Arc::downgrade(&handle),
+                board_seen,
             },
             Arc::downgrade(self),
         );
         lock(&self.live).push(Live {
-            handle: Arc::new(handle),
+            handle,
             spot,
             started_at: self.backend.outside.clock.now(),
             timeline,
@@ -228,7 +236,7 @@ impl Shared {
             watch,
         } = live.taken();
         // The end is reported here, not by the watcher.
-        drop(watch);
+        watch.stop().await;
         let left = match Arc::try_unwrap(handle) {
             Ok(handle) => handle.leave().await.map(drop).map_err(ClientError::from),
             // Borrowed elsewhere for a moment: dropping the last reference stops its task,

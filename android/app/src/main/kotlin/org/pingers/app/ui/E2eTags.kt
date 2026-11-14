@@ -26,7 +26,7 @@ object E2eTags {
     const val ENDED_DONE = "ended_done"
 
     // Flow A (ask to join, design canvas JoinA1 to JoinA3 and InviteApprove). The scenario
-    // looks for these first; the screens that carry them are not built yet.
+    // looks for these first.
     /** JoinA1: the "Your name in this Party" field. */
     const val JOIN_NAME = "join_name"
     /** JoinA1: "Ask to join". */

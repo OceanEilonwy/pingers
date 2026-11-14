@@ -1,0 +1,45 @@
+{
+  "name": "join-code",
+  "description": "Join code shown on both phones while someone asks to join (design D, invite flow): join_code_key = HKDF-Expand(invite_secret, \"pingers/v1/join-code\", 32); mac = HMAC-SHA256(join_code_key, key_package); code_value = be64(mac[0..8]) mod 10^12, shown as 12 digits in three groups of four, leading zeros kept. `key_package` is the joiner's serialized MLS KeyPackage, exactly as carried in the join request.",
+  "vectors": [
+    {
+      "name": "ramp-secret-short-key-package",
+      "inputs": {
+        "invite_secret": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "key_package": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6061626364656667"
+      },
+      "expected": {
+        "join_code_key": "d9bc771b06ea32d715ddc0f2254ca82bbfbbb0d681d119f6f0168e188bb9ca07",
+        "mac": "c79f429b1b9a881e9fdc282d65562a36b13503820593d145dce2187d8cce59ed",
+        "code_value": 968795129886,
+        "code": "9687 9512 9886"
+      }
+    },
+    {
+      "name": "longer-key-package",
+      "inputs": {
+        "invite_secret": "1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c",
+        "key_package": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7"
+      },
+      "expected": {
+        "join_code_key": "98db6c2ee151e58bcbe229be65d41c651e6c9533b2fdfd8bbebbe2f4893079aa",
+        "mac": "ac897694e31477a6d91cb610f2dd7041bb8d1e27cbf91da8938c1aa75e20cbd4",
+        "code_value": 628169971622,
+        "code": "6281 6997 1622"
+      }
+    },
+    {
+      "name": "leading-zeros-are-shown",
+      "inputs": {
+        "invite_secret": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+        "key_package": "7702"
+      },
+      "expected": {
+        "join_code_key": "8b0018051935c1305c52d26bcd18d69dd6de0622731a029ad39cb2210af5f348",
+        "mac": "a258442f2ba1045b2625f9b69c917944e28bb7594dbeec2e3e29181902fbcdcc",
+        "code_value": 1480987739,
+        "code": "0014 8098 7739"
+      }
+    }
+  ]
+}

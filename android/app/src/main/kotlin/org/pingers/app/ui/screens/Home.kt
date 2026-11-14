@@ -124,7 +124,7 @@ private fun SettingsMenu(repo: PingersRepository, nav: Navigator, simulateAlert:
                 style = body(12.sp, 600, Pc.Muted),
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             )
-            DropdownMenuItem(text = { Text(stringResource(R.string.menu_invite_link)) }, onClick = { open = false; nav.go(Route.AcceptInvite) })
+            DropdownMenuItem(text = { Text(stringResource(R.string.menu_invite_link)) }, onClick = { open = false; repo.showInvite(""); nav.go(Route.OpenInvite) })
             DropdownMenuItem(text = { Text(stringResource(R.string.menu_alert)) }, onClick = { open = false; simulateAlert() })
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.menu_location_request)) },

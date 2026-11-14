@@ -196,8 +196,10 @@ pub enum Fallback {
 pub trait Events: Send + Sync {
     /// Parties, rosters or Spots changed.
     fn parties_changed(&self);
-    /// Someone asked to join a Party through a multi-use invite.
+    /// Someone asked to join a Party through this device's invite ("Ben asked to join").
     fn join_requested(&self, party: PartyId);
+    /// The inviter let this device into a Party ("You're in"); post a notification.
+    fn let_in(&self, party: PartyId);
     /// A Meetup started.
     fn meetup_started(&self, meetup: GroupId);
     /// A Meetup's roster or meet point changed.
