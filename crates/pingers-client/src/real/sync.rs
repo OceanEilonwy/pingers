@@ -22,8 +22,8 @@ use pingers_parties::{LeaveRequest, Outbound, OutgoingCommit, PartiesError, Part
 use pingers_presence::{MailboxPurpose, OutgoingKnock};
 use pingers_proto::{
     AppMessage, BoardCursor, BoardPage, CommitRequest, CommitResponse, CreateGroup, Epoch, GroupId,
-    GroupLogEntry, MailboxId, Padded, SecretText, SequenceNumber, SizeClass, SubscriptionId,
-    TimeToLive, WelcomeBytes,
+    GroupLogEntry, MailboxId, Padded, SecretText, SequenceNumber, ServerId, SizeClass,
+    SubscriptionId, TimeToLive, WelcomeBytes,
 };
 use pingers_store::{MailboxPurpose as StoredPurpose, WakePushes as StoredPushes};
 use pingers_sync::{
@@ -479,8 +479,9 @@ impl Net {
     }
 }
 
+// One engine serves every server for now: the server each call names is not used yet.
 impl ServerPort for Net {
-    async fn pull_group_logs(&self) -> Result<(), PortError> {
+    async fn pull_group_logs(&self, _server: &ServerId) -> Result<(), PortError> {
         // A Party may have changed: the wake's next Party view reads it again.
         self.flush().await.map_err(|error| port_error(&error))?;
         // The server's parameters once per process (the map host, the push relays); a failure
@@ -496,7 +497,11 @@ impl ServerPort for Net {
             .map_err(|error| port_error(&error))
     }
 
-    async fn upload_lease(&self, upload: LeaseUpload) -> Result<Option<BoardPage>, PortError> {
+    async fn upload_lease(
+        &self,
+        _server: &ServerId,
+        upload: LeaseUpload,
+    ) -> Result<Option<BoardPage>, PortError> {
         let engine = self.engine().map_err(|_none| PortError::Unavailable)?;
         let lease = NewLease {
             lease: upload.lease,
@@ -512,13 +517,17 @@ impl ServerPort for Net {
         }
     }
 
-    async fn board_page(&self, cursor: BoardCursor) -> Result<BoardPage, PortError> {
+    async fn board_page(
+        &self,
+        _server: &ServerId,
+        cursor: BoardCursor,
+    ) -> Result<BoardPage, PortError> {
         let engine = self.engine().map_err(|_none| PortError::Unavailable)?;
         self.server(engine.board_page(&cursor, WakeBudget::UNLIMITED))
             .await
     }
 
-    async fn post_knock(&self, knock: OutgoingKnock) -> Result<(), PortError> {
+    async fn post_knock(&self, _server: &ServerId, knock: OutgoingKnock) -> Result<(), PortError> {
         let engine = self.engine().map_err(|_none| PortError::Unavailable)?;
         let body = Padded::from_wire(knock.post).map_err(|_bad| PortError::Unavailable)?;
         let sending = Sending::or_drop(WakeBudget::UNLIMITED);
@@ -531,7 +540,11 @@ impl ServerPort for Net {
         }
     }
 
-    async fn read_mailbox(&self, mailbox: MailboxId) -> Result<Vec<Vec<u8>>, PortError> {
+    async fn read_mailbox(
+        &self,
+        _server: &ServerId,
+        mailbox: MailboxId,
+    ) -> Result<Vec<Vec<u8>>, PortError> {
         let engine = self.engine().map_err(|_none| PortError::Unavailable)?;
         let messages = self
             .server(engine.read_mailbox(&mailbox, None, WakeBudget::UNLIMITED))
@@ -543,7 +556,12 @@ impl ServerPort for Net {
             .collect())
     }
 
-    fn take_mailbox(&self, purpose: MailboxPurpose, lease_start: Bucket) -> Option<MailboxId> {
+    fn take_mailbox(
+        &self,
+        _server: &ServerId,
+        purpose: MailboxPurpose,
+        lease_start: Bucket,
+    ) -> Option<MailboxId> {
         self.engine
             .as_deref()?
             .take_mailbox_for_lease(stored_purpose(purpose), lease_start)
@@ -551,7 +569,7 @@ impl ServerPort for Net {
             .flatten()
     }
 
-    async fn refill_mailbox_pool(&self) -> Result<(), PortError> {
+    async fn refill_mailbox_pool(&self, _server: &ServerId) -> Result<(), PortError> {
         let engine = self.engine().map_err(|_none| PortError::Unavailable)?;
         let target = PoolTarget {
             purpose: StoredPurpose::Knock,

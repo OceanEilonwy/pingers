@@ -5,16 +5,23 @@
 //! a Focus change. [`WakeState::run`] runs the fixed sequence of design E.2:
 //!
 //! 1. ask pingers-gate (Focus read fresh, exclusion zones and their trail first);
-//! 2. update Spot presence (pingers-geo), and choose the OS geofences again if the device moved;
-//! 3. pull the group logs, then build and upload the lease, read the board and trial-match
-//!    (pingers-presence), only against Spots that are confirmed `Inside`;
-//! 4. knock on matches, and answer knocks with a liveness check;
-//! 5. hand accepted knocks and Welcomes to pingers-meetup-session;
-//! 6. refill the mailbox pool, set the location mode and schedule the next wake.
+//! 2. update Spot presence (pingers-geo), choose the OS geofences again if the device moved,
+//!    and leave Meetups the device left or may no longer share in;
+//! 3. then one board round per server (each Party lives on one server, with its own board,
+//!    mailboxes and group logs), for every server with a Party and every board that still holds
+//!    a lease or waits for a Welcome:
+//!    1. pull that server's group logs, then build and upload one lease to its board (its
+//!       Parties' real records plus dummies), read the board and trial-match
+//!       (pingers-presence), only against that server's Spots that are confirmed `Inside`;
+//!    2. knock on matches, and answer knocks on that board's records with a liveness check;
+//!    3. hand accepted knocks and Welcomes to pingers-meetup-session;
+//!    4. refill that server's mailbox pool;
+//! 4. set the location mode and schedule the next wake.
 //!
-//! The wake owns its budget: every outside call is bounded by it, and when it runs out the
-//! wake skips the remaining network steps, keeps its state consistent and still schedules
-//! the next wake ([`WakeEnding`]).
+//! The wake owns its budget: every outside call is bounded by it. Each board round gets an
+//! equal share of what is left when it starts, and a failure or timeout ends only that round's
+//! network steps ([`BoardReport`]), so one unreachable server never stalls the others. The
+//! state stays consistent and the next wake is always scheduled ([`WakeEnding`]).
 //!
 //! Everything outside the core is reached through the ports in [`ports`]; pingers-client
 //! implements them over pingers-sync, pingers-parties, pingers-meetup-session and the shell.
@@ -32,11 +39,12 @@ mod tests;
 
 pub use error::{PortError, WakeError};
 pub use pipeline::{
-    FIX_MAX_AGE, GeofenceEvent, GeofenceTransition, KnockOutcome, LIVENESS_FIX_TIMEOUT,
-    MailboxReads, PushReason, RETRY_AFTER, ROUTINE_FIX_TIMEOUT, UploadOutcome, WakeEnding, WakeEnv,
-    WakeInput, WakeNotice, WakeReport, WakeSettings, WakeStep, WakeTrigger,
+    BoardReport, FIX_MAX_AGE, GeofenceEvent, GeofenceTransition, KnockOutcome,
+    LIVENESS_FIX_TIMEOUT, MailboxReads, PushReason, RETRY_AFTER, ROUTINE_FIX_TIMEOUT,
+    UploadOutcome, WakeEnding, WakeEnv, WakeInput, WakeNotice, WakeReport, WakeSettings, WakeStep,
+    WakeTrigger,
 };
 pub use state::{
-    DecidedKnock, KnockStatus, KnownEpoch, LeaseSlot, LiveLease, PeerActivity, RealRecord,
-    SentKnock, SpotSnapshot, SpotTransition, WakeSnapshot, WakeState,
+    BoardSnapshot, DecidedKnock, KnockStatus, KnownEpoch, LeaseSlot, LiveLease, PeerActivity,
+    RealRecord, SentKnock, SpotSnapshot, SpotTransition, WakeSnapshot, WakeState,
 };
