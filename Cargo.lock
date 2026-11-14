@@ -6310,6 +6310,7 @@ dependencies = [
  "pingers-ohttp",
  "pingers-proto",
  "pingers-push-relay",
+ "pingers-server",
  "toml",
  "zeroize",
 ]

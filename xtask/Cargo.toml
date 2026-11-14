@@ -21,8 +21,9 @@ toml = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
-# `pins` is checked against the relay's own `pins` subcommand.
+# `pins` is checked against the relay's and the server's own `pins` subcommands.
 pingers-push-relay = { path = "../crates/pingers-push-relay" }
+pingers-server = { path = "../crates/pingers-server" }
 
 [lints]
 workspace = true

@@ -77,7 +77,9 @@ use rand_chacha::ChaCha20Rng;
 use rand_core::{Rng as _, SeedableRng as _};
 use zeroize::Zeroizing;
 
-pub use crate::admin::{Command, OhttpSecret, new_ohttp_secret, os_ohttp_secret, pins};
+pub use crate::admin::{
+    Command, OhttpSecret, new_ohttp_secret, os_ohttp_secret, pin_set, pins_output,
+};
 pub use crate::config::{
     AddressList, CertificateSource, ConfigError, Database, Logging, OhttpKeys, RelayAllowList,
     Required, ServedKey, ServerConfig,

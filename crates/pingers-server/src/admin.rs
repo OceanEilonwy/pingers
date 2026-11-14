@@ -1,21 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The binary's commands besides serving: `keygen ohttp` makes a gateway key, and `pins`
-//! prints the public pin set of a configuration's gateway keys for the app build
+//! prints the pins of a configuration's gateway keys for the app build
 //! (`PINGERS_GATEWAY_KEY_PINS`). Neither starts the server or opens a database.
 
 use std::ffi::OsString;
-use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use pingers_ohttp::GatewayKey;
+use pingers_ohttp::{GatewayKey, KeyConfig};
+use pingers_proto::KeyConfigHash;
 use rand_chacha::ChaCha20Rng;
 use rand_core::{CryptoRng, SeedableRng as _};
 use zeroize::Zeroizing;
 
 use crate::{OhttpKeys, ServerError};
-
-/// The name of the app build's variable that holds the gateway key pins.
-const PINS_VARIABLE: &str = "PINGERS_GATEWAY_KEY_PINS";
 
 /// What the binary was asked to do. Exhaustive on purpose: the binary must handle every
 /// command.
@@ -103,35 +100,24 @@ pub fn os_ohttp_secret() -> Result<OhttpSecret, ServerError> {
     new_ohttp_secret(&mut ChaCha20Rng::from_seed(*seed.bytes))
 }
 
-/// The public pin set of `keys`, as printed by `pingers-server pins`: for each key, in the
-/// order configured, its id, whether it is served, its encoded key config and that config's
-/// SHA-256 (`KeyConfig::hash`, what the app pins), as `#` comments; then one line
-/// `PINGERS_GATEWAY_KEY_PINS=<hash>,<hash>` with every key's hash in lowercase hex. Nothing
-/// secret is printed.
+/// The pin of every configured gateway key, in the order configured: the served key and the
+/// other rotation slot, so that switching `served_key_id` never shows the app an unpinned key.
+/// Each is the SHA-256 of the key's RFC 9458 key config (`KeyConfig::hash`).
 #[must_use]
-pub fn pins(keys: &OhttpKeys) -> String {
-    let served = keys.served().key_id();
-    let configs = keys.configs();
-    let mut report = String::new();
-    let mut hashes = Vec::with_capacity(configs.len());
-    for config in &configs {
-        let hash = hex::encode(config.hash().as_bytes());
-        let role = if config.key_id() == served {
-            "served"
-        } else {
-            "not served"
-        };
-        // Writing to a String cannot fail.
-        let _ = writeln!(
-            report,
-            "# key_id {} ({role})\n# key_config {}\n# key_config_hash {hash}",
-            config.key_id(),
-            hex::encode(config.encoded()),
-        );
-        hashes.push(hash);
-    }
-    let _ = writeln!(report, "{PINS_VARIABLE}={}", hashes.join(","));
-    report
+pub fn pin_set(keys: &OhttpKeys) -> Vec<KeyConfigHash> {
+    keys.configs().iter().map(KeyConfig::hash).collect()
+}
+
+/// What `pingers-server pins` prints: [`pin_set`], one [`KeyConfigHash::to_pin`] per line and
+/// nothing else. Joined with commas, the lines are the value of the app build's
+/// `PINGERS_GATEWAY_KEY_PINS`, as `cargo xtask pins` prints it. Nothing secret is printed.
+#[must_use]
+pub fn pins_output(keys: &OhttpKeys) -> String {
+    pin_set(keys).iter().fold(String::new(), |mut output, pin| {
+        output.push_str(&pin.to_pin());
+        output.push('\n');
+        output
+    })
 }
 
 #[cfg(test)]
@@ -205,26 +191,22 @@ mod tests {
     }
 
     #[test]
-    fn pins_list_every_key_and_mark_the_served_one() -> TestResult {
+    fn pins_are_every_key_in_order_one_per_line_whichever_is_served() -> TestResult {
         let mut rng = ChaCha20Rng::seed_from_u64(6);
         let first = GatewayKey::generate(1, &mut rng)?;
         let second = GatewayKey::generate(2, &mut rng)?;
-        let first_config = first.config();
-        let second_config = second.config();
+        let first_pin = first.config().hash();
+        let second_pin = second.config().hash();
         let keys = OhttpKeys::serving(vec![first, second], ServedKey::Id(2))?;
-        let report = pins(&keys);
-        let first_hash = hex::encode(first_config.hash().as_bytes());
-        let second_hash = hex::encode(second_config.hash().as_bytes());
+        assert_eq!(pin_set(&keys), [first_pin, second_pin]);
         assert_eq!(
-            report,
-            format!(
-                "# key_id 1 (not served)\n# key_config {}\n# key_config_hash {first_hash}\n\
-                 # key_id 2 (served)\n# key_config {}\n# key_config_hash {second_hash}\n\
-                 PINGERS_GATEWAY_KEY_PINS={first_hash},{second_hash}\n",
-                hex::encode(first_config.encoded()),
-                hex::encode(second_config.encoded()),
-            )
+            pins_output(&keys),
+            format!("{}\n{}\n", first_pin.to_pin(), second_pin.to_pin())
         );
+        // Each line reads back as the hash it came from.
+        for (line, pin) in pins_output(&keys).lines().zip([first_pin, second_pin]) {
+            assert_eq!(KeyConfigHash::from_pin(line)?, pin);
+        }
         Ok(())
     }
 }

@@ -47,7 +47,9 @@
 //! url = "https://push.example"     # or http:// to a loopback address literal only, such as
 //!                                  # "http://127.0.0.1:9472" for a relay on this machine
 //! credential = "<the bearer credential this relay issued to this server>"
-//! key_config_hash = "<64 hex>"     # optional, with operator: listed in /v1/params
+//! key_config_hash = "<pin>"        # optional, with operator: listed in /v1/params. The relay
+//!                                  # key's pin as `pingers-push-relay pins` prints it: 43
+//!                                  # base64url characters (KeyConfigHash::to_pin)
 //! operator = "Push Relay Ltd"
 //! public_url = "https://push.example"   # optional: the URL /v1/params lists, where devices
 //!                                  # reach the relay (default: url); needed when url is http://
@@ -149,10 +151,12 @@ pub enum ConfigError {
     /// `map_host` was not an `https://` URL.
     #[error("configuration: map_host must start with https://")]
     MapHostUrl,
-    /// A push relay's `key_config_hash` is not 64 hex digits, or only one of
-    /// `key_config_hash` and `operator` is given.
+    /// A push relay's `key_config_hash` is not a pin (43 base64url characters, as
+    /// `pingers-push-relay pins` prints), or only one of `key_config_hash` and `operator` is
+    /// given.
     #[error(
-        "configuration: push_relays.key_config_hash must be 64 hex digits, given with operator"
+        "configuration: push_relays.key_config_hash must be a 43-character base64url pin, \
+         given with operator"
     )]
     RelayInfo,
     /// A duration or count is zero.
@@ -520,9 +524,8 @@ fn push_relays(relays: Vec<FilePushRelay>) -> Result<PushRelays, ConfigError> {
                 relay_id: RelayId::new(relay.relay_id),
                 url: RelayUrl::new(relay.public_url.unwrap_or_else(|| url.as_str().to_owned()))
                     .map_err(|_| ConfigError::PublicRelayUrl)?,
-                key_config_hash: KeyConfigHash::from_bytes(
-                    crate::wire::hex_array(&hash).ok_or(ConfigError::RelayInfo)?,
-                ),
+                key_config_hash: KeyConfigHash::from_pin(&hash)
+                    .map_err(|_| ConfigError::RelayInfo)?,
                 operator,
             }),
             (Some(_), None) | (None, Some(_)) => return Err(ConfigError::RelayInfo),

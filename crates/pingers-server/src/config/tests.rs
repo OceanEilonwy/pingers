@@ -363,7 +363,7 @@ fn a_push_relay_on_this_machine_is_called_over_loopback_and_advertised_by_its_pu
 
     let advertised = format!(
         "key_config_hash = \"{}\"\noperator = \"Me\"\n",
-        "cd".repeat(32)
+        pingers_proto::KeyConfigHash::from_bytes([0xcd; 32]).to_pin()
     );
     let config = ServerConfig::parse(&format!(
         "{}{}{advertised}public_url = \"https://push.example\"\n",
@@ -431,7 +431,7 @@ fn server_identity_and_published_fields_are_read() -> TestResult {
          push_relay_ca = \"/tmp/ca.pem\"\n{}{}key_config_hash = \"{}\"\noperator = \"Relay Ltd\"\n{}",
         minimal(&key(1, SECRET_A)),
         relay(3, "https://push.example"),
-        "ab".repeat(32),
+        pingers_proto::KeyConfigHash::from_bytes([0xab; 32]).to_pin(),
         relay(4, "https://other.example"),
     ))?;
     assert_eq!(config.server_operator, "Example Ltd");
@@ -484,7 +484,7 @@ fn server_identity_and_published_fields_are_read() -> TestResult {
 fn bad_identity_fields_are_refused() {
     let with_key = minimal(&key(1, SECRET_A));
     let http_server = with_key.replace("https://pingers.test", "http://pingers.test");
-    let cases: [(String, Expected); 6] = [
+    let cases: [(String, Expected); 7] = [
         (http_server, |error| matches!(error, ConfigError::ServerId)),
         (
             format!("map_host = \"http://maps.example\"\n{with_key}"),
@@ -506,6 +506,15 @@ fn bad_identity_fields_are_refused() {
             format!(
                 "{with_key}{}key_config_hash = \"zz\"\noperator = \"x\"\n",
                 relay(1, "https://a")
+            ),
+            |error| matches!(error, ConfigError::RelayInfo),
+        ),
+        // The hash as hex is not a pin: there is one text form.
+        (
+            format!(
+                "{with_key}{}key_config_hash = \"{}\"\noperator = \"x\"\n",
+                relay(1, "https://a"),
+                "ab".repeat(32)
             ),
             |error| matches!(error, ConfigError::RelayInfo),
         ),

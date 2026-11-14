@@ -5,8 +5,9 @@
 //!
 //! - `pingers-server <config.toml>` runs the server until SIGTERM or Ctrl-C, then stops
 //!   gracefully. It writes nothing unless the configuration turns counts logging on.
-//! - `pingers-server pins <config.toml>` prints the public pin set of the configured gateway
-//!   keys, ending with the line `PINGERS_GATEWAY_KEY_PINS=<hash>,<hash>` for the app build.
+//! - `pingers-server pins <config.toml>` prints the pin of every configured gateway key, one
+//!   per line (`KeyConfigHash::to_pin`); joined with commas they are the app build's
+//!   `PINGERS_GATEWAY_KEY_PINS`.
 //! - `pingers-server keygen ohttp` prints a new gateway key secret (64 hex digits) for an
 //!   `[[ohttp.keys]] secret`.
 //!
@@ -32,7 +33,7 @@ fn run() -> Result<(), ServerError> {
     match Command::parse(std::env::args_os().skip(1))? {
         Command::Pins { config } => {
             let config = pingers_server::load_config(&config)?;
-            print(&pingers_server::pins(&config.ohttp_keys));
+            print(&pingers_server::pins_output(&config.ohttp_keys));
             Ok(())
         }
         Command::KeygenOhttp => {
