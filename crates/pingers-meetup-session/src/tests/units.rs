@@ -120,7 +120,7 @@ fn peer(leaf: LeafIndex, position: Option<PeerLocation>) -> PeerView {
             ExactLocation::Private
         },
         holds_own_key: false,
-        request_pending_until: None,
+        request_pending: None,
         position,
     }
 }
@@ -138,6 +138,7 @@ fn view(meet_point: Option<MeetPoint>) -> Result<MeetupView, TestError> {
         channel: ChannelState::Connected,
         meet_point,
         meet_point_set_by: None,
+        requests: Vec::new(),
         peers: vec![
             peer(
                 SEEN,

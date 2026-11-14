@@ -21,9 +21,10 @@ design B.5, B.6, B.6.1, G.4 to G.7).
 - `events: mpsc::UnboundedReceiver<pingers_meetup::MeetupEvent>`: every event, positions
   included, each sent after the view that shows it is published. Closed when the task ends.
 - `MeetupView { group, own_leaf, cadence, visibility, channel, meet_point, meet_point_set_by,
+  requests,
   peers }`,
   `position_age(leaf, now)`, `compass(target, &observer, now)`; `PeerView { leaf,
-  signature_key, access, holds_own_key, request_pending_until, position }`,
+  signature_key, access, holds_own_key, request_pending, position }`,
   `PeerView::position_age(now)` ("Updated 40 s ago").
 - `MeetupScreen::{Open, Closed}`, `Ended::{Left, AloneTooLong, Removed}`, `ChannelState`.
 - `trait GroupNetwork { create_group, post_commit, post_message, fetch_log, delete_group,

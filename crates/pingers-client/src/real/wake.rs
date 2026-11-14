@@ -21,8 +21,9 @@ use pingers_proto::{CoverReadRatio, PartyId, PushHandle};
 use pingers_store::{LocationVisibility as StoredVisibility, Session, WakePushes as StoredPushes};
 use pingers_time::{Clock, UnixSeconds};
 use pingers_wake::{
-    GeofenceEvent, GeofenceTransition as WakeTransition, MailboxReads, PushReason, WakeEnv,
-    WakeInput as PipelineInput, WakeNotice, WakeReport, WakeSettings, WakeState, WakeTrigger,
+    FIX_MAX_AGE, GeofenceEvent, GeofenceTransition as WakeTransition, MailboxReads, PushReason,
+    WakeEnv, WakeInput as PipelineInput, WakeNotice, WakeReport, WakeSettings, WakeState,
+    WakeTrigger,
 };
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -79,6 +80,14 @@ impl Wake {
         self.last.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// The last fix the shell delivered, if it is younger than pingers-wake's `FIX_MAX_AGE`.
+    fn fresh_fix(&self) -> Option<Fix> {
+        let now = self.backend.outside.clock.now();
+        self.last()
+            .1
+            .filter(|fix| now.saturating_duration_since(fix.taken_at) <= FIX_MAX_AGE)
+    }
+
     /// Runs one pipeline wake and stores the state after it.
     pub(crate) async fn pipeline(
         &self,
@@ -99,6 +108,7 @@ impl Wake {
         let device = Device::new(
             Arc::clone(&self.platform),
             stored.device.pause_in_focus == PauseInFocus::Off,
+            self.fresh_fix(),
         );
         let time = Time {
             clock: Arc::clone(&self.backend.outside.clock),

@@ -241,7 +241,7 @@ mod tests {
             .public_key(),
             access: ExactLocation::Private,
             holds_own_key: false,
-            request_pending_until: None,
+            request_pending: None,
             position: None,
         }
     }
@@ -255,6 +255,7 @@ mod tests {
             channel: ChannelState::Connected,
             meet_point,
             meet_point_set_by: set_by.map(LeafIndex::new),
+            requests: Vec::new(),
             peers: peers.iter().copied().map(peer).collect(),
         }
     }

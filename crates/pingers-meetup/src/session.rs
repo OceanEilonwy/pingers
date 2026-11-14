@@ -21,7 +21,7 @@ use crate::board::{Agreement, BoardCheck};
 use crate::cadence::{BACKGROUND_FRAME_INTERVAL, Cadence};
 use crate::chat::{Recorded, Threads};
 use crate::convert::rounded;
-use crate::requests::{Requests, Sighting, expiry_from};
+use crate::requests::{PendingAsk, PendingRequest, Requests, Sighting, expiry_from};
 use crate::sharing::{
     FrameContext, GrantEnd, MeetAtMe, Padding, Plan, Roster, Rotation, Sharing, consent, ephemeral,
     stored,
@@ -460,11 +460,16 @@ impl MeetupSession {
         self.sharing.holds(peer)
     }
 
-    /// When this device's request to see `peer` lapses, while one is pending ("Request
-    /// sent").
+    /// This device's request to see `peer`, while it is pending ("Request sent").
     #[must_use]
-    pub fn pending_request(&self, peer: LeafIndex, now: UnixSeconds) -> Option<UnixSeconds> {
+    pub fn pending_request(&self, peer: LeafIndex, now: UnixSeconds) -> Option<PendingAsk> {
         self.requests.outgoing(peer, now)
+    }
+
+    /// The other members' requests to see this device that wait on an answer at `now`.
+    #[must_use]
+    pub fn incoming_requests(&self, now: UnixSeconds) -> Vec<PendingRequest> {
+        self.requests.incoming(now)
     }
 
     /// The generation of this device's current location key.
@@ -1043,7 +1048,13 @@ impl MeetupSession {
             asked_at: step.now,
         };
         let sealed = seal_location_ask(&member.grant_key, &ask, step.rng)?;
-        self.requests.sent(target, expiry_from(step.now)?);
+        self.requests.sent(
+            target,
+            PendingAsk {
+                id: ask.request,
+                expires: expiry_from(step.now)?,
+            },
+        );
         step.outputs
             .push(send(consent(MeetupMessage::LocationAsk(sealed))));
         Ok(())

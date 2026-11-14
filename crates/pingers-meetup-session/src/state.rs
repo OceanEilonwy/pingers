@@ -304,7 +304,7 @@ impl Core {
                     signature_key: member.signature_key,
                     access,
                     holds_own_key: self.meetup.shares_with(member.leaf),
-                    request_pending_until: self.meetup.pending_request(member.leaf, self.now),
+                    request_pending: self.meetup.pending_request(member.leaf, self.now),
                     position: match access {
                         ExactLocation::Shared { .. } => self.positions.get(&member.leaf).copied(),
                         ExactLocation::Private => None,
@@ -320,6 +320,7 @@ impl Core {
             channel,
             meet_point: self.meetup.meet_point().cloned(),
             meet_point_set_by: self.meetup.meet_point_set_by(),
+            requests: self.meetup.incoming_requests(self.now),
             peers,
         }
     }

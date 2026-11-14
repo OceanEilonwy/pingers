@@ -50,9 +50,10 @@ impl GroupLogs {
 impl GroupNetwork for GroupLogs {
     async fn create_group(&self, request: CreateGroup) -> Result<(), NetworkError> {
         let engine = self.0.engine().map_err(|_none| NetworkError::Unavailable)?;
+        // The creator's group is at epoch 0 until its first commit (adding the knocker) lands.
         let start = GroupStart {
             lifetime: GroupLifetime::Meetup,
-            epoch: Epoch::new(1),
+            epoch: Epoch::new(0),
         };
         let result = engine
             .create_group(&request, start, WakeBudget::UNLIMITED)

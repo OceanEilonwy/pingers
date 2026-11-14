@@ -32,14 +32,17 @@ pub(crate) struct Device {
     platform: Arc<dyn Platform>,
     /// "Pause during Focus" is off: the gate sees Focus as off.
     ignore_focus: bool,
+    /// The latest fix the shell delivered, while it is fresh enough to answer a request.
+    fresh: Option<Fix>,
     outcome: Mutex<WakeOutcome>,
 }
 
 impl Device {
-    pub(crate) fn new(platform: Arc<dyn Platform>, ignore_focus: bool) -> Self {
+    pub(crate) fn new(platform: Arc<dyn Platform>, ignore_focus: bool, fresh: Option<Fix>) -> Self {
         Self {
             platform,
             ignore_focus,
+            fresh,
             outcome: Mutex::new(WakeOutcome::default()),
         }
     }
@@ -65,13 +68,17 @@ impl DevicePort for Device {
         }
     }
 
-    /// The platform delivers fixes through `Client::on_location`, which runs the next wake, so
-    /// this wake asks for one and goes on without it.
+    /// The platform delivers fixes through `Client::on_location`, which runs the next wake. A
+    /// fix delivered within `FIX_MAX_AGE` answers at once (the liveness check of a knock read
+    /// right after a fix); otherwise this wake asks for one and goes on without it.
     fn request_fix(
         &self,
         quality: WakeFixQuality,
         timeout: Duration,
     ) -> impl Future<Output = Option<Fix>> + Send {
+        if let Some(fix) = self.fresh {
+            return ready(Some(fix));
+        }
         self.record(|outcome| {
             outcome.fix = Some(FixRequest {
                 quality: fix_quality(quality),

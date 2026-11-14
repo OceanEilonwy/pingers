@@ -29,8 +29,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use async_trait::async_trait;
 use pingers_geo::Fix;
 use pingers_meetup::{
-    ASK_EXPIRY, ExactLocation, LocationAnswer, MeetPointDraft, MeetupAction, MeetupEvent,
-    TargetPosition, coordinate_from_wire,
+    ExactLocation, LocationAnswer, MeetPointDraft, MeetupAction, MeetupEvent, TargetPosition,
+    coordinate_from_wire,
 };
 use pingers_meetup_session::{
     AddMember, CreateMeetup, JoinMeetup, MeetupHandle, MeetupScreen, MeetupView, Runtime,
@@ -43,7 +43,7 @@ use pingers_proto::{
     ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, MeetPoint, Padded,
     PartyId, Subscription, TimeToLive, WelcomeBytes,
 };
-use pingers_store::{KnockKey, LocationRequestState, RequestDirection, Session};
+use pingers_store::{KnockKey, Session};
 use pingers_time::{Clock, UnixSeconds};
 use pingers_wake::PortError;
 use pingers_wake::ports::{KnockKeyPackage, MeetupAdmission, MeetupPort, ReplyPost};
@@ -513,20 +513,17 @@ impl MeetupsPort for Meetups {
         meetup: GroupId,
         peer: LeafIndex,
     ) -> Result<LocationRequestId, ClientError> {
+        let handle = self.handle(meetup)?;
         self.act(meetup, MeetupAction::AskLocation(peer)).await?;
-        // pingers-meetup chooses the id; the ask is in the store once `act` returns.
-        self.backend()
-            .store(move |session, _clock, _rng| {
-                session
-                    .location_asks()
-                    .list(&meetup)?
-                    .into_iter()
-                    .rev()
-                    .find(|ask| ask.direction == RequestDirection::Outgoing && ask.peer == peer)
-                    .map(|ask| ask.id)
-                    .ok_or_else(corrupt)
-            })
-            .await
+        // pingers-meetup chooses the id; the view shows the pending ask once `act` returns.
+        let view = handle.view();
+        let pending = view
+            .borrow()
+            .peer(peer)
+            .and_then(|shown| shown.request_pending);
+        pending
+            .map(|ask| ask.id)
+            .ok_or_else(|| ClientError::Internal)
     }
 
     async fn answer_location_request(
@@ -558,16 +555,17 @@ impl MeetupsPort for Meetups {
                 timeline: meetup_watch::lock(&live.timeline).clone(),
             })
             .collect();
-        let (meetups, location_requests) = self
+        let location_requests = lives
+            .iter()
+            .flat_map(|shown| incoming_requests(&shown.view))
+            .collect();
+        let meetups = self
             .backend()
             .store(move |session, clock, _rng| {
-                let mut meetups = Vec::new();
-                let mut requests = Vec::new();
-                for shown in &lives {
-                    meetups.push(meetup(session, clock, shown)?);
-                    requests.extend(incoming_requests(session, shown.view.group)?);
-                }
-                Ok((meetups, requests))
+                lives
+                    .iter()
+                    .map(|shown| meetup(session, clock, shown))
+                    .collect::<Result<Vec<_>, _>>()
             })
             .await?;
         Ok(MeetupsSection {
@@ -616,7 +614,7 @@ fn meetup(session: &Session, clock: &dyn Clock, shown: &Shown) -> Result<Meetup,
         .peers
         .iter()
         .map(|peer| {
-            let access = match (peer.position, peer.access, peer.request_pending_until) {
+            let access = match (peer.position, peer.access, peer.request_pending) {
                 (Some(position), ExactLocation::Shared { .. }, _) => {
                     PeerAccess::Shared(TargetPosition {
                         position: position.position,
@@ -633,11 +631,12 @@ fn meetup(session: &Session, clock: &dyn Clock, shown: &Shown) -> Result<Meetup,
             })
         })
         .collect::<Result<Vec<_>, ClientError>>()?;
-    let sharing_with = session
-        .location_grants()
-        .list(&view.group)?
-        .into_iter()
-        .map(|grant| grant.grantee)
+    // Who holds this device's current location key, as the session knows it.
+    let sharing_with = view
+        .peers
+        .iter()
+        .filter(|peer| peer.holds_own_key)
+        .map(|peer| peer.leaf)
         .collect();
     Ok(Meetup {
         id: view.group,
@@ -728,26 +727,17 @@ fn chat(
     Ok(entries.into_iter().map(|dated| dated.entry).collect())
 }
 
-/// Requests from other members waiting for an answer.
-fn incoming_requests(
-    session: &Session,
-    meetup: GroupId,
-) -> Result<Vec<LocationRequest>, ClientError> {
-    Ok(session
-        .location_asks()
-        .list(&meetup)?
-        .into_iter()
-        .filter(|ask| {
-            ask.direction == RequestDirection::Incoming
-                && ask.state == LocationRequestState::Pending
+/// Requests from other members waiting for an answer, as the session holds them.
+fn incoming_requests(view: &MeetupView) -> Vec<LocationRequest> {
+    view.requests
+        .iter()
+        .map(|request| LocationRequest {
+            id: request.id,
+            meetup: view.group,
+            from: request.from,
+            expires_at: request.expires,
         })
-        .map(|ask| LocationRequest {
-            id: ask.id,
-            meetup,
-            from: ask.peer,
-            expires_at: UnixSeconds::new(ask.created_at.get().saturating_add(ASK_EXPIRY.as_secs())),
-        })
-        .collect())
+        .collect()
 }
 
 impl MeetupPort for Meetups {

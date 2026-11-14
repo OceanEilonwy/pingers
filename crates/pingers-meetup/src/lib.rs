@@ -44,6 +44,7 @@ pub use consent::{
 };
 pub use error::MeetupError;
 pub use meet_point::{MeetPointDraft, MeetPointRegister, MeetPointUpdate};
+pub use requests::{PendingAsk, PendingRequest};
 pub use session::{
     ALONE_LIMIT, ASK_EXPIRY, EndReason, KEEP_ALIVE_INTERVAL, LOCATION_FRAME_INTERVAL, MeetupAction,
     MeetupConfig, MeetupEvent, MeetupInput, MeetupOutput, MeetupSession, Member, OutgoingFrame,
