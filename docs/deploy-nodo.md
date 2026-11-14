@@ -23,14 +23,10 @@ variables (`PINGERS_SERVER_HOST`, `PINGERS_OHTTP_RELAY`, `PINGERS_PUSH_RELAY`,
   a configurable feed signer). Both are written as patches against monokulo-nodo; until they are
   merged there, nodo refuses the server's and relay's manifests (`upstream_protocol`) and the
   feed workflow stops at its first check.
-- Server config keys `[ohttp] listen`, `[ohttp] served_key_id`, a loopback `http://`
-  `[[push_relays]] url` with a separate advertised `public_url`, and `key_config_hash` in the pin
-  form (`TODO(p-server)`).
 
-`cargo test -p xtask --test nodo_packaging` checks the packaging against nodo's own parsers
-(manifests, settings, rendering) and parses the rendered push relay and map host configs, and
-their dev configs, with those services' own parsers. The server's config joins once its keys
-are on main.
+(manifests, settings, rendering) and parses the rendered server, push relay and map host configs,
+and their dev configs, with those services' own parsers.
+their dev configs, with those services' own parsers, and the server's config likewise.
 
 ## 1. The four apps
 

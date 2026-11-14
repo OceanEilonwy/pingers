@@ -44,15 +44,16 @@
 //!
 //! [[push_relays]]                  # the relays mailbox wakes are forwarded to
 //! relay_id = 1                     # what devices name in RelayRef::Listed
-//! url = "https://push.example"     # or http:// to a loopback address literal only, such as
+//! url = "https://push.example"     # where this server sends wakes: https://, or http:// to
+//!                                  # a loopback address literal only, such as
 //!                                  # "http://127.0.0.1:9472" for a relay on this machine
+//! public_url = "https://push.example"   # where devices reach the relay, as /v1/params lists
+//!                                  # it: https:// only (the same as url unless url is local)
 //! credential = "<the bearer credential this relay issued to this server>"
 //! key_config_hash = "<pin>"        # optional, with operator: listed in /v1/params. The relay
 //!                                  # key's pin as `pingers-push-relay pins` prints it: 43
 //!                                  # base64url characters (KeyConfigHash::to_pin)
 //! operator = "Push Relay Ltd"
-//! public_url = "https://push.example"   # optional: the URL /v1/params lists, where devices
-//!                                  # reach the relay (default: url); needed when url is http://
 //! ```
 //!
 //! Every field above `[ohttp]` other than `listen` and `server_id` is optional; so are those
@@ -132,9 +133,8 @@ pub enum ConfigError {
     /// A push relay URL is neither `https://` nor `http://` to a loopback address literal.
     #[error("configuration: push_relays.url must be https://, or http:// to a loopback address")]
     RelayUrl,
-    /// A push relay to advertise has no `https://` URL for devices: its `url` is plain
-    /// `http://` and no `public_url` is given, or `public_url` is not `https://`.
-    #[error("configuration: an advertised push relay needs an https:// public_url")]
+    /// A push relay's `public_url`, where devices reach it, is not `https://`.
+    #[error("configuration: push_relays.public_url must start with https://")]
     PublicRelayUrl,
     /// `served_key_id` names no configured key.
     #[error("configuration: ohttp.served_key_id {key_id} is not an [[ohttp.keys]] key_id")]
@@ -489,7 +489,7 @@ struct FilePushRelay {
     credential: String,
     key_config_hash: Option<String>,
     operator: Option<String>,
-    public_url: Option<String>,
+    public_url: String,
 }
 
 const fn default_push_timeout() -> u64 {
@@ -518,12 +518,13 @@ fn push_relays(relays: Vec<FilePushRelay>) -> Result<PushRelays, ConfigError> {
         }
         seen.push(relay.relay_id);
         let url = PushRelayUrl::new(relay.url).map_err(|_| ConfigError::RelayUrl)?;
+        let public_url =
+            RelayUrl::new(relay.public_url).map_err(|_| ConfigError::PublicRelayUrl)?;
         match (relay.key_config_hash, relay.operator) {
             (None, None) => {}
             (Some(hash), Some(operator)) => advertised.push(PushRelayInfo {
                 relay_id: RelayId::new(relay.relay_id),
-                url: RelayUrl::new(relay.public_url.unwrap_or_else(|| url.as_str().to_owned()))
-                    .map_err(|_| ConfigError::PublicRelayUrl)?,
+                url: public_url,
                 key_config_hash: KeyConfigHash::from_pin(&hash)
                     .map_err(|_| ConfigError::RelayInfo)?,
                 operator,

@@ -446,14 +446,37 @@ fn the_feed_publishes_the_recipe_and_every_subpackage() -> TestResult {
     Ok(())
 }
 
-/// The push relay and the map host read what nodo renders, and the tier-1 dev configs, with
-/// their own parsers. TODO(p-server): the server's too, once its new keys (`[ohttp] listen`,
-/// `served_key_id`, loopback push relay `url` with `public_url`, the pin-form
-/// `key_config_hash`) are on main.
+/// The server, the push relay and the map host read what nodo renders, and the tier-1 dev
+/// configs, with their own parsers.
 #[test]
 fn the_services_accept_the_rendered_and_dev_configs() -> TestResult {
     let installed = installed()?;
     let dev = |name: &str| read(&packaging().join("dev").join(format!("{name}.toml")));
+    let server = |text: &str, what: &str| -> TestResult {
+        let config = pingers_server::ServerConfig::parse(text)
+            .map_err(|error| format!("{what} server.toml: {error}"))?;
+        // The gateway is on its own loopback listener, and wakes go to the push relay on
+        // loopback while devices are told its public address.
+        assert_eq!(
+            config.gateway_listen,
+            "127.0.0.1:9471".parse::<std::net::SocketAddr>()?,
+            "{what}"
+        );
+        assert_eq!(config.ohttp_keys.configs().len(), 2, "{what}");
+        assert!(
+            config
+                .advertised_push_relays
+                .iter()
+                .all(|relay| relay.url.as_str().starts_with("https://")),
+            "{what}"
+        );
+        Ok(())
+    };
+    server(
+        &render(&installed, "pingers-server", "server")?.text,
+        "rendered",
+    )?;
+    server(&dev("server")?, "dev")?;
     let push = |text: &str, what: &str| -> TestResult {
         pingers_push_relay::config::RelayConfig::parse(text)
             .map(drop)

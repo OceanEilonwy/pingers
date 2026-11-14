@@ -110,7 +110,6 @@ return {
       max = 255,
     },
     {
-      -- TODO(p-server): the field name ohttp.served_key_id (P2).
       name = "ohttp_served_key_id",
       type = "int",
       label = "Served gateway key",
@@ -121,8 +120,8 @@ return {
       max = 255,
     },
     {
-      -- TODO(p-server): the field push_relays.public_url (P4), the push relay's address as
-      -- /v1/params advertises it, now that url is the loopback address the server pushes to.
+      -- push_relays.public_url: the push relay's address as
+      -- /v1/params advertises it; url is the loopback address the server pushes to.
       name = "push_relay_public_url",
       type = "url",
       label = "Push relay address",
@@ -132,8 +131,8 @@ return {
       validate = https_origin,
     },
     {
-      -- TODO(p-server): push_relays.key_config_hash in the pin form (unpadded base64url SHA-256,
-      -- 43 characters), as p-server is changing it; one pin, the served key's.
+      -- push_relays.key_config_hash in the pin form (unpadded base64url SHA-256,
+      -- 43 characters): one pin, the served key's.
       name = "push_relay_key_config_hash",
       type = "string",
       label = "Push relay key hash",

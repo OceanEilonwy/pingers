@@ -14,9 +14,9 @@ quota_db = "target/dev-stack/quota.sqlite"
 mailbox_db = "target/dev-stack/mailboxes.sqlite"
 
 [ohttp]
-listen = "127.0.0.1:9471"                                    # TODO(p-server): [ohttp] listen
+listen = "127.0.0.1:9471"
 relays = ["127.0.0.1"]
-served_key_id = 1                                            # TODO(p-server): served_key_id
+served_key_id = 1
 
 [[ohttp.keys]]
 key_id = 1
@@ -31,9 +31,9 @@ allow = ["127.0.0.1"]
 
 [[push_relays]]
 relay_id = 1
-url = "http://127.0.0.1:9472"                                # TODO(p-server): loopback http url
-public_url = "https://10.0.2.2:9445"                         # TODO(p-server): advertised url
+url = "http://127.0.0.1:9472"
+public_url = "https://10.0.2.2:9445"
 credential = "3333333333333333333333333333333333333333333333333333333333333333"
 # `pingers-push-relay pins packaging/nodo/dev/push-relay.toml` prints the value for these keys.
-key_config_hash = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"   # TODO(p-server): pin form
+key_config_hash = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 operator = "Local test"

@@ -261,7 +261,15 @@ fn keys_built_in_code_follow_the_same_rules() -> TestResult {
 }
 
 fn relay(relay_id: u16, url: &str) -> String {
-    format!("[[push_relays]]\nrelay_id = {relay_id}\nurl = \"{url}\"\ncredential = \"c\"\n")
+    relay_at(relay_id, url, "https://public.example")
+}
+
+/// A push relay called at `url` that devices reach at `public_url`.
+fn relay_at(relay_id: u16, url: &str, public_url: &str) -> String {
+    format!(
+        "[[push_relays]]\nrelay_id = {relay_id}\nurl = \"{url}\"\npublic_url = \"{public_url}\"\n\
+         credential = \"c\"\n"
+    )
 }
 
 #[test]
@@ -366,9 +374,9 @@ fn a_push_relay_on_this_machine_is_called_over_loopback_and_advertised_by_its_pu
         pingers_proto::KeyConfigHash::from_bytes([0xcd; 32]).to_pin()
     );
     let config = ServerConfig::parse(&format!(
-        "{}{}{advertised}public_url = \"https://push.example\"\n",
+        "{}{}{advertised}",
         minimal(&key(1, SECRET_A)),
-        relay(2, "http://127.0.0.1:9472"),
+        relay_at(2, "http://127.0.0.1:9472", "https://push.example"),
     ))?;
     let target = config
         .push_relays
@@ -380,18 +388,18 @@ fn a_push_relay_on_this_machine_is_called_over_loopback_and_advertised_by_its_pu
 
     let with_key = minimal(&key(1, SECRET_A));
     let cases: [(String, Expected); 3] = [
-        // Devices cannot reach a loopback URL: an advertised relay needs its public one.
+        // Devices cannot be told a loopback URL: every relay names its public one.
         (
             format!(
-                "{with_key}{}{advertised}",
-                relay(2, "http://127.0.0.1:9472")
+                "{with_key}[[push_relays]]\nrelay_id = 2\nurl = \"http://127.0.0.1:9472\"\n\
+                 credential = \"c\"\n{advertised}"
             ),
-            |error| matches!(error, ConfigError::PublicRelayUrl),
+            |error| matches!(error, ConfigError::Syntax { .. }),
         ),
         (
             format!(
-                "{with_key}{}{advertised}public_url = \"http://push.example\"\n",
-                relay(2, "https://push.example")
+                "{with_key}{}{advertised}",
+                relay_at(2, "https://push.example", "http://push.example")
             ),
             |error| matches!(error, ConfigError::PublicRelayUrl),
         ),
@@ -467,7 +475,8 @@ fn server_identity_and_published_fields_are_read() -> TestResult {
     assert_eq!(config.advertised_push_relays.len(), 1);
     let advertised = config.advertised_push_relays.first().ok_or("advertised")?;
     assert_eq!(advertised.relay_id, pingers_proto::RelayId::new(3));
-    assert_eq!(advertised.url.as_str(), "https://push.example");
+    // Devices are told the public URL, not the one this server calls.
+    assert_eq!(advertised.url.as_str(), "https://public.example");
     assert_eq!(advertised.key_config_hash.as_bytes(), &[0xab; 32]);
     assert_eq!(advertised.operator, "Relay Ltd");
     assert_eq!(
