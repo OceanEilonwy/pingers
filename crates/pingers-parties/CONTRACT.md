@@ -16,7 +16,9 @@ Parties as long-lived things (client, L3). Sans network: every request for the s
   `self_update` (each `-> OutgoingCommit`), `commit_accepted -> CommitApplied`,
   `commit_rejected`, `process_group_message(&GroupId, &MlsMessageBytes) -> Incoming`.
 - Invites (inviter): `create_invite(&PartyId, NewInvite { uses, registration_code }, rng) -> CreatedInvite { invite,
-  link, expires }`, `invite_status`, `invites`, `revoke_invite -> DeleteMailbox`,
+  link, expires }` (the link carries the gateway and push relay pins of the Party's server
+  row, `PartiesError::NoServerPins` without them; the invite mailbox comes from that server's
+  pool, as does a joiner's reply mailbox from the invite's server), `invite_status`, `invites`, `revoke_invite -> DeleteMailbox`,
   `receive_join_request(InviteId, &Padded, rng) -> JoinRequestOutcome::{Admitted,
   AwaitingApproval, Refused(Refusal)}`, `pending_joins`, `approve_join`, `decline_join`.
 - Joins (joiner): `prepare_join(&InviteLink, JoinDetails, rng) -> PreparedJoin { join,

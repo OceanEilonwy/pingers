@@ -173,6 +173,13 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
   gives no limit; 200 matches pingers-store's `MemberName`) with a redacted `Debug`.
 - Vectors `invite-payload-encoding` and `join-request-encoding`; fuzz targets
   `invite_payload` and `join_request`.
+- **Key pins in the link** (added 2026-11-14, v1-multiserver): the payload is now `[server,
+  invite mailbox, invite secret, inviter fingerprint, expires, uses, gateway pins, push relay
+  pins]` plus the code: eight or nine elements. `gateway_pins` (1 to `MAX_PINS` = 4
+  `KeyConfigHash`es) and `push_relay_pins` (0 to 4) are the hashes the inviter trusts for the
+  Party's server, so a joiner new to the server pins them rather than whatever key it is first
+  shown (owner decision: nothing is pinned on first use). Older six- and seven-element links
+  are refused; none were released.
 
 ### Privacy Pass keys (added 2026-11-13, wave 3 server)
 

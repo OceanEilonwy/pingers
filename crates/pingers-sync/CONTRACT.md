@@ -9,6 +9,18 @@ B.4.9, B.12, D, E.2). L3: tokio (spawn_blocking, select), no detached tasks.
   role, credentials, token_stock, commit_attempts, queue_capacity })`. `transport` is the
   pingers-transport `Router`; `database` the store: each store step opens its own session on the blocking pool, so the
   cross-process lock is held per step and the engine can live for the whole process.
+- **One engine per server** (2026-11-14): every store step runs in a pingers-store
+  `ServerSession` of `SyncSettings::server`, so an engine reads and writes only its server's
+  rows (account standing, bearer, tokens, RLN state, mailboxes, subscriptions, queue, board
+  upload); the server must have a `server` row first. The account key in `identity` is the
+  device's and is registered on every server; each server records the gateway key hash its
+  account was made with (`servers().server_pin`).
+- Registration refusals: `SyncError::RegistrationCodeRequired` (refused without a code) and
+  `SyncError::RegistrationCodeRefused` (refused the code offered); `CodeSource::{Build, Invite,
+  User}`.
+- `params_direct(&dyn Transport)`: a server's `/v1/params` over the identified (direct) route,
+  only to learn the relays of a server the device has not used; everything after it goes
+  through the relay.
 - `ApiRequest`: a typed builder per route (`Route`, 24 of them). `Route::class()` fixes the
   privacy class, `Route::credential()` the RLN scope of the anonymous credential (writes only).
 - `SyncEngine::send(request, Sending { policy, budget }) -> Outcome::{Answered(Response),

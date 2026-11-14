@@ -3840,6 +3840,7 @@ name = "pingers-proto"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "hex",
  "minicbor",
  "pingers-testkit",
  "pingers-time",
