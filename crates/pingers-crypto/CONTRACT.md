@@ -111,8 +111,9 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
   `seal_join_request_in_class(secret, request, SizeClass, rng)` for callers that want a fixed
   class. `open_join_request` strips the padding and refuses non-zero padding.
 - **Join code** (join flow A, 2026-11-14): `be64(HMAC-SHA256(HKDF-Expand(invite_secret,
-  "pingers/v1/join-code", 32), key_package)[..8]) mod 10^12`, 12 digits. Over the whole key
-  package (it carries and is signed by the joiner's signature key) so neither side needs MLS to
+  "pingers/v1/join-code", 32), be32(len) || key_package || be32(len) || x_wing_key_package)[..8])
+  mod 10^12`, 12 digits (`JoinKeyPackages`; the X-Wing one empty when absent). Over both whole
+  key packages (each carries and is signed by the joiner's signature key) so neither side needs MLS to
   compute it and the code names exactly the leaf that would be added. The modulo bias is below
   10^-7. Vectors in `vectors/crypto/join-code.json` (HKDF and HMAC steps checked with openssl).
 - **Join key** is `HKDF-Expand(invite_secret, "join", 32)` without an Extract step: the invite

@@ -644,19 +644,38 @@ fn join_code_vectors() -> Result<(), TestError> {
     for vector in load("join-code")?.vectors {
         let secret =
             InviteSecret::from_bytes(Zeroizing::new(input_array(&vector, "invite_secret")?));
-        let key_package = vector.input_bytes("key_package")?;
+        let classical = vector.input_bytes("key_package")?;
+        // `""`: the request carries no X-Wing key package.
+        let x_wing = vector.input_bytes("x_wing_key_package")?;
         assert_eq!(
             crate::invite::join_code_key(&secret)?.as_slice(),
             vector.expected_bytes("join_code_key")?,
             "vector {}",
             vector.name
         );
+        let length = |bytes: &[u8]| u32::try_from(bytes.len()).map(u32::to_be_bytes);
+        let mac_input = [
+            length(&classical)
+                .map_err(|_| TestError::Field("key_package"))?
+                .as_slice(),
+            &classical,
+            length(&x_wing)
+                .map_err(|_| TestError::Field("x_wing_key_package"))?
+                .as_slice(),
+            &x_wing,
+        ]
+        .concat();
+        assert_eq!(mac_input, vector.expected_bytes("mac_input")?);
         let key = crate::invite::join_code_key(&secret)?;
         assert_eq!(
-            crate::primitives::hmac_sha256(&key, &[&key_package])?.as_slice(),
+            crate::primitives::hmac_sha256(&key, &[&mac_input])?.as_slice(),
             vector.expected_bytes("mac")?
         );
-        let code = crate::join_code(&secret, &key_package)?;
+        let packages = crate::JoinKeyPackages {
+            classical: &classical,
+            quantum_resistant: (!x_wing.is_empty()).then_some(x_wing.as_slice()),
+        };
+        let code = crate::join_code(&secret, packages)?;
         assert_eq!(code.value(), vector.expected_u64("code_value")?);
         assert_eq!(code.to_string(), vector.expected_str("code")?);
     }

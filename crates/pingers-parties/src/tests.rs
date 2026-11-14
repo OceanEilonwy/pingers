@@ -1229,6 +1229,35 @@ fn per_party_settings_are_kept_and_changed() -> Result<(), TestError> {
 }
 
 #[test]
+fn a_quantum_resistant_party_refuses_a_request_without_an_x_wing_key_package()
+-> Result<(), TestError> {
+    use crate::records::{Key, write};
+    use crate::settings::StoredSettings;
+
+    let mut rng = rng(16);
+    let alice = Device::new(1)?;
+    let bob = Device::new(2)?;
+    let party = create_party(&alice, &mut rng)?.party;
+    let created = invite(&alice, &party, &mut rng)?;
+    // This build cannot make X-Wing key packages, so Bob's request carries the slot empty.
+    let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
+    // A classical Party takes it; make this one quantum-resistant (as an X-Wing build would
+    // have created it) and the same request is refused.
+    let quantum = StoredSettings {
+        server: ServerId::new(SERVER.into())?,
+        relays: RelayChoice::ServerDefault,
+        post_quantum: PostQuantum::QuantumResistant,
+    };
+    write(&alice.session, &Key::Settings(&party), &quantum.encode()?)?;
+    assert_eq!(
+        receive(&alice, created.invite, 1, &posted)?,
+        JoinRequestOutcome::Refused(Refusal::NoQuantumResistantKeyPackage)
+    );
+    assert!(alice.parties().pending_joins(&party)?.is_empty());
+    Ok(())
+}
+
+#[test]
 fn quantum_resistant_party_needs_the_x_wing_build() -> Result<(), TestError> {
     let mut rng = rng(11);
     let alice = Device::new(1)?;
