@@ -21,8 +21,11 @@
 //! - `cargo xtask pins <server.toml> <push-relay.toml>`: the app's two key pin build
 //!   variables from the deployed configurations; `cargo xtask pins --relay <url> --push <url>`:
 //!   the same from the running services. See [`pins`].
-//! - `cargo xtask release-android [--flavour gms|foss]...`: the signed release build CI's
-//!   `release.yml` runs, from the same environment variables. See [`release_android`].
+//! - `cargo xtask release-android [--flavour gms|foss]... [--tag <v-tag>]`: the signed release
+//!   build CI's `release.yml` runs, from the same environment variables, named for Obtainium.
+//!   See [`release_android`]. `cargo xtask release-version <v-tag>` and `cargo xtask
+//!   release-notes`: the version numbers and the GitHub Release body. See [`release_version`]
+//!   and [`release_notes`].
 //! - `cargo xtask nodo-dist [<commit>] [--nodo <checkout>]`: the vendored source tarball and
 //!   filled-in xbps recipes for monokulo-nodo's builder; `cargo xtask dev-ca`: a throwaway CA
 //!   for the tier-1 local stack. See [`nodo`].
@@ -42,6 +45,8 @@ mod no_python;
 mod nodo;
 mod pins;
 mod release_android;
+mod release_notes;
+mod release_version;
 mod scenario;
 mod stack;
 mod supervise;
@@ -120,10 +125,16 @@ const USAGE: &str = "usage: cargo xtask <command>\n\n\
                      pins --relay <ohttp relay url> --push <push relay url>\n          \
                      the same lines from the running services: the served gateway key\n          \
                      through the relay, the push relay's published and next keys\n  \
-                     release-android [--flavour gms|foss]...\n          \
+                     release-android [--flavour gms|foss]... [--tag <v-tag>]\n          \
                      signed release APKs and AABs from PINGERS_KEYSTORE_PATH,\n          \
                      PINGERS_KEYSTORE_PASSWORD and PINGERS_KEY_ALIAS, checked with\n          \
-                     apksigner (android/docs/release.md)\n  \
+                     apksigner, versioned from the tag (default: HEAD's v* tag), copied\n          \
+                     to target/release-android/pingers-<version>-<flavour>.apk|.aab\n  \
+                     release-version <v-tag>\n          \
+                     versionName, versionCode and prerelease for a tag, refusing one\n          \
+                     that does not come after every other v* tag\n  \
+                     release-notes --tag <v-tag> --dir <dir> [--repository <owner/name>]\n          \
+                     the GitHub Release body for the files in <dir>, and its SHA256SUMS\n  \
                      nodo-dist [<commit>] [--nodo <checkout>]\n          \
                      vendored source tarball (prints its SHA-256) and filled-in xbps\n          \
                      recipes in target/nodo/ (docs/deploy-nodo.md)\n  \
@@ -187,6 +198,14 @@ fn run() -> Result<Outcome> {
         }
         Some("release-android") => match release_android::parse_options(options) {
             Some(choice) => release_android::run(&workspace_root()?, &choice),
+            None => usage(),
+        },
+        Some("release-version") => match options {
+            [tag] => release_version::run(&workspace_root()?, tag),
+            _ => usage(),
+        },
+        Some("release-notes") => match release_notes::NotesOptions::parse(options) {
+            Some(notes) => release_notes::run(&workspace_root()?, &notes),
             None => usage(),
         },
         Some("nodo-dist") => match nodo::parse_dist_options(options) {

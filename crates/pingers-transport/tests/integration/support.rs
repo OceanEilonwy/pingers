@@ -29,7 +29,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
-use crate::config::Config;
+use pingers_ohttp_relay::Config;
 
 /// How long any single step may take in real time; a hang fails the test instead of
 /// stalling it.
@@ -491,12 +491,12 @@ pub(crate) async fn start_relay(
          response_timeout_seconds = 5\n"
     ))
     .map_err(|_| TestError::Setup("relay config"))?;
-    let listener = TcpListener::bind(config.listen).await?;
+    let listener = TcpListener::bind(config.listen()).await?;
     let address = listener.local_addr()?;
-    let relay = Arc::new(crate::relay::Relay::new(config));
+    let relay = Arc::new(pingers_ohttp_relay::Relay::new(config));
     let mut tasks = JoinSet::new();
     tasks.spawn(async move {
-        let _ = crate::relay::serve(listener, relay, std::future::pending()).await;
+        let _ = pingers_ohttp_relay::serve(listener, relay, std::future::pending()).await;
     });
     Ok(RunningRelay {
         address,
