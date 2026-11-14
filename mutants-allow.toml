@@ -34,3 +34,7 @@ reason = "equivalent: is_end_stream is only a hint; with false, hyper polls the 
 [[mutant]]
 name = "crates/pingers-server/src/http.rs: replace >= with < in IdleWatch::serve"
 reason = "caught as a timeout, not missed: every connection is then closed as soon as it opens, and tests that wait on the manual clock for an answer hang until cargo-mutants gives up"
+
+[[mutant]]
+name = "crates/pingers-wake/src/state.rs: replace < with <= in Board::prune"
+reason = "equivalent: a knock is decided after its record's lease started, so exactly one lease after the decision that lease has expired and its knock mailbox is no longer read; keeping or dropping the decision at that instant cannot be observed (the comment at the call says so)"

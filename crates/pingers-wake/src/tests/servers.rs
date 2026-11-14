@@ -386,7 +386,11 @@ async fn board_without_a_party_only_withdraws_its_record() -> Result<(), TestErr
     alice
         .platform
         .script_fix(world.town.spot("anchor")?.fix_inside(alice.now()));
-    alice.wake(WakeTrigger::Scheduled).await?;
+    let quiet = alice.wake(WakeTrigger::Scheduled).await?;
+    // Nothing is due on that board until the withdrawing lease runs out.
+    let now = alice.now();
+    assert!(quiet.boards.iter().any(|board| board.server == world.server
+        && matches!(board.upload, UploadOutcome::NotDue(at) if at > now)));
     assert!(
         !alice
             .server
