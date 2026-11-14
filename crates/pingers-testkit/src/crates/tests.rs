@@ -105,7 +105,8 @@ fn call_every_port(fakes: &FakeCrates) -> Result<Vec<CrateCall>, TestError> {
     assert_eq!(link.url.as_str(), "https://pingers.test/join#secret");
     assert_eq!(link.expires_at, FakeCrates::INVITE_EXPIRES);
     now(parties.open_invite(url.clone(), Name::new("Bo")?))??;
-    assert_eq!(now(parties.accept_invite())??, FakeCrates::PARTY);
+    now(parties.withdraw_join())??;
+    now(parties.dismiss_join())??;
     now(parties.decide_join(PARTY, INVITE, JoinDecision::Refuse))??;
     now(parties.cancel_invite(PARTY, INVITE))??;
     now(parties.set_display_name(Name::new("Sam")?))??;
@@ -142,7 +143,8 @@ fn call_every_port(fakes: &FakeCrates) -> Result<Vec<CrateCall>, TestError> {
         CrateCall::CreateParty(party_draft()?),
         CrateCall::CreateInvite(PARTY),
         CrateCall::OpenInvite(url, Name::new("Bo")?),
-        CrateCall::AcceptInvite,
+        CrateCall::WithdrawJoin,
+        CrateCall::DismissJoin,
         CrateCall::DecideJoin(PARTY, INVITE, JoinDecision::Refuse),
         CrateCall::CancelInvite(PARTY, INVITE),
         CrateCall::SetDisplayName(Name::new("Sam")?),

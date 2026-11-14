@@ -8,9 +8,9 @@ use core::fmt::Debug;
 use pingers_proto::{
     AppMessage, AuthRequest, AuthResponse, BoardPage, BoardSyncRequest, BoardSyncResponse,
     CommitRequest, CommitResponse, CreateGroup, GroupLogEntry, GroupMessages, GroupState,
-    InvitePayload, JoinRequest, Knock, Lease, LiveFrame, LocationPlaintext, MailboxMessages,
-    MailboxSpec, MeetupMessage, MembershipLeafRequest, MembershipLeafResponse, MembershipLeaves,
-    MessageAccepted, Params, PrivacyPassAllowance, PrivacyPassIssueRequest,
+    InvitePayload, InvitePost, JoinRequest, Knock, Lease, LiveFrame, LocationPlaintext,
+    MailboxMessages, MailboxSpec, MeetupMessage, MembershipLeafRequest, MembershipLeafResponse,
+    MembershipLeaves, MessageAccepted, Params, PrivacyPassAllowance, PrivacyPassIssueRequest,
     PrivacyPassIssueResponse, PushRelayConfig, PushRequest, PushTokenPlaintext, Record,
     RegisterRequest, RegisterResponse, RlnAuth, Subscription, WireDecode, WireEncode,
 };
@@ -138,6 +138,7 @@ wire_properties! {
     push_relay_config: PushRelayConfig = strategies::push_relay_config();
     invite_payload: InvitePayload = strategies::invite_payload();
     join_request: JoinRequest = strategies::join_request();
+    invite_post: InvitePost = strategies::invite_post();
     privacy_pass_issue_request: PrivacyPassIssueRequest = strategies::privacy_pass_issue_request();
     privacy_pass_issue_response: PrivacyPassIssueResponse =
         strategies::privacy_pass_issue_response();

@@ -28,10 +28,6 @@
 //!
 //! # Known gaps
 //!
-//! - **The OHTTP relay is a stand-in.** pingers-ohttp-relay has no library target yet, so the
-//!   harness runs a forward-only relay of its own that behaves the same way (strips the client,
-//!   streams both directions). TODO(wave 2 follow-up): call `pingers_ohttp_relay::serve` once
-//!   it exists.
 //! - **The relay-only rule cannot bite on loopback**: relay and test clients connect from the
 //!   same address. pingers-server's own tests check the rule with two loopback addresses.
 

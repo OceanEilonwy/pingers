@@ -3088,7 +3088,7 @@ dependencies = [
 [[package]]
 name = "nodo-manifest"
 version = "0.1.0"
-source = "git+https://github.com/OceanEilonwy/monokulo-nodo?rev=def65d4820a511b944fd1f59720b059759afe0a4#def65d4820a511b944fd1f59720b059759afe0a4"
+source = "git+https://github.com/OceanEilonwy/monokulo-nodo?rev=4ad566128b7ce69a83a512ce435084428487b39f#4ad566128b7ce69a83a512ce435084428487b39f"
 dependencies = [
  "serde",
  "thiserror",
@@ -3098,7 +3098,7 @@ dependencies = [
 [[package]]
 name = "nodo-settings"
 version = "0.1.0"
-source = "git+https://github.com/OceanEilonwy/monokulo-nodo?rev=def65d4820a511b944fd1f59720b059759afe0a4#def65d4820a511b944fd1f59720b059759afe0a4"
+source = "git+https://github.com/OceanEilonwy/monokulo-nodo?rev=4ad566128b7ce69a83a512ce435084428487b39f#4ad566128b7ce69a83a512ce435084428487b39f"
 dependencies = [
  "libc",
  "mlua",
@@ -3793,12 +3793,12 @@ dependencies = [
 name = "pingers-ohttp-relay"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "hyper",
  "hyper-util",
  "pingers-ohttp",
  "pingers-testkit",
  "serde",
+ "thiserror",
  "tokio",
  "toml 1.2.1+spec-1.1.0",
 ]
@@ -3993,6 +3993,7 @@ dependencies = [
  "pingers-meetup",
  "pingers-meetup-session",
  "pingers-ohttp",
+ "pingers-ohttp-relay",
  "pingers-parties",
  "pingers-presence",
  "pingers-proto",
@@ -4041,17 +4042,16 @@ dependencies = [
  "hyper",
  "hyper-util",
  "pingers-ohttp",
+ "pingers-ohttp-relay",
  "pingers-proto",
  "pingers-testkit",
  "pingers-time",
  "rand_core 0.10.1",
  "rcgen",
  "rustls",
- "serde",
  "thiserror",
  "tokio",
  "tokio-rustls",
- "toml 1.2.1+spec-1.1.0",
  "webpki-roots",
 ]
 

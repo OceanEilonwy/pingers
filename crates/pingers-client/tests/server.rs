@@ -303,7 +303,6 @@ async fn an_invite_links_registration_code_registers_the_joiner() -> Result<(), 
             .now()
             .checked_add(std::time::Duration::from_hours(1))
             .ok_or(TestError::Setup("time"))?,
-        uses: pingers_proto::InviteUses::Multiple,
         registration_code: Some(SecretText::new(CODE.to_owned())),
     })?;
     // Opening the link registers the account with the link's code first; the join itself

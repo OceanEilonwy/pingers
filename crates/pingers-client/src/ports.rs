@@ -21,8 +21,8 @@ use pingers_proto::{
 };
 
 use crate::snapshot::{
-    EndedMeetup, ExclusionZone, HideTrail, InviteLink, InviteUrl, JoinPreview, LocationRequest,
-    Meetup, Name, OwnPosition, Party, PartyColour, PauseInFocus, PostQuantum, QuietHoursPreference,
+    EndedMeetup, ExclusionZone, HideTrail, InviteLink, InviteUrl, Joining, LocationRequest, Meetup,
+    Name, OwnPosition, Party, PartyColour, PauseInFocus, PostQuantum, QuietHoursPreference,
     RelayStatus, Settings, WakePushes,
 };
 use crate::{ClientError, Fallback, FixQuality, LocationMode, Notice, OsRegion, PushTokens};
@@ -64,12 +64,12 @@ pub struct SpotDraft {
     pub fence: Fence,
 }
 
-/// The inviter's answer once both screens' safety codes were compared.
+/// The inviter's answer once the joiner read out their code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum JoinDecision {
-    /// The codes matched: add them.
+    /// The codes matched: let them in ("Codes match · Let Ben in").
     Admit,
-    /// They did not: refuse.
+    /// Turn them away ("Don't let in"); nothing is sent.
     Refuse,
 }
 
@@ -176,6 +176,8 @@ pub enum ClientEvent {
     PartiesChanged,
     /// [`Events::join_requested`](crate::Events::join_requested).
     JoinRequested(PartyId),
+    /// [`Events::let_in`](crate::Events::let_in).
+    LetIn(PartyId),
     /// [`Events::meetup_started`](crate::Events::meetup_started).
     MeetupStarted(GroupId),
     /// [`Events::meetup_updated`](crate::Events::meetup_updated).
@@ -193,8 +195,8 @@ pub enum ClientEvent {
 pub struct PartiesSection {
     /// The Parties.
     pub parties: Vec<Party>,
-    /// An opened invite waiting for the codes to be compared.
-    pub join_preview: Option<JoinPreview>,
+    /// The join this device started, if any.
+    pub joining: Option<Joining>,
     /// The name this device's user goes by in Parties they create or join, once set.
     pub display_name: Option<Name>,
 }
@@ -245,15 +247,17 @@ pub trait PartiesPort: Send + Sync {
     async fn create_party(&self, draft: PartyDraft) -> Result<PartyId, ClientError>;
     /// Makes an invite link.
     async fn create_invite(&self, party: PartyId) -> Result<InviteLink, ClientError>;
-    /// Opens an invite link and shows what joining means.
+    /// Asks to join through an invite link; the snapshot then shows the code to read out.
     async fn open_invite(&self, link: InviteUrl, my_name: Name) -> Result<(), ClientError>;
-    /// Joins the Party of the opened invite, once the codes matched.
-    async fn accept_invite(&self) -> Result<PartyId, ClientError>;
-    /// Admits or refuses someone who opened an invite.
+    /// Withdraws the join this device asked for.
+    async fn withdraw_join(&self) -> Result<(), ClientError>;
+    /// Forgets the "You're in" state once the user opened the Party.
+    async fn dismiss_join(&self) -> Result<(), ClientError>;
+    /// Lets in or turns away someone who asked to join, by their request.
     async fn decide_join(
         &self,
         party: PartyId,
-        invite: MailboxId,
+        request: MailboxId,
         decision: JoinDecision,
     ) -> Result<(), ClientError>;
     /// Cancels an invite this device made: it takes no more join requests, and its mailbox is

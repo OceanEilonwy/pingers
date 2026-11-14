@@ -142,10 +142,11 @@ rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs"
 toml = "1.2.1"
 # monokulo-nodo's own manifest and settings parsers, so a test checks packaging/nodo exactly as a
 # device would. GPL-3.0-or-later (compatible with AGPL-3.0 under GPLv3 §13); dev-dependencies of
-# xtask only, never in a shipped binary (deny.toml has the licence exception). Pinned to the
-# commit the nodo patches (N1, N2) are written against.
-nodo-manifest = { git = "https://github.com/OceanEilonwy/monokulo-nodo", rev = "def65d4820a511b944fd1f59720b059759afe0a4" }
-nodo-settings = { git = "https://github.com/OceanEilonwy/monokulo-nodo", rev = "def65d4820a511b944fd1f59720b059759afe0a4" }
+# xtask only, never in a shipped binary (`[licenses.private]` in deny.toml says how their licence
+# is checked). Pinned to the monokulo-nodo main commit that merged N1 and N2 (#12), the same one
+# feed.yml builds with.
+nodo-manifest = { git = "https://github.com/OceanEilonwy/monokulo-nodo", rev = "4ad566128b7ce69a83a512ce435084428487b39f" }
+nodo-settings = { git = "https://github.com/OceanEilonwy/monokulo-nodo", rev = "4ad566128b7ce69a83a512ce435084428487b39f" }
 
 # Same-layer dependencies, checked by `cargo xtask layers`. The architecture puts pingers-time
 # in L0 beside the crates that need its types, so L0 has an internal order:

@@ -80,7 +80,8 @@ one Kotlin caller today.
 | `data/FakeRepository.kt` | The canvas's example data (Climbing crew at Riverside Park), for previews and screenshots. |
 | `data/PolygonEditor.kt` | FakeRepository's Draw area editing model (tap to add, close on the first point, drag, midpoints, select and delete, undo, clear), kept out of the composables. |
 | `Navigator.kt` | `Route` (every canvas screen) and a plain back stack, as in monokulo-fob. |
-| `MainActivity.kt` | Edge-to-edge host, routes, notification and invite-link intents. |
+| `MainActivity.kt` | Edge-to-edge host, routes, notification and invite-link intents (a link opens Open invite; You're in opens on `Events.let_in` and from its notification). |
+| `ui/screens/Join.kt` | Join flow A: Open invite, Asked to join, You're in, and "Ben asked to join" on the inviter's phone. Their words all come from the core. |
 | `CoPresenceNotifier.kt` | The co-presence alert as a real notification with "Open meetup" and "Hide me here". |
 | `CoreInfo.kt` | The calls into the Rust core so far (`coreVersion`, `currentBucket`), for the Security screen. |
 | `Heading.kt` | Compass heading from the rotation-vector sensor. |
@@ -92,13 +93,17 @@ one Kotlin caller today.
 | `ui/screens/MapRegions.kt` | The region picker and the Maps rows for Advanced and What your server sees. |
 | `ui/screens/` | One composable per screen. Each gets its state, the repository and the navigator, and holds no logic. |
 
-All copy is in `res/values/strings.xml`. Fonts are in `res/font` (both SIL OFL).
+All copy is in `res/values/strings.xml`, except the join flow's, which the core supplies
+(pingers-words through the FFI views). Fonts are in `res/font` (both SIL OFL).
 
 **Reaching every screen.** Most screens link as the canvas does. Some screens only open
 from outside the app: an invite link (`pingers://join#...`), a push, or a request from
 another member. For those, the gear on Home has a "Preview events" menu: open an invite
-link, co-presence alert (posts the real notification too), location request, and meetup
-ended. Debug builds also take `--es screen <Route>` on the launch intent:
+link (Open invite), co-presence alert (posts the real notification too), location request,
+and meetup ended. Asked to join follows "Ask to join"; You're in opens when the core
+raises `Events.let_in` (with a notification that opens it) and "Ben asked to join" from an
+opened invite on Invite people. Debug builds also take `--es screen <Route>` on the launch
+intent (`OpenInvite`, `AskedToJoin`, `LetIn`, `JoinRequest` with `--ez fake true`):
 
 ```sh
 adb shell am start -n org.pingers.app.debug/org.pingers.app.MainActivity --es screen Compass
