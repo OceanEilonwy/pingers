@@ -79,6 +79,14 @@ impl Trust {
     }
 }
 
+/// The relay's origin from the instance's setting, which may name the origin or, as servers
+/// advertise it (`ohttp_relay_urls`) and deployments configure it, the relay URL ending in
+/// `/ohttp`: both mean the same relay, never `.../ohttp/ohttp`.
+fn relay_origin(setting: &str) -> &str {
+    let trimmed = setting.trim_end_matches('/');
+    trimmed.strip_suffix("/ohttp").unwrap_or(trimmed)
+}
+
 /// The router over the instance: anonymous and stream requests through the OHTTP relay,
 /// identified requests direct to the server.
 pub(crate) fn router(
@@ -86,7 +94,7 @@ pub(crate) fn router(
     timer: Arc<dyn Timer>,
     outside: &Outside,
 ) -> Result<Arc<dyn Transport>, ClientError> {
-    let origin = instance.relay.trim_end_matches('/');
+    let origin = relay_origin(&instance.relay);
     let relay = Relay::new(
         &format!("{origin}/ohttp"),
         &format!("{origin}/v1/ohttp/config"),
@@ -142,4 +150,25 @@ pub(crate) fn engine(
             queue_capacity: QueueCapacity::default(),
         },
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::relay_origin;
+
+    #[test]
+    fn a_relay_is_named_by_its_origin_or_its_ohttp_url() {
+        for setting in [
+            "https://relay.example",
+            "https://relay.example/",
+            "https://relay.example/ohttp",
+            "https://relay.example/ohttp/",
+        ] {
+            assert_eq!(relay_origin(setting), "https://relay.example", "{setting}");
+        }
+        assert_eq!(
+            relay_origin("https://relay.example/ohttp-relay"),
+            "https://relay.example/ohttp-relay"
+        );
+    }
 }

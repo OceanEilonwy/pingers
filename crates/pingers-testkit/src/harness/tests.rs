@@ -301,10 +301,7 @@ mod running {
             client
                 .post(format!("https://{}/v1/push", endpoints.push_relay))
                 .header(CONTENT_TYPE.as_str(), "application/cbor")
-                .header(
-                    AUTHORIZATION.as_str(),
-                    format!("Bearer {}", String::from_utf8_lossy(PUSH_CREDENTIAL)),
-                )
+                .header(AUTHORIZATION.as_str(), format!("Bearer {PUSH_CREDENTIAL}"))
                 .body(body.clone())
                 .send()
         };

@@ -85,7 +85,8 @@ fn instance(harness: &InProcessHarness, code: Option<&str>) -> Result<Instance, 
     let endpoints = harness.endpoints();
     Ok(Instance {
         server: ServerId::new(endpoints.server_id.clone())?,
-        relay: format!("http://{}", endpoints.ohttp_relay),
+        // As deployments configure it (PINGERS_OHTTP_RELAY): the relay URL, not its origin.
+        relay: format!("http://{}/ohttp", endpoints.ohttp_relay),
         push_relay: Some(format!("https://{}", endpoints.push_relay)),
         gateway_pins: None,
         push_relay_pins: None,

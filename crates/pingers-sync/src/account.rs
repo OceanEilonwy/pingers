@@ -508,6 +508,8 @@ mod tests {
                 key(1, 500, 900),
                 key(2, 1_200, 2_000),
                 key(3, NOW.get(), 3_000),
+                // Its tokens stop being accepted this very second.
+                key(4, 500, NOW.get()),
             ],
         };
         let choice = choose_issuer(&keys, NOW)?;

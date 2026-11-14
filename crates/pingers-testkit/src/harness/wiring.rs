@@ -39,7 +39,7 @@ use crate::rng::{random_array, seeded_rng};
 /// How long a request body may take to arrive, on the harness clock.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// The bearer credential pingers-server will present to the push relay.
-pub(super) const PUSH_CREDENTIAL: &[u8] = b"pingers-testkit-harness-push-credential";
+pub(super) const PUSH_CREDENTIAL: &str = "pingers-testkit-harness-push-credential";
 
 /// The running services: a thread driving their runtime, and the signal that stops them.
 #[derive(Debug)]
@@ -209,7 +209,7 @@ fn push_relay(
     let credential_hash = keyed_hash(
         &credential_hash_key,
         KeyedHashPurpose::ServerCredential,
-        PUSH_CREDENTIAL,
+        PUSH_CREDENTIAL.as_bytes(),
     )
     .map_err(|_| HarnessError::Keys {
         service: Service::PushRelay,
@@ -317,7 +317,7 @@ pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started,
         RelayUrl::new(format!("https://{push_address}")).map_err(|_| HarnessError::Keys {
             service: Service::PushRelay,
         })?;
-    let credential = push_credential()?;
+    let credential = PUSH_CREDENTIAL.to_owned();
     // The relay forwards to the gateway's own listener, which test clients have no reason to
     // reach; on loopback the relay's connections come from the bind address, so the address
     // allow-list cannot tell it from a client there. The push relay is HTTPS with the test
@@ -386,13 +386,6 @@ fn registration_codes(config: &HarnessConfig) -> Vec<SecretText> {
         .iter()
         .map(|code| SecretText::new(code.clone()))
         .collect()
-}
-
-/// The credential the server presents to the push relay, as text.
-fn push_credential() -> Result<String, HarnessError> {
-    String::from_utf8(PUSH_CREDENTIAL.to_vec()).map_err(|_| HarnessError::Keys {
-        service: Service::PushRelay,
-    })
 }
 
 /// The bound listeners: the server's two and its TLS front, the relay's and the push relay's.

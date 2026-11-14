@@ -5,17 +5,64 @@
 
 use pingers_crypto::key_config_hash;
 use pingers_proto::SecretText;
-use pingers_store::AccountRegistration;
+use pingers_store::{AccountBearer, AccountRegistration};
 use pingers_sync::{
     CodeSource, CredentialChoice, Delivered, LeafStanding, Prepared, Refill, SyncError, WakeBudget,
 };
 use pingers_testkit::HarnessConfig;
+use pingers_time::Clock as _;
 
 use crate::mailbox::knock_mailbox;
 use crate::support::{Device, TestError, TestResult, World};
 
 fn code(text: &str) -> SecretText {
     SecretText::new(text.to_owned())
+}
+
+/// A bearer the server never issued, stored as valid until `expires_at`.
+fn stale_bearer(device: &Device, expires_at: pingers_time::UnixSeconds) -> TestResult {
+    device.session()?.account().set_bearer(&AccountBearer {
+        bearer: code(&"ab".repeat(32)),
+        expires_at,
+    })?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bearer_is_replaced_when_it_lapses_or_the_server_refuses_it() -> TestResult {
+    let world = World::start()?;
+    let device = world.account_device()?;
+    device
+        .engine
+        .ensure_registered(WakeBudget::UNLIMITED)
+        .await?;
+    let _ = direct(&device)?.take_seen();
+    // The server answers the leaf registration 401: one fresh bearer, one more try.
+    let later = world
+        .clock
+        .now()
+        .checked_add(std::time::Duration::from_mins(30))
+        .ok_or(TestError::Unexpected("time"))?;
+    stale_bearer(&device, later)?;
+    assert_eq!(
+        device
+            .engine
+            .ensure_membership_leaf(WakeBudget::UNLIMITED)
+            .await?,
+        LeafStanding::Registered
+    );
+    assert_eq!(
+        direct(&device)?.take_seen(),
+        ["/v1/rln/leaf", "/v1/auth", "/v1/rln/leaf"]
+    );
+    // A bearer that lapses this very second is not presented at all.
+    stale_bearer(&device, world.clock.now())?;
+    assert_eq!(
+        device.engine.stock_tokens(WakeBudget::UNLIMITED).await?,
+        Refill::Fetched { added: 5, held: 5 }
+    );
+    assert_eq!(direct(&device)?.take_seen(), ["/v1/auth", "/v1/pp/issue"]);
+    Ok(())
 }
 
 fn direct(device: &Device) -> Result<&crate::support::Direct, TestError> {
@@ -168,6 +215,11 @@ async fn a_refused_code_is_not_tried_again_until_another_is_offered() -> TestRes
         ..HarnessConfig::default()
     })?;
     let device = world.account_device()?;
+    // A later invite's code replaces an earlier one that waits.
+    device
+        .engine
+        .offer_registration_code(code("early"), CodeSource::Invite)
+        .await?;
     device
         .engine
         .offer_registration_code(code("strangers"), CodeSource::Invite)
