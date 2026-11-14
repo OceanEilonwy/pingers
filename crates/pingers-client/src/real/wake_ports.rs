@@ -198,7 +198,8 @@ impl Lens {
                 root: group.presence_root(&row.id).map_err(PartiesError::from)?,
                 rosters: lifecycle.roster_view(&row.id)?,
             });
-            let knock_class = match lifecycle.settings(&row.id)?.post_quantum {
+            let settings = lifecycle.settings(&row.id)?;
+            let knock_class = match settings.post_quantum {
                 PostQuantum::Classical => SizeClass::Bytes1024,
                 PostQuantum::QuantumResistant => SizeClass::Bytes4096,
             };
@@ -212,6 +213,7 @@ impl Lens {
                 .collect();
             parties.push(PartyInfo {
                 party: row.id,
+                server: settings.server,
                 epoch: EpochState {
                     current: epoch,
                     entered_at: row.created_at,

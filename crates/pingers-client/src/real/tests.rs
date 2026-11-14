@@ -22,9 +22,9 @@ use pingers_store::{Database, DatabaseKey, Identity, Session};
 use pingers_time::{Bucket, Clock as _, ManualClock, UnixSeconds};
 use pingers_wake::ports::{PartyView as _, RegionId};
 use pingers_wake::{
-    DecidedKnock, KnockStatus, KnownEpoch, LeaseSlot, LiveLease, PeerActivity, PortError,
-    RETRY_AFTER, RealRecord, SentKnock, SpotSnapshot, WakeEnding, WakeSnapshot, WakeStep,
-    WakeTrigger,
+    BoardSnapshot, DecidedKnock, KnockStatus, KnownEpoch, LeaseSlot, LiveLease, PeerActivity,
+    PortError, RETRY_AFTER, RealRecord, SentKnock, SpotSnapshot, WakeEnding, WakeSnapshot,
+    WakeStep, WakeTrigger,
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng as _;
@@ -213,19 +213,31 @@ async fn a_full_wake_snapshot_round_trips_through_the_store() -> TestResult {
             presence(7, PresenceState::Outside, 14),
         ],
         last_in_zone: Some(UnixSeconds::new(20)),
-        leases: vec![LiveLease {
-            start: Bucket::from_index(1_000)?,
-            slots,
-        }],
-        sent_knocks: vec![
-            knock(4, KnockStatus::Waiting),
-            knock(8, KnockStatus::Answered),
+        boards: vec![
+            BoardSnapshot {
+                server: ServerId::new(String::from("https://one.example"))?,
+                leases: vec![LiveLease {
+                    start: Bucket::from_index(1_000)?,
+                    slots,
+                }],
+                sent_knocks: vec![
+                    knock(4, KnockStatus::Waiting),
+                    knock(8, KnockStatus::Answered),
+                ],
+                decided_knocks: vec![DecidedKnock {
+                    reply_mailbox: MailboxId::from_bytes([11; 16]),
+                    at: UnixSeconds::new(40),
+                }],
+                last_upload: Some(UnixSeconds::new(50)),
+            },
+            BoardSnapshot {
+                server: ServerId::new(String::from("https://two.example"))?,
+                leases: Vec::new(),
+                sent_knocks: vec![knock(9, KnockStatus::Waiting)],
+                decided_knocks: Vec::new(),
+                last_upload: None,
+            },
         ],
-        decided_knocks: vec![DecidedKnock {
-            reply_mailbox: MailboxId::from_bytes([11; 16]),
-            at: UnixSeconds::new(40),
-        }],
-        last_upload: Some(UnixSeconds::new(50)),
         epochs: vec![KnownEpoch {
             party: PartyId::from_bytes([12; 16]),
             epoch: Epoch::new(8),
@@ -237,12 +249,82 @@ async fn a_full_wake_snapshot_round_trips_through_the_store() -> TestResult {
     };
     let saved = snapshot.clone();
     let loaded = session(&store, move |session| {
-        let empty = wake_codec::load(session)?;
+        let empty = wake_codec::load(session, None)?;
         wake_codec::save(session, &saved)?;
-        Ok((empty, wake_codec::load(session)?))
+        Ok((empty, wake_codec::load(session, None)?))
     })
     .await?;
     assert_eq!(loaded, (WakeSnapshot::default(), snapshot));
+    Ok(())
+}
+
+/// A snapshot stored in the first layout (one board, no server) has its leases, decisions and
+/// last upload put under the instance's server; without an instance they are dropped and the
+/// rest is kept.
+#[tokio::test]
+async fn a_first_layout_wake_snapshot_moves_into_the_instance_servers_board() -> TestResult {
+    let store = store()?;
+    let lease = LiveLease {
+        start: Bucket::from_index(1_000)?,
+        slots: [LeaseSlot {
+            randomness: RecordRandomness::from_bytes([2; 16]),
+            real: None,
+        }; Lease::SLOTS],
+    };
+    let decided = DecidedKnock {
+        reply_mailbox: MailboxId::from_bytes([11; 16]),
+        at: UnixSeconds::new(40),
+    };
+    let known = KnownEpoch {
+        party: PartyId::from_bytes([12; 16]),
+        epoch: Epoch::new(8),
+    };
+    let server = ServerId::new(String::from("https://one.example"))?;
+    let legacy = server.clone();
+    let (moved, dropped) = session(&store, move |session| {
+        super::records::write(session, &super::records::Key::WakeSnapshot, |writer| {
+            // No Spots, no exclusion trail.
+            writer.len(0);
+            writer.option(None::<UnixSeconds>, |_writer, _at| {});
+            writer.len(1);
+            writer.u64(lease.start.index());
+            for slot in &lease.slots {
+                writer.fixed(slot.randomness.as_bytes());
+                writer.option(None::<RealRecord>, |_writer, _real| {});
+            }
+            // No knocks sent, one decided, the last upload.
+            writer.len(0);
+            writer.len(1);
+            writer.fixed(decided.reply_mailbox.as_bytes());
+            writer.u64(decided.at.get());
+            writer.option(Some(UnixSeconds::new(50)), |writer, at| {
+                writer.u64(at.get());
+            });
+            writer.len(1);
+            writer.fixed(known.party.as_bytes());
+            writer.u64(known.epoch.get());
+            // No peer activity.
+            writer.len(0);
+        })?;
+        Ok((
+            wake_codec::load(session, Some(&legacy))?,
+            wake_codec::load(session, None)?,
+        ))
+    })
+    .await?;
+    assert_eq!(
+        moved.boards,
+        vec![BoardSnapshot {
+            server,
+            leases: vec![lease],
+            sent_knocks: Vec::new(),
+            decided_knocks: vec![decided],
+            last_upload: Some(UnixSeconds::new(50)),
+        }]
+    );
+    assert_eq!(moved.epochs, vec![known]);
+    assert!(dropped.boards.is_empty());
+    assert_eq!(dropped.epochs, vec![known]);
     Ok(())
 }
 
@@ -426,7 +508,7 @@ async fn a_wake_confirmed_inside_a_spot_ends_at_the_sync_stub() -> TestResult {
     assert_eq!(outcome.next_wake, Some(RETRY_AFTER));
     assert!(outcome.events.is_empty());
 
-    let stored = session(&store, wake_codec::load).await?;
+    let stored = session(&store, |session| wake_codec::load(session, None)).await?;
     assert_eq!(
         stored.spots.first().map(|spot| spot.presence.state),
         Some(PresenceState::Inside)

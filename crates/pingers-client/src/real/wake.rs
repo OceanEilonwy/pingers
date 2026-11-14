@@ -19,6 +19,7 @@ use pingers_meetup_session::MeetupScreen;
 use pingers_presence::DataMode;
 use pingers_proto::{CoverReadRatio, PartyId, PushHandle};
 use pingers_store::{LocationVisibility as StoredVisibility, Session, WakePushes as StoredPushes};
+use pingers_sync::SyncEngine;
 use pingers_time::{Clock, UnixSeconds};
 use pingers_wake::{
     GeofenceEvent, GeofenceTransition as WakeTransition, MailboxReads, PushReason, WakeEnv,
@@ -85,13 +86,15 @@ impl Wake {
         trigger: WakeTrigger,
     ) -> Result<(WakeReport, WakeOutcome), ClientError> {
         let mut state = self.state.lock().await;
+        // A snapshot from before boards were kept per server belongs to the instance's server.
+        let legacy_server = self.net.engine.as_deref().map(SyncEngine::server);
         let (stored, lens, snapshot) = self
             .backend
-            .store(|session, clock, rng| {
+            .store(move |session, clock, rng| {
                 Ok((
                     Stored::load(session)?,
                     Lens::load(session, clock, rng)?,
-                    wake_codec::load(session)?,
+                    wake_codec::load(session, legacy_server.as_ref())?,
                 ))
             })
             .await?;
