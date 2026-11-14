@@ -21,6 +21,7 @@ object Push {
     const val PREFS = "pingers.push"
     private const val KEY_UP_ENDPOINT = "unifiedpush.endpoint"
     private const val KEY_FCM_TOKEN = "fcm.token"
+    private const val KEY_OPTED_OUT = "unifiedpush.opted-out"
 
     /** The connector's instance; Pingers has exactly one registration. */
     const val INSTANCE = "pingers"
@@ -50,6 +51,7 @@ object Push {
      * The endpoint arrives later through [PingersPushService].
      */
     fun registerUnifiedPush(context: Context, distributor: String? = null): Boolean {
+        prefs(context).edit { putBoolean(KEY_OPTED_OUT, false) }
         val chosen = distributor
             ?: UnifiedPush.getSavedDistributor(context)?.takeIf { it in distributors(context) }
             ?: when (val resolved = UnifiedPush.resolveDefaultDistributor(context)) {
@@ -64,8 +66,20 @@ object Push {
 
     /** Ends the UnifiedPush registration ("No wake-up pushes", design B.7). */
     fun unregisterUnifiedPush(context: Context) {
+        prefs(context).edit { putBoolean(KEY_OPTED_OUT, true) }
         UnifiedPush.unregister(context, INSTANCE)
         setEndpoint(context, null)
+    }
+
+    /**
+     * At every start, as UnifiedPush asks: registers again with the saved distributor (or the
+     * default one), so a new endpoint reaches the core; unless the user turned wake-up pushes off.
+     * When no distributor is left (it was uninstalled), the endpoint goes, and the core marks
+     * wake-ups downgraded ("no push service").
+     */
+    fun renew(context: Context) {
+        if (prefs(context).getBoolean(KEY_OPTED_OUT, false)) return
+        if (!registerUnifiedPush(context)) setEndpoint(context, null)
     }
 
     internal fun setEndpoint(context: Context, endpoint: String?) {

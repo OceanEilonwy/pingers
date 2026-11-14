@@ -14,7 +14,6 @@ object FlavorServices {
     @Suppress("UNUSED_PARAMETER")
     fun fcmAvailable(context: Context): Boolean = false
 
-    /** Nothing to start: push is UnifiedPush, registered through [Push.registerUnifiedPush]. */
-    @Suppress("UNUSED_PARAMETER")
-    fun startPush(context: Context) = Unit
+    /** Push is UnifiedPush: registered again at every start ([Push.renew]). */
+    fun startPush(context: Context) = Push.renew(context)
 }

@@ -136,6 +136,17 @@ class PlatformUnitTest {
     }
 
     @Test
+    fun aDistributorThatIsGoneTakesTheEndpointWithItAtTheNextStart() {
+        context.getSharedPreferences(Push.PREFS, Context.MODE_PRIVATE).edit().clear().commit()
+        Push.setEndpoint(context, "http://10.0.2.2:8099/upAbc")
+        assertEquals(PushPlatform.UNIFIED_PUSH, sink.await<RecordingSink.Tokens>()!!.tokens!!.platform)
+        // No distributor is installed under Robolectric: as after an uninstall.
+        Push.renew(context)
+        assertNull(Push.tokens(context))
+        assertNull(sink.await<RecordingSink.Tokens>()!!.tokens)
+    }
+
+    @Test
     fun aPushReachesTheCoreWithItsFcmPriority() {
         val priority = FcmPriority(sentHigh = true, deliveredHigh = false)
         Push.wake(PushPlatform.FCM, """{"v":1,"h":"AAAAAAAAAAA="}""".toByteArray(), priority)
