@@ -3,11 +3,12 @@
 //!
 //! ```text
 //! cargo xtask e2e-emulators [<local-stack options>] [--avd <name>] [--leases <dir>]
-//!                           [--apk <file>] [--ntfy-apk <file>]
+//!                           [--apk <file>] [--ntfy-apk <file>] [--flavour foss|gms]
 //! ```
 //!
-//! It uses a running local stack, or starts one (and stops it at the end); builds the foss
-//! debug APK against it unless `--apk` names one; takes both emulator leases (`--leases`,
+//! It uses a running local stack, or starts one (and stops it at the end); builds the debug
+//! APK (foss, or gms with `--flavour gms`) against it unless `--apk` names one; takes both
+//! emulator leases (`--leases`,
 //! `$PINGERS_EMULATOR_LEASES`, else the stack directory) and boots two emulators of `--avd`
 //! (`$PINGERS_E2E_AVD`, default `Pixel_9_Pro`) with `-gpu host -accel on`, checking that both
 //! render on the AMD GPU. If an ntfy app is installed, or `--ntfy-apk` (`$PINGERS_NTFY_APK`)
@@ -51,13 +52,13 @@ use anyhow::{Context as _, Result, bail};
 use crate::Outcome;
 use crate::device::{Device, Find, Position, Text, safety_code};
 use crate::emulator::{Emulator, EmulatorSpec, Sdk, take_leases};
+use crate::local_app::Flavour;
 use crate::stack::{self, Layout, NTFY_PORT, StackOptions, environment};
 use crate::supervise::Supervisor;
 use crate::wait::{Deadline, pause};
 
-/// The foss debug build's application id.
-const PACKAGE: &str = "org.pingers.app.foss.debug";
-const ACTIVITY: &str = "org.pingers.app.foss.debug/org.pingers.app.MainActivity";
+/// The main activity, after the application id.
+const ACTIVITY: &str = "org.pingers.app.MainActivity";
 /// The ntfy app, the UnifiedPush distributor on the emulators.
 const NTFY_PACKAGE: &str = "io.heckel.ntfy";
 
@@ -101,6 +102,7 @@ pub(crate) struct ScenarioOptions {
     leases: Option<PathBuf>,
     apk: Option<PathBuf>,
     ntfy_apk: Option<PathBuf>,
+    flavour: Flavour,
 }
 
 impl ScenarioOptions {
@@ -117,6 +119,7 @@ impl ScenarioOptions {
                 "--leases" => parsed.leases = Some(PathBuf::from(options.next()?)),
                 "--apk" => parsed.apk = Some(PathBuf::from(options.next()?)),
                 "--ntfy-apk" => parsed.ntfy_apk = Some(PathBuf::from(options.next()?)),
+                "--flavour" => parsed.flavour = Flavour::parse(options.next()?)?,
                 _ => return None,
             }
         }
@@ -235,6 +238,8 @@ impl Report {
 /// What the steps share.
 struct Scene {
     out: PathBuf,
+    /// The application id of the build under test.
+    package: &'static str,
     a: Device,
     b: Device,
     link: Option<String>,
@@ -340,7 +345,7 @@ fn setup_and_play(
     setup_step(report, "app built for the stack", || {
         apk = match &options.apk {
             Some(apk) => apk.clone(),
-            None => crate::local_app::build(workspace, &options.stack)?,
+            None => crate::local_app::build(workspace, &options.stack, options.flavour)?,
         };
         if !apk.is_file() {
             bail!("{} does not exist", apk.display());
@@ -412,6 +417,7 @@ fn setup_and_play(
     };
     let mut scene = Scene {
         out: layout.e2e_out(),
+        package: options.flavour.package(),
         a: Device::new("A", first.serial.clone(), sdk.adb.clone()),
         b: Device::new("B", second.serial.clone(), sdk.adb.clone()),
         link: None,
@@ -470,7 +476,7 @@ fn play(
 
     step(report, scene, "Pingers installed", |scene| {
         for device in [&scene.a, &scene.b] {
-            install_pingers(device, apk)?;
+            install_pingers(device, apk, scene.package)?;
         }
         Ok("foss debug build, permissions granted, Home shown on both".to_owned())
     })?;
@@ -520,7 +526,8 @@ fn play(
         let b = &scene.b;
         // Single quotes: the phone's shell must not treat '#' as a comment.
         b.shell(&format!(
-            "am start -W -a android.intent.action.VIEW -d '{link}' {PACKAGE}"
+            "am start -W -a android.intent.action.VIEW -d '{link}' {}",
+            scene.package
         ))?;
         Ok("opened with am start".to_owned())
     })?;
@@ -594,7 +601,7 @@ fn play(
     )?;
 
     step(report, scene, "A is notified of the request", |scene| {
-        let text = notification_shown(&scene.a, "opened your invite", NETWORK)?;
+        let text = notification_shown(&scene.a, scene.package, "opened your invite", NETWORK)?;
         Ok(format!("A's notification: {text}"))
     })?;
 
@@ -696,7 +703,7 @@ fn play(
     step(report, scene, "both are notified of the Meetup", |scene| {
         let mut seen = Vec::new();
         for device in [&scene.a, &scene.b] {
-            let text = notification_shown(device, "too. Say hi?", NETWORK)?;
+            let text = notification_shown(device, scene.package, "too. Say hi?", NETWORK)?;
             seen.push(format!("{}: {text}", device.label));
         }
         Ok(seen.join("; "))
@@ -730,13 +737,13 @@ fn play(
     })?;
 
     step(report, scene, "B is notified of it", |scene| {
-        let text = notification_shown(&scene.b, MESSAGE, NETWORK)?;
+        let text = notification_shown(&scene.b, scene.package, MESSAGE, NETWORK)?;
         Ok(format!("B's notification: {text}"))
     })?;
 
     step(report, scene, "B receives it", |scene| {
         let b = &scene.b;
-        b.shell(&format!("am start -W -n {ACTIVITY}"))?;
+        b.shell(&format!("am start -W -n {}/{ACTIVITY}", scene.package))?;
         b.tap_when(&Find::tag("meetup_chat"), UI)?;
         b.wait_for(&Find::text(Text::Is(MESSAGE.into())), NETWORK)?;
         b.back()?;
@@ -801,11 +808,16 @@ fn play(
 
 /// Waits until one of Pingers' notifications on `device` contains `text` (title or body, as
 /// `dumpsys notification` shows them) and returns that line.
-fn notification_shown(device: &Device, text: &str, within: Duration) -> Result<String> {
+fn notification_shown(
+    device: &Device,
+    package: &str,
+    text: &str,
+    within: Duration,
+) -> Result<String> {
     let deadline = Deadline::after(within);
     loop {
         let dump = device.shell("dumpsys notification --noredact")?;
-        if let Some(line) = pingers_notification_line(&dump, text) {
+        if let Some(line) = notification_line(&dump, package, text) {
             return Ok(line);
         }
         if deadline.passed() {
@@ -818,12 +830,12 @@ fn notification_shown(device: &Device, text: &str, within: Duration) -> Result<S
     }
 }
 
-/// The first line of `dump` that belongs to a Pingers notification and contains `text`.
-fn pingers_notification_line(dump: &str, text: &str) -> Option<String> {
+/// The first line of `dump` that belongs to a notification of `package` and contains `text`.
+fn notification_line(dump: &str, package: &str, text: &str) -> Option<String> {
     let mut in_pingers = false;
     for line in dump.lines() {
         if line.contains("NotificationRecord(") {
-            in_pingers = line.contains(PACKAGE);
+            in_pingers = line.contains(&format!("pkg={package} "));
         }
         if in_pingers && line.contains(text) {
             return Some(line.trim().to_owned());
@@ -891,8 +903,8 @@ fn set_ntfy_server(device: &Device, server: &str) -> Result<()> {
 
 /// A fresh install with every runtime permission granted (so onboarding has nothing to ask),
 /// animations off, the phone away from the Spot, and Home on screen.
-fn install_pingers(device: &Device, apk: &Path) -> Result<()> {
-    let _ignored = device.adb(&["uninstall", PACKAGE]);
+fn install_pingers(device: &Device, apk: &Path, package: &str) -> Result<()> {
+    let _ignored = device.adb(&["uninstall", package]);
     device.adb(&["install", "-r", "-g", &apk.display().to_string()])?;
     for setting in [
         "window_animation_scale",
@@ -902,10 +914,10 @@ fn install_pingers(device: &Device, apk: &Path) -> Result<()> {
         device.shell(&format!("settings put global {setting} 0"))?;
     }
     device.shell("settings put secure location_mode 3")?;
-    device.shell(&format!("dumpsys deviceidle whitelist +{PACKAGE}"))?;
+    device.shell(&format!("dumpsys deviceidle whitelist +{package}"))?;
     device.shell("logcat -c")?;
     device.geo_fix(AWAY)?;
-    device.shell(&format!("am start -W -n {ACTIVITY}"))?;
+    device.shell(&format!("am start -W -n {package}/{ACTIVITY}"))?;
     device
         .wait_for(
             &Find::tag("home_new_party").or(Text::Is("New party".into())),
@@ -944,7 +956,16 @@ mod tests {
     #[test]
     fn options_mix_stack_and_scenario_flags() {
         let parsed = ScenarioOptions::parse(&strings(&[
-            "--dir", "/s", "--avd", "Pixel", "--leases", "/l", "--apk", "/a.apk",
+            "--dir",
+            "/s",
+            "--avd",
+            "Pixel",
+            "--leases",
+            "/l",
+            "--apk",
+            "/a.apk",
+            "--flavour",
+            "gms",
         ]));
         assert_eq!(
             parsed,
@@ -957,9 +978,19 @@ mod tests {
                 leases: Some(PathBuf::from("/l")),
                 apk: Some(PathBuf::from("/a.apk")),
                 ntfy_apk: None,
+                flavour: Flavour::Gms,
             })
         );
         assert_eq!(ScenarioOptions::parse(&strings(&["--avd"])), None);
+        assert_eq!(
+            ScenarioOptions::parse(&strings(&["--flavour", "play"])),
+            None
+        );
+        assert_eq!(
+            ScenarioOptions::parse(&[]).map(|options| options.flavour.package()),
+            Some("org.pingers.app.foss.debug")
+        );
+        assert_eq!(Flavour::Gms.package(), "org.pingers.app.debug");
     }
 
     #[test]
@@ -983,16 +1014,22 @@ mod tests {
                     NotificationRecord(0x2: pkg=org.pingers.app.foss.debug user=0 id=7)\n    \
                     android.title=String (Ana · Crag)\n    android.text=String (Hello from A)\n";
         assert_eq!(
-            pingers_notification_line(dump, "Hello from A").as_deref(),
+            notification_line(dump, "org.pingers.app.foss.debug", "Hello from A").as_deref(),
             Some("android.text=String (Hello from A)")
         );
         assert_eq!(
-            pingers_notification_line(dump, "Ana · Crag").as_deref(),
+            notification_line(dump, "org.pingers.app.foss.debug", "Ana · Crag").as_deref(),
             Some("android.title=String (Ana · Crag)")
         );
-        assert_eq!(pingers_notification_line(dump, "nothing"), None);
+        assert_eq!(
+            notification_line(dump, "org.pingers.app.foss.debug", "nothing"),
+            None
+        );
         let ntfy_only = "NotificationRecord(0x1: pkg=io.heckel.ntfy id=1)\n android.text=String (Hello from A)\n";
-        assert_eq!(pingers_notification_line(ntfy_only, "Hello from A"), None);
+        assert_eq!(
+            notification_line(ntfy_only, "org.pingers.app.foss.debug", "Hello from A"),
+            None
+        );
     }
 
     #[test]

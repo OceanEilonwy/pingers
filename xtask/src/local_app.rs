@@ -23,8 +23,51 @@ use anyhow::{Result, bail};
 use crate::Outcome;
 use crate::stack::{self, Layout, StackOptions};
 
-/// The APK `assembleFossDebug` writes, relative to the workspace.
-const APK: &str = "android/app/build/outputs/apk/foss/debug/app-foss-debug.apk";
+/// Which flavour of the debug build: foss (`UnifiedPush` only) or gms (Play services location,
+/// FCM when the build has a Firebase configuration, and `UnifiedPush`, which wins when a
+/// distributor is installed).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Flavour {
+    /// `assembleFossDebug`.
+    #[default]
+    Foss,
+    /// `assembleGmsDebug`.
+    Gms,
+}
+
+impl Flavour {
+    /// The flavour named on the command line.
+    pub(crate) fn parse(name: &str) -> Option<Self> {
+        match name {
+            "foss" => Some(Self::Foss),
+            "gms" => Some(Self::Gms),
+            _ => None,
+        }
+    }
+
+    const fn task(self) -> &'static str {
+        match self {
+            Self::Foss => ":app:assembleFossDebug",
+            Self::Gms => ":app:assembleGmsDebug",
+        }
+    }
+
+    /// The APK the task writes, relative to the workspace.
+    const fn apk(self) -> &'static str {
+        match self {
+            Self::Foss => "android/app/build/outputs/apk/foss/debug/app-foss-debug.apk",
+            Self::Gms => "android/app/build/outputs/apk/gms/debug/app-gms-debug.apk",
+        }
+    }
+
+    /// The debug build's application id.
+    pub(crate) const fn package(self) -> &'static str {
+        match self {
+            Self::Foss => "org.pingers.app.foss.debug",
+            Self::Gms => "org.pingers.app.debug",
+        }
+    }
+}
 
 /// `cargo xtask local-app`.
 ///
@@ -32,7 +75,7 @@ const APK: &str = "android/app/build/outputs/apk/foss/debug/app-foss-debug.apk";
 ///
 /// When the stack cannot be prepared or Gradle fails.
 pub(crate) fn run(workspace: &Path, options: &StackOptions) -> Result<Outcome> {
-    let apk = build(workspace, options)?;
+    let apk = build(workspace, options, Flavour::Foss)?;
     writeln!(io::stdout(), "local-app: {}", apk.display())?;
     Ok(Outcome::Passed)
 }
@@ -42,7 +85,7 @@ pub(crate) fn run(workspace: &Path, options: &StackOptions) -> Result<Outcome> {
 /// # Errors
 ///
 /// When the stack cannot be prepared or Gradle fails.
-pub(crate) fn build(workspace: &Path, options: &StackOptions) -> Result<PathBuf> {
+pub(crate) fn build(workspace: &Path, options: &StackOptions, flavour: Flavour) -> Result<PathBuf> {
     let layout = Layout::new(options.resolve_dir()?);
     if !layout.app_env().is_file() || options.fresh {
         stack::prepare(workspace, options)?;
@@ -51,7 +94,7 @@ pub(crate) fn build(workspace: &Path, options: &StackOptions) -> Result<PathBuf>
     let mut command = Command::new(workspace.join("android/gradlew"));
     command
         .current_dir(workspace.join("android"))
-        .arg(":app:assembleFossDebug");
+        .arg(flavour.task());
     for (name, value) in &variables {
         command.env(name, value.as_str());
     }
@@ -61,12 +104,13 @@ pub(crate) fn build(workspace: &Path, options: &StackOptions) -> Result<PathBuf>
         .collect();
     writeln!(
         io::stdout(),
-        "local-app: ./gradlew :app:assembleFossDebug with {} from {}",
+        "local-app: ./gradlew {} with {} from {}",
+        flavour.task(),
         names.join(", "),
         layout.app_env().display()
     )?;
     if !command.status()?.success() {
-        bail!("the foss debug build failed");
+        bail!("the debug build failed ({})", flavour.task());
     }
-    Ok(workspace.join(APK))
+    Ok(workspace.join(flavour.apk()))
 }
