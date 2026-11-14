@@ -587,7 +587,7 @@ fn play(
         let b = &scene.b;
         // Single quotes: the phone's shell must not treat '#' as a comment.
         b.shell(&format!(
-            "am start -W -a android.intent.action.VIEW -d '{link}' {PACKAGE}"
+            "am start -W -a android.intent.action.VIEW -d '{link}' -n {ACTIVITY}"
         ))?;
         Ok("opened with am start".to_owned())
     })?;
