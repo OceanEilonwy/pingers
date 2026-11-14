@@ -220,6 +220,43 @@ pub fn open_invite(language: Language, view: &OpenInvite) -> OpenInviteText {
     }
 }
 
+/// The row at the top of Home while a join request waits (canvas `HomePendingJoin`). It names
+/// no Party or inviter: join flow A does not know them yet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingJoinText {
+    /// "Waiting to be let in".
+    pub title: String,
+    /// "Asked to join a Party · Code ".
+    pub detail: String,
+    /// "4821", the code's first group, set in the code's font.
+    pub code_start: String,
+    /// " …", for the rest of the code.
+    pub more: String,
+    /// The whole row for screen readers: "Waiting to be let in. Asked to join a Party. Code
+    /// starts 4821."
+    pub label: String,
+}
+
+/// The pending join row on Home, in words.
+#[must_use]
+pub fn pending_join(language: Language, view: &AskedToJoin) -> PendingJoinText {
+    let Language::English = language;
+    let code_start = view
+        .code
+        .as_str()
+        .split(' ')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    PendingJoinText {
+        title: "Waiting to be let in".into(),
+        detail: "Asked to join a Party · Code ".into(),
+        label: format!("Waiting to be let in. Asked to join a Party. Code starts {code_start}."),
+        code_start,
+        more: " …".into(),
+    }
+}
+
 /// The Asked to join screen, in words (canvas `JoinA2`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AskedToJoinText {
@@ -477,6 +514,24 @@ mod tests {
             (unnamed.name_label.as_str(), unnamed.name_help.as_str()),
             ("Your name", "The same name in every Party")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn the_pending_join_row_shows_only_the_codes_first_group() -> Result<(), FixtureError> {
+        let mut snapshot = fixtures::snapshot()?;
+        let text = pending_join(EN, &asked_screen(&snapshot).ok_or(FixtureError::Missing)?);
+        assert_eq!(text.title, "Waiting to be let in");
+        assert_eq!(text.detail, "Asked to join a Party · Code ");
+        assert_eq!(text.code_start, "4821");
+        assert_eq!(text.more, " …");
+        assert_eq!(
+            text.label,
+            "Waiting to be let in. Asked to join a Party. Code starts 4821."
+        );
+        // Once let in or withdrawn, nothing waits and Home shows no row.
+        snapshot.joining = None;
+        assert_eq!(asked_screen(&snapshot), None);
         Ok(())
     }
 

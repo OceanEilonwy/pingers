@@ -976,6 +976,35 @@ impl From<screens::invite::OpenInvite> for OpenInviteView {
     }
 }
 
+/// The row at the top of Home while a join request waits (canvas `HomePendingJoin`); tapping it
+/// reopens Asked to join.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct PendingJoinView {
+    /// "Waiting to be let in".
+    pub title: String,
+    /// "Asked to join a Party · Code ".
+    pub detail: String,
+    /// "4821", in the code's font.
+    pub code_start: String,
+    /// " …".
+    pub more: String,
+    /// The whole row for screen readers.
+    pub label: String,
+}
+
+impl From<&screens::invite::AskedToJoin> for PendingJoinView {
+    fn from(view: &screens::invite::AskedToJoin) -> Self {
+        let text = pingers_words::invite::pending_join(LANGUAGE, view);
+        Self {
+            title: text.title,
+            detail: text.detail,
+            code_start: text.code_start,
+            more: text.more,
+            label: text.label,
+        }
+    }
+}
+
 /// Asked to join (canvas `JoinA2`): the code to read to the inviter.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct AskedToJoinView {
