@@ -62,6 +62,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.pingers.app.Navigator
+import androidx.compose.ui.platform.testTag
+import org.pingers.app.ui.E2eTags
 import org.pingers.app.R
 import org.pingers.app.Route
 import org.pingers.app.data.DrawAreaState
@@ -252,7 +254,7 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
                 }
             }
             LockNote(stringResource(R.string.spot_encrypted, state.partyName))
-            PillButton(stringResource(R.string.spot_save), { repo.saveSpot(); nav.go(Route.Party) }, enabled = state.canSave)
+            PillButton(stringResource(R.string.spot_save), { repo.saveSpot(); nav.go(Route.Party) }, Modifier.testTag(E2eTags.SPOT_SAVE), enabled = state.canSave)
         }
     }
 }

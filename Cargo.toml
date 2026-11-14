@@ -108,6 +108,8 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "
 async-trait = "0.1.92"
 hyper = { version = "1.12.0", features = ["client", "server", "http2"] }
 hyper-util = { version = "0.1.21", features = ["tokio", "client-legacy", "http2"] }
+# Empty and Either bodies for the local stack's TLS front (xtask; already in the tree via hyper-util).
+http-body-util = "0.1.5"
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 # rustls over tokio sockets for pingers-transport's HTTP/2 connections (already in the tree via reqwest).
 tokio-rustls = { version = "0.26.6", default-features = false }

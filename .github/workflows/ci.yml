@@ -24,7 +24,12 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # sccache caches each compiled crate in the GitHub Actions cache and updates on every run, so
+  # unchanged crates (dependencies and workspace crates alike) are not rebuilt. It cannot cache
+  # incremental builds. target/ is not cached: sccache replaces it.
   CARGO_INCREMENTAL: 0
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: sccache
   # The NDK app/build.gradle.kts asks for.
   NDK_VERSION: 27.0.12077973
 
@@ -43,6 +48,8 @@ jobs:
           rustup toolchain install --no-self-update
           rustc --version
 
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -50,9 +57,8 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             ~/.cargo/bin/cargo-deny
-            target
-          key: ci-rust-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: ci-rust-${{ runner.os }}-
+          key: ci-rust-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: ci-rust-registry-${{ runner.os }}-
 
       - name: Install cargo-deny
         run: command -v cargo-deny || cargo install --locked cargo-deny
@@ -102,6 +108,9 @@ jobs:
           rustup toolchain install --no-self-update
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
 
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        if: steps.firebase.outputs.build == 'true'
+
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: steps.firebase.outputs.build == 'true'
         with:
@@ -110,9 +119,8 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             ~/.cargo/bin/cargo-ndk
-            target
-          key: ci-android-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ci-android-cargo-${{ runner.os }}-
+          key: ci-android-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: ci-android-registry-${{ runner.os }}-
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: steps.firebase.outputs.build == 'true'

@@ -54,6 +54,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.pingers.app.Navigator
+import androidx.compose.ui.platform.testTag
+import org.pingers.app.ui.E2eTags
 import org.pingers.app.R
 import org.pingers.app.Route
 import org.pingers.app.data.AdvancedState
@@ -148,7 +150,7 @@ fun NewPartyScreen(state: NewPartyState, repo: PingersRepository, nav: Navigator
                 repo.createParty()
                 nav.replace(Route.Party)
                 nav.go(Route.Invite)
-            }, enabled = state.canCreate)
+            }, enabled = state.canCreate, modifier = Modifier.testTag(E2eTags.NEW_PARTY_CREATE))
         },
         spacing = 18,
     ) {
@@ -347,7 +349,7 @@ fun InviteScreen(state: InviteState, repo: PingersRepository, nav: Navigator) {
                 PillButton(stringResource(R.string.invite_share), {
                     val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, state.link)
                     context.startActivity(Intent.createChooser(send, shareTitle))
-                }, height = 50.dp, icon = PIcons.Share, enabled = state.link != null)
+                }, Modifier.testTag(E2eTags.INVITE_SHARE), height = 50.dp, icon = PIcons.Share, enabled = state.link != null)
             }
         }
         SectionLabel(stringResource(R.string.invite_invitations), Modifier.padding(start = 4.dp, top = 4.dp))
@@ -413,7 +415,7 @@ fun PartyScreen(state: PartyState, repo: PingersRepository, nav: Navigator) {
     Page(
         top = {
             TopBar(state.name, { nav.back() }, stringResource(R.string.cd_back)) {
-                IconAction(PIcons.PersonAdd, stringResource(R.string.cd_invite_people), { nav.go(Route.Invite) })
+                IconAction(PIcons.PersonAdd, stringResource(R.string.cd_invite_people), { nav.go(Route.Invite) }, Modifier.testTag(E2eTags.PARTY_INVITE))
             }
         },
         bodyPadding = PaddingValues(0.dp),
@@ -469,6 +471,7 @@ fun PartyScreen(state: PartyState, repo: PingersRepository, nav: Navigator) {
                     .heightIn(min = 48.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .clickable(role = Role.Button) { repo.editSpot(null); nav.go(Route.SpotEditor) }
+                    .testTag(E2eTags.PARTY_ADD_SPOT)
                     .padding(horizontal = 8.dp),
                 contentAlignment = Alignment.Center,
             ) { Text(stringResource(R.string.party_add_spot), style = body(15.sp, 600, Pc.Blue)) }
