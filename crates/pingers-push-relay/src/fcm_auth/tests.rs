@@ -7,6 +7,8 @@ use std::sync::LazyLock;
 
 use aws_lc_rs::signature::{RSA_PKCS1_2048_8192_SHA256, UnparsedPublicKey};
 use axum::http::StatusCode as MockStatus;
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use pingers_testkit::ManualClock;
 
 use super::*;
@@ -103,19 +105,6 @@ fn the_assertion_is_rs256_with_the_documented_claims_and_verifies() -> TestResul
             "exp": START + 3600,
         })
     );
-    Ok(())
-}
-
-#[test]
-fn a_tampered_assertion_does_not_verify() -> TestResult {
-    let account = test_account("https://oauth2.googleapis.com/token")?;
-    let jwt = account.assertion(UnixSeconds::new(START))?;
-    let (signing_input, signature) = jwt.rsplit_once('.').ok_or("no signature")?;
-    let forged_claims = URL_SAFE_NO_PAD.encode(
-        serde_json::json!({"iss": CLIENT_EMAIL, "iat": START, "exp": START + 7200}).to_string(),
-    );
-    let (header, _) = signing_input.split_once('.').ok_or("no claims")?;
-    assert!(verified_parts(&format!("{header}.{forged_claims}.{signature}")).is_err());
     Ok(())
 }
 
@@ -224,34 +213,12 @@ fn the_token_uri_must_be_https_or_loopback_http() -> TestResult {
 }
 
 #[test]
-fn a_private_key_that_is_not_pem_pkcs8_rsa_is_refused() -> TestResult {
-    let pem = test_key()?.serialize_pem();
+fn a_private_key_pingers_crypto_refuses_is_a_bad_private_key() -> TestResult {
+    // Which keys are refused is pingers-crypto's to test (rs256); this is the mapping.
     let ec_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)?.serialize_pem();
-    for bad in [
-        String::new(),
-        pem.replace("-----BEGIN PRIVATE KEY-----", ""),
-        pem.replace("-----END PRIVATE KEY-----", ""),
-        pem.replace(
-            "-----BEGIN PRIVATE KEY-----\n",
-            "-----BEGIN PRIVATE KEY-----\n!",
-        ),
-        "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n".to_owned(),
-        ec_key,
-    ] {
-        assert_eq!(
-            error_of(&with_field("private_key", serde_json::json!(bad))?),
-            Some(ServiceAccountError::BadPrivateKey)
-        );
-    }
-    Ok(())
-}
-
-#[test]
-fn the_pem_body_may_be_wrapped_with_any_whitespace() -> TestResult {
-    let pem = test_key()?.serialize_pem().replace('\n', "\r\n  ");
     assert_eq!(
-        error_of(&with_field("private_key", serde_json::json!(pem))?),
-        None
+        error_of(&with_field("private_key", serde_json::json!(ec_key))?),
+        Some(ServiceAccountError::BadPrivateKey)
     );
     Ok(())
 }

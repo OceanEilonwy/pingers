@@ -3,24 +3,18 @@
 //! obtained with a JWT bearer assertion (RFC 7523) signed RS256, cached, and refreshed
 //! [`REFRESH_MARGIN`] before it expires.
 //!
-//! Style guide §8 keeps cryptographic primitives in pingers-crypto. This module is the written
-//! exception: RS256 over Google's JWT is what Google's token endpoint requires, it is not part
-//! of the Pingers protocol, it has no domain-separation label, and only the relay needs it. The
-//! signing is aws-lc-rs's, already in the tree as rustls's provider.
-//!
-//! The private key is parsed once, from text held in [`Zeroizing`] buffers, into an aws-lc-rs
-//! key pair that AWS-LC zeroizes when it is freed. Nothing here implements `Debug` over the key,
-//! and no error carries any part of the file.
+//! The signing is pingers-crypto's (`rs256` feature, style guide §8): this module builds the
+//! header and claims and hands them to [`sign_compact_jws_rs256`]. The private key is moved out
+//! of the parsed file into a [`Zeroizing`] buffer and parsed once into pingers-crypto's
+//! [`Rs256Key`], which AWS-LC zeroizes when it is freed. Nothing here implements `Debug` over the
+//! key, and no error carries any part of the file.
 
 use std::fmt;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aws_lc_rs::rand::SystemRandom;
-use aws_lc_rs::signature::{RSA_PKCS1_SHA256, RsaKeyPair};
-use base64::Engine as _;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use pingers_crypto::{Rs256Key, sign_compact_jws_rs256};
 use pingers_time::{Clock, UnixSeconds};
 use reqwest::Url;
 use reqwest::header::CONTENT_TYPE;
@@ -37,8 +31,6 @@ pub const ASSERTION_LIFETIME: Duration = Duration::from_hours(1);
 pub const REFRESH_MARGIN: Duration = Duration::from_mins(5);
 
 const JWT_BEARER_GRANT: &str = "urn:ietf:params:oauth:grant-type:jwt-bearer";
-const PEM_BEGIN: &str = "-----BEGIN PRIVATE KEY-----";
-const PEM_END: &str = "-----END PRIVATE KEY-----";
 
 /// What is wrong with the service-account file. Never carries any part of it.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -87,9 +79,6 @@ pub enum TokenError {
     BadResponse,
 }
 
-/// The service account's RSA key, held by AWS-LC (zeroized on free). No `Debug` or `Clone`.
-struct SigningKey(RsaKeyPair);
-
 /// A Google service account, from the JSON key file the Firebase console downloads.
 pub struct ServiceAccount {
     client_email: String,
@@ -97,7 +86,7 @@ pub struct ServiceAccount {
     audience: String,
     token_uri: Url,
     key_id: Option<String>,
-    key: SigningKey,
+    key: Rs256Key,
 }
 
 impl fmt::Debug for ServiceAccount {
@@ -146,14 +135,14 @@ impl ServiceAccount {
             return Err(ServiceAccountError::NoClientEmail);
         }
         let endpoint = token_endpoint(&token_uri)?;
-        let der = pkcs8_der(&private_key)?;
-        let key = RsaKeyPair::from_pkcs8(&der).map_err(|_| ServiceAccountError::BadPrivateKey)?;
+        let key = Rs256Key::from_pkcs8_pem(&private_key)
+            .map_err(|_| ServiceAccountError::BadPrivateKey)?;
         Ok(Self {
             client_email,
             audience: token_uri,
             token_uri: endpoint,
             key_id: private_key_id.filter(|id| !id.is_empty()),
-            key: SigningKey(key),
+            key,
         })
     }
 
@@ -179,25 +168,7 @@ impl ServiceAccount {
         });
         let header = serde_json::to_vec(&header).map_err(|_| TokenError::Sign)?;
         let claims = serde_json::to_vec(&claims).map_err(|_| TokenError::Sign)?;
-        let signing_input = format!(
-            "{}.{}",
-            URL_SAFE_NO_PAD.encode(header),
-            URL_SAFE_NO_PAD.encode(claims)
-        );
-        let mut signature = vec![0; self.key.0.public_modulus_len()];
-        self.key
-            .0
-            .sign(
-                &RSA_PKCS1_SHA256,
-                &SystemRandom::new(),
-                signing_input.as_bytes(),
-                &mut signature,
-            )
-            .map_err(|_| TokenError::Sign)?;
-        Ok(Zeroizing::new(format!(
-            "{signing_input}.{}",
-            URL_SAFE_NO_PAD.encode(signature)
-        )))
+        sign_compact_jws_rs256(&self.key, &header, &claims).map_err(|_| TokenError::Sign)
     }
 }
 
@@ -213,26 +184,6 @@ fn token_endpoint(text: &str) -> Result<Url, ServiceAccountError> {
         "http" if loopback => Ok(url),
         _ => Err(ServiceAccountError::BadTokenUri),
     }
-}
-
-/// The DER inside a `PRIVATE KEY` PEM block, in a buffer wiped on drop.
-fn pkcs8_der(pem: &str) -> Result<Zeroizing<Vec<u8>>, ServiceAccountError> {
-    let (_, rest) = pem
-        .split_once(PEM_BEGIN)
-        .ok_or(ServiceAccountError::BadPrivateKey)?;
-    let (body, _) = rest
-        .split_once(PEM_END)
-        .ok_or(ServiceAccountError::BadPrivateKey)?;
-    // Sized up front so it never reallocates and leaves a copy behind.
-    let mut base64 = Zeroizing::new(String::with_capacity(body.len()));
-    base64.extend(
-        body.chars()
-            .filter(|character| !character.is_ascii_whitespace()),
-    );
-    STANDARD
-        .decode(base64.as_bytes())
-        .map(Zeroizing::new)
-        .map_err(|_| ServiceAccountError::BadPrivateKey)
 }
 
 /// A minted access token, as the `Authorization` header value. No `Debug` or `Clone`.

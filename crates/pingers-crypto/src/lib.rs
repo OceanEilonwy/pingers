@@ -15,6 +15,8 @@
 //! - Invite join requests (D).
 //! - Keyed hashes for the push relay's rate limits and stored credentials (C.1a).
 //! - The SHA-256 preimage hashes of RLN's external nullifier and request digest (B.4.8).
+//! - With the `rs256` feature: RS256 compact JWS for the push relay's FCM service-account
+//!   assertion (RFC 7523), a Google requirement rather than a Pingers primitive.
 //!
 //! Secret types wrap `zeroize::Zeroizing` and implement neither `Debug`, `Display`, `Clone`
 //! nor `Serialize`. MACs and tags are compared with `subtle`, never `==`.
@@ -38,6 +40,8 @@ mod padded;
 mod presence;
 mod primitives;
 mod rln;
+#[cfg(feature = "rs256")]
+mod rs256;
 mod secret;
 #[cfg(test)]
 mod test_support;
@@ -76,3 +80,5 @@ pub use presence::{
     sign_knock, tag_matches, verify_knock,
 };
 pub use rln::{RlnPreimageHash, rln_external_nullifier_hash, rln_request_hash};
+#[cfg(feature = "rs256")]
+pub use rs256::{Rs256Key, sign_compact_jws_rs256};
