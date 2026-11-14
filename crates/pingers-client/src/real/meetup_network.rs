@@ -143,24 +143,6 @@ impl GroupNetwork for GroupLogs {
         result.map_err(|error| network_error(&error))
     }
 
-    async fn delete_subscription(
-        &self,
-        group: &GroupId,
-        auth: &LogAuthKeyPair,
-        subscription: SubscriptionId,
-    ) -> Result<(), NetworkError> {
-        let engine = self.0.engine().map_err(|_none| NetworkError::Unavailable)?;
-        let result = engine
-            .delete_subscription(
-                GroupCall { group, key: auth },
-                &subscription,
-                WakeBudget::UNLIMITED,
-            )
-            .await;
-        self.0.observe(&result);
-        result.map_err(|error| network_error(&error))
-    }
-
     async fn open_live(
         &self,
         group: &GroupId,

@@ -34,14 +34,14 @@ use pingers_meetup::{
 };
 use pingers_meetup_session::{
     AddMember, CreateMeetup, JoinMeetup, Knocking, MeetupHandle, MeetupScreen, MeetupView, Runtime,
-    SessionError, create, discard_stale, join, knock_key_package,
+    create, discard_stale, join, knock_key_package,
 };
 use pingers_mls::CipherSuitePolicy;
 use pingers_parties::{PartyLifecycle, PostQuantum};
 use pingers_presence::{Admission, LEASE_DURATION, MeetupKey, SpotRef};
 use pingers_proto::{
     ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, MeetPoint, Padded,
-    PartyId, Subscription, TimeToLive, WelcomeBytes,
+    PartyId, SeenSegment, Subscription, TimeToLive, WelcomeBytes,
 };
 use pingers_store::{KnockKey, Session};
 use pingers_time::{Clock, UnixSeconds};
@@ -181,12 +181,6 @@ impl Shared {
         }
         let view = handle.view();
         let timeline = Arc::new(Mutex::new(Timeline::starting(&view.borrow())));
-        let board_seen = self
-            .backend
-            .store(|session, _clock, _rng| Ok(session.board_seen().list()?))
-            .await
-            .unwrap_or_default();
-        let handle = Arc::new(handle);
         let watch = meetup_watch::watch(
             Watched {
                 group,
@@ -195,13 +189,11 @@ impl Shared {
                 timeline: Arc::clone(&timeline),
                 clock: Arc::clone(&self.backend.outside.clock),
                 sink: self.events.clone(),
-                handle: Arc::downgrade(&handle),
-                board_seen,
             },
             Arc::downgrade(self),
         );
         lock(&self.live).push(Live {
-            handle,
+            handle: Arc::new(handle),
             spot,
             started_at: self.backend.outside.clock.now(),
             timeline,
@@ -236,7 +228,7 @@ impl Shared {
             watch,
         } = live.taken();
         // The end is reported here, not by the watcher.
-        watch.stop().await;
+        drop(watch);
         let left = match Arc::try_unwrap(handle) {
             Ok(handle) => handle.leave().await.map(drop).map_err(ClientError::from),
             // Borrowed elsewhere for a moment: dropping the last reference stops its task,
@@ -354,27 +346,28 @@ impl Meetups {
         Ok(self.handle(meetup)?.act(action).await?)
     }
 
-    /// The Meetup screen opened or closed, or the app came on screen or left it.
-    pub(crate) async fn screen(&self, screen: MeetupScreen) -> Result<(), ClientError> {
+    /// The Meetup screen opened or closed, or the app came on screen or left it. Best effort
+    /// per Meetup: one that has just ended is past caring, and its watcher reports the end.
+    pub(crate) async fn screen(&self, screen: MeetupScreen) {
         *lock(&self.shared.screen) = screen;
         let handles = self.shared.handles();
         for handle in &handles {
-            skip_ended(handle.screen(screen).await)?;
+            let _set = handle.screen(screen).await;
         }
         if !handles.is_empty() {
             self.shared
                 .platform
                 .set_location_mode(self.shared.meetup_mode());
         }
-        Ok(())
     }
 
-    /// A new fix of this device, for every live Meetup.
-    pub(crate) async fn own_fix(&self, fix: Fix) -> Result<(), ClientError> {
+    /// A new fix of this device, for every live Meetup. Best effort per Meetup, as for
+    /// [`Meetups::screen`]: a fix one Meetup cannot use (an accuracy beyond the frame's range)
+    /// must not stop the wake that delivered it.
+    pub(crate) async fn own_fix(&self, fix: Fix) {
         for handle in self.shared.handles() {
-            skip_ended(handle.own_fix(fix).await)?;
+            let _taken = handle.own_fix(fix).await;
         }
-        Ok(())
     }
 
     /// What every Meetup shares. `None` without a configured instance.
@@ -405,6 +398,15 @@ impl Meetups {
             // live channel carries the Meetup anyway.
             let _remembered = engine.remember_subscription(&group, subscription).await;
         }
+    }
+
+    /// The closed board segments this device read (`board_seen`), for a Meetup's first
+    /// message. Best effort: none read, or none readable, sends nothing to compare.
+    async fn board_seen(&self) -> Vec<SeenSegment> {
+        self.backend()
+            .store(|session, _clock, _rng| Ok(session.board_seen().list()?))
+            .await
+            .unwrap_or_default()
     }
 
     /// The Party's ciphersuite.
@@ -447,6 +449,7 @@ impl Meetups {
                 knocker: knocker.key_package,
                 subscriptions: own.iter().cloned().chain(knocker.subscription).collect(),
                 own_subscription: own.as_ref().map(|subscription| subscription.id),
+                board_seen: self.board_seen().await,
                 suite,
             },
             (self.backend().outside.rng)(),
@@ -462,15 +465,6 @@ impl Meetups {
             })
             .await;
         Ok(created.welcome)
-    }
-}
-
-/// A Meetup that ended between listing it and calling it is skipped: its watcher is about to
-/// report the end.
-fn skip_ended(result: Result<(), SessionError>) -> Result<(), ClientError> {
-    match result {
-        Err(SessionError::Ended) | Ok(()) => Ok(()),
-        Err(error) => Err(error.into()),
     }
 }
 
@@ -856,6 +850,7 @@ impl MeetupPort for Meetups {
                 welcome,
                 grant_key,
                 own_subscription: subscription.as_ref().map(|subscription| subscription.id),
+                board_seen: self.board_seen().await,
             },
             (self.backend().outside.rng)(),
         )

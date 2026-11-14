@@ -7,8 +7,8 @@
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use pingers_meetup::MeetupEvent;
-use pingers_meetup_session::{ChannelState, MeetupHandle, MeetupView};
-use pingers_proto::{GroupId, LeafIndex, MeetPoint, MeetPointLabel, SeenSegment};
+use pingers_meetup_session::MeetupView;
+use pingers_proto::{GroupId, LeafIndex, MeetPoint, MeetPointLabel};
 use pingers_time::{Clock, UnixSeconds};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -122,15 +122,6 @@ fn leaves(view: &MeetupView) -> Vec<LeafIndex> {
 /// The watcher of one Meetup, owned by its entry in the live list and stopped with it.
 pub(super) struct Watch(JoinHandle<()>);
 
-impl Watch {
-    /// Stops the watcher and waits until it has, so it holds no reference to the Meetup any
-    /// more. Never called from the watcher itself.
-    pub(super) async fn stop(mut self) {
-        self.0.abort();
-        let _stopped = (&mut self.0).await;
-    }
-}
-
 impl Drop for Watch {
     fn drop(&mut self) {
         self.0.abort();
@@ -145,11 +136,6 @@ pub(super) struct Watched {
     pub(super) timeline: Arc<Mutex<Timeline>>,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) sink: mpsc::UnboundedSender<ClientEvent>,
-    /// The Meetup, to send it what needs the channel up.
-    pub(super) handle: Weak<MeetupHandle>,
-    /// The board segments this device saw, sent as its first message once the channel is up
-    /// (design B.4.3, G.4); empty if it read no closed segment.
-    pub(super) board_seen: Vec<SeenSegment>,
 }
 
 /// Starts watching a Meetup. `shared` is weak: the live list owns the watcher, not the other
@@ -166,8 +152,6 @@ async fn run(watched: Watched, shared: Weak<Shared>) {
         timeline,
         clock,
         sink,
-        handle,
-        mut board_seen,
     } = watched;
     let mut members = leaves(&view.borrow_and_update());
     let mut view_open = true;
@@ -189,9 +173,6 @@ async fn run(watched: Watched, shared: Weak<Shared>) {
                     continue;
                 }
                 let current = view.borrow_and_update().clone();
-                if current.channel == ChannelState::Connected && !board_seen.is_empty() {
-                    send_board_seen(&handle, core::mem::take(&mut board_seen)).await;
-                }
                 let roster_changed = lock(&timeline).view(&members, &current, clock.now());
                 if roster_changed {
                     members = leaves(&current);
@@ -202,14 +183,6 @@ async fn run(watched: Watched, shared: Weak<Shared>) {
     }
     if let Some(shared) = shared.upgrade() {
         shared.ended_on_its_own(group).await;
-    }
-}
-
-/// Sends the board segments this device saw as its first message. Best effort: a Meetup
-/// that ended meanwhile, or a frame refused, only loses this comparison.
-async fn send_board_seen(handle: &Weak<MeetupHandle>, segments: Vec<SeenSegment>) {
-    if let Some(handle) = handle.upgrade() {
-        let _sent = handle.board_seen(segments).await;
     }
 }
 

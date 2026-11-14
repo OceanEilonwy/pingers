@@ -87,19 +87,6 @@ pub trait GroupNetwork: Send + Sync {
         auth: &LogAuthKeyPair,
     ) -> Result<(), NetworkError>;
 
-    /// `DELETE /v1/groups/{id}/subs/{sub_id}`: a leaver takes its own subscription off the
-    /// group before it goes, so the server stops waking it for a Meetup it left (design G.6).
-    ///
-    /// # Errors
-    ///
-    /// Any [`NetworkError`].
-    async fn delete_subscription(
-        &self,
-        group: &GroupId,
-        auth: &LogAuthKeyPair,
-        subscription: SubscriptionId,
-    ) -> Result<(), NetworkError>;
-
     /// `POST /v1/groups/{id}/live?sub=`: opens the Meetup's live channel, a chunked OHTTP
     /// exchange through the relay (privacy class Stream, never direct), its head signed with
     /// `auth`. `subscription` is this device's own, so the server does not push to it while

@@ -185,7 +185,7 @@ impl WakePort for Wake {
         let trigger = match input {
             WakeInput::Fix(fix) => {
                 self.last().1 = Some(fix);
-                self.meetups.own_fix(fix).await?;
+                self.meetups.own_fix(fix).await;
                 WakeTrigger::Fix(fix)
             }
             WakeInput::Geofence { region, transition } => WakeTrigger::Geofence(GeofenceEvent {
@@ -201,12 +201,12 @@ impl WakePort for Wake {
             WakeInput::Push(handle) => WakeTrigger::Push(self.push_reason(handle).await?),
             WakeInput::FocusChanged(_focus) => WakeTrigger::FocusChanged,
             WakeInput::Foreground(Foreground::Visible) => {
-                self.meetups.screen(MeetupScreen::Open).await?;
+                self.meetups.screen(MeetupScreen::Open).await;
                 opened = true;
                 WakeTrigger::Scheduled
             }
             WakeInput::Foreground(Foreground::Hidden) => {
-                self.meetups.screen(MeetupScreen::Closed).await?;
+                self.meetups.screen(MeetupScreen::Closed).await;
                 return Ok(WakeOutcome::default());
             }
         };

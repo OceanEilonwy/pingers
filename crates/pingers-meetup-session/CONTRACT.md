@@ -6,17 +6,20 @@ design B.5, B.6, B.6.1, G.4 to G.7).
 ## Fixed (pingers-client builds against these)
 
 - `Runtime { database, network, clock, timer }` (all `Arc`), `SessionRng`.
-- `knock_key_package(&database, suite, rng) -> KnockKeyPackage { key_package, grant_key }`.
-- `create(&runtime, CreateMeetup { key, group, knocker, subscriptions, own_subscription, suite },
+- `knock_key_package(&database, Knocking { suite, subscription }, rng) -> KnockKeyPackage {
+  key_package, grant_key }`: the subscription id goes in the leaf (`pingers_meetup_subscription`).
+- `create(&runtime, CreateMeetup { key, group, knocker, subscriptions, own_subscription,
+  board_seen, suite },
   rng) -> Created { handle, events, welcome }`: post the Welcome to the knocker's reply mailbox.
-- `join(&runtime, JoinMeetup { key, welcome, grant_key, own_subscription }, rng) -> Joined {
+- `join(&runtime, JoinMeetup { key, welcome, grant_key, own_subscription, board_seen }, rng)
+  -> Joined {
   handle, events }`. Both futures are `Send`.
 - `key` is pingers-presence's `MeetupKey`: `PSK_meet(b)` and its id, from which the Party and
   Spot are taken and the MLS PSK id `(party_id, epoch, spot_id, b)` is built in one place
   (design B.5). Callers can no longer pass a PSK under the wrong id.
 - `discard_stale(&database) -> usize`: call once at launch.
 - `MeetupHandle`: `group`, `view() -> watch::Receiver<MeetupView>`, `screen(MeetupScreen)`,
-  `own_fix(Fix)`, `board_seen(segments)`, `act(MeetupAction)`, `add_member(AddMember) ->
+  `own_fix(Fix)`, `act(MeetupAction)`, `add_member(AddMember) ->
   WelcomeBytes`, `leave() -> Ended`, `finished() -> Ended`. Dropping it aborts the task.
 - `events: mpsc::UnboundedReceiver<pingers_meetup::MeetupEvent>`: every event, positions
   included, each sent after the view that shows it is published. Closed when the task ends.
@@ -28,7 +31,7 @@ design B.5, B.6, B.6.1, G.4 to G.7).
   `PeerView::position_age(now)` ("Updated 40 s ago").
 - `MeetupScreen::{Open, Closed}`, `Ended::{Left, AloneTooLong, Removed}`, `ChannelState`.
 - `trait GroupNetwork { create_group, post_commit, post_message, fetch_log, delete_group,
-  delete_subscription,
+
   open_live }`, `NetworkError::{Unavailable, Rejected}`. `open_live` opens the chunked OHTTP
   live channel through the relay (pingers-sync's `open_live` on the Stream route), its head
   signed with the epoch's log-auth key; the transport is not passed in separately.
@@ -72,8 +75,10 @@ design B.5, B.6, B.6.1, G.4 to G.7).
 - **No resume**: pingers-meetup's session has no snapshot; `discard_stale` deletes what a
   killed process left. Positions are kept only in memory, never in `meetup_peer`.
 - **Errors**: only storage failures (and panics) stop the task; anything else drops the input.
-- **Subscriptions**: a leaver deletes its own subscription from the group (while its key
-  still signs) before posting its self-remove proposal, so remove commits need no
-  `subscriptions_removed`: members do not know each other's subscription ids, and need not.
-  The last member deletes the whole group instead. A silent member's subscription expires on
-  the server with its TTL.
+- **Subscriptions**: each member's subscription id is in its leaf (`pingers_meetup_subscription`,
+  from the knock or the creator's own), so whoever commits a removal (a silent member, a
+  leaver's proposal) lists the removed members' subscriptions in `subscriptions_removed` and
+  the server stops waking them at once. The last member deletes the whole group instead.
+- **Board segments**: the segments a device saw before the Meetup come in with `create` or
+  `join` and go out once, as its first frame after the live channel opens (the frame is
+  ephemeral); a member whose hashes differ raises `BoardEquivocation` on both sides.

@@ -91,6 +91,9 @@ pub struct CreateMeetup {
     pub subscriptions: Vec<Subscription>,
     /// This device's own subscription, named on the live channel.
     pub own_subscription: Option<SubscriptionId>,
+    /// The closed board segments this device saw, sent as its first message once the live
+    /// channel is up (design B.4.3, G.4); empty if it saw none.
+    pub board_seen: Vec<SeenSegment>,
     /// The Party's ciphersuite.
     pub suite: CipherSuitePolicy,
 }
@@ -107,6 +110,9 @@ pub struct JoinMeetup {
     pub grant_key: GrantSecretKey,
     /// This device's own subscription, named on the live channel.
     pub own_subscription: Option<SubscriptionId>,
+    /// The closed board segments this device saw, sent as its first message once the live
+    /// channel is up (design B.4.3, G.4); empty if it saw none.
+    pub board_seen: Vec<SeenSegment>,
 }
 
 /// The MLS PSK id `(party_id, epoch, spot_id, b)` and value of `key` (design B.5).
@@ -212,6 +218,7 @@ pub async fn create(
         knocker,
         subscriptions,
         own_subscription,
+        board_seen,
         suite,
     } = request;
     let SpotRef { party, spot } = key.id().spot;
@@ -275,7 +282,11 @@ pub async fn create(
         )
     })
     .await?;
-    let Joined { handle, events } = spawn(runtime, core, own_subscription);
+    let launch = Launch {
+        subscription: own_subscription,
+        board_seen,
+    };
+    let Joined { handle, events } = spawn(runtime, core, launch);
     Ok(Created {
         handle,
         events,
@@ -360,6 +371,7 @@ pub async fn join(
         welcome,
         grant_key,
         own_subscription,
+        board_seen,
     } = request;
     let SpotRef { party, spot } = key.id().spot;
     let now = runtime.clock.now();
@@ -382,7 +394,11 @@ pub async fn join(
         )
     })
     .await?;
-    Ok(spawn(runtime, core, own_subscription))
+    let launch = Launch {
+        subscription: own_subscription,
+        board_seen,
+    };
+    Ok(spawn(runtime, core, launch))
 }
 
 /// Deletes every Meetup left in the store, with its MLS state: call once at launch. A
@@ -450,15 +466,6 @@ impl MeetupHandle {
     /// [`SessionError::Ended`]; [`SessionError::Meetup`] for a fix outside the wire range.
     pub async fn own_fix(&self, fix: Fix) -> Result<(), SessionError> {
         self.input(MeetupInput::OwnFix(fix)).await
-    }
-
-    /// The board segment hashes this device saw, sent as its first message (design B.4.3).
-    ///
-    /// # Errors
-    ///
-    /// [`SessionError::Ended`].
-    pub async fn board_seen(&self, segments: Vec<SeenSegment>) -> Result<(), SessionError> {
-        self.input(MeetupInput::OwnBoardSeen(segments)).await
     }
 
     /// Something the user did: ask, answer, revoke, chat, meet point, visibility.
@@ -630,7 +637,13 @@ fn start_core(local: Local<'_>, started: Started, now: UnixSeconds) -> Result<Co
     )
 }
 
-fn spawn(runtime: &Runtime, core: Core, subscription: Option<SubscriptionId>) -> Joined {
+/// What a started Meetup needs beyond its state machine.
+struct Launch {
+    subscription: Option<SubscriptionId>,
+    board_seen: Vec<SeenSegment>,
+}
+
+fn spawn(runtime: &Runtime, core: Core, launch: Launch) -> Joined {
     let group = core.group();
     let (commands, receiver) = mpsc::channel(COMMAND_BUFFER);
     let (events, events_receiver) = mpsc::unbounded_channel();
@@ -639,7 +652,7 @@ fn spawn(runtime: &Runtime, core: Core, subscription: Option<SubscriptionId>) ->
         runtime: runtime.clone(),
         core: Arc::new(Mutex::new(core)),
         group,
-        subscription,
+        subscription: launch.subscription,
         commands: receiver,
         events,
         view,
@@ -648,6 +661,7 @@ fn spawn(runtime: &Runtime, core: Core, subscription: Option<SubscriptionId>) ->
         last_sequence: None,
         next_deadline: None,
         catch_up: CatchUp::Done,
+        board_seen: launch.board_seen,
     };
     let task = tokio::spawn(driver.run());
     Joined {
@@ -704,6 +718,8 @@ struct Driver {
     last_sequence: Option<SequenceNumber>,
     next_deadline: Option<UnixSeconds>,
     catch_up: CatchUp,
+    /// Board segments still to send as the first message, once the channel is up.
+    board_seen: Vec<SeenSegment>,
 }
 
 impl Driver {
@@ -734,6 +750,12 @@ impl Driver {
                 if let Some(ended) = self.read_log().await? {
                     return Ok(ended);
                 }
+            }
+            if self.channel.is_some()
+                && !self.board_seen.is_empty()
+                && let Some(ended) = self.send_board_seen().await?
+            {
+                return Ok(ended);
             }
             let clock = &*self.runtime.clock;
             let timer = &*self.runtime.timer;
@@ -773,21 +795,20 @@ impl Driver {
                 let step = self
                     .step(move |core, local| core.input(local, *input, now))
                     .await;
-                let (answer, ended) = match step {
+                let (answer, ended) = match survivable(step)? {
                     Ok(effects) => self.carry_out(effects).await?,
-                    Err(error) if error.is_fatal() => return Err(error),
                     Err(error) => (Err(error), None),
                 };
                 let _answered = reply.send(answer);
                 Ok(ended)
             }
             Command::Add { newcomer, reply } => {
-                let (answer, ended) = match self.commit(CommitJob::Add(newcomer)).await {
+                let committed = survivable(self.commit(CommitJob::Add(newcomer)).await)?;
+                let (answer, ended) = match committed {
                     Ok((effects, welcome)) => {
                         let (_delivered, ended) = self.carry_out(effects).await?;
                         (welcome.ok_or(SessionError::Internal), ended)
                     }
-                    Err(error) if error.is_fatal() => return Err(error),
                     Err(error) => (Err(error), None),
                 };
                 let _answered = reply.send(answer);
@@ -798,6 +819,20 @@ impl Driver {
                 let _answered = reply.send(());
                 ended.map(Some)
             }
+        }
+    }
+
+    /// Sends the board segments this device saw, once: the frame is ephemeral, so it waits
+    /// for the channel.
+    async fn send_board_seen(&mut self) -> Result<Option<Ended>, SessionError> {
+        let segments = core::mem::take(&mut self.board_seen);
+        let now = self.runtime.clock.now();
+        let step = self
+            .step(move |core, local| core.input(local, MeetupInput::OwnBoardSeen(segments), now))
+            .await;
+        match survivable(step)? {
+            Ok(effects) => Ok(self.carry_out(effects).await?.1),
+            Err(_refused) => Ok(None),
         }
     }
 
@@ -822,12 +857,11 @@ impl Driver {
         body: pingers_proto::MlsMessageBytes,
     ) -> Result<Option<Ended>, SessionError> {
         let now = self.runtime.clock.now();
-        match self
+        let step = self
             .step(move |core, local| core.receive(local, &body, now))
-            .await
-        {
+            .await;
+        match survivable(step)? {
             Ok(effects) => Ok(self.carry_out(effects).await?.1),
-            Err(error) if error.is_fatal() => Err(error),
             Err(_dropped) => Ok(None),
         }
     }
@@ -875,9 +909,8 @@ impl Driver {
             }
             jobs.extend(effects.removals.into_iter().map(CommitJob::Remove));
             for job in jobs {
-                match self.commit(job).await {
+                match survivable(self.commit(job).await)? {
                     Ok((more, _welcome)) => queue.push_back(more),
-                    Err(error) if error.is_fatal() => return Err(error),
                     // Lost the race or the leaf is gone: the winner's commit does the job.
                     Err(_skipped) => {}
                 }
@@ -1020,7 +1053,8 @@ impl Driver {
         if self.lock()?.is_alone() {
             self.delete_on_server().await;
         } else {
-            self.delete_own_subscription().await;
+            // Whoever commits the proposal drops this device's subscription with it (read
+            // from its leaf).
             let proposal = self.step(Core::propose_leave).await;
             if let Ok(proposal) = proposal {
                 // Best effort: if it is lost, the others remove this device as silent.
@@ -1041,20 +1075,6 @@ impl Driver {
         };
         self.delete_locally().await?;
         Ok(ended)
-    }
-
-    /// Takes this device's subscription off the group before leaving it, while the epoch's
-    /// key still signs (best effort: the subscription expires on the server anyway).
-    async fn delete_own_subscription(&mut self) {
-        if let (Some(subscription), Ok(auth)) = (self.subscription, self.auth()) {
-            let _deleted = within(
-                &*self.runtime.timer,
-                self.runtime
-                    .network
-                    .delete_subscription(&self.group, &auth, subscription),
-            )
-            .await;
-        }
     }
 
     async fn delete_on_server(&mut self) {
@@ -1116,6 +1136,17 @@ impl Driver {
             self.next_deadline = core.next_deadline();
             self.view.send_replace(core.view(channel));
         }
+    }
+}
+
+/// Splits a step's outcome: a fatal error (the store or its MLS state can no longer be
+/// trusted) stops the task; anything else, error or not, goes back to whoever asked.
+fn survivable<T>(
+    outcome: Result<T, SessionError>,
+) -> Result<Result<T, SessionError>, SessionError> {
+    match outcome {
+        Err(error) if error.is_fatal() => Err(error),
+        other => Ok(other),
     }
 }
 

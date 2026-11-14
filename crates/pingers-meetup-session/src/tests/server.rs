@@ -56,7 +56,6 @@ struct State {
     refused_commits: usize,
     uplinks: Vec<Uplink>,
     deleted: Vec<GroupId>,
-    deleted_subscriptions: Vec<SubscriptionId>,
     /// Subscriptions accepted commits removed, in order.
     removed_by_commits: Vec<SubscriptionId>,
     /// Every byte string a device sent the server, as it arrived: requests, paths and frames.
@@ -286,10 +285,6 @@ impl FakeServer {
         self.lock().removed_by_commits.clone()
     }
 
-    pub(crate) fn deleted_subscriptions(&self) -> Vec<SubscriptionId> {
-        self.lock().deleted_subscriptions.clone()
-    }
-
     pub(crate) fn deleted(&self) -> Vec<GroupId> {
         self.lock().deleted.clone()
     }
@@ -480,16 +475,6 @@ impl GroupNetwork for FakeNetwork {
             .filter(|entry| after.is_none_or(|after| entry.sequence > after))
             .cloned()
             .collect())
-    }
-
-    async fn delete_subscription(
-        &self,
-        _group: &GroupId,
-        _auth: &LogAuthKeyPair,
-        subscription: SubscriptionId,
-    ) -> Result<(), NetworkError> {
-        self.server.lock().deleted_subscriptions.push(subscription);
-        Ok(())
     }
 
     async fn delete_group(

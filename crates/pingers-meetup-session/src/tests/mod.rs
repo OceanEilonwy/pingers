@@ -100,12 +100,18 @@ pub(crate) struct Device {
     pub(crate) key: AccountPublicKey,
     pub(crate) runtime: Runtime,
     // Field order: the database closes before its directory is removed.
-    _directory: TestDir,
+    directory: TestDir,
 }
 
 impl Device {
     pub(crate) fn database(&self) -> &Arc<Database> {
         &self.runtime.database
+    }
+
+    /// Overwrites the store's file, as a failing disk would: every later session fails.
+    pub(crate) fn break_store(&self) -> Result<(), TestError> {
+        std::fs::write(self.directory.path.join("store.db"), [0_u8; 4096])?;
+        Ok(())
     }
 
     /// The store's view of the Meetup: whether anything of it is left.
@@ -167,6 +173,8 @@ pub(crate) struct World {
     pub(crate) party: PartyId,
     pub(crate) spot: SpotId,
     pub(crate) devices: Vec<Device>,
+    /// The board segments each device says it saw; by default all saw the same one.
+    pub(crate) boards: std::sync::Mutex<Vec<Vec<pingers_proto::SeenSegment>>>,
 }
 
 const NAMES: [&str; 3] = ["Alice", "Bob", "Chloé"];
@@ -227,7 +235,7 @@ impl World {
                     clock: Arc::new(clock.clone()),
                     timer: Arc::new(clock.clone()),
                 },
-                _directory: directory,
+                directory,
             });
         }
         Ok(Self {
@@ -235,6 +243,7 @@ impl World {
             server,
             party,
             spot: SpotId::from_bytes([0x33; 16]),
+            boards: std::sync::Mutex::new(vec![common_board(); count]),
             devices,
         })
     }
@@ -267,6 +276,28 @@ impl World {
         key_for(&self.status(), record_start()?)
     }
 
+    /// The board segments device `index` says it saw.
+    pub(crate) fn board_of(&self, index: usize) -> Vec<pingers_proto::SeenSegment> {
+        self.boards
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(index)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Device `index` says it saw `board`.
+    pub(crate) fn sees(&self, index: usize, board: Vec<pingers_proto::SeenSegment>) {
+        if let Some(slot) = self
+            .boards
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(index)
+        {
+            *slot = board;
+        }
+    }
+
     /// Alice creates the Meetup with Bob, and Bob joins it; both channels are open.
     pub(crate) async fn meetup_of_two(&self) -> Result<[Live; 2], TestError> {
         let alice = self.device(0)?;
@@ -285,6 +316,7 @@ impl World {
                 knocker: knock.key_package,
                 subscriptions: Vec::new(),
                 own_subscription: Some(subscription_of(0)),
+                board_seen: self.board_of(0),
                 suite: CipherSuitePolicy::Classical,
             },
             Box::new(pingers_testkit::seeded_rng(1)),
@@ -327,6 +359,7 @@ impl World {
                 welcome,
                 grant_key,
                 own_subscription: Some(subscription_of(index)),
+                board_seen: self.board_of(index),
             },
             Box::new(pingers_testkit::seeded_rng(
                 u64::try_from(index).unwrap_or(0).saturating_add(10),
@@ -438,4 +471,12 @@ impl Live {
         }
         events
     }
+}
+
+/// The one closed board segment every device saw unless a test says otherwise.
+pub(crate) fn common_board() -> Vec<pingers_proto::SeenSegment> {
+    vec![pingers_proto::SeenSegment {
+        start: Bucket::containing(START),
+        hash: pingers_proto::SegmentHash::from_bytes([0x5e; 32]),
+    }]
 }
