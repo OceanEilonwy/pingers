@@ -110,3 +110,22 @@ replaced by `^` (the shifted bytes never overlap, so OR and XOR are the same ope
 `Drop for ApiRequest` replaced with `()` (it zeroizes header values holding bearer tokens and
 read keys as the request is freed; no test can read freed memory). Both stay: the first is
 the natural way to write it, the second is the style guide's secret hygiene (§8).
+
+## Push lifecycle (added 2026-11-14, v1-push)
+
+- **`maintain_push_registrations`** with **`Maintenance`** `{ pool, groups, subscription_lifetime,
+  pushes }` and **`GroupMembership`**: the wake's one push registration. Forgets subscriptions of
+  groups not listed (no request), refills an empty pool first, else seals the most urgent stale
+  registration again in place (`PUT /v1/mailboxes/{id}/push`, `PUT /v1/groups/{id}/subs/{id}`),
+  adds a missing group subscription, or clears pushes with **`Pushes::Off`**; with nothing stale it
+  tops the pool up. **`Pushes::Unknown`** touches no seal. Answers **`Maintained`**.
+- Each mailbox and subscription row records its **`SealStamp`** (pingers-store schema v5): the
+  fingerprint of the relay key and token (pingers-crypto's `push_seal_fingerprint`) and the
+  seal's `not_after`. **`RENEW_AHEAD`** (three days) is the renewal window; a renewal that would
+  gain no time is not made.
+- **`push_relay_next_key`** answers **`NextPushRelayKey`** (`NotScheduled`, `Pinned(ScheduledPushRelay)`,
+  `Unpinned { activates_at }`) from `GET /v1/push-relays/{id}/config/next`.
+- New routes **`Route::PushRelayNextConfig`** (anonymous class, no credential) and
+  **`Route::ReplaceMailboxPush`** (anonymous class, Cap: the read key); queue codes 26 and 27.
+- `new_subscription` remembers the seal of what it hands out until `remember_subscription`
+  records it; a subscription recorded in another process counts as stale and is sealed again.

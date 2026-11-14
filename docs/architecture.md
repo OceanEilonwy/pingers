@@ -90,6 +90,7 @@ Licence (decided 2026-11-13): every crate, binary and the Android app is `AGPL-3
 
 **pingers-crypto**: the only place primitives are called directly.
 - Domain-separated labels as constants (`pingers/v1/...`); HKDF, HMAC tags truncated to 16 B, AES-GCM, HPKE base mode (X25519; X-Wing behind a feature).
+- RS256 compact JWS for the push relay's FCM service-account assertion, behind the `rs256` feature (only the push relay enables it; aws-lc-rs, which zeroizes the key on free).
 - Key schedule: Party exporter to `K_spot`, `K_tag`, bucket tags; sealed push; location grants; beacon sealing.
 - Secret types wrap `zeroize::Zeroizing`; no `Debug` on secrets.
 - Deps: `hkdf`, `hmac`, `sha2`, `aes-gcm`, `hpke-rs` (or `hpke`), `rand_core`, `zeroize`, `subtle`.
@@ -165,6 +166,7 @@ Client side:
 
 **pingers-sync**: talking to the server, reliably, for everyone else.
 - Fetch and apply group log messages; post commits (one per epoch, retry on conflict); mailbox registration and reads; subscriptions with sealed push.
+- Keeps every registration's sealed push current: a fingerprint of the relay key and token beside each, sealed again in place (one per wake) after a token change, a relay key rotation, a settings change, or as it runs out.
 - Queue for anonymous requests that could not be sent in this wake; drop rules (a missed lease looks like a dummy); token supply (pre-fetched Privacy Pass, RLN proofs made only in the main app).
 - Knows nothing about what the messages mean; it hands them to their owner.
 - Deps: pingers-transport, pingers-store, pingers-anon, pingers-proto.
@@ -173,6 +175,7 @@ Client side:
 - Entry points: a fix, an OS geofence transition, a scheduled wake, a push, a Focus change.
 - Fixed sequence: ask pingers-gate; update Spot presence (pingers-geo); build and upload the lease, sync the board and trial-match (pingers-presence); knock or answer a knock (liveness check); hand a successful match to pingers-meetup-session; choose the next OS geofences and the next wake.
 - Owns the wake budget (the seconds a background wake allows) and stops cleanly when it runs out.
+- Ends each wake with its one push registration (pingers-sync renews a stale sealed push, or refills the mailbox pool), and keeps the FCM priority downgrade window.
 - Deps: pingers-gate, pingers-geo, pingers-presence, pingers-sync, pingers-parties (read-only view of Spots).
 
 **pingers-meetup-session**: a meetup while it is live.
@@ -206,7 +209,7 @@ Server side (each crate owns its storage trait, with a SQLite implementation beh
 
 **pingers-server**: the self-hosted server binary. It routes requests to pingers-board-store, pingers-mailbox, pingers-delivery and pingers-quota and holds no logic of its own (same rule as pingers-client). `axum` over `hyper`, HTTP/2; the gateway accepts `POST /ohttp` only from configured relays (mutual TLS or allow-list); identified endpoints direct; config file; metrics without identifiers.
 
-**pingers-push-relay**: the publisher-run push relay. Stateless: HPKE open, check the mailbox binding, send to APNs (`a2`), FCM HTTP v1, or a UnifiedPush endpoint; per-token and per-server rate limits; key config endpoint; logging off by default.
+**pingers-push-relay**: the publisher-run push relay. Stateless: HPKE open, check the mailbox binding, send to APNs (`a2`), FCM HTTP v1 (its OAuth assertion signed by pingers-crypto), or a UnifiedPush endpoint; per-token and per-server rate limits; key config endpoints for the published key and the next one with its activation time (two-slot rotation); logging off by default.
 
 **pingers-ohttp-relay**: a small reference relay (forward only, full-duplex streaming, no logs) so relay operators have something to run. Optional if an existing relay is used.
 

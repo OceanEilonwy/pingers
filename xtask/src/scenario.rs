@@ -590,6 +590,11 @@ fn play(
         },
     )?;
 
+    step(report, scene, "A is notified of the request", |scene| {
+        let text = notification_shown(&scene.a, "opened your invite", NETWORK)?;
+        Ok(format!("A's notification: {text}"))
+    })?;
+
     step(report, scene, "A lets B in", |scene| {
         scene.a.tap_when(
             &Find::tag("approve_let_in").or(Text::StartsWith("Codes match · Let".into())),
@@ -685,6 +690,15 @@ fn play(
         }
     })?;
 
+    step(report, scene, "both are notified of the Meetup", |scene| {
+        let mut seen = Vec::new();
+        for device in [&scene.a, &scene.b] {
+            let text = notification_shown(device, "too. Say hi?", NETWORK)?;
+            seen.push(format!("{}: {text}", device.label));
+        }
+        Ok(seen.join("; "))
+    })?;
+
     step(report, scene, "both open the Meetup", |scene| {
         for device in [&scene.a, &scene.b] {
             let open = Find::tag("alert_open").or(Text::Is("Open meetup".into()));
@@ -696,7 +710,12 @@ fn play(
         Ok("Meetup shows 2 here on both".to_owned())
     })?;
 
-    // 5. Chat.
+    // 5. Chat, with B out of the app so the message reaches it as a push and a notification.
+    step(report, scene, "B leaves the app", |scene| {
+        scene.b.shell("input keyevent KEYCODE_HOME")?;
+        Ok("B is on the launcher".to_owned())
+    })?;
+
     step(report, scene, "A sends a chat message", |scene| {
         let a = &scene.a;
         a.tap_when(&Find::tag("meetup_chat"), UI)?;
@@ -707,8 +726,14 @@ fn play(
         Ok(format!("sent {MESSAGE:?}"))
     })?;
 
+    step(report, scene, "B is notified of it", |scene| {
+        let text = notification_shown(&scene.b, MESSAGE, NETWORK)?;
+        Ok(format!("B's notification: {text}"))
+    })?;
+
     step(report, scene, "B receives it", |scene| {
         let b = &scene.b;
+        b.shell(&format!("am start -W -n {ACTIVITY}"))?;
         b.tap_when(&Find::tag("meetup_chat"), UI)?;
         b.wait_for(&Find::text(Text::Is(MESSAGE.into())), NETWORK)?;
         b.back()?;
@@ -769,6 +794,39 @@ fn play(
         }
     })?;
     Ok(())
+}
+
+/// Waits until one of Pingers' notifications on `device` contains `text` (title or body, as
+/// `dumpsys notification` shows them) and returns that line.
+fn notification_shown(device: &Device, text: &str, within: Duration) -> Result<String> {
+    let deadline = Deadline::after(within);
+    loop {
+        let dump = device.shell("dumpsys notification --noredact")?;
+        if let Some(line) = pingers_notification_line(&dump, text) {
+            return Ok(line);
+        }
+        if deadline.passed() {
+            bail!(
+                "no notification containing {text:?} within {} s",
+                within.as_secs()
+            );
+        }
+        pause(Duration::from_secs(1));
+    }
+}
+
+/// The first line of `dump` that belongs to a Pingers notification and contains `text`.
+fn pingers_notification_line(dump: &str, text: &str) -> Option<String> {
+    let mut in_pingers = false;
+    for line in dump.lines() {
+        if line.contains("NotificationRecord(") {
+            in_pingers = line.contains(PACKAGE);
+        }
+        if in_pingers && line.contains(text) {
+            return Some(line.trim().to_owned());
+        }
+    }
+    None
 }
 
 /// Installs (or finds) ntfy and points its default server at the stack's, through `adb
@@ -913,6 +971,25 @@ mod tests {
             assert!(metres(SPOT_CENTRE, inside) < 50.0);
         }
         assert!(metres(SPOT_CENTRE, AWAY) > 1_000.0);
+    }
+
+    #[test]
+    fn only_pingers_notifications_are_read_from_the_dump() {
+        let dump = "  NotificationRecord(0x1: pkg=io.heckel.ntfy user=0 id=1)\n    \
+                    android.text=String (Hello from A)\n  \
+                    NotificationRecord(0x2: pkg=org.pingers.app.foss.debug user=0 id=7)\n    \
+                    android.title=String (Ana · Crag)\n    android.text=String (Hello from A)\n";
+        assert_eq!(
+            pingers_notification_line(dump, "Hello from A").as_deref(),
+            Some("android.text=String (Hello from A)")
+        );
+        assert_eq!(
+            pingers_notification_line(dump, "Ana · Crag").as_deref(),
+            Some("android.title=String (Ana · Crag)")
+        );
+        assert_eq!(pingers_notification_line(dump, "nothing"), None);
+        let ntfy_only = "NotificationRecord(0x1: pkg=io.heckel.ntfy id=1)\n android.text=String (Hello from A)\n";
+        assert_eq!(pingers_notification_line(ntfy_only, "Hello from A"), None);
     }
 
     #[test]

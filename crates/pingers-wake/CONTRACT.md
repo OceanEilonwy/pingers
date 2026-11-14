@@ -89,4 +89,13 @@ pingers-meetup-session and the shell.
   from `refill_mailbox_pool` on 2026-11-14: the one registration a wake makes may also renew a
   stale sealed push), the previous
   lease's revoke key for `replaces`, and a sealed Meetup subscription for knocks (sent as
-  `None` today). Clock skew from `server_time` (F.1) is not handled here yet.
+  `None`: a knocker that joins gets its own from the client's maintenance step at the end of the
+  joining wake). Clock skew from `server_time` (F.1) is not handled here yet.
+
+## Push priority (added 2026-11-14, v1-push)
+
+- **`PriorityWindow`**, **`PushPriority`**, **`PriorityChange`**: the last 20 high-priority pushes
+  and which came downgraded by FCM; 3 of them downgraded raises `Notice::PushDowngraded` (client)
+  and marks wake-ups downgraded until the window clears.
+- The pipeline's last network step is **`ServerPort::maintain_push_registrations`** (was
+  `refill_mailbox_pool`), step **`WakeStep::PushRegistration`** (was `MailboxPool`).
