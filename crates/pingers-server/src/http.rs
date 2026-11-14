@@ -3,6 +3,7 @@
 //! for the reference relay) on two listeners. The public one serves metrics and direct
 //! requests; the gateway one serves `POST /ohttp` and the key config only.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::num::NonZeroU32;
@@ -136,18 +137,29 @@ struct Listener {
     app: Router,
     slots: Arc<Semaphore>,
     streams: u32,
+    requests: Requests,
 }
 
-impl Listener {
-    fn new(app: Router, limit: NonZeroU32, streams: u32) -> Self {
-        let slots = usize::try_from(limit.get()).unwrap_or(Semaphore::MAX_PERMITS);
-        Self {
-            app,
-            slots: Arc::new(Semaphore::new(slots.min(Semaphore::MAX_PERMITS))),
-            streams,
-        }
-    }
+/// How long a request on a listener may be in progress.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Requests {
+    /// At most [`OVERDUE_FACTOR`] request timeouts (the public listener: every route answers
+    /// within its body timeout and one bounded call).
+    Bounded,
+    /// As long as they like (the gateway: live channels last as long as a Meetup, and the
+    /// relay, not the phone, is the peer).
+    MayLast,
 }
+
+/// A listener's connection slots.
+fn slots(limit: NonZeroU32) -> Arc<Semaphore> {
+    let slots = usize::try_from(limit.get()).unwrap_or(Semaphore::MAX_PERMITS);
+    Arc::new(Semaphore::new(slots.min(Semaphore::MAX_PERMITS)))
+}
+
+/// How many request timeouts a request on the public listener may take in all (reading its
+/// body, being answered, and sending the answer) before its connection is dropped.
+pub(crate) const OVERDUE_FACTOR: u32 = 3;
 
 /// Accepts HTTP/2 connections on both listeners until `shutdown` completes, then drops every
 /// connection it owns (live channels included, which would otherwise keep a graceful shutdown
@@ -155,25 +167,29 @@ impl Listener {
 ///
 /// Against slow and idle clients: each listener holds at most its configured number of
 /// connections (one more is closed on arrival), a connection with no request in progress for
-/// the idle timeout is closed (so is one that never completes a request head), request heads
-/// are limited to [`MAX_HEADER_LIST`], and request bodies to their route's size within the
-/// request timeout (`gateway.rs`).
+/// the idle timeout is closed (so is one that never completes a request head), a public
+/// connection whose oldest request has taken [`OVERDUE_FACTOR`] request timeouts is dropped
+/// (a client that stops reading its answer), request heads are limited to
+/// [`MAX_HEADER_LIST`], and request bodies to their route's size within the request timeout
+/// (`gateway.rs`).
 pub(crate) async fn accept_loop(
     listeners: Listeners,
     shared: &Arc<Shared>,
     shutdown: impl Future<Output = ()>,
 ) {
     let policy = shared.connections;
-    let public = Listener::new(
-        public_router(Arc::clone(shared)),
-        policy.public_limit,
-        PUBLIC_STREAMS,
-    );
-    let gateway = Listener::new(
-        gateway_router(Arc::clone(shared)),
-        policy.gateway_limit,
-        GATEWAY_STREAMS,
-    );
+    let public = Listener {
+        app: public_router(Arc::clone(shared)),
+        slots: slots(policy.public_limit),
+        streams: PUBLIC_STREAMS,
+        requests: Requests::Bounded,
+    };
+    let gateway = Listener {
+        app: gateway_router(Arc::clone(shared)),
+        slots: slots(policy.gateway_limit),
+        streams: GATEWAY_STREAMS,
+        requests: Requests::MayLast,
+    };
     let mut connections = JoinSet::new();
     let mut shutdown = std::pin::pin!(shutdown);
     loop {
@@ -229,6 +245,10 @@ fn spawn_connection(
         timer: Arc::clone(&shared.timer),
         activity,
         idle_timeout: shared.connections.idle_timeout,
+        overdue_after: match listener.requests {
+            Requests::Bounded => Some(shared.request_timeout.saturating_mul(OVERDUE_FACTOR)),
+            Requests::MayLast => None,
+        },
         grace: shared.request_timeout,
     };
     connections.spawn(async move {
@@ -237,24 +257,36 @@ fn spawn_connection(
     });
 }
 
-/// What is going on on one connection: how many requests are in progress, and since when
-/// none has been.
+/// What is going on on one connection: which requests are in progress since when, and since
+/// when none has been.
 struct Activity {
     state: Mutex<ActivityState>,
     timer: Arc<dyn Timer>,
 }
 
-#[derive(Clone, Copy)]
 struct ActivityState {
-    in_progress: usize,
+    /// Requests in progress by number; numbers grow with time, so the first is the oldest.
+    requests: BTreeMap<u64, MonotonicTime>,
+    next: u64,
     idle_since: MonotonicTime,
+}
+
+/// When a connection is due to be closed, if nothing changes first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Deadlines {
+    /// Idle long enough to be closed gracefully; `None` while a request is in progress.
+    idle: Option<MonotonicTime>,
+    /// Its oldest request overdue, so the connection is dropped; `None` without a request or
+    /// on a listener with no such limit.
+    overdue: Option<MonotonicTime>,
 }
 
 impl Activity {
     fn new(timer: Arc<dyn Timer>) -> Self {
         Self {
             state: Mutex::new(ActivityState {
-                in_progress: 0,
+                requests: BTreeMap::new(),
+                next: 0,
                 idle_since: timer.now(),
             }),
             timer,
@@ -262,38 +294,50 @@ impl Activity {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ActivityState> {
-        // A counter and a time: nothing a panic could leave half-written.
+        // A map and two numbers, each changed in one step: nothing a panic could leave
+        // half-written.
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// When the connection will have been idle for `timeout`, or `None` while a request is
-    /// in progress.
-    fn idle_deadline(&self, timeout: Duration) -> Option<MonotonicTime> {
-        let state = *self.lock();
-        (state.in_progress == 0).then(|| state.idle_since.saturating_add(timeout))
+    fn deadlines(&self, idle_timeout: Duration, overdue_after: Option<Duration>) -> Deadlines {
+        let state = self.lock();
+        let oldest = state.requests.values().next().copied();
+        Deadlines {
+            idle: oldest
+                .is_none()
+                .then(|| state.idle_since.saturating_add(idle_timeout)),
+            overdue: oldest
+                .zip(overdue_after)
+                .map(|(start, after)| start.saturating_add(after)),
+        }
     }
 }
 
 /// A request in progress, from its head until its response body is finished or dropped.
 struct InProgress {
     activity: Arc<Activity>,
+    number: u64,
 }
 
 impl InProgress {
     fn start(activity: Arc<Activity>) -> Self {
+        let now = activity.timer.now();
         let mut state = activity.lock();
-        state.in_progress = state.in_progress.saturating_add(1);
+        let number = state.next;
+        state.next = state.next.wrapping_add(1);
+        state.requests.insert(number, now);
         drop(state);
-        Self { activity }
+        Self { activity, number }
     }
 }
 
 impl Drop for InProgress {
     fn drop(&mut self) {
+        let now = self.activity.timer.now();
         let mut state = self.activity.lock();
-        state.in_progress = state.in_progress.saturating_sub(1);
-        if state.in_progress == 0 {
-            state.idle_since = self.activity.timer.now();
+        state.requests.remove(&self.number);
+        if state.requests.is_empty() {
+            state.idle_since = now;
         }
     }
 }
@@ -343,11 +387,15 @@ impl HttpBody for TrackedBody {
     }
 }
 
-/// Closes a connection once it has been idle for the idle timeout.
+/// Closes a connection once it has been idle for the idle timeout, or drops it once a
+/// request on it is overdue.
 struct IdleWatch {
     timer: Arc<dyn Timer>,
     activity: Arc<Activity>,
     idle_timeout: Duration,
+    /// How long a request may be in progress; `None` where requests may last (the gateway's
+    /// live channels).
+    overdue_after: Option<Duration>,
     /// How long requests that arrive as the connection is being closed may still take.
     grace: Duration,
 }
@@ -356,19 +404,28 @@ impl IdleWatch {
     async fn serve(self, connection: Connection) {
         let mut connection = std::pin::pin!(connection);
         loop {
-            let deadline = self
+            let due = self
                 .activity
-                .idle_deadline(self.idle_timeout)
+                .deadlines(self.idle_timeout, self.overdue_after);
+            let wake = [due.idle, due.overdue]
+                .into_iter()
+                .flatten()
+                .min()
                 .unwrap_or_else(|| self.timer.now().saturating_add(self.idle_timeout));
             tokio::select! {
                 _ = connection.as_mut() => return,
-                () = self.timer.sleep_until(deadline) => {}
+                () = self.timer.sleep_until(wake) => {}
             }
-            let idle_long_enough = self
+            let now = self.timer.now();
+            let due = self
                 .activity
-                .idle_deadline(self.idle_timeout)
-                .is_some_and(|deadline| self.timer.now() >= deadline);
-            if idle_long_enough {
+                .deadlines(self.idle_timeout, self.overdue_after);
+            if due.overdue.is_some_and(|deadline| now >= deadline) {
+                // A client that stopped reading its response (and so granting HTTP/2
+                // flow-control credit) would hold the stream for ever: drop the connection.
+                return;
+            }
+            if due.idle.is_some_and(|deadline| now >= deadline) {
                 break;
             }
         }

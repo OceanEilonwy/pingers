@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use axum::body::{Body, Bytes};
 use axum::http::{Method, Request, StatusCode};
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use pingers_ohttp::ChunkPosition;
 use tokio::io::AsyncReadExt as _;
 use tokio::net::TcpStream;
@@ -188,5 +189,52 @@ async fn an_oversized_request_head_is_refused() -> TestResult {
     // A head within the limit is served on a fresh connection.
     let mut fresh = connect(server.address, LOOPBACK).await?;
     assert_eq!(params(&mut fresh).await?, StatusCode::OK);
+    server.stop().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_public_client_that_stops_reading_its_answer_is_dropped() -> TestResult {
+    let server = limited(8, 8).await?;
+    // A client that grants no flow-control credit: the answer's head arrives, its body never
+    // can, and the request stays in progress.
+    let stream = TcpStream::connect(server.address).await?;
+    let (mut client, connection) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
+        .initial_stream_window_size(0)
+        .handshake(TokioIo::new(stream))
+        .await?;
+    let driver = tokio::spawn(connection);
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("http://server/v1/params")
+        .body(Body::empty())?;
+    let response = send(&mut client, request).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let limit = super::REQUEST_TIMEOUT.saturating_mul(crate::http::OVERDUE_FACTOR);
+    server
+        .clock
+        .advance(limit.saturating_sub(Duration::from_secs(1)));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), async {
+            while !client.is_closed() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .is_err(),
+        "dropped before its time"
+    );
+    let dropped = tokio::time::timeout(STEP, async {
+        loop {
+            if client.is_closed() {
+                return;
+            }
+            server.clock.advance(Duration::from_secs(1));
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(dropped.is_ok(), "the stalled connection stayed open");
+    drop(response);
+    driver.abort();
     server.stop().await
 }
