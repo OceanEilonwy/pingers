@@ -141,7 +141,7 @@ fn base64url_decode(text: &str) -> Option<Vec<u8>> {
 mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
-    use pingers_proto::{InviteUses, InviterFingerprint, MailboxId, SecretBytes, ServerId};
+    use pingers_proto::{InviterFingerprint, MailboxId, SecretBytes, ServerId};
     use pingers_time::UnixSeconds;
 
     use super::*;
@@ -184,7 +184,6 @@ mod tests {
             invite_secret: SecretBytes::new([4; 32]),
             inviter_fingerprint: InviterFingerprint::from_bytes([5; 8]),
             expires: UnixSeconds::new(1_000_000),
-            uses: InviteUses::Single,
         })
     }
 

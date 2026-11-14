@@ -655,4 +655,3 @@ fn join_code_vectors() -> Result<(), TestError> {
     }
     Ok(())
 }
-

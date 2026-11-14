@@ -101,8 +101,8 @@ fn wire_secrets_stay_out_of_debug_and_compare_by_content() {
 #[test]
 fn structs_holding_secrets_compare_every_field() -> Result<(), ProtoError> {
     use pingers_proto::{
-        AuthResponse, InvitePayload, InviterFingerprint, MailboxId, RegisterRequest,
-        SecretBytes, SecretText, ServerId,
+        AuthResponse, InvitePayload, InviterFingerprint, MailboxId, RegisterRequest, SecretBytes,
+        SecretText, ServerId,
     };
     use pingers_time::UnixSeconds;
 

@@ -234,7 +234,7 @@ pub(crate) fn join_request() -> impl Strategy<Value = JoinRequest> {
 
 pub(crate) fn invite_post() -> impl Strategy<Value = InvitePost> {
     prop_oneof![
-        join_request().prop_map(InvitePost::Join),
+        join_request().prop_map(|request| InvitePost::Join(Box::new(request))),
         bytes16().prop_map(|reply_mailbox| InvitePost::Withdraw {
             reply_mailbox: MailboxId::from_bytes(reply_mailbox),
         }),

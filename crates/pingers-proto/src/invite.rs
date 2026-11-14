@@ -185,8 +185,8 @@ impl CborBody for JoinRequest {
 /// and padded to a mailbox size class.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InvitePost {
-    /// Asks to join.
-    Join(JoinRequest),
+    /// Asks to join (boxed: a join request carries a whole key package).
+    Join(Box<JoinRequest>),
     /// Withdraws the request whose Welcome would go to this reply mailbox ("Withdraw
     /// request"). Only the joiner and the inviter know the pairing of request and reply
     /// mailbox; the server also sees the mailbox id, so a server that also held the link could
@@ -222,7 +222,7 @@ impl CborBody for InvitePost {
     fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
         cbor::array_of(decoder, 2)?;
         match decoder.u8()? {
-            post_kind::JOIN => Ok(Self::Join(JoinRequest::decode_body(decoder)?)),
+            post_kind::JOIN => Ok(Self::Join(Box::new(JoinRequest::decode_body(decoder)?))),
             post_kind::WITHDRAW => Ok(Self::Withdraw {
                 reply_mailbox: MailboxId::from_bytes(cbor::fixed_bytes(decoder)?),
             }),

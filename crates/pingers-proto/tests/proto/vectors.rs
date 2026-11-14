@@ -546,7 +546,7 @@ fn invite_post_vectors() -> Result<(), TestError> {
         file: "invite-post-encoding",
         bytes_field: "encoding",
         build: |vector| match text(vector, "kind")?.as_str() {
-            "join" => Ok(InvitePost::Join(join_request(vector)?)),
+            "join" => Ok(InvitePost::Join(Box::new(join_request(vector)?))),
             "withdraw" => Ok(InvitePost::Withdraw {
                 reply_mailbox: MailboxId::from_bytes(bytes(vector, "reply_mailbox")?),
             }),
