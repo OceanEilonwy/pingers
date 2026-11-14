@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Invite people and Accept invite, in words.
+//! Invite people, "Ben asked to join", and the joiner's Open invite, Asked to join and You're
+//! in, in words (canvas `JoinA1`, `JoinA2`, `JoinA3` and `InviteApprove`).
 
 use pingers_screens::common::Initials;
-use pingers_screens::invite::{AcceptInvite, Invitation, InviteView};
+use pingers_screens::invite::{
+    AskedToJoin, Invitation, InviteView, JoinRequestView, LetIn, OpenInvite,
+};
 
 use crate::Language;
 use crate::common::{avatar, members, spots};
@@ -17,7 +20,8 @@ pub struct InvitationText {
     pub avatar: Option<String>,
     /// "Ben", or "Invite link".
     pub title: String,
-    /// "Opened the link · compare code 4821", "Not opened yet · expires in 22 h", "Joined · code verified".
+    /// "Opened the link · compare code 4821 0937 5512", "Not opened yet · expires in 22 h",
+    /// "Joined · code verified".
     pub status: String,
     /// "Link shared 2 h ago", for a pending invite.
     pub shared: Option<String>,
@@ -94,44 +98,188 @@ pub fn invite(language: Language, view: &InviteView) -> InviteText {
     }
 }
 
-/// The Accept invite screen, in words.
+/// "Ben asked to join", in words (canvas `InviteApprove`).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AcceptInviteText {
-    /// "Ana invited you to".
-    pub invited_by: String,
-    /// "Climbing crew".
-    pub party_name: String,
+pub struct JoinRequestText {
+    /// "BE".
+    pub avatar: String,
+    /// "Ben asked to join".
+    pub title: String,
+    /// "Climbing crew · from the link you shared 2 h ago".
+    pub subtitle: String,
+    /// "Ask Ben to read their code. It should be:".
+    pub ask: String,
+    /// "4821 0937 5512".
+    pub code: String,
+    /// "A different code means someone else opened your link. Don't let them in."
+    pub warning: String,
+    /// "When you let Ben in".
+    pub when_heading: String,
+    /// "Ben sees the Party's name, its members and its Spots, and everyone gets a new key. The
+    /// link stops working."
+    pub when_body: String,
+    /// "Codes match · Let Ben in".
+    pub let_in: String,
+    /// "Don't let in".
+    pub turn_away: String,
+}
+
+/// "Ben asked to join", in words. The canvas says "his code" and "He sees"; the app does not
+/// know the joiner's pronouns, so these read "their code" and "Ben sees".
+#[must_use]
+pub fn join_request(language: Language, view: &JoinRequestView) -> JoinRequestText {
+    let Language::English = language;
+    let name = view.name.as_str();
+    JoinRequestText {
+        avatar: Initials::of(&view.name).as_str().to_owned(),
+        title: format!("{name} asked to join"),
+        subtitle: format!(
+            "{} · from the link you shared {} h ago",
+            view.party_name.as_str(),
+            view.shared_ago.get()
+        ),
+        ask: format!("Ask {name} to read their code. It should be:"),
+        code: view.code.as_str().to_owned(),
+        warning: "A different code means someone else opened your link. Don't let them in.".into(),
+        when_heading: format!("When you let {name} in"),
+        when_body: format!(
+            "{name} sees the Party's name, its members and its Spots, and everyone gets a new \
+             key. The link stops working."
+        ),
+        let_in: format!("Codes match · Let {name} in"),
+        turn_away: "Don't let in".into(),
+    }
+}
+
+/// The Open invite screen, in words (canvas `JoinA1`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenInviteText {
+    /// "You've been invited to a Party".
+    pub title: String,
+    /// "You'll see its name and who's in it once the person who invited you lets you in."
+    pub subtitle: String,
+    /// "What joining means".
+    pub what_joining_means: String,
+    /// The two points.
+    pub points: [String; 2],
+    /// "Your name in this Party".
+    pub name_label: String,
+    /// The name to prefill, or empty.
+    pub name: String,
+    /// "Ask to join".
+    pub ask: String,
+    /// "Not now".
+    pub not_now: String,
+}
+
+/// The Open invite screen, in words.
+#[must_use]
+pub fn open_invite(language: Language, view: &OpenInvite) -> OpenInviteText {
+    let Language::English = language;
+    OpenInviteText {
+        title: "You've been invited to a Party".into(),
+        subtitle: "You'll see its name and who's in it once the person who invited you lets you \
+                   in."
+        .into(),
+        what_joining_means: "What joining means".into(),
+        points: [
+            "Members find out you're nearby only when you're in the same Spot at the same time."
+                .into(),
+            "Your location is end-to-end encrypted. The server can't see where you are or which \
+             Spot you're in."
+                .into(),
+        ],
+        name_label: "Your name in this Party".into(),
+        name: view
+            .name
+            .as_ref()
+            .map_or_else(String::new, |name| name.as_str().to_owned()),
+        ask: "Ask to join".into(),
+        not_now: "Not now".into(),
+    }
+}
+
+/// The Asked to join screen, in words (canvas `JoinA2`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AskedToJoinText {
+    /// "Asked to join".
+    pub title: String,
+    /// "The person who invited you sees your request with the same code. When they let you in,
+    /// the Party appears on your home screen."
+    pub subtitle: String,
+    /// "Read this code to them, in person or on a call".
+    pub read_code: String,
+    /// "4821 0937 5512".
+    pub code: String,
+    /// "If their code is different, someone else may have your link. Tell them not to let you
+    /// in."
+    pub warning: String,
+    /// "You can leave this screen. We'll notify you when you're in."
+    pub leave_note: String,
+    /// "Done".
+    pub done: String,
+    /// "Withdraw request".
+    pub withdraw: String,
+}
+
+/// The Asked to join screen, in words.
+#[must_use]
+pub fn asked_to_join(language: Language, view: &AskedToJoin) -> AskedToJoinText {
+    let Language::English = language;
+    AskedToJoinText {
+        title: "Asked to join".into(),
+        subtitle: "The person who invited you sees your request with the same code. When they \
+                   let you in, the Party appears on your home screen."
+            .into(),
+        read_code: "Read this code to them, in person or on a call".into(),
+        code: view.code.as_str().to_owned(),
+        warning: "If their code is different, someone else may have your link. Tell them not to \
+                  let you in."
+            .into(),
+        leave_note: "You can leave this screen. We'll notify you when you're in.".into(),
+        done: "Done".into(),
+        withdraw: "Withdraw request".into(),
+    }
+}
+
+/// The You're in screen, in words (canvas `JoinA3`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LetInText {
     /// "CC".
     pub party_initials: String,
+    /// "Ana let you in".
+    pub let_in_by: String,
+    /// "Climbing crew".
+    pub party_name: String,
     /// The avatars.
     pub avatars: Vec<String>,
     /// "+2", when there are more members than avatars.
     pub more: Option<String>,
-    /// "5 members · 3 spots".
+    /// "6 members · 3 spots".
     pub counts: String,
-    /// "What joining means".
-    pub what_joining_means: String,
-    /// The three points.
-    pub points: [String; 3],
-    /// "Check this code matches Ana's screen".
-    pub check_code: String,
-    /// "4821 0937 5512".
-    pub code: String,
-    /// "Codes match · Join".
-    pub join: String,
-    /// "Decline".
-    pub decline: String,
+    /// "Code 4821 0937 5512 was checked before Ana let you in. You can see it again in the
+    /// Party's security details."
+    pub checked: String,
+    /// "Open Climbing crew".
+    pub open: String,
+    /// "Leave Party".
+    pub leave: String,
+    /// The notification posted when the Welcome arrives: "Ana let you in".
+    pub notification_title: String,
+    /// "Climbing crew".
+    pub notification_body: String,
 }
 
-/// The Accept invite screen, in words.
+/// The You're in screen, in words.
 #[must_use]
-pub fn accept_invite(language: Language, view: &AcceptInvite) -> AcceptInviteText {
+pub fn let_in(language: Language, view: &LetIn) -> LetInText {
     let Language::English = language;
     let inviter = view.inviter.as_str();
-    AcceptInviteText {
-        invited_by: format!("{inviter} invited you to"),
-        party_name: view.party_name.as_str().to_owned(),
+    let party_name = view.party_name.as_str();
+    LetInText {
         party_initials: view.party_initials.as_str().to_owned(),
+        let_in_by: format!("{inviter} let you in"),
+        party_name: party_name.to_owned(),
         avatars: view
             .preview
             .iter()
@@ -143,19 +291,15 @@ pub fn accept_invite(language: Language, view: &AcceptInvite) -> AcceptInviteTex
             members(language, view.members),
             spots(language, view.spots)
         ),
-        what_joining_means: "What joining means".into(),
-        points: [
-            "Members find out you're nearby only when you're in the same Spot at the same time."
-                .into(),
-            "Your location is end-to-end encrypted. The server can't see where you are or which \
-             Spot you're in."
-                .into(),
-            "Nothing is sent while you're in Focus or inside your exclusion zones.".into(),
-        ],
-        check_code: format!("Check this code matches {inviter}'s screen"),
-        code: view.safety_code.as_str().to_owned(),
-        join: "Codes match · Join".into(),
-        decline: "Decline".into(),
+        checked: format!(
+            "Code {} was checked before {inviter} let you in. You can see it again in the \
+             Party's security details.",
+            view.code.as_str()
+        ),
+        open: format!("Open {party_name}"),
+        leave: "Leave Party".into(),
+        notification_title: format!("{inviter} let you in"),
+        notification_body: party_name.to_owned(),
     }
 }
 
@@ -164,7 +308,10 @@ mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
     use pingers_screens::fixtures::{self, FixtureError};
-    use pingers_screens::invite::{accept_invite as accept_screen, invite as invite_screen};
+    use pingers_screens::invite::{
+        asked_to_join as asked_screen, invite as invite_screen, join_request as request_screen,
+        let_in as let_in_screen, open_invite as open_screen,
+    };
 
     use super::*;
 
@@ -191,7 +338,7 @@ mod tests {
         assert_eq!(
             rows,
             [
-                ("Ben", "Opened the link · compare code 4821"),
+                ("Ben", "Opened the link · compare code 4821 0937 5512"),
                 ("Invite link", "Not opened yet · expires in 22 h"),
                 ("Chloé", "Joined · code verified"),
             ]
@@ -234,31 +381,138 @@ mod tests {
     }
 
     #[test]
-    fn accept_invite_reads_like_the_canvas() -> Result<(), FixtureError> {
+    fn join_request_reads_like_the_canvas() -> Result<(), FixtureError> {
         let snapshot = fixtures::snapshot()?;
-        let text = accept_invite(EN, &accept_screen(&snapshot).ok_or(FixtureError::Missing)?);
-        assert_eq!(text.invited_by, "Ana invited you to");
-        assert_eq!(
-            (text.party_name.as_str(), text.party_initials.as_str()),
-            ("Climbing crew", "CC")
+        let text = join_request(
+            EN,
+            &request_screen(
+                &snapshot,
+                fixtures::climbing_crew(),
+                fixtures::ben_request(),
+                fixtures::at(19, 30),
+            )?,
         );
-        assert_eq!(text.avatars, ["AN", "CH", "DE"]);
-        assert_eq!(text.more.as_deref(), Some("+2"));
-        assert_eq!(text.counts, "5 members · 3 spots");
-        assert_eq!(text.check_code, "Check this code matches Ana's screen");
+        assert_eq!(text.avatar, "BE");
+        assert_eq!(text.title, "Ben asked to join");
+        assert_eq!(
+            text.subtitle,
+            "Climbing crew · from the link you shared 2 h ago"
+        );
+        assert_eq!(text.ask, "Ask Ben to read their code. It should be:");
         assert_eq!(text.code, "4821 0937 5512");
         assert_eq!(
-            (text.join.as_str(), text.decline.as_str()),
-            ("Codes match · Join", "Decline")
+            text.warning,
+            "A different code means someone else opened your link. Don't let them in."
+        );
+        assert_eq!(text.when_heading, "When you let Ben in");
+        assert_eq!(
+            text.when_body,
+            "Ben sees the Party's name, its members and its Spots, and everyone gets a new key. \
+             The link stops working."
+        );
+        assert_eq!(
+            (text.let_in.as_str(), text.turn_away.as_str()),
+            ("Codes match · Let Ben in", "Don't let in")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn open_invite_reads_like_the_canvas() -> Result<(), FixtureError> {
+        let mut snapshot = fixtures::snapshot()?;
+        let text = open_invite(EN, &open_screen(&snapshot));
+        assert_eq!(text.title, "You've been invited to a Party");
+        assert_eq!(
+            text.subtitle,
+            "You'll see its name and who's in it once the person who invited you lets you in."
         );
         assert_eq!(text.what_joining_means, "What joining means");
-        assert!(text.points.iter().all(|point| !point.is_empty()));
+        assert_eq!(
+            text.points,
+            [
+                "Members find out you're nearby only when you're in the same Spot at the same \
+                 time.",
+                "Your location is end-to-end encrypted. The server can't see where you are or \
+                 which Spot you're in.",
+            ]
+        );
+        assert_eq!(
+            (text.name_label.as_str(), text.name.as_str()),
+            ("Your name in this Party", "Sam")
+        );
+        assert_eq!(
+            (text.ask.as_str(), text.not_now.as_str()),
+            ("Ask to join", "Not now")
+        );
+        snapshot.display_name = None;
+        assert_eq!(open_invite(EN, &open_screen(&snapshot)).name, "");
+        Ok(())
+    }
 
+    #[test]
+    fn asked_to_join_reads_like_the_canvas() -> Result<(), FixtureError> {
+        let snapshot = fixtures::snapshot()?;
+        let text = asked_to_join(EN, &asked_screen(&snapshot).ok_or(FixtureError::Missing)?);
+        assert_eq!(text.title, "Asked to join");
+        assert_eq!(
+            text.subtitle,
+            "The person who invited you sees your request with the same code. When they let you \
+             in, the Party appears on your home screen."
+        );
+        assert_eq!(
+            text.read_code,
+            "Read this code to them, in person or on a call"
+        );
+        assert_eq!(text.code, "4821 0937 5512");
+        assert_eq!(
+            text.warning,
+            "If their code is different, someone else may have your link. Tell them not to let \
+             you in."
+        );
+        assert_eq!(
+            text.leave_note,
+            "You can leave this screen. We'll notify you when you're in."
+        );
+        assert_eq!(
+            (text.done.as_str(), text.withdraw.as_str()),
+            ("Done", "Withdraw request")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn let_in_reads_like_the_canvas() -> Result<(), FixtureError> {
+        let snapshot = fixtures::let_in_snapshot()?;
+        let text = let_in(EN, &let_in_screen(&snapshot).ok_or(FixtureError::Missing)?);
+        assert_eq!(text.party_initials, "CC");
+        assert_eq!(text.let_in_by, "Ana let you in");
+        assert_eq!(text.party_name, "Climbing crew");
+        assert_eq!(text.avatars, ["AN", "CH", "BE"]);
+        assert_eq!(text.more.as_deref(), Some("+2"));
+        assert_eq!(text.counts, "6 members · 3 spots");
+        assert_eq!(
+            text.checked,
+            "Code 4821 0937 5512 was checked before Ana let you in. You can see it again in the \
+             Party's security details."
+        );
+        assert_eq!(
+            (text.open.as_str(), text.leave.as_str()),
+            ("Open Climbing crew", "Leave Party")
+        );
+        assert_eq!(
+            (
+                text.notification_title.as_str(),
+                text.notification_body.as_str()
+            ),
+            ("Ana let you in", "Climbing crew")
+        );
+
+        // With no more members than avatars there is no "+".
         let mut small = snapshot;
-        if let Some(preview) = &mut small.join_preview {
-            preview.members.truncate(3);
+        for party in &mut small.parties {
+            party.members.truncate(4);
         }
-        let text = accept_invite(EN, &accept_screen(&small).ok_or(FixtureError::Missing)?);
+        let text = let_in(EN, &let_in_screen(&small).ok_or(FixtureError::Missing)?);
         assert_eq!(text.more, None);
         Ok(())
     }

@@ -42,6 +42,8 @@ pub(crate) enum Key<'id> {
     InviteIndex(&'id MailboxId),
     /// A join this device started, by its reply mailbox.
     Joining(&'id MailboxId),
+    /// Who let this device into a Party it joined, and the code that was checked.
+    JoinedVia(&'id PartyId),
 }
 
 impl Key<'_> {
@@ -66,6 +68,7 @@ impl Key<'_> {
                 key.extend_from_slice(mailbox.as_bytes());
             }
             Self::Subscriptions(party) => party_key(&mut key, party, b"subscriptions"),
+            Self::JoinedVia(party) => party_key(&mut key, party, b"joined-via"),
             Self::InviteIndex(mailbox) => {
                 key.extend_from_slice(b"invite-index/");
                 key.extend_from_slice(mailbox.as_bytes());

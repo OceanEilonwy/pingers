@@ -69,11 +69,8 @@ pub enum Unavailable {
     /// Wake-up pushes need a push relay: the build names none, or the server does not list it.
     #[error("no push relay set up")]
     NoPushRelay,
-    /// Joining a Party needs wake-up pushes: the join request carries a sealed subscription
-    /// (pingers-proto `JoinRequest.party_subscription` is not optional).
-    #[error("joining needs wake-up pushes on")]
+    /// "No wake-up pushes" is set, so nothing can be sealed to wake this device. Joining does
+    /// not need them: a join request then carries no subscription.
+    #[error("wake-up pushes are off")]
     WakePushesOff,
-    /// The invite's Welcome has not arrived yet: the inviter has not admitted this device.
-    #[error("waiting for the inviter")]
-    AwaitingWelcome,
 }

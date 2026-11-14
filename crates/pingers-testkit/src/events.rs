@@ -21,6 +21,11 @@ pub enum RecordedEvent {
         /// The Party.
         party: PartyId,
     },
+    /// `let_in`.
+    LetIn {
+        /// The Party.
+        party: PartyId,
+    },
     /// `meetup_started`.
     MeetupStarted {
         /// The Meetup group.
@@ -82,6 +87,8 @@ pub enum EventKind {
     PartiesChanged,
     /// [`RecordedEvent::JoinRequested`].
     JoinRequested,
+    /// [`RecordedEvent::LetIn`].
+    LetIn,
     /// [`RecordedEvent::MeetupStarted`].
     MeetupStarted,
     /// [`RecordedEvent::MeetupUpdated`].
@@ -153,6 +160,7 @@ impl RecordedEvent {
         match self {
             Self::PartiesChanged => EventKind::PartiesChanged,
             Self::JoinRequested { .. } => EventKind::JoinRequested,
+            Self::LetIn { .. } => EventKind::LetIn,
             Self::MeetupStarted { .. } => EventKind::MeetupStarted,
             Self::MeetupUpdated { .. } => EventKind::MeetupUpdated,
             Self::MeetupMessage { .. } => EventKind::MeetupMessage,
@@ -172,6 +180,7 @@ impl RecordedEvent {
             Self::Notice(notice) => Some(NoticeKind::of(notice)),
             Self::PartiesChanged
             | Self::JoinRequested { .. }
+            | Self::LetIn { .. }
             | Self::MeetupStarted { .. }
             | Self::MeetupUpdated { .. }
             | Self::MeetupMessage { .. }
