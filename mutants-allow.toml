@@ -34,3 +34,7 @@ reason = "equivalent in the client tests: without a harness server no Meetup goe
 [[mutant]]
 name = "crates/pingers-meetup-session/src/live.rs: replace Driver::command -> Result<Option<Ended>, SessionError> with Ok(None)"
 reason = "caught by a hang, which cargo-mutants reports as a timeout: the mutant drops every command and its reply, so every handle call in the tests waits forever"
+
+[[mutant]]
+name = "crates/pingers-wake/src/push_priority.rs: replace | with ^ in PriorityWindow::record"
+reason = "equivalent: the shifted window has its lowest bit clear, so ORing and XORing the new bit agree for every input"
