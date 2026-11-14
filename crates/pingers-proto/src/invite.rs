@@ -310,6 +310,36 @@ mod tests {
     }
 
     #[test]
+    fn a_link_carries_one_to_four_gateway_pins_and_at_most_four_push_relay_pins()
+    -> Result<(), ProtoError> {
+        use crate::WireEncode as _;
+        let pins = |count: u8| {
+            (0..count)
+                .map(|fill| KeyConfigHash::from_bytes([fill; 32]))
+                .collect()
+        };
+        let payload = |gateway: u8, push: u8| -> Result<InvitePayload, ProtoError> {
+            Ok(InvitePayload {
+                server: ServerId::new("https://pingers.example".to_owned())?,
+                invite_mailbox: MailboxId::from_bytes([1; 16]),
+                invite_secret: SecretBytes::new([2; 32]),
+                inviter_fingerprint: InviterFingerprint::from_bytes([3; 8]),
+                expires: UnixSeconds::new(4),
+                uses: InviteUses::Single,
+                gateway_pins: pins(gateway),
+                push_relay_pins: pins(push),
+                registration_code: None,
+            })
+        };
+        assert!(payload(1, 0)?.encode().is_ok());
+        assert!(payload(4, 4)?.encode().is_ok());
+        assert!(payload(0, 0)?.encode().is_err());
+        assert!(payload(5, 0)?.encode().is_err());
+        assert!(payload(1, 5)?.encode().is_err());
+        Ok(())
+    }
+
+    #[test]
     fn debug_hides_names_and_fingerprints() -> Result<(), ProtoError> {
         let name = DisplayName::new(String::from("Ben"))?;
         assert_eq!(format!("{name:?}"), "DisplayName(redacted)");

@@ -931,6 +931,65 @@ mod tests {
     const PARTY_HEX: &str = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
 
     #[tokio::test]
+    async fn servers_are_looked_at_trusted_and_given_codes_through_the_client()
+    -> Result<(), CoreError> {
+        let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
+        let core = open_on("servers", &fakes).await?;
+        let server = pingers_proto::ServerId::new("https://b.example".to_owned())?;
+        assert!(matches!(
+            core.probe_server("b.example".into()).await,
+            Err(CoreError::Unavailable { .. })
+        ));
+        fakes.set_probe(Some(pingers_client::ServerProbe {
+            server: server.clone(),
+            operator: Some(pingers_client::snapshot::Operator::new("B")?),
+            relay: pingers_client::snapshot::Host::new("relay.b.example")?,
+            push_relay: None,
+            gateway_key: pingers_proto::KeyConfigHash::from_bytes([0x12; 32]),
+            known: false,
+        }));
+        let look = core.probe_server("b.example".into()).await?;
+        assert_eq!(look.server, "https://b.example");
+        assert_eq!(look.operator.as_deref(), Some("B"));
+        assert!(look.gateway_key.starts_with("1212 1212"));
+        assert_eq!(
+            fakes.calls().last(),
+            Some(&CrateCall::ProbeServer("b.example".into()))
+        );
+
+        core.trust_server("https://b.example".into()).await?;
+        assert_eq!(
+            fakes.calls().last(),
+            Some(&CrateCall::TrustServer(server.clone()))
+        );
+        assert!(matches!(
+            core.trust_server("http://b.example".into()).await,
+            Err(CoreError::Server {
+                issue: crate::ServerIssue::InvalidAddress,
+                ..
+            })
+        ));
+
+        let before = fakes.calls().len();
+        assert!(matches!(
+            core.submit_registration_code("https://b.example".into(), "  ".into())
+                .await,
+            Err(CoreError::Server {
+                issue: crate::ServerIssue::CodeRefused,
+                ..
+            })
+        ));
+        assert_eq!(fakes.calls().len(), before, "an empty code is not sent");
+        core.submit_registration_code("https://b.example".into(), " friends ".into())
+            .await?;
+        assert_eq!(
+            fakes.calls().last(),
+            Some(&CrateCall::SubmitRegistrationCode(server))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn invites_are_verified_and_cancelled_through_the_client() -> Result<(), CoreError> {
         let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
         let core = open_on("invites", &fakes).await?;

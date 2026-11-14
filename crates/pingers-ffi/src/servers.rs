@@ -317,7 +317,38 @@ mod tests {
         assert_eq!(view.keys, KeysTrusted::FromInvite);
         assert_eq!(view.push_relay_host.as_deref(), Some("push.other.example"));
         assert!(!view.post_quantum);
+        assert!(!view.wake_pushes_off);
         Ok(())
+    }
+
+    #[test]
+    fn every_server_problem_has_its_own_issue_and_words() {
+        use pingers_client::ClientError;
+        let cases = [
+            (ServerProblem::InvalidAddress, ServerIssue::InvalidAddress),
+            (ServerProblem::Unreachable, ServerIssue::Unreachable),
+            (ServerProblem::NoRelay, ServerIssue::NoRelay),
+            (
+                ServerProblem::RelayUnreachable,
+                ServerIssue::RelayUnreachable,
+            ),
+            (ServerProblem::RelaysDiffer, ServerIssue::RelaysDiffer),
+            (ServerProblem::KeyMismatch, ServerIssue::KeyMismatch),
+            (ServerProblem::NotProbed, ServerIssue::NotLookedAt),
+        ];
+        let mut words = Vec::new();
+        for (problem, issue) in cases {
+            assert_eq!(ServerIssue::of(&ClientError::Server(problem)), Some(issue));
+            let error = issue.error();
+            assert!(matches!(&error, CoreError::Server { issue: shown, .. } if *shown == issue));
+            words.push(error.to_string());
+        }
+        for issue in [ServerIssue::CodeRequired, ServerIssue::CodeRefused] {
+            words.push(issue.error().to_string());
+        }
+        words.sort();
+        words.dedup();
+        assert_eq!(words.len(), 9, "each issue is told in its own words");
     }
 
     #[test]
