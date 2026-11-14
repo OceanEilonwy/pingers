@@ -79,6 +79,8 @@ openmls_rust_crypto = "0.6.0"
 openmls_traits = "0.6.0"
 openmls_basic_credential = "0.6.0"
 openmls_memory_storage = "0.6.0"
+# The X-Wing suite (0x004D) for "quantum-resistant" Parties (design B.8); pingers-mls feature x-wing.
+openmls_libcrux_crypto = "0.4.0"
 tls_codec = "0.5.0"
 
 # Anonymous authorisation (pingers-anon only)
@@ -164,6 +166,14 @@ same-layer = [
   # L4: as fob-words reads fob-screens, the words are written from the view models.
   { crate = "pingers-words", dependency = "pingers-screens", reason = "words are written from the view models (architecture §3, L4)" },
 ]
+
+# Vendored copies of crates that pinned dependencies hold at versions with open advisories; each
+# carries only the upstream fix (vendor/*/PINGERS.md says which, and when to drop it).
+[patch.crates-io]
+# RUSTSEC-2026-0330, -0331: pinned =0.0.9 by hpke-rs-libcrux 0.7 under openmls_libcrux_crypto.
+libcrux-kem = { path = "vendor/libcrux-kem" }
+# RUSTSEC-2026-0329: pinned 0.0.1 by openmls_libcrux_crypto 0.4.
+libcrux-hmac-drbg = { path = "vendor/libcrux-hmac-drbg" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

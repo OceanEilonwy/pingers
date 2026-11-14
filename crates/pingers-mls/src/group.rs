@@ -241,7 +241,7 @@ impl<'context, S: MlsStorage> MlsContext<'context, S> {
         rng: &mut impl CryptoRng,
     ) -> Result<KeyPackageBytes, MlsError> {
         let suite = policy::ciphersuite(suite)?;
-        let provider = Provider::new(self.storage, InjectedRand::new(rng));
+        let provider = Provider::new(self.storage, InjectedRand::new(rng))?;
         let builder = KeyPackage::builder();
         let builder = match purpose {
             KeyPackagePurpose::Party => {
@@ -273,7 +273,7 @@ impl<'context, S: MlsStorage> MlsContext<'context, S> {
     /// [`MlsError::InvalidMessage`] if the bytes are not a valid KeyPackage of a supported
     /// suite; [`MlsError::Storage`]; [`MlsError::Internal`].
     pub fn delete_key_package(&self, key_package: &KeyPackageBytes) -> Result<(), MlsError> {
-        let provider = Provider::new(self.storage, NoRand);
+        let provider = Provider::new(self.storage, NoRand)?;
         let hash_ref = parse_key_package(key_package, &provider)?
             .hash_ref(provider.crypto())
             .map_err(|_| MlsError::Internal)?;
@@ -304,7 +304,7 @@ impl<'context, S: MlsStorage> MlsContext<'context, S> {
         rng: &mut impl CryptoRng,
     ) -> Result<Group<'context, S, Party>, MlsError> {
         let suite = policy::ciphersuite(suite)?;
-        let provider = Provider::new(self.storage, InjectedRand::new(rng));
+        let provider = Provider::new(self.storage, InjectedRand::new(rng))?;
         let inner = MlsGroup::builder()
             .with_group_id(openmls::prelude::GroupId::from_slice(raw_group_id))
             .ciphersuite(suite)
@@ -332,7 +332,7 @@ impl<'context, S: MlsStorage> MlsContext<'context, S> {
         &self,
         welcome: &WelcomeBytes,
     ) -> Result<Group<'context, S, Party>, MlsError> {
-        let provider = Provider::new(self.storage, NoRand);
+        let provider = Provider::new(self.storage, NoRand)?;
         let welcome = parse_welcome(welcome)?;
         let processed = ProcessedWelcome::new_from_welcome(
             &provider,
@@ -379,7 +379,7 @@ impl<'context, S: MlsStorage> MlsContext<'context, S> {
         rng: &mut impl CryptoRng,
     ) -> Result<CreatedMeetup<'context, S>, MlsError> {
         let suite = policy::ciphersuite(creation.suite)?;
-        let provider = Provider::new(self.storage, InjectedRand::new(rng));
+        let provider = Provider::new(self.storage, InjectedRand::new(rng))?;
         let knocker = parse_key_package(creation.first_member, &provider)?;
         check_meetup_leaf(creation.party_roster, knocker.leaf_node())?;
         let signer = leaf_signer(self.signer);
@@ -439,7 +439,7 @@ impl<'context, S: MlsStorage> MlsContext<'context, S> {
         psk: &MeetupPskBinding<'_>,
         party_roster: &Roster,
     ) -> Result<Group<'context, S, Meetup>, MlsError> {
-        let provider = Provider::new(self.storage, NoRand);
+        let provider = Provider::new(self.storage, NoRand)?;
         let welcome = parse_welcome(welcome)?;
         // OpenMLS reads the PSK while it decrypts the Welcome, so the PSK is stored under the
         // expected id first (and deleted right after): a Welcome naming another id then finds
@@ -572,6 +572,17 @@ impl<S: MlsStorage, Kind: GroupKind> Group<'_, S, Kind> {
         Epoch::new(self.inner.epoch().as_u64())
     }
 
+    /// The group's ciphersuite, so a member that joined by Welcome learns whether its Party is
+    /// quantum-resistant (design B.8).
+    ///
+    /// # Errors
+    ///
+    /// [`MlsError::UnsupportedSuite`] if the group's suite is not one this build runs (a stored
+    /// group cannot have one: creating or joining it would have failed).
+    pub fn suite(&self) -> Result<CipherSuitePolicy, MlsError> {
+        policy::policy_of(self.inner.ciphersuite()).ok_or(MlsError::UnsupportedSuite)
+    }
+
     /// This device's leaf.
     #[must_use]
     pub fn own_leaf(&self) -> LeafIndex {
@@ -622,7 +633,7 @@ impl<S: MlsStorage, Kind: GroupKind> Group<'_, S, Kind> {
                 group: self.epoch(),
             });
         }
-        let provider = Provider::new(self.storage, NoRand);
+        let provider = Provider::new(self.storage, NoRand)?;
         let processed = self
             .inner
             .process_message(&provider, protocol)
@@ -692,7 +703,7 @@ impl<S: MlsStorage, Kind: GroupKind> Group<'_, S, Kind> {
         if self.inner.pending_commit().is_some() || self.inner.has_pending_proposals() {
             return Err(MlsError::CommitPending);
         }
-        let provider = Provider::new(self.storage, InjectedRand::new(rng));
+        let provider = Provider::new(self.storage, InjectedRand::new(rng))?;
         let message = self
             .inner
             .create_message(&provider, &leaf_signer(self.signer), plaintext.as_bytes())
@@ -754,7 +765,7 @@ impl<S: MlsStorage, Kind: GroupKind> Group<'_, S, Kind> {
     ///
     /// [`MlsError::Storage`], [`MlsError::Internal`].
     pub fn propose_leave(&mut self, rng: &mut impl CryptoRng) -> Result<MlsMessageBytes, MlsError> {
-        let provider = Provider::new(self.storage, InjectedRand::new(rng));
+        let provider = Provider::new(self.storage, InjectedRand::new(rng))?;
         let message = self
             .inner
             .leave_group(&provider, &leaf_signer(self.signer))
@@ -782,7 +793,7 @@ impl<S: MlsStorage, Kind: GroupKind> Group<'_, S, Kind> {
         let removed = removed_leaves(pending);
         let epoch = Epoch::new(pending.epoch().as_u64());
         let before = self.roster();
-        let provider = Provider::new(self.storage, NoRand);
+        let provider = Provider::new(self.storage, NoRand)?;
         self.inner
             .merge_pending_commit(&provider)
             .map_err(|_| provider.adapter().error_or(MlsError::Internal))?;
@@ -801,7 +812,7 @@ impl<S: MlsStorage, Kind: GroupKind> Group<'_, S, Kind> {
     ///
     /// [`MlsError::Storage`].
     pub fn discard_pending_commit(&mut self) -> Result<(), MlsError> {
-        let provider = Provider::new(self.storage, NoRand);
+        let provider = Provider::new(self.storage, NoRand)?;
         self.inner.clear_pending_commit(provider.storage())?;
         Ok(())
     }
@@ -858,7 +869,7 @@ impl<S: MlsStorage, Kind: GroupKind> Group<'_, S, Kind> {
         label: ExporterLabel,
         context: &[u8],
     ) -> Result<Zeroizing<[u8; 32]>, MlsError> {
-        let crypto = openmls_rust_crypto::RustCrypto::default();
+        let crypto = crate::provider::new_crypto()?;
         let secret = self
             .inner
             .export_secret(&crypto, label.label(), context, label.output_length())
@@ -874,7 +885,7 @@ impl<S: MlsStorage, Kind: GroupKind> Group<'_, S, Kind> {
             CommitBuilder<'builder, Initial>,
         ) -> CommitBuilder<'builder, Initial>,
     ) -> Result<Commit, MlsError> {
-        let provider = Provider::new(self.storage, InjectedRand::new(rng));
+        let provider = Provider::new(self.storage, InjectedRand::new(rng))?;
         stage_commit(
             &mut self.inner,
             &provider,
@@ -1109,7 +1120,7 @@ fn export_pending(
     label: ExporterLabel,
     context: &[u8],
 ) -> Result<Zeroizing<[u8; 32]>, MlsError> {
-    let crypto = openmls_rust_crypto::RustCrypto::default();
+    let crypto = crate::provider::new_crypto()?;
     let secret = pending
         .export_secret(&crypto, label.label(), context, label.output_length())
         .map_err(|_| MlsError::Internal)?;
@@ -1173,7 +1184,7 @@ fn parse_key_packages<S: MlsStorage>(
     key_packages: &[KeyPackageBytes],
     storage: &S,
 ) -> Result<Vec<KeyPackage>, MlsError> {
-    let provider = Provider::new(storage, NoRand);
+    let provider = Provider::new(storage, NoRand)?;
     key_packages
         .iter()
         .map(|bytes| parse_key_package(bytes, &provider))
@@ -1196,9 +1207,10 @@ pub struct KeyPackageInfo {
 /// # Errors
 ///
 /// [`MlsError::InvalidMessage`] for bytes that are not a valid KeyPackage of a supported
-/// suite, or whose signature key is not an Ed25519 key.
+/// suite, or whose signature key is not an Ed25519 key; [`MlsError::Internal`] if the crypto
+/// backend cannot start.
 pub fn inspect_key_package(key_package: &KeyPackageBytes) -> Result<KeyPackageInfo, MlsError> {
-    let crypto = openmls_rust_crypto::RustCrypto::default();
+    let crypto = crate::provider::new_crypto()?;
     let parsed = validate_key_package(key_package, &crypto)?;
     let signature_key = policy::leaf_account_key(parsed.leaf_node().signature_key().as_slice())
         .ok_or(MlsError::InvalidMessage)?;
