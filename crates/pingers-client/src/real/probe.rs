@@ -423,6 +423,35 @@ mod tests {
     }
 
     #[test]
+    fn each_failure_of_a_look_names_its_problem() {
+        use pingers_sync::Route;
+        let named = |error: SyncError| problem(&error);
+        assert!(matches!(
+            named(SyncError::NoRelay {
+                route: Route::Params
+            }),
+            ClientError::Server(ServerProblem::RelayUnreachable)
+        ));
+        for mismatch in [SyncError::RelayKeyMismatch, SyncError::PushRelayKeyMismatch] {
+            assert!(matches!(
+                named(mismatch),
+                ClientError::Server(ServerProblem::KeyMismatch)
+            ));
+        }
+        assert!(matches!(
+            named(SyncError::Status {
+                route: Route::Params,
+                status: 500
+            }),
+            ClientError::Server(ServerProblem::Unreachable)
+        ));
+        assert!(matches!(
+            named(SyncError::Store(pingers_store::StoreError::UnknownServer)),
+            ClientError::Internal
+        ));
+    }
+
+    #[test]
     fn relay_lists_compare_by_origin_whatever_their_order() -> TestResult {
         let url = |text: &str| RelayUrl::new(text.to_owned());
         let direct = [url("https://a.example/ohttp")?, url("https://b.example")?];
