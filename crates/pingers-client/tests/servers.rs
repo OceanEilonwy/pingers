@@ -295,12 +295,12 @@ async fn ana_on_both(world: &World) -> Result<(Device, PartyId, PartyId), TestEr
     ));
     assert!(matches!(
         ana.client
-            .submit_registration_code(b.clone(), SecretText::new("b-fiends".to_owned()))
+            .submit_registration_code(Some(b.clone()), SecretText::new("b-fiends".to_owned()))
             .await,
         Err(ClientError::RegistrationCodeRefused)
     ));
     ana.client
-        .submit_registration_code(b.clone(), SecretText::new(B_CODE.to_owned()))
+        .submit_registration_code(Some(b.clone()), SecretText::new(B_CODE.to_owned()))
         .await?;
     let on_b = ana.create_party(Some(b.clone()), "Book club").await?;
     // Looked at again, B is one this device already trusts.
@@ -322,7 +322,14 @@ async fn one_device_holds_parties_on_two_servers_with_their_own_pins() -> TestRe
     assert_eq!(config(on_a)?.keys, KeyTrust::BuiltIn);
     assert_eq!(config(on_b)?.origin, b);
     assert_eq!(config(on_b)?.keys, KeyTrust::Confirmed);
-    assert_eq!(config(on_b)?.server.operator.as_str(), "Server B");
+    assert_eq!(
+        config(on_b)?
+            .server
+            .operator
+            .as_ref()
+            .map(pingers_client::snapshot::Operator::as_str),
+        Some("Server B")
+    );
     // A uses the build's push relay; B its own, shown by its host.
     assert_eq!(config(on_a)?.push_relay.kind, PushRelayKind::Official);
     assert_eq!(

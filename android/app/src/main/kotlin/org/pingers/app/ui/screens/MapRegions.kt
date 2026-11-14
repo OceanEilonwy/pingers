@@ -1,15 +1,17 @@
 package org.pingers.app.ui.screens
 
-import android.text.format.Formatter
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -18,9 +20,13 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.pingers.app.Navigator
@@ -34,19 +40,20 @@ import org.pingers.app.maps.Manifest
 import org.pingers.app.maps.Maps
 import org.pingers.app.maps.RegionOffer
 import org.pingers.app.maps.updateAvailable
+import org.pingers.app.ui.E2eTags
 import org.pingers.app.ui.components.Card
 import org.pingers.app.ui.components.RowDivider
-import org.pingers.app.ui.components.SectionLabel
-import org.pingers.app.ui.components.Tag
 import org.pingers.app.ui.components.TopBar
 import org.pingers.app.ui.theme.Pc
 import org.pingers.app.ui.theme.body
+import uniffi.pingers.DownloadedMapsWords
 
 /*
- * The region picker: areas on offer from the map host chain, which host serves each, sizes,
- * what is on this phone and from which build. "This area" is worked out here from [around]
- * (the map the user came from, on this phone only); nothing about it is sent anywhere.
- * Updates are offered, never automatic.
+ * Downloaded maps (design canvas DownloadedMaps), the region picker: what is on this phone,
+ * the areas on offer from the map host chain, and what the host sees. Its words are
+ * pingers-words' (downloadedMapsWords, sizeWords, downloadingWords). "This area" is worked out
+ * here from [around] (the map the user came from, on this phone only); nothing about it is sent
+ * anywhere. Updates are offered, never automatic.
  */
 
 @Composable
@@ -55,51 +62,67 @@ fun MapRegionsScreen(maps: Maps, around: Coordinate?, nav: Navigator) {
     val catalog by maps.catalog.collectAsState()
     val installed by maps.installed.collectAsState()
     val downloads by maps.downloads.collectAsState()
-    Page(top = { TopBar(stringResource(R.string.maps_title), { nav.back() }, stringResource(R.string.cd_back)) }) {
-        Text(stringResource(R.string.maps_intro), style = body(14.sp, color = Pc.Body, lineHeight = 1.45f), modifier = Modifier.padding(top = 4.dp))
+    val settings by maps.settings.collectAsState()
+    val host = maps.primaryHost()
+    val words = uniffi.pingers.downloadedMapsWords(host.name, host.source.toFfi(), settings.throughRelay)
+    Page(top = { TopBar(words.title, { nav.back() }, words.back) }, spacing = 0) {
+        Text(words.intro, style = body(14.sp, color = Pc.Muted, lineHeight = 1.45f), modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 6.dp))
         val offers = (catalog as? CatalogState.Loaded)?.offers.orEmpty()
         val offered = offers.map { it.id }.toSet()
-        val here = around?.let { c -> offers.filter { o -> o.bbox()?.let { c in it } == true } }.orEmpty()
+        val here = around?.let { c -> offers.filter { o -> o.bbox()?.let { c in it } == true } }.orEmpty().map { it.id }.toSet()
         val mine = installed.map { it.id }.toSet()
-        if (here.isNotEmpty()) {
-            SectionLabel(stringResource(R.string.maps_this_area), Modifier.padding(top = 8.dp))
-            RegionCard(here, installed, downloads, maps, thisArea = true)
-        }
         val onPhone = installed.filter { it.id !in offered }
-        val installedOffers = offers.filter { it.id in mine && it !in here }
+        val installedOffers = offers.filter { it.id in mine }
         if (installedOffers.isNotEmpty() || onPhone.isNotEmpty()) {
-            SectionLabel(stringResource(R.string.maps_installed), Modifier.padding(top = 8.dp))
+            Heading(words.installed)
             Card {
                 installedOffers.forEachIndexed { i, offer ->
                     if (i > 0) RowDivider()
-                    RegionRow(offer, installed.firstOrNull { it.id == offer.id }, downloads[offer.id], maps, thisArea = false)
+                    RegionRow(offer, installed.firstOrNull { it.id == offer.id }, downloads[offer.id], maps, offer.id in here, words)
                 }
                 onPhone.forEachIndexed { i, m ->
                     if (i > 0 || installedOffers.isNotEmpty()) RowDivider()
-                    InstalledOnlyRow(m, maps)
+                    InstalledOnlyRow(m, maps, words)
                 }
             }
         }
         when (val c = catalog) {
             CatalogState.Idle, CatalogState.Loading ->
-                Text(stringResource(R.string.maps_loading), style = body(14.sp, color = Pc.Muted), modifier = Modifier.padding(top = 8.dp))
+                Text(stringResource(R.string.maps_loading), style = body(14.sp, color = Pc.Muted), modifier = Modifier.padding(start = 4.dp, top = 20.dp))
             is CatalogState.Loaded -> {
-                val rest = c.offers.filter { it.id !in mine && it !in here }
+                // "This area" first, then the rest by group.
+                val rest = c.offers.filter { it.id !in mine }.sortedByDescending { it.id in here }
                 rest.groupBy { it.entry.group }.forEach { (group, inGroup) ->
-                    SectionLabel(group ?: stringResource(R.string.maps_available), Modifier.padding(top = 8.dp))
-                    RegionCard(inGroup, installed, downloads, maps, thisArea = false)
+                    Heading(group ?: words.available)
+                    Card {
+                        inGroup.forEachIndexed { i, offer ->
+                            if (i > 0) RowDivider()
+                            RegionRow(offer, null, downloads[offer.id], maps, offer.id in here, words)
+                        }
+                    }
                 }
                 if (c.relayUnavailable) {
-                    Text(stringResource(R.string.maps_failed_relay), style = body(14.sp, color = Pc.OrangeText, lineHeight = 1.45f))
+                    Text(stringResource(R.string.maps_failed_relay), style = body(14.sp, color = Pc.OrangeText, lineHeight = 1.45f), modifier = Modifier.padding(top = 12.dp))
                 } else if (c.offers.isEmpty()) {
-                    Text(stringResource(R.string.maps_none), style = body(14.sp, color = Pc.Muted, lineHeight = 1.45f))
+                    Text(stringResource(R.string.maps_none), style = body(14.sp, color = Pc.Muted, lineHeight = 1.45f), modifier = Modifier.padding(top = 12.dp))
                 }
-                c.failedHosts.forEach { host ->
-                    Text(stringResource(R.string.maps_host_failed, host.name), style = body(12.sp, color = Pc.Muted))
+                c.failedHosts.forEach { failed ->
+                    Text(stringResource(R.string.maps_host_failed, failed.name), style = body(12.sp, color = Pc.Muted), modifier = Modifier.padding(top = 6.dp))
                 }
             }
         }
+        Card(Modifier.padding(top = 20.dp), padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
+            Text(words.hostTitle, style = body(15.sp, 600))
+            Text(words.hostDetail, style = body(13.sp, color = Pc.Muted, lineHeight = 1.45f), modifier = Modifier.padding(top = 6.dp))
+        }
+        Note(words.attribution, size = 12)
     }
+}
+
+private fun org.pingers.app.maps.MapHostSource.toFfi() = when (this) {
+    org.pingers.app.maps.MapHostSource.UserOverride -> uniffi.pingers.MapHostSource.USER_OVERRIDE
+    org.pingers.app.maps.MapHostSource.Server -> uniffi.pingers.MapHostSource.SERVER
+    org.pingers.app.maps.MapHostSource.Publisher -> uniffi.pingers.MapHostSource.PUBLISHER
 }
 
 private fun RegionOffer.bbox() = when (val e = entry) {
@@ -107,74 +130,86 @@ private fun RegionOffer.bbox() = when (val e = entry) {
     is CatalogEntry.OnDemand -> e.bbox
 }
 
-@Composable
-private fun RegionCard(offers: List<RegionOffer>, installed: List<Manifest>, downloads: Map<String, DownloadState>, maps: Maps, thisArea: Boolean) {
-    Card {
-        offers.forEachIndexed { i, offer ->
-            if (i > 0) RowDivider()
-            RegionRow(offer, installed.firstOrNull { it.id == offer.id }, downloads[offer.id], maps, thisArea)
-        }
-    }
-}
+private fun Manifest.bytes() = (pack.size + index.size).coerceAtLeast(0).toULong()
 
 @Composable
-private fun RegionRow(offer: RegionOffer, installed: Manifest?, download: DownloadState?, maps: Maps, thisArea: Boolean) {
-    val context = LocalContext.current
-    val size = (offer.entry as? CatalogEntry.Ready)?.manifest?.let { Formatter.formatShortFileSize(context, it.pack.size + it.index.size) }
+private fun RegionRow(offer: RegionOffer, installed: Manifest?, download: DownloadState?, maps: Maps, thisArea: Boolean, words: DownloadedMapsWords) {
+    val size = (offer.entry as? CatalogEntry.Ready)?.manifest?.let { uniffi.pingers.sizeWords(it.bytes()) }
+        ?: installed?.let { uniffi.pingers.sizeWords(it.bytes()) }
         ?: stringResource(R.string.maps_prepared_on_request)
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    val update = installed != null && updateAvailable(installed, offer)
+    val busy = download is DownloadState.Running || download is DownloadState.Preparing
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(if (update) 4.dp else 2.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(offer.entry.name, style = body(16.sp, 600))
-                    if (thisArea) Tag(stringResource(R.string.maps_this_area), Pc.BlueDark, Pc.BlueTint)
+                    if (thisArea) Chip(words.thisArea, Pc.Body, Pc.Chip)
                 }
-                Text("$size · " + stringResource(R.string.maps_from_host, offer.host.name), style = body(13.sp, color = Pc.Muted))
-                if (installed != null) {
-                    Text(stringResource(R.string.maps_data_from, installed.buildDate), style = body(13.sp, color = Pc.Muted))
-                    if (updateAvailable(installed, offer)) Text(stringResource(R.string.maps_update_available), style = body(13.sp, 600, Pc.OrangeText))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val line = (download as? DownloadState.Running)?.let { uniffi.pingers.downloadingWords(it.done.toULong(), it.total.toULong()) } ?: size
+                    Text(line, style = body(13.sp, color = Pc.Muted))
+                    if (update && !busy) Chip(words.updateAvailable, Pc.BlueDark, Pc.BlueTint)
                 }
             }
             when {
-                download is DownloadState.Running || download is DownloadState.Preparing -> {}
-                installed == null -> Action(stringResource(if (download is DownloadState.Failed) R.string.maps_retry else R.string.maps_download)) { maps.download(offer) }
-                updateAvailable(installed, offer) -> Action(stringResource(R.string.maps_update)) { maps.download(offer) }
-                else -> Action(stringResource(R.string.maps_delete), destructive = true) { maps.delete(offer.id) }
+                busy -> {}
+                installed == null -> RowButton(words.download, Pc.Ink, outlined = true) { maps.download(offer) }
+                update -> RowButton(words.update, Color.White, outlined = false) { maps.download(offer) }
+                else -> RowButton(words.delete, Pc.Red, outlined = true) { maps.delete(offer.id) }
             }
         }
-        DownloadLine(download)
+        DownloadLine(download, offer.entry.name)
     }
 }
 
 @Composable
-private fun InstalledOnlyRow(manifest: Manifest, maps: Maps) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun InstalledOnlyRow(manifest: Manifest, maps: Maps, words: DownloadedMapsWords) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(manifest.name, style = body(16.sp, 600))
-            Text(stringResource(R.string.maps_data_from, manifest.buildDate), style = body(13.sp, color = Pc.Muted))
+            Text(uniffi.pingers.sizeWords(manifest.bytes()), style = body(13.sp, color = Pc.Muted))
         }
-        Action(stringResource(R.string.maps_delete), destructive = true) { maps.delete(manifest.id) }
+        RowButton(words.delete, Pc.Red, outlined = true) { maps.delete(manifest.id) }
     }
 }
 
 @Composable
-private fun DownloadLine(download: DownloadState?) {
-    val context = LocalContext.current
+private fun Chip(text: String, color: Color, background: Color) {
+    Text(
+        text, style = body(12.sp, 600, color),
+        modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(background).padding(horizontal = 8.dp, vertical = 2.dp),
+    )
+}
+
+/** Update (blue), Delete (outlined, red) and Download (outlined). */
+@Composable
+private fun RowButton(text: String, content: Color, outlined: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(20.dp)
+    Box(
+        Modifier
+            .height(40.dp)
+            .clip(shape)
+            .background(if (outlined) Pc.Card else Pc.Blue)
+            .then(if (outlined) Modifier.border(1.dp, Pc.Handle, shape) else Modifier)
+            .clickable(role = Role.Button, onClick = onClick)
+            .testTag(E2eTags.MAPS_ACTION)
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(text, style = body(14.sp, 600, content)) }
+}
+
+@Composable
+private fun DownloadLine(download: DownloadState?, name: String) {
     when (download) {
-        is DownloadState.Running -> {
-            LinearProgressIndicator(
-                progress = { if (download.total > 0) download.done.toFloat() / download.total else 0f },
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                color = Pc.Blue,
-                trackColor = Pc.Line,
-            )
-            Text(
-                stringResource(R.string.maps_downloading, Formatter.formatShortFileSize(context, download.done), Formatter.formatShortFileSize(context, download.total)),
-                style = body(12.sp, color = Pc.Muted),
-            )
-        }
+        is DownloadState.Running -> LinearProgressIndicator(
+            progress = { if (download.total > 0) download.done.toFloat() / download.total else 0f },
+            modifier = Modifier.fillMaxWidth().height(6.dp).semantics { contentDescription = name },
+            color = Pc.Blue,
+            trackColor = Pc.Line,
+        )
         is DownloadState.Preparing -> {
-            LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 4.dp), color = Pc.Blue, trackColor = Pc.Line)
+            LinearProgressIndicator(Modifier.fillMaxWidth().height(6.dp), color = Pc.Blue, trackColor = Pc.Line)
             Text(stringResource(R.string.maps_preparing, download.seconds), style = body(12.sp, color = Pc.Muted))
         }
         is DownloadState.Failed -> Text(
@@ -190,14 +225,6 @@ private fun DownloadLine(download: DownloadState?) {
         )
         null -> {}
     }
-}
-
-@Composable
-private fun Action(text: String, destructive: Boolean = false, onClick: () -> Unit) {
-    Box(
-        Modifier.heightIn(min = 48.dp).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) { Text(text, style = body(15.sp, 600, if (destructive) Pc.OrangeText else Pc.Blue)) }
 }
 
 /** The Maps rows for Advanced: the host in use, an override, the relay setting and the picker. */

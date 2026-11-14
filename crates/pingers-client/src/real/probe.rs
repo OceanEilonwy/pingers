@@ -65,7 +65,7 @@ struct Looked {
 /// # Errors
 ///
 /// [`ServerProblem::InvalidAddress`].
-pub(crate) fn server_address(text: &str) -> Result<ServerId, ClientError> {
+pub fn server_address(text: &str) -> Result<ServerId, ClientError> {
     let trimmed = text.trim().trim_end_matches('/');
     let origin = if trimmed.contains("://") {
         trimmed.to_owned()

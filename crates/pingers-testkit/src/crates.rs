@@ -17,7 +17,7 @@ use pingers_client::ports::{
 };
 use pingers_client::snapshot::{
     DailyWindow, HideTrail, InviteLink, InviteUrl, Name, PauseInFocus, QuietHoursPreference,
-    RelayStatus, Settings, SnapshotError, Toggle, WakePushes,
+    RelayStatus, SafetyCode, Settings, SnapshotError, Toggle, WakePushes,
 };
 use pingers_client::{ClientError, Crates, PushTokens, Unavailable};
 use pingers_gate::{FocusState, GateDecision, GateError, LocationSharing, MinuteOfDay};
@@ -72,13 +72,15 @@ pub enum CrateCall {
     SaveSpot(PartyId, SpotDraft),
     DeleteSpot(PartyId, SpotId),
     SetAlwaysAllow(PartyId, LeafIndex, AllowListChange),
+    SafetyCode(PartyId, LeafIndex),
+    MarkChecked(PartyId, LeafIndex),
     PushTokensChanged(Option<PushTokens>),
     SetWakePushes(WakePushes, Option<PushTokens>),
     CheckReachability,
     ProbeServer(String),
     TrustServer(ServerId),
-    /// The code itself is not recorded: it is a credential.
-    SubmitRegistrationCode(ServerId),
+    /// The server (`None`: built in) and the code, exposed: the fake keeps no secrets.
+    SubmitRegistrationCode(Option<ServerId>, String),
     Wake(WakeInput),
     ChangeSetting(SettingChange),
     SendChat(GroupId, ChatBody, Option<ChatMessageId>),
@@ -111,6 +113,9 @@ struct State {
 impl FakeCrates {
     /// The id every `create_party` returns.
     pub const PARTY: PartyId = PartyId::from_bytes([0xa1; 16]);
+    /// The code every `safety_code` returns.
+    pub const SAFETY_CODE: &str =
+        "48210 93755 12064 38817 70459 21386 66102 94573 15028 83941 57260 30694";
     /// The id every `save_spot` returns.
     pub const SPOT: SpotId = SpotId::from_bytes([0xb2; 16]);
     /// The id every `send_chat` returns.
@@ -359,6 +364,27 @@ impl PartiesPort for FakeCrates {
         self.answer(CrateName::Parties, call, ())
     }
 
+    async fn safety_code(
+        &self,
+        party: PartyId,
+        member: LeafIndex,
+    ) -> Result<SafetyCode, ClientError> {
+        let code = SafetyCode::new(Self::SAFETY_CODE).map_err(|_invalid| ClientError::Internal)?;
+        self.answer(
+            CrateName::Parties,
+            CrateCall::SafetyCode(party, member),
+            code,
+        )
+    }
+
+    async fn mark_checked(&self, party: PartyId, member: LeafIndex) -> Result<(), ClientError> {
+        self.answer(
+            CrateName::Parties,
+            CrateCall::MarkChecked(party, member),
+            (),
+        )
+    }
+
     async fn section(&self) -> Result<PartiesSection, ClientError> {
         self.section(CrateName::Parties, |state| state.parties.clone())
     }
@@ -398,14 +424,11 @@ impl SyncPort for FakeCrates {
 
     async fn submit_registration_code(
         &self,
-        server: ServerId,
-        _code: SecretText,
+        server: Option<ServerId>,
+        code: SecretText,
     ) -> Result<(), ClientError> {
-        self.answer(
-            CrateName::Sync,
-            CrateCall::SubmitRegistrationCode(server),
-            (),
-        )
+        let call = CrateCall::SubmitRegistrationCode(server, code.expose().to_owned());
+        self.answer(CrateName::Sync, call, ())
     }
 
     async fn section(&self) -> Result<ServerSection, ClientError> {

@@ -81,6 +81,22 @@ object PIcons {
     )
     val Send = icon("send", 2.2f, "M12 19V5M5 12l7-7 7 7")
 
+    // Section 4: settings, wake-ups, notices, Party settings.
+    /** A bell struck through: wake-ups off or failing. */
+    val BellOff = icon(
+        "bell-off", 2f, "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9", "M10.3 21a1.9 1.9 0 0 0 3.4 0", "M3 3l18 18",
+    )
+    /** A shield with an exclamation mark: reduced privacy, a relay key that changed. */
+    val ShieldAlert = icon("shield-alert", 2.2f, SHIELD, "M12 8v4.5M12 16h.01")
+    /** An exclamation mark in a circle: an error or a warning line. */
+    val AlertCircle = icon("alert-circle", 2.2f, circle(12f, 12f, 9f), "M12 7.5v5.5M12 16.5h.01")
+    /** A person and a minus: leaving a Party. */
+    val PersonMinus = icon("person-minus", 2f, circle(10f, 8f, 3.5f), "M3.5 20c.8-3.5 3.4-5.5 6.5-5.5s5.7 2 6.5 5.5M16 11h6")
+    /** The chain link of "This server needs a code". */
+    val LinkSmall = icon(
+        "link-small", 2f, "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1", "M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
+    )
+
     /** The filled green tick in a circle ("reachable", "joined"). */
     val CheckCircle: ImageVector = ImageVector.Builder("check-circle", 24.dp, 24.dp, 24f, 24f).apply {
         addPath(addPathNodes(circle(12f, 12f, 11f)), fill = SolidColor(Color(0xFF1F8A4C)))

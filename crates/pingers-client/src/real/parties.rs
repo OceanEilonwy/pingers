@@ -16,7 +16,7 @@ use pingers_parties::{
     RelayChoice, SpotEdit, SpotShape,
 };
 use pingers_proto::{LeafIndex, MailboxId, PartyId, ServerId, SpotId};
-use pingers_store::{MemberName, Party as StoredParty, PartyName, Session, SpotName};
+use pingers_store::{MemberName, Party as StoredParty, PartyName, Session, SpotName, Verification};
 use pingers_time::Clock;
 
 use super::Backend;
@@ -28,8 +28,8 @@ use crate::ports::{
 };
 use crate::snapshot::{
     Host, Hosting, Invite, InviteLink, InviteStatus, InviteUrl, JoinRequest, Joining, KeyTrust, Me,
-    Member, Name, Operator, Party, PartyColour, PartyConfig, PostQuantum, PushRelay, PushRelayKind,
-    RelayStatus, SafetyCode, Service, Spot,
+    Member, Name, Party, PartyColour, PartyConfig, PostQuantum, PushRelay, PushRelayKind,
+    RelayStatus, SafetyCheck, SafetyCode, Service, Spot,
 };
 use crate::{ClientError, Unavailable};
 
@@ -307,6 +307,30 @@ impl PartiesPort for Parties {
             .await
     }
 
+    async fn safety_code(
+        &self,
+        party: PartyId,
+        member: LeafIndex,
+    ) -> Result<SafetyCode, ClientError> {
+        self.backend
+            .store(move |session, clock, _rng| {
+                let code = PartyLifecycle::new(session, clock).safety_code(&party, member)?;
+                SafetyCode::new(&code.to_string()).map_err(|_invalid| corrupt())
+            })
+            .await
+    }
+
+    /// The code this device computes is the one the user compared, so it is entered as is.
+    async fn mark_checked(&self, party: PartyId, member: LeafIndex) -> Result<(), ClientError> {
+        self.backend
+            .store(move |session, clock, _rng| {
+                let lifecycle = PartyLifecycle::new(session, clock);
+                let code = lifecycle.safety_code(&party, member)?;
+                Ok(lifecycle.verify_member(&party, member, &code)?)
+            })
+            .await
+    }
+
     async fn section(&self) -> Result<PartiesSection, ClientError> {
         let links: HashMap<PartyId, InviteLink> = self
             .links()
@@ -373,6 +397,10 @@ fn party(
                 me: match entry.is_self {
                     Myself::Yes => Me::Me,
                     Myself::No => Me::Other,
+                },
+                checked: match entry.verification {
+                    Verification::Verified => SafetyCheck::Checked,
+                    Verification::Unverified => SafetyCheck::NotChecked,
                 },
             }))
         })
@@ -474,20 +502,17 @@ fn code_of(code: JoinCode) -> Result<SafetyCode, ClientError> {
 /// Who runs what for a Party, from what its server's link knows: the server's declared
 /// operator (once its `/v1/params` were read in this process), the relay this device uses for
 /// it and whether it answered, the push relay, and how the server's keys were trusted.
-/// Relays declare no operator, so theirs reads "undeclared", as does any operator not known
-/// yet. Hosting is not declared by servers either: every server shows as public.
+/// Relays declare no operator, so theirs stays unknown, as does any operator not read yet.
+/// Hosting is not declared by servers either: every server shows as public.
 fn config(settings: &PartySettings, view: Option<&ServerView>) -> Result<PartyConfig, ClientError> {
     let origin = settings.server.as_str();
     let host = Host::new(origin.strip_prefix("https://").unwrap_or(origin))
         .map_err(|_invalid| corrupt())?;
-    let undeclared = Operator::new("undeclared").map_err(|_invalid| corrupt())?;
-    let known =
-        |operator: Option<&Operator>| operator.cloned().unwrap_or_else(|| undeclared.clone());
     Ok(PartyConfig {
         origin: settings.server.clone(),
         server: Service {
             host: host.clone(),
-            operator: known(view.and_then(|view| view.server_operator.as_ref())),
+            operator: view.and_then(|view| view.server_operator.clone()),
         },
         relay_status: view.map_or(RelayStatus::Unreachable, |view| view.relay_status),
         keys: view.map_or(KeyTrust::FromInvite, |view| view.keys),
@@ -496,11 +521,12 @@ fn config(settings: &PartySettings, view: Option<&ServerView>) -> Result<PartyCo
             host: view
                 .and_then(|view| view.relay_host.clone())
                 .unwrap_or(host),
-            operator: undeclared.clone(),
+            operator: None,
         },
         push_relay: PushRelay {
             kind: view.map_or(PushRelayKind::Official, |view| view.push_relay_kind.clone()),
-            operator: known(view.and_then(|view| view.push_relay_operator.as_ref())),
+            operator: view.and_then(|view| view.push_relay_operator.clone()),
+            host: view.and_then(|view| view.push_relay_host.clone()),
         },
         post_quantum: match settings.post_quantum {
             PartiesPostQuantum::QuantumResistant => PostQuantum::On,

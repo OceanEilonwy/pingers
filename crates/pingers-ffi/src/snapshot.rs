@@ -18,8 +18,8 @@ use crate::views::{
     AdvancedView, AnswerDraft, AskedToJoinView, ChatView, CoPresenceAlert, CompassSelection,
     CompassView, DrawAreaView, ExclusionZonesView, HomeView, InviteView, JoinRequestView,
     LetInView, LocationRequestView, MeetPointDraft, MeetPointView, MeetupEndedView, MeetupView,
-    NewPartyView, OpenInviteView, PartyDraft, PartyView, PrivacyView, ServerSeesView, SpotDraft,
-    SpotEditorView, YourNameView,
+    NewPartyView, OpenInviteView, PartyDraft, PartyView, PendingJoinView, PrivacyView,
+    ServerSeesView, SpotDraft, SpotEditorView, YourNameView,
 };
 
 /// The device's clock, for screens that print times or count down.
@@ -52,8 +52,8 @@ impl Snapshot {
         Arc::new(Self(snapshot))
     }
 
-    /// The client's snapshot, for the exports in other modules.
-    pub(crate) fn client_snapshot(&self) -> &ClientSnapshot {
+    /// The client's snapshot, for the screens in other modules.
+    pub(crate) fn client(&self) -> &ClientSnapshot {
         &self.0
     }
 }
@@ -143,6 +143,14 @@ impl Snapshot {
     #[must_use]
     pub fn asked_to_join(&self) -> Option<AskedToJoinView> {
         screens::invite::asked_to_join(&self.0).map(Into::into)
+    }
+
+    /// The row at the top of Home while a join request waits; `None` once let in or withdrawn.
+    #[must_use]
+    pub fn pending_join(&self) -> Option<PendingJoinView> {
+        screens::invite::asked_to_join(&self.0)
+            .as_ref()
+            .map(Into::into)
     }
 
     /// You're in, once this device was let in and until `Core::dismiss_join`.
@@ -452,13 +460,30 @@ mod tests {
     }
 
     #[test]
+    fn home_shows_the_pending_join_with_the_codes_first_group() -> Result<(), CoreError> {
+        let pending = snapshot()?
+            .pending_join()
+            .ok_or_else(|| CoreError::invalid("no pending join"))?;
+        assert_eq!(pending.title, "Waiting to be let in");
+        assert_eq!(pending.code_start, "4821");
+        Ok(())
+    }
+
+    #[test]
     fn join_screens_carry_their_codes_and_words() -> Result<(), CoreError> {
         let asked = snapshot()?
             .asked_to_join()
             .ok_or_else(|| CoreError::invalid("not asked"))?;
         assert_eq!(asked.code, "4821 0937 5512");
         assert_eq!(asked.withdraw, "Withdraw request");
-        assert_eq!(snapshot()?.open_invite().name, "Sam");
+        assert_eq!(
+            snapshot()?
+                .open_invite()
+                .join_as
+                .map(|join_as| join_as.title)
+                .as_deref(),
+            Some("You'll join as Sam")
+        );
         let request = snapshot()?.join_request(
             &fixtures::climbing_crew().into(),
             &fixtures::ben_request().into(),

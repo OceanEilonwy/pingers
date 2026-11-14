@@ -25,8 +25,8 @@ use crate::snapshot::{
     ExclusionZone, HideTrail, Hosting, Invite, InviteLink, InviteStatus, InviteUrl, JoinRequest,
     Joining, KeyTrust, LocationRequest, MeetPlace, MeetPointSnapshot, Meetup, MeetupPeer,
     MeetupSelf, Member, OwnPosition, Party, PartyConfig, PauseInFocus, PeerAccess, PostQuantum,
-    PushRelay, PushRelayKind, QuietHoursPreference, RelayStatus, SafetyCode, Service, Settings,
-    Spot, Toggle, WakePushes, ZoneId, ZoneParties, ZoneSchedule, ZoneTimes,
+    PushRelay, PushRelayKind, QuietHoursPreference, RelayStatus, SafetyCheck, SafetyCode, Service,
+    Settings, Spot, Toggle, WakePushes, ZoneId, ZoneParties, ZoneSchedule, ZoneTimes,
 };
 
 /// Why a fixture could not be built (it always can; the constructors are fallible).
@@ -207,6 +207,12 @@ fn members(names: &[&str], me_at: u32) -> Result<Vec<Member>, ScreenError> {
             leaf: LeafIndex::new(leaf),
             name: name(text)?,
             me: if leaf == me_at { Me::Me } else { Me::Other },
+            // The canvas: Ben and Chloé compared safety codes with this device.
+            checked: if matches!(*text, "Ben" | "Chloé") {
+                SafetyCheck::Checked
+            } else {
+                SafetyCheck::NotChecked
+            },
         });
     }
     Ok(members)
@@ -230,18 +236,19 @@ pub fn full_privacy_config() -> Result<PartyConfig, ScreenError> {
             .map_err(|_invalid| ScreenError::InvalidHost)?,
         server: Service {
             host: Host::new("pingers.flat7.org")?,
-            operator: Operator::new("Flat 7")?,
+            operator: Some(Operator::new("Flat 7")?),
         },
         relay_status: RelayStatus::Reachable,
         keys: KeyTrust::Confirmed,
         hosting: Hosting::SelfHosted,
         relay: Service {
             host: Host::new("relay.quietpath.net")?,
-            operator: Operator::new("Quietpath")?,
+            operator: Some(Operator::new("Quietpath")?),
         },
         push_relay: PushRelay {
             kind: PushRelayKind::Official,
-            operator: Operator::new("Pingers")?,
+            operator: Some(Operator::new("Pingers")?),
+            host: Some(Host::new("push.pingers.org")?),
         },
         post_quantum: PostQuantum::Off,
     })

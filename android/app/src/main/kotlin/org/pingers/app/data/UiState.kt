@@ -2,12 +2,20 @@ package org.pingers.app.data
 
 import kotlin.math.PI
 import kotlin.math.cos
+import uniffi.pingers.AdvancedText
+import uniffi.pingers.JoinAs
+import uniffi.pingers.NewPartyText
+import uniffi.pingers.ServerChoice
 
 /*
  * What each screen shows: one plain data class per screen, no behaviour. They follow the
  * view models of the Rust crate pingers-screens field for field (typed ids, coordinates,
  * enums, the can* and problem fields), so CoreRepository maps the generated UniFFI records
  * onto them one to one and FakeRepository fills them with the canvas's example.
+ *
+ * The screens of the canvas's section 4 (Settings, Wake-ups, notices, Party settings and the
+ * rest) take pingers-ffi's records as they are instead: they are words and flags only, written
+ * by pingers-words, so a copy here would add nothing.
  *
  * Positions are WGS84 coordinates. The placeholder map still draws in its own units (the
  * canvas's 390-wide artboard); each map screen carries a MapFrame that places coordinates
@@ -139,6 +147,14 @@ data class NewPartyState(
     val canCreate: Boolean,
     /** Why the last Create failed, worded by the core. */
     val error: String? = null,
+    /** The app's own server, or another one typed in. */
+    val serverChoice: ServerChoice = ServerChoice.BUILT_IN,
+    /** Another server's key to compare, once looked up, or "Keys trusted". */
+    val keysLine: String? = null,
+    /** "Trust this server's keys", while its keys wait for the user. */
+    val keysTrust: String? = null,
+    /** Every word on the screen (pingers-words); null until the core has answered. */
+    val text: NewPartyText? = null,
 )
 
 enum class Reachability { Checking, Reachable, Unreachable }
@@ -154,7 +170,27 @@ data class AdvancedState(
     val relayCheck: Reachability,
     val pushRelay: PushRelayChoice,
     val postQuantum: Boolean,
+    val serverChoice: ServerChoice = ServerChoice.BUILT_IN,
+    /** The app's own server, as the build names it. */
+    val builtIn: String = "",
+    /** Every word on the screen (pingers-words); null until the core has answered. */
+    val text: AdvancedText? = null,
 )
+
+/** How Create party ended, for New party and "This server needs a code" to route. */
+enum class CreateOutcome {
+    /** Made: on to Invite people. */
+    Created,
+
+    /** The chosen server asks for a registration code: "This server needs a code". */
+    CodeNeeded,
+
+    /** The code typed was refused: stay, with the refusal shown. */
+    CodeRefused,
+
+    /** Anything else; the screen shows why. */
+    Failed,
+}
 
 sealed interface Invitation {
     val id: InviteId
@@ -178,9 +214,11 @@ data class OpenInviteState(
     val subtitle: String,
     val whatJoiningMeans: String,
     val points: List<String>,
+    /** "You'll join as Ben · Change", once a name is set; the name field shows only without it. */
+    val joinAs: JoinAs?,
+    /** "Your name": what is typed here becomes Your name. */
     val nameLabel: String,
-    /** The name to prefill. */
-    val name: String,
+    val nameHelp: String,
     val ask: String,
     val notNow: String,
     /** Why the last "Ask to join" failed, if it did. */
@@ -249,6 +287,10 @@ data class PartyState(
     val server: String,
     val privacy: PrivacyLevel,
     val meetup: MeetupId?,
+    /** The bottom row: "pingers.flat7.org · Full privacy", in the core's words. */
+    val settingsRow: String = "",
+    /** "Party settings: server, invites, leave". */
+    val settingsDetail: String = "",
 )
 
 // ---------------------------------------------------------------- Spots and privacy

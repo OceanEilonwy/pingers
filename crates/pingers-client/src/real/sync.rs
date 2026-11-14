@@ -807,9 +807,18 @@ impl SyncPort for Sync {
     /// [`ClientError::RegistrationCodeRefused`], distinct from a server that is not reached.
     async fn submit_registration_code(
         &self,
-        server: ServerId,
+        server: Option<ServerId>,
         code: SecretText,
     ) -> Result<(), ClientError> {
+        let server = match server {
+            Some(server) => server,
+            None => self
+                .0
+                .servers
+                .built_in()
+                .cloned()
+                .ok_or(Unavailable::Sync)?,
+        };
         self.0
             .link(&server)
             .await?

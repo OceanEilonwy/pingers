@@ -15,6 +15,7 @@ use std::sync::Arc;
 use pingers_client::ports::{self, Foreground, GeofenceTransition};
 use pingers_client::{Client, ClientConfig, ClientError};
 use pingers_screens as screens;
+use pingers_words::Language;
 
 use crate::CoreError;
 use crate::callbacks::{Events, EventsAdapter, Platform, PlatformAdapter};
@@ -33,6 +34,19 @@ impl From<ClientError> for CoreError {
     fn from(error: ClientError) -> Self {
         if let Some(issue) = crate::servers::ServerIssue::of(&error) {
             return issue.error();
+        }
+        match &error {
+            ClientError::RegistrationCodeRequired => {
+                return Self::CodeNeeded {
+                    reason: pingers_words::errors::code_needed(Language::English),
+                };
+            }
+            ClientError::RegistrationCodeRefused => {
+                return Self::CodeRefused {
+                    reason: pingers_words::errors::code_refused(Language::English),
+                };
+            }
+            _ => {}
         }
         let reason = match &error {
             // Say what the call waits for, so the app's log names the missing piece.
@@ -57,9 +71,6 @@ impl From<ClientError> for CoreError {
 /// A new Party, as New party has it.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct NewPartyDraft {
-    /// The server it lives on: `None` for the built-in server, or the origin of one this
-    /// device trusts (`probe_server` then `trust_server`, or an invite).
-    pub server: Option<String>,
     /// The Party's name.
     pub name: String,
     /// The name this device's user goes by in it.
@@ -68,6 +79,12 @@ pub struct NewPartyDraft {
     pub colour: PartyColour,
     /// Whether it uses the X-Wing suite.
     pub post_quantum: bool,
+    /// "Another server", by host or origin; `None` for the app's own server. It must be one
+    /// this device trusts: `probe_server`, then `trust_server` ("Trust this server's keys"),
+    /// or an invite.
+    pub other_server: Option<String>,
+    /// A registration code the user typed ("This server needs a code").
+    pub registration_code: Option<String>,
 }
 
 impl TryFrom<NewPartyDraft> for ports::PartyDraft {
@@ -75,7 +92,13 @@ impl TryFrom<NewPartyDraft> for ports::PartyDraft {
 
     fn try_from(draft: NewPartyDraft) -> Result<Self, CoreError> {
         Ok(Self {
-            server: draft.server.map(crate::servers::server_id).transpose()?,
+            server: draft
+                .other_server
+                .as_deref()
+                .map(str::trim)
+                .filter(|address| !address.is_empty())
+                .map(pingers_client::server_address)
+                .transpose()?,
             name: pingers_client::snapshot::Name::new(&draft.name)?,
             my_name: pingers_client::snapshot::Name::new(&draft.my_name)?,
             colour: draft.colour.into(),
@@ -364,13 +387,69 @@ impl Core {
         Snapshot::new(self.client.snapshot())
     }
 
-    /// Creates a Party.
+    /// Creates a Party, on the app's server or on another one this device trusts, with the
+    /// registration code the user typed if the server asked for one.
     ///
     /// # Errors
     ///
-    /// [`CoreError::Invalid`] for an empty name; [`CoreError::Network`].
+    /// [`CoreError::Invalid`] for an empty name; [`CoreError::CodeNeeded`] or
+    /// [`CoreError::CodeRefused`]; [`CoreError::Server`] for an address that is not one, or a
+    /// server whose keys were not trusted (`NotLookedAt`); [`CoreError::Network`].
     pub async fn create_party(&self, draft: NewPartyDraft) -> Result<PartyId, CoreError> {
-        Ok(self.client.create_party(draft.try_into()?).await?.into())
+        let code = draft
+            .registration_code
+            .as_deref()
+            .map(str::trim)
+            .filter(|code| !code.is_empty())
+            .map(|code| pingers_proto::SecretText::new(code.to_owned()));
+        let draft: ports::PartyDraft = draft.try_into()?;
+        // A typed code goes to the chosen server first; refused, no Party is created.
+        if let Some(code) = code {
+            self.client
+                .submit_registration_code(draft.server.clone(), code)
+                .await?;
+        }
+        Ok(self.client.create_party(draft).await?.into())
+    }
+
+    /// The safety code between this device and a member (Safety codes): twelve groups of
+    /// five digits.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Invalid`] for an id that is not one; [`CoreError::Network`] for a Party
+    /// or member this device does not hold.
+    pub async fn safety_code(&self, party: PartyId, member: MemberId) -> Result<String, CoreError> {
+        let code = self
+            .client
+            .safety_code((&party).try_into()?, member.into())
+            .await?;
+        Ok(code.as_str().to_owned())
+    }
+
+    /// Marks a member checked once the codes matched ("Codes match · Mark Ana as checked").
+    ///
+    /// # Errors
+    ///
+    /// As [`Core::safety_code`].
+    pub async fn mark_checked(&self, party: PartyId, member: MemberId) -> Result<(), CoreError> {
+        Ok(self
+            .client
+            .mark_checked((&party).try_into()?, member.into())
+            .await?)
+    }
+
+    /// Deletes an exclusion zone ("Delete zone").
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::NotFound`] for a zone that is gone; [`CoreError::Storage`].
+    pub async fn delete_zone(&self, zone: ZoneId) -> Result<(), CoreError> {
+        let zones = screens::zones::without(&self.client.snapshot(), zone.into())?;
+        Ok(self
+            .client
+            .change_setting(ports::SettingChange::Zones(zones))
+            .await?)
     }
 
     /// Makes an invite link for a Party; returns the link.
@@ -1008,7 +1087,10 @@ mod tests {
         let server = pingers_proto::ServerId::new("https://b.example".to_owned())?;
         assert!(matches!(
             core.probe_server("b.example".into()).await,
-            Err(CoreError::Unavailable { .. })
+            Err(CoreError::Server {
+                issue: crate::ServerIssue::NotLookedAt,
+                ..
+            })
         ));
         fakes.set_probe(Some(pingers_client::ServerProbe {
             server: server.clone(),
@@ -1040,22 +1122,33 @@ mod tests {
             })
         ));
 
-        let before = fakes.calls().len();
+        // A Party on B, by host, with the code B asked for: the code goes to B first.
+        let on_b = NewPartyDraft {
+            name: "Book club".into(),
+            my_name: "Sam".into(),
+            colour: PartyColour::Blue,
+            post_quantum: false,
+            other_server: Some(" b.example ".into()),
+            registration_code: Some(" friends ".into()),
+        };
+        core.create_party(on_b.clone()).await?;
+        let calls = fakes.calls();
+        let last_two = calls.get(calls.len().saturating_sub(2)..);
         assert!(matches!(
-            core.submit_registration_code("https://b.example".into(), "  ".into())
-                .await,
-            Err(CoreError::Server {
-                issue: crate::ServerIssue::CodeRefused,
-                ..
-            })
+            last_two,
+            Some([
+                CrateCall::SubmitRegistrationCode(Some(to), typed),
+                CrateCall::CreateParty(draft),
+            ]) if *to == server && typed == "friends" && draft.server.as_ref() == Some(&server)
         ));
-        assert_eq!(fakes.calls().len(), before, "an empty code is not sent");
-        core.submit_registration_code("https://b.example".into(), " friends ".into())
-            .await?;
-        assert_eq!(
-            fakes.calls().last(),
-            Some(&CrateCall::SubmitRegistrationCode(server))
-        );
+        // An empty code is not sent.
+        let before = fakes.calls().len();
+        core.create_party(NewPartyDraft {
+            registration_code: Some("  ".into()),
+            ..on_b
+        })
+        .await?;
+        assert_eq!(fakes.calls().len(), before.saturating_add(1));
         Ok(())
     }
 
@@ -1115,6 +1208,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn safety_codes_and_registration_codes_reach_the_client() -> Result<(), CoreError> {
+        let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
+        let core = open_on("safety", &fakes).await?;
+        let party = PartyId {
+            hex: PARTY_HEX.into(),
+        };
+        let party_id = pingers_proto::PartyId::from_bytes([0xa1; 16]);
+        let ana = MemberId { leaf: 0 };
+        let digits = core.safety_code(party.clone(), ana).await?;
+        assert_eq!(digits, FakeCrates::SAFETY_CODE);
+        core.mark_checked(party, ana).await?;
+        assert_eq!(
+            fakes.calls().last(),
+            Some(&CrateCall::MarkChecked(
+                party_id,
+                pingers_proto::LeafIndex::new(0)
+            ))
+        );
+        core.create_party(NewPartyDraft {
+            name: "Climbing crew".into(),
+            my_name: "Sam".into(),
+            colour: PartyColour::Blue,
+            post_quantum: false,
+            other_server: None,
+            registration_code: Some(" spring-otter-4471 ".into()),
+        })
+        .await?;
+        let calls = fakes.calls();
+        let last_two = calls.get(calls.len().saturating_sub(2)..);
+        assert!(matches!(
+            last_two,
+            Some([CrateCall::SubmitRegistrationCode(None, typed), CrateCall::CreateParty(_)])
+                if typed == "spring-otter-4471"
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn the_display_name_is_trimmed_stored_and_shown() -> Result<(), CoreError> {
         let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
         let core = open_on("name", &fakes).await?;
@@ -1151,6 +1282,8 @@ mod tests {
                     pingers_client::snapshot::Operator::new("Push Co")
                         .map_err(|_| CoreError::invalid("operator"))?,
                 ),
+                relay_host: None,
+                push_relay_host: None,
             }),
         });
         let check = core.check_reachability().await?;
@@ -1253,11 +1386,12 @@ mod tests {
         let core = open("calls").await?;
         let party = core
             .create_party(NewPartyDraft {
-                server: None,
                 name: "Climbing crew".into(),
                 my_name: "Sam".into(),
                 colour: PartyColour::Blue,
                 post_quantum: false,
+                other_server: None,
+                registration_code: None,
             })
             .await?;
         assert_eq!(party.hex, "a1".repeat(16), "FakeCrates' party id");
@@ -1274,12 +1408,25 @@ mod tests {
     async fn bad_input_is_refused_before_the_client() -> Result<(), CoreError> {
         let core = open("refused").await?;
         let empty = NewPartyDraft {
-            server: None,
             name: " ".into(),
             my_name: "Sam".into(),
             colour: PartyColour::Blue,
             post_quantum: false,
+            other_server: None,
+            registration_code: None,
         };
+        let elsewhere = NewPartyDraft {
+            name: "Crew".into(),
+            other_server: Some("pingers.flat7.org/path".into()),
+            ..empty.clone()
+        };
+        assert!(matches!(
+            core.create_party(elsewhere).await,
+            Err(CoreError::Server {
+                issue: crate::ServerIssue::InvalidAddress,
+                ..
+            })
+        ));
         assert!(matches!(
             core.create_party(empty).await,
             Err(CoreError::Invalid { .. })

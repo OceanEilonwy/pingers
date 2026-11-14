@@ -39,4 +39,71 @@ object E2eTags {
     const val APPROVE_CODE = "approve_code"
     /** InviteApprove: "Codes match · Let <name> in". */
     const val APPROVE_LET_IN = "approve_let_in"
+    /** JoinA1: "Change" on "You'll join as Ben", which opens Your name. */
+    const val JOIN_CHANGE_NAME = "join_change_name"
+
+    // Section 4 of the canvas: first run, Settings, Wake-ups, notices, Party settings.
+    /** First run: the step's main button ("Allow location", "Continue"). */
+    const val SETUP_CONTINUE = "setup_continue"
+    /** First run: "Not now". */
+    const val SETUP_NOT_NOW = "setup_not_now"
+    /** Home: the cog, which opens Settings. */
+    const val SETTINGS_OPEN = "settings_open"
+    /** Home: the notice's link ("Open date and time settings", "Party settings"). */
+    const val NOTICE_ACTION = "notice_action"
+    /** Home: the orange wake-ups fault banner; tapping it (Fix) opens Wake-ups. */
+    const val WAKEUPS_FIX = "wakeups_fix"
+    /** Home: the grey "Wake-ups off" line. */
+    const val WAKEUPS_OFF_LINE = "wakeups_off_line"
+    /** Home: "Waiting to be let in", which reopens Asked to join. */
+    const val HOME_PENDING_JOIN = "home_pending_join"
+    /** Settings: the Your name card. */
+    const val SETTINGS_YOUR_NAME = "settings_your_name"
+    const val SETTINGS_QUIET_HOURS = "settings_quiet_hours"
+    const val SETTINGS_WAKEUPS = "settings_wakeups"
+    const val YOUR_NAME_FIELD = "your_name_field"
+    const val YOUR_NAME_SAVE = "your_name_save"
+    const val QUIET_HOURS_SWITCH = "quiet_hours_switch"
+    const val QUIET_HOURS_SAVE = "quiet_hours_save"
+    /** Exclusion zones: a zone row, which opens Zone times. */
+    const val ZONE_ROW = "zone_row"
+    const val ZONE_TIMES_SAVE = "zone_times_save"
+    const val ZONE_DELETE = "zone_delete"
+    /** Wake-ups: the "No wake-up pushes" switch. */
+    const val WAKEUPS_NO_PUSHES = "wakeups_no_pushes"
+    const val WAKEUPS_KEEP_RUNNING = "wakeups_keep_running"
+    /** Wake-ups: "Get ntfy". */
+    const val WAKEUPS_GET_PUSH_APP = "wakeups_get_push_app"
+    /** Wake-ups: battery use's "Change". */
+    const val WAKEUPS_BATTERY = "wakeups_battery"
+    const val WAKEUPS_NOTIFICATIONS = "wakeups_notifications"
+    /** Privacy: the Wake-ups link under Delivery. */
+    const val PRIVACY_WAKEUPS = "privacy_wakeups"
+    /** Downloaded maps: a row's Update, Delete or Download. */
+    const val MAPS_ACTION = "maps_action"
+    /** Party: the row at the bottom, which opens Party settings. */
+    const val PARTY_SETTINGS_OPEN = "party_settings_open"
+    const val PARTY_SETTINGS_INVITE = "party_settings_invite"
+    /** Party settings: "Check the privacy relay again". */
+    const val PARTY_CHECK_RELAY = "party_check_relay"
+    /** Party settings (reduced privacy): "Wake-ups settings". */
+    const val PARTY_WAKEUPS_LINK = "party_wakeups_link"
+    /** Party settings: "Leave party", which opens the sheet. */
+    const val PARTY_LEAVE = "party_leave"
+    /** The Leave party sheet: "Leave party". */
+    const val LEAVE_PARTY_CONFIRM = "leave_party_confirm"
+    const val SAFETY_CODES_OPEN = "safety_codes_open"
+    /** Safety codes: the twelve groups of digits. */
+    const val SAFETY_CODE = "safety_code"
+    /** Safety codes: "Codes match · Mark … as checked". */
+    const val SAFETY_MARK_CHECKED = "safety_mark_checked"
+    /** New party: "The app's server" and "Another server", and the address field. */
+    const val NEW_PARTY_BUILT_IN = "new_party_built_in"
+    const val NEW_PARTY_ANOTHER = "new_party_another"
+    const val NEW_PARTY_SERVER = "new_party_server"
+    /** New party: "Trust this server's keys" for another server. */
+    const val NEW_PARTY_TRUST_KEYS = "new_party_trust_keys"
+    /** "This server needs a code": the code field and "Create party" / "Try again". */
+    const val PARTY_CODE_FIELD = "party_code_field"
+    const val PARTY_CODE_CREATE = "party_code_create"
 }

@@ -48,6 +48,19 @@ pub enum CoreError {
         /// What to tell the user, in words.
         reason: String,
     },
+    /// The chosen server makes accounts only with a registration code ("This server needs a
+    /// code"); no Party was created.
+    #[error("{reason}")]
+    CodeNeeded {
+        /// Why, in words.
+        reason: String,
+    },
+    /// The server refused the registration code offered; no Party was created.
+    #[error("{reason}")]
+    CodeRefused {
+        /// Why, in words.
+        reason: String,
+    },
     /// The encrypted database or the secure store failed.
     #[error("{reason}")]
     Storage {

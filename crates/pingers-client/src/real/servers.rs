@@ -399,10 +399,12 @@ pub(crate) struct ServerView {
     pub(crate) relay_status: RelayStatus,
     pub(crate) push_relay_kind: PushRelayKind,
     pub(crate) push_relay_operator: Option<Operator>,
+    pub(crate) push_relay_host: Option<Host>,
     pub(crate) keys: KeyTrust,
 }
 
-fn host_of(url: &str) -> Option<Host> {
+/// A URL's host (and port), as screens name a server: "relay.quietpath.net".
+pub(crate) fn host_of(url: &str) -> Option<Host> {
     let rest = url.split_once("://").map_or(url, |(_scheme, rest)| rest);
     Host::new(rest.split('/').next().unwrap_or(rest)).ok()
 }
@@ -431,6 +433,7 @@ impl Link {
                 _ => PushRelayKind::Official,
             },
             push_relay_operator: operators.and_then(|known| known.push_relay),
+            push_relay_host: push_origin.and_then(host_of),
             keys: trust_view(self.record.trust),
         }
     }

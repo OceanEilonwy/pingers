@@ -46,6 +46,7 @@ use pingers_transport::TokioTimer;
 use rand_core::UnwrapErr;
 
 pub use network::{Instance, Trust};
+pub use probe::server_address;
 
 use crate::ports::Crates;
 use crate::{ClientError, Platform};

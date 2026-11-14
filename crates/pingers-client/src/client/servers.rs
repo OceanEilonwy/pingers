@@ -34,8 +34,8 @@ impl Client {
             .await
     }
 
-    /// Gives `server` the registration code the user typed ("This server needs a code") and
-    /// registers with it.
+    /// Gives `server` (`None`: the built-in one) the registration code the user typed ("This
+    /// server needs a code") and registers with it.
     ///
     /// # Errors
     ///
@@ -43,7 +43,7 @@ impl Client {
     /// another code can be tried); [`ClientError::Unavailable`] for an unknown server.
     pub async fn submit_registration_code(
         &self,
-        server: ServerId,
+        server: Option<ServerId>,
         code: SecretText,
     ) -> Result<(), ClientError> {
         self.published(

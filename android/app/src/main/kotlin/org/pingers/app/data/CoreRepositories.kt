@@ -15,7 +15,7 @@ object CoreRepositories {
 
     fun get(context: Context): CoreRepository = instance ?: synchronized(this) {
         instance ?: CoreRepository(
-            res = context.resources,
+            context = context.applicationContext,
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
         ).also { instance = it }
     }

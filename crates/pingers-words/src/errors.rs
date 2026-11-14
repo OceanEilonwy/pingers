@@ -5,6 +5,20 @@ use pingers_screens::ScreenError;
 
 use crate::Language;
 
+/// The chosen server needs a registration code before it makes an account.
+#[must_use]
+pub fn code_needed(language: Language) -> String {
+    let Language::English = language;
+    "This server needs a code".into()
+}
+
+/// The server refused the registration code.
+#[must_use]
+pub fn code_refused(language: Language) -> String {
+    let Language::English = language;
+    "The server didn't accept this code.".into()
+}
+
 /// A screen error, as the user is told it.
 #[must_use]
 pub fn screen_error(language: Language, error: &ScreenError) -> String {
@@ -32,15 +46,10 @@ pub fn screen_error(language: Language, error: &ScreenError) -> String {
     .into()
 }
 
-/// Why a server could not be used: added by address on New party, joined through an invite, or
-/// asking for a registration code (canvas "This server needs a code").
+/// Why a server could not be used: added by address on New party, or joined through an invite.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ServerRefusal {
-    /// The server takes only devices with a code from whoever runs it.
-    CodeRequired,
-    /// The server refused the code given.
-    CodeRefused,
     /// What was typed is not a server address.
     InvalidAddress,
     /// The server did not answer.
@@ -62,13 +71,6 @@ pub enum ServerRefusal {
 pub fn server_refusal(language: Language, refusal: ServerRefusal) -> String {
     let Language::English = language;
     match refusal {
-        ServerRefusal::CodeRequired => {
-            "Only people with a code from whoever runs this server can set up Pingers on it."
-        }
-        ServerRefusal::CodeRefused => {
-            "The server didn't accept this code. Check it for typing mistakes, or ask whoever \
-             runs the server for a new one."
-        }
         ServerRefusal::InvalidAddress => "Enter an address like pingers.example.org.",
         ServerRefusal::Unreachable => "This server didn't answer. Check the address and try again.",
         ServerRefusal::NoRelay => {
@@ -98,9 +100,11 @@ mod tests {
 
     #[test]
     fn a_refused_code_is_told_apart_from_a_missing_one() {
+        assert_ne!(
+            code_needed(Language::English),
+            code_refused(Language::English)
+        );
         let say = |refusal| server_refusal(Language::English, refusal);
-        assert!(say(ServerRefusal::CodeRequired).starts_with("Only people with a code"));
-        assert!(say(ServerRefusal::CodeRefused).starts_with("The server didn't accept"));
         assert!(say(ServerRefusal::KeyMismatch).contains("keys"));
     }
 

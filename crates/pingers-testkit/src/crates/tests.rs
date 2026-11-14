@@ -14,7 +14,7 @@ use pingers_client::{Fallback, Unavailable};
 use pingers_gate::{PauseState, SuppressReason};
 use pingers_geo::{Circle, Coordinate, Fence, GeoError, Meters};
 use pingers_meetup::{AllowListChoice, AskBack, GrantScope};
-use pingers_proto::{PushPlatform, PushToken};
+use pingers_proto::{PushPlatform, PushToken, SecretText};
 
 use super::*;
 
@@ -119,9 +119,15 @@ fn call_every_port(fakes: &FakeCrates) -> Result<Vec<CrateCall>, TestError> {
     );
     now(parties.delete_spot(PARTY, FakeCrates::SPOT))??;
     now(parties.set_always_allow(PARTY, PEER, AllowListChange::Remove))??;
+    assert_eq!(
+        now(parties.safety_code(PARTY, PEER))??.as_str(),
+        FakeCrates::SAFETY_CODE
+    );
+    now(parties.mark_checked(PARTY, PEER))??;
     now(sync.push_tokens_changed(Some(tokens())))??;
     now(sync.set_wake_pushes(WakePushes::On, None))??;
     assert_eq!(now(sync.check_reachability())??, RelayStatus::Reachable);
+    now(sync.submit_registration_code(None, SecretText::new("otter".into())))??;
     assert_eq!(
         now(wake.run(WakeInput::Scheduled))??,
         WakeOutcome::default()
@@ -154,9 +160,12 @@ fn call_every_port(fakes: &FakeCrates) -> Result<Vec<CrateCall>, TestError> {
         CrateCall::SaveSpot(PARTY, spot_draft()?),
         CrateCall::DeleteSpot(PARTY, FakeCrates::SPOT),
         CrateCall::SetAlwaysAllow(PARTY, PEER, AllowListChange::Remove),
+        CrateCall::SafetyCode(PARTY, PEER),
+        CrateCall::MarkChecked(PARTY, PEER),
         CrateCall::PushTokensChanged(Some(tokens())),
         CrateCall::SetWakePushes(WakePushes::On, None),
         CrateCall::CheckReachability,
+        CrateCall::SubmitRegistrationCode(None, "otter".into()),
         CrateCall::Wake(WakeInput::Scheduled),
         CrateCall::ChangeSetting(change),
         CrateCall::SendChat(MEETUP, body, None),

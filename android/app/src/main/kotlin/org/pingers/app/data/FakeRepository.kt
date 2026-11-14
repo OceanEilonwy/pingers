@@ -10,14 +10,27 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.pingers.app.R
+import uniffi.pingers.JoinAs
+import uniffi.pingers.ServerChoice
 
 /**
  * The canvas's example data (Climbing crew meeting at Riverside Park), with just
  * enough behaviour for every control to respond. Nothing leaves the phone and
  * nothing is stored. The app runs on CoreRepository; this one backs previews,
  * screenshots and the UI's own development.
+ *
+ * [variant] is the debug launch extra `--es variant ...` (android/README.md): comma-separated
+ * names picking which state the section-4 screens show (FakeSection4.kt).
  */
-class FakeRepository(private val res: Resources, private val scope: CoroutineScope) : PingersRepository {
+class FakeRepository(
+    private val res: Resources,
+    private val scope: CoroutineScope,
+    variant: String? = null,
+) : PingersRepository {
+    private val variants: Set<String> = variant.orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+
+    /** The canvas's section-4 example, in the state [variants] picks. */
+    private val s4 = FakeSection4(variants)
 
     /** The canvas's map: Riverside Park's middle at the centre of the 390-wide artboard, 2 m a unit. */
     private val frame = MapFrame(Coordinate(51.5390, -0.0590), MapPoint(195f, 256f))
@@ -72,6 +85,8 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
             server = server,
             privacy = PrivacyLevel.Full,
             meetup = m1,
+            settingsRow = "$server · Full privacy",
+            settingsDetail = FakeSection4.SETTINGS_DETAIL,
         ),
         uf to PartyState(
             id = uf,
@@ -85,6 +100,8 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
             server = server,
             privacy = PrivacyLevel.Full,
             meetup = null,
+            settingsRow = "$server · Full privacy",
+            settingsDetail = FakeSection4.SETTINGS_DETAIL,
         ),
         fiveASide to PartyState(
             id = fiveASide,
@@ -95,6 +112,8 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
             server = server,
             privacy = PrivacyLevel.Full,
             meetup = null,
+            settingsRow = "$server · Full privacy",
+            settingsDetail = FakeSection4.SETTINGS_DETAIL,
         ),
     )
 
@@ -109,10 +128,14 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
     override val home: StateFlow<HomeState> = _home.asStateFlow()
 
     private val _newParty = MutableStateFlow(
-        NewPartyState("Climbing crew", PartyColour.Blue, server, PrivacyLevel.Full, canCreate = true),
+        NewPartyState(
+            "Climbing crew", PartyColour.Blue, FakeSection4.BUILT_IN, PrivacyLevel.Full, canCreate = true,
+            serverChoice = ServerChoice.BUILT_IN, text = s4.newPartyText(PrivacyLevel.Full),
+        ),
     )
     override val newParty: StateFlow<NewPartyState> = _newParty.asStateFlow()
 
+    // The canvas's Advanced shows "Another server" chosen, New party the app's server.
     private val _advanced = MutableStateFlow(
         AdvancedState(
             privacy = PrivacyLevel.Full,
@@ -122,6 +145,9 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
             relayCheck = Reachability.Checking,
             pushRelay = PushRelayChoice.Official,
             postQuantum = false,
+            serverChoice = ServerChoice.ANOTHER,
+            builtIn = FakeSection4.BUILT_IN,
+            text = s4.advancedText(Reachability.Checking, Reachability.Checking),
         ),
     )
     override val advanced: StateFlow<AdvancedState> = _advanced.asStateFlow()
@@ -151,8 +177,10 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
                 "Members find out you're nearby only when you're in the same Spot at the same time.",
                 "Your location is end-to-end encrypted. The server can't see where you are or which Spot you're in.",
             ),
-            nameLabel = "Your name in this Party",
-            name = "Ben",
+            // `--es variant noname`: no name set yet, so the name field shows instead.
+            joinAs = if ("noname" in variants) null else JoinAs("BE", "You'll join as Ben", "The same name in every Party", "Change"),
+            nameLabel = "Your name",
+            nameHelp = "The same name in every Party",
             ask = "Ask to join",
             notNow = "Not now",
         ),
@@ -199,11 +227,11 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
             avatar = "BE",
             title = "Ben asked to join",
             subtitle = "Climbing crew · from the link you shared 2 h ago",
-            ask = "Ask Ben to read his code. It should be:",
+            ask = "Ask Ben to read their code. It should be:",
             code = "4821 0937 5512",
             warning = "A different code means someone else opened your link. Don't let them in.",
             whenHeading = "When you let Ben in",
-            whenBody = "He sees the Party's name, its members and its Spots, and everyone gets a new key. The link stops working.",
+            whenBody = "Ben sees the Party's name, its members and its Spots, and everyone gets a new key. The link stops working.",
             letIn = "Codes match · Let Ben in",
             turnAway = "Don't let in",
         ),
@@ -349,20 +377,40 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
 
     override fun setNewPartyColour(colour: PartyColour) = _newParty.update { it.copy(colour = colour) }
 
-    override fun createParty() {
+    override fun createParty(onResult: (CreateOutcome) -> Unit) {
+        // From "This server needs a code": `--es variant refused` refuses the code once.
+        if (_partyCode.value != null && "refused" in variants && _partyCode.value?.refused == null) {
+            _partyCode.value = s4.partyCode(refused = true)
+            return onResult(CreateOutcome.CodeRefused)
+        }
         val name = _newParty.value.name.ifBlank { "New party" }
         _party.update { it.copy(name = name) }
         _invite.update { it.copy(partyName = name) }
+        onResult(CreateOutcome.Created)
+    }
+
+    override fun setServerChoice(choice: ServerChoice) {
+        val host = if (choice == ServerChoice.BUILT_IN) FakeSection4.BUILT_IN else server
+        _newParty.update { it.copy(serverChoice = choice, server = host) }
+        _advanced.update { it.copy(serverChoice = choice, server = host) }
+    }
+
+    private val _registrationCode = MutableStateFlow(s4.typedCode)
+    override val registrationCode: StateFlow<String> = _registrationCode.asStateFlow()
+
+    override fun setRegistrationCode(code: String) {
+        _registrationCode.value = code
+        _partyCode.update { it?.copy(canCreate = code.isNotBlank()) }
     }
 
     private val checks = mutableMapOf<String, Job>()
 
     private fun check(key: String, ms: Long, set: (AdvancedState, Reachability) -> AdvancedState) {
         checks[key]?.cancel()
-        _advanced.update { set(it, Reachability.Checking) }
+        _advanced.update { set(it, Reachability.Checking).let { s -> s.copy(text = s4.advancedText(s.serverCheck, s.relayCheck)) } }
         checks[key] = scope.launch {
             delay(ms)
-            _advanced.update { set(it, Reachability.Reachable) }
+            _advanced.update { set(it, Reachability.Reachable).let { s -> s.copy(text = s4.advancedText(s.serverCheck, s.relayCheck)) } }
         }
     }
 
@@ -381,6 +429,8 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
         _newParty.update { it.copy(server = url) }
         checkServer(1200)
     }
+
+    override fun trustServerKeys() = _newParty.update { it.copy(keysTrust = null) }
 
     override fun setRelay(url: String) {
         _advanced.update { it.copy(relay = url) }
@@ -499,7 +549,106 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
 
     override fun setVisibility(visibility: Visibility) = _privacy.update { it.copy(visibility = visibility) }
 
-    override fun setNoWakePushes(on: Boolean) = _privacy.update { it.copy(noWakePushes = on) }
+    override fun setNoWakePushes(on: Boolean) {
+        _privacy.update { it.copy(noWakePushes = on) }
+        showWake(if (on) uniffi.pingers.WakeupsKind.OFF else uniffi.pingers.WakeupsKind.WORKING)
+    }
+
+    // ------------------------------------------------------------ Section 4 (FakeSection4)
+
+    private val _deviceSettings = MutableStateFlow<uniffi.pingers.DeviceSettingsView?>(s4.deviceSettings())
+    override val deviceSettings: StateFlow<uniffi.pingers.DeviceSettingsView?> = _deviceSettings.asStateFlow()
+    private val _yourName = MutableStateFlow<uniffi.pingers.YourNameView?>(s4.yourName)
+    override val yourName: StateFlow<uniffi.pingers.YourNameView?> = _yourName.asStateFlow()
+    private var quietDraft = uniffi.pingers.QuietHoursDraft(true, s4.quietFrom, s4.quietTo)
+    private val _quietHours = MutableStateFlow(quietEditor())
+    override val quietHours: StateFlow<uniffi.pingers.QuietHoursEditorView?> = _quietHours.asStateFlow()
+    private val _zoneTimes = MutableStateFlow<uniffi.pingers.ZoneTimesEditorView?>(s4.zoneTimes())
+    override val zoneTimes: StateFlow<uniffi.pingers.ZoneTimesEditorView?> = _zoneTimes.asStateFlow()
+    private val _wakeups = MutableStateFlow<uniffi.pingers.WakeupsView?>(s4.wakeups())
+    override val wakeups: StateFlow<uniffi.pingers.WakeupsView?> = _wakeups.asStateFlow()
+    private val _homeWakeups = MutableStateFlow(s4.homeWakeups())
+    override val homeWakeups: StateFlow<uniffi.pingers.HomeWakeupsView> = _homeWakeups.asStateFlow()
+    private val _notice = MutableStateFlow(s4.notice)
+    override val notice: StateFlow<uniffi.pingers.NoticeView?> = _notice.asStateFlow()
+    private val _privacyText = MutableStateFlow<uniffi.pingers.PrivacyText?>(s4.privacyText())
+    override val privacyText: StateFlow<uniffi.pingers.PrivacyText?> = _privacyText.asStateFlow()
+    private val _partySettings = MutableStateFlow<uniffi.pingers.PartySettingsView?>(s4.partySettings)
+    override val partySettings: StateFlow<uniffi.pingers.PartySettingsView?> = _partySettings.asStateFlow()
+    private var safetyShown = 1u
+    private var safetyChecked = setOf(2u, 3u)
+    private val _safetyCodes = MutableStateFlow<uniffi.pingers.SafetyCodesView?>(s4.safetyCodes())
+    override val safetyCodes: StateFlow<uniffi.pingers.SafetyCodesView?> = _safetyCodes.asStateFlow()
+    private val _leaveParty = MutableStateFlow<uniffi.pingers.LeavePartyView?>(s4.leaveParty)
+    override val leaveParty: StateFlow<uniffi.pingers.LeavePartyView?> = _leaveParty.asStateFlow()
+    private val _partyCode = MutableStateFlow<uniffi.pingers.PartyCodeView?>(s4.partyCode())
+    override val partyCode: StateFlow<uniffi.pingers.PartyCodeView?> = _partyCode.asStateFlow()
+
+    private val _pendingJoin = MutableStateFlow(s4.pendingJoin)
+    override val pendingJoin: StateFlow<uniffi.pingers.PendingJoinView?> = _pendingJoin.asStateFlow()
+
+    private fun showWake(kind: uniffi.pingers.WakeupsKind) {
+        _wakeups.value = s4.wakeups(kind)
+        _homeWakeups.value = s4.homeWakeups(kind)
+        _deviceSettings.value = s4.deviceSettings(kind)
+        _privacyText.value = s4.privacyText(kind)
+    }
+
+    // Quiet hours' words, bar and refusal are pingers-words' own (a pure function of the times).
+    private fun quietEditor() = try {
+        uniffi.pingers.quietHoursEditor(quietDraft.on, quietDraft.from, quietDraft.to)
+    } catch (_: uniffi.pingers.CoreException) {
+        null
+    }
+
+    override fun setupStep(step: uniffi.pingers.SetupStep): uniffi.pingers.SetupView = uniffi.pingers.setupView(step)
+
+    override fun refreshPhone() = Unit
+
+    override fun saveDisplayName(name: String, onSaved: () -> Unit) {
+        _yourName.update { it?.copy(name = name.trim()) }
+        onSaved()
+    }
+
+    override fun openQuietHours() = Unit
+
+    override fun setQuietHoursDraft(on: Boolean, from: uniffi.pingers.TimeOfDay, to: uniffi.pingers.TimeOfDay) {
+        quietDraft = uniffi.pingers.QuietHoursDraft(on, from, to)
+        _quietHours.value = quietEditor()
+    }
+
+    override fun saveQuietHours(onSaved: () -> Unit) = onSaved()
+
+    override fun openZoneTimes(zone: ZoneId) = Unit
+
+    override fun setZoneTimesDraft(times: uniffi.pingers.ZoneTimes) {
+        _zoneTimes.value = s4.zoneTimes(times)
+    }
+
+    override fun saveZoneTimes(onSaved: () -> Unit) = onSaved()
+
+    override fun deleteZone(onDeleted: () -> Unit) {
+        _exclusionZones.update { s -> s.copy(zones = s.zones.filterNot { it.id == ZoneId(2) }) }
+        onDeleted()
+    }
+
+    override fun openPartySettings(party: PartyId) = openParty(party)
+
+    override fun checkRelayAgain() = Unit
+
+    override fun openSafetyCodes() = Unit
+
+    override fun showSafetyCode(member: MemberId) {
+        safetyShown = member.leaf.toUInt()
+        _safetyCodes.value = s4.safetyCodes(safetyShown, safetyChecked)
+    }
+
+    override fun markChecked() {
+        safetyChecked = safetyChecked + safetyShown
+        _safetyCodes.value = s4.safetyCodes(safetyShown, safetyChecked)
+    }
+
+    override fun leaveParty(onLeft: () -> Unit) = onLeft()
 
     // The fake server is always reachable; What your server sees has nothing to update.
     override fun checkReachability() = Unit

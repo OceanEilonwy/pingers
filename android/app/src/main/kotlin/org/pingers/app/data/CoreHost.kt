@@ -300,6 +300,8 @@ object CoreHost {
         override fun meetupEnded(meetup: uniffi.pingers.MeetupId) = each { it.meetupEnded(meetup) }
         override fun notice(notice: uniffi.pingers.Notice) {
             Log.i(TAG, "notice: ${notice::class.simpleName}")
+            // Kept with its time for Home's notice and the Wake-ups screens (PhoneFacts).
+            PhoneFacts.record(app, notice)
             each { it.notice(notice) }
         }
         override fun privacyStatusChanged() = each { it.privacyStatusChanged() }

@@ -19,7 +19,7 @@ use pingers_proto::{Params, PushClass, PushTokenPlaintext, RelayRef, TimeToLive,
 use pingers_sync::{PushSeal, VerifiedPushRelay, WakeBudget, WakePush};
 
 use super::records::corrupt;
-use super::servers::Link;
+use super::servers::{Link, host_of};
 use crate::snapshot::{Operator, ServerOperators};
 use crate::{ClientError, Platform, PushTokens, Unavailable};
 
@@ -111,21 +111,26 @@ impl Link {
         self.server_params().await.map(Some)
     }
 
-    /// Who runs the server and its push relay, from the parameters this process read; `None`
-    /// before they were read or if the server declares no operator.
+    /// Who runs the server and its push relay, and where its default privacy relay and the
+    /// push relay are, from the parameters this process read; `None` before they were read or
+    /// if the server declares no operator.
     pub(crate) fn operators(&self) -> Option<ServerOperators> {
         let params = lock(&self.learned.params);
         let params = params.as_ref()?;
-        let push_relay = self.learned.push_relay.as_ref().and_then(|setup| {
+        let listed = self.learned.push_relay.as_ref().and_then(|setup| {
             params
                 .push_relays
                 .iter()
                 .find(|relay| same_origin(relay.url.as_str(), &setup.origin))
-                .and_then(|relay| Operator::new(&relay.operator).ok())
         });
         Some(ServerOperators {
             server: Operator::new(&params.server_operator).ok()?,
-            push_relay,
+            push_relay: listed.and_then(|relay| Operator::new(&relay.operator).ok()),
+            relay_host: params
+                .ohttp_relays
+                .first()
+                .and_then(|relay| host_of(relay.as_str())),
+            push_relay_host: listed.and_then(|relay| host_of(relay.url.as_str())),
         })
     }
 
@@ -247,6 +252,21 @@ mod tests {
     use super::*;
 
     type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
+
+    #[test]
+    fn hosts_are_read_from_relay_urls() {
+        let host = |url| host_of(url).map(|host| host.as_str().to_owned());
+        assert_eq!(
+            host("https://relay.quietpath.net/"),
+            Some("relay.quietpath.net".into())
+        );
+        assert_eq!(
+            host("http://10.0.2.2:8443/relay"),
+            Some("10.0.2.2:8443".into())
+        );
+        assert_eq!(host("push.pingers.org"), Some("push.pingers.org".into()));
+        assert_eq!(host("https://"), None);
+    }
 
     fn relay(max_days: u64) -> TestResult<VerifiedPushRelay> {
         Ok(VerifiedPushRelay {

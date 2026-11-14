@@ -23,7 +23,7 @@ use pingers_proto::{
 use crate::snapshot::{
     EndedMeetup, ExclusionZone, HideTrail, InviteLink, InviteUrl, Joining, LocationRequest, Meetup,
     Name, OwnPosition, Party, PartyColour, PauseInFocus, PostQuantum, QuietHoursPreference,
-    RelayStatus, Settings, WakePushes,
+    RelayStatus, SafetyCode, Settings, WakePushes,
 };
 use crate::{ClientError, Fallback, FixQuality, LocationMode, Notice, OsRegion, PushTokens};
 
@@ -313,6 +313,14 @@ pub trait PartiesPort: Send + Sync {
         member: LeafIndex,
         choice: AllowListChange,
     ) -> Result<(), ClientError>;
+    /// The safety code between this device and a member (design B.1), to compare in person.
+    async fn safety_code(
+        &self,
+        party: PartyId,
+        member: LeafIndex,
+    ) -> Result<SafetyCode, ClientError>;
+    /// Marks a member checked, once the user saw the same safety code on both phones.
+    async fn mark_checked(&self, party: PartyId, member: LeafIndex) -> Result<(), ClientError>;
     /// The current Parties.
     async fn section(&self) -> Result<PartiesSection, ClientError>;
 }
@@ -346,7 +354,7 @@ pub trait SyncPort: Send + Sync {
     /// Offers the registration code the user typed for `server` and registers with it.
     async fn submit_registration_code(
         &self,
-        server: ServerId,
+        server: Option<ServerId>,
         code: SecretText,
     ) -> Result<(), ClientError>;
     /// The server status.
