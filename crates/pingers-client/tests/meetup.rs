@@ -12,13 +12,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use pingers_client::ports::{JoinDecision, PartyDraft, SpotDraft};
+use pingers_client::ports::{Foreground, JoinDecision, PartyDraft, SpotDraft};
 use pingers_client::snapshot::{
-    ChatEntry, ClientSnapshot, Meetup, Name, PartyColour, PeerAccess, PostQuantum, WakePushes,
+    ChatEntry, ChatMessage, ClientSnapshot, MeetPlace, Meetup, Name, PartyColour, PeerAccess,
+    PostQuantum, WakePushes,
 };
 use pingers_client::{Client, ClientConfig, ClientError, Crates, Instance, Outside, Trust};
 use pingers_geo::{Circle, Coordinate, Fence, Fix, Meters};
-use pingers_meetup::{AllowListChoice, AskBack, GrantScope, LocationAnswer};
+use pingers_meetup::{AllowListChoice, AskBack, GrantScope, LocationAnswer, MeetPointDraft};
 use pingers_proto::{
     ChatBody, GroupId, LeafIndex, PartyId, ProtoError, PushPlatform, PushToken, ServerId,
 };
@@ -49,6 +50,8 @@ enum TestError {
     Snapshot(#[from] pingers_client::snapshot::SnapshotError),
     #[error(transparent)]
     Geo(#[from] pingers_geo::GeoError),
+    #[error(transparent)]
+    Transport(#[from] pingers_transport::TransportError),
     #[error("missing: {0}")]
     Missing(&'static str),
     #[error("timed out waiting for {0}")]
@@ -263,6 +266,14 @@ impl Phone {
         .await
     }
 
+    /// Whether this phone's store records its own subscription in `group` (so a push for the
+    /// group is recognised).
+    fn subscribed(&self, group: GroupId) -> Result<bool, TestError> {
+        let database =
+            Database::open(&self.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+        Ok(database.session()?.subscriptions().get(&group)?.is_some())
+    }
+
     /// The Meetup rows left in this phone's store.
     fn meetup_rows(&self) -> Result<usize, TestError> {
         let database =
@@ -345,18 +356,38 @@ fn names(shown: &Meetup) -> Vec<String> {
         .collect()
 }
 
+/// What the first phone in the Meetup writes before the other has joined.
+const GREETING: &str = "Here first";
+
 /// Both phones report fixes in the Spot and wake, half a minute apart, until each is in the
 /// Meetup: entry needs two fixes, the pools fill one mailbox per wake, the board shows the
-/// other's record, a knock goes out and is answered, and the Welcome is read.
+/// other's record, a knock goes out and is answered, and the Welcome is read. The phone that
+/// created the Meetup greets before the other joins, so the greeting reaches the other only
+/// from the group log, when its channel first opens.
 async fn meet<'phones>(
     ana: &'phones Phone,
     ben: &'phones Phone,
 ) -> Result<Meeting<'phones>, TestError> {
+    let mut greeted = false;
     for _round in 0..40 {
         ana.clock.advance(Duration::from_secs(30));
-        for phone in [ana, ben] {
+        for (phone, other) in [(ana, ben), (ben, ana)] {
             phone.at_the_spot().await?;
             phone.wake().await?;
+            let first = phone
+                .client
+                .snapshot()
+                .meetups
+                .first()
+                .map(|shown| shown.id);
+            if let Some(meetup) = first
+                && !greeted
+                && other.client.snapshot().meetups.is_empty()
+            {
+                let greeting = ChatBody::new(GREETING.to_owned())?;
+                phone.client.send_chat(meetup, greeting, None).await?;
+                greeted = true;
+            }
         }
         let ana_in = ana.client.snapshot().meetups.first().cloned();
         let ben_in = ben.client.snapshot().meetups.first().cloned();
@@ -376,57 +407,191 @@ async fn meet<'phones>(
     Err(TestError::Missing("a Meetup on both phones"))
 }
 
+/// The top-level messages of a Meetup's chat, as a phone shows it.
+fn messages(shown: &Meetup) -> Vec<ChatMessage> {
+    shown
+        .chat
+        .iter()
+        .filter_map(|entry| match entry {
+            ChatEntry::Message(message) => Some(message.clone()),
+            ChatEntry::Joined { .. } | ChatEntry::MeetPointSet { .. } => None,
+        })
+        .collect()
+}
+
+/// Whether `shown` has a top-level message reading `body`.
+fn has_message(shown: &Meetup, body: &str) -> bool {
+    messages(shown)
+        .iter()
+        .any(|message| message.body.as_str() == body)
+}
+
+/// Whether the server still holds `group`: a request the gateway cannot authorise is refused
+/// as unknown (404) once the group is gone, and as unauthorised while it exists.
+async fn group_exists(
+    harness: &InProcessHarness,
+    clock: &ManualClock,
+    group: GroupId,
+) -> Result<bool, TestError> {
+    use pingers_transport::{
+        KeyPin, OhttpConfig, OhttpTransport, PrivacyClass, Relay, TlsRoots, Transport as _,
+    };
+
+    let relay = harness.endpoints().ohttp_relay;
+    let ohttp = OhttpTransport::new(
+        OhttpConfig::new(
+            vec![Relay::new(
+                &format!("http://{relay}/ohttp"),
+                &format!("http://{relay}/v1/ohttp/config"),
+            )?],
+            KeyPin::FirstUse,
+            TlsRoots::from_der(&[])?,
+        ),
+        Arc::new(clock.clone()),
+        Box::new(ChaCha20Rng::seed_from_u64(91)),
+    )?;
+    let answer = ohttp
+        .request(
+            PrivacyClass::Anonymous,
+            pingers_ohttp::BinaryRequest {
+                method: "GET".to_owned(),
+                path: format!("/v1/groups/{}/state", hex::encode(group.as_bytes())),
+                headers: Vec::new(),
+                body: Vec::new(),
+            },
+        )
+        .await?;
+    Ok(answer.status.get() != 404)
+}
+
 impl Meeting<'_> {
-    /// Both shells heard of the Meetup, run the Meetup location service and show the alert.
-    async fn started(&self) -> TestResult {
+    /// Both shells heard of the Meetup and run the Meetup location service (at 1 Hz on the
+    /// phone whose app is on screen), and both show the alert.
+    async fn started(&self, on_screen: &Phone) -> TestResult {
         let meetup = self.meetup;
         for phone in [self.ana, self.ben] {
             let started = RecordedEvent::MeetupStarted { meetup };
             phone.told("the Meetup started", started).await?;
-            assert_eq!(
-                phone.platform.location_mode(),
+            let mode = if core::ptr::eq(phone, on_screen) {
+                LocationMode::MeetupForeground
+            } else {
                 LocationMode::MeetupBackground
-            );
+            };
+            assert_eq!(phone.platform.location_mode(), mode);
             assert_eq!(phone.client.snapshot().alert, Some(meetup));
         }
         Ok(())
     }
 
-    /// Ana writes; Ben's chat shows it, with the event that refreshes his screen.
+    /// The greeting written before the second phone joined reached it from the group log;
+    /// Ana writes, Ben's chat shows it with the event that refreshes his screen, and Ben's
+    /// reply shows under her message on her phone.
     async fn chat(&self) -> TestResult {
-        let meetup = self.meetup;
+        let Self {
+            ana, ben, meetup, ..
+        } = *self;
+        for phone in [ana, ben] {
+            phone
+                .until("the greeting", |snapshot| {
+                    snapshot
+                        .meetup(meetup)
+                        .is_ok_and(|shown| has_message(shown, GREETING))
+                })
+                .await?;
+        }
         let body = ChatBody::new("On the left wall".to_owned())?;
-        self.ana.client.send_chat(meetup, body, None).await?;
-        let seen = self
-            .ben
+        let sent = ana.client.send_chat(meetup, body, None).await?;
+        let seen = ben
             .until("Ana's message on Ben's phone", |snapshot| {
                 snapshot
                     .meetup(meetup)
-                    .is_ok_and(|shown| !shown.chat.is_empty())
+                    .is_ok_and(|shown| has_message(shown, "On the left wall"))
             })
             .await?;
-        let message = seen
-            .meetup(meetup)?
-            .chat
-            .iter()
-            .find_map(|entry| match entry {
-                ChatEntry::Message(message) => Some(message.clone()),
-                ChatEntry::Joined { .. } | ChatEntry::MeetPointSet { .. } => None,
-            });
-        let message = message.ok_or(TestError::Missing("the message"))?;
+        let message = messages(seen.meetup(meetup)?)
+            .into_iter()
+            .find(|message| message.id == sent)
+            .ok_or(TestError::Missing("the message"))?;
         assert_eq!(message.author, self.ana_leaf);
-        assert_eq!(message.body.as_str(), "On the left wall");
-        let message_event = EventKind::MeetupMessage;
-        self.ben.heard("the message event", message_event).await?;
+        ben.heard("the message event", EventKind::MeetupMessage)
+            .await?;
+        let reply = ChatBody::new("Coming".to_owned())?;
+        let replied = ben.client.send_chat(meetup, reply, Some(sent)).await?;
+        let shown = ana
+            .until("Ben's reply on Ana's phone", |snapshot| {
+                snapshot.meetup(meetup).is_ok_and(|shown| {
+                    messages(shown)
+                        .iter()
+                        .any(|message| message.id == sent && !message.replies.is_empty())
+                })
+            })
+            .await?;
+        let thread = messages(shown.meetup(meetup)?)
+            .into_iter()
+            .find(|message| message.id == sent)
+            .ok_or(TestError::Missing("the thread"))?;
+        let under: Vec<_> = thread
+            .replies
+            .iter()
+            .map(|reply| (reply.id, reply.author))
+            .collect();
+        assert_eq!(under, vec![(replied, self.ben_leaf)]);
+        // A reply is not a message of its own in the main thread.
+        assert!(!has_message(shown.meetup(meetup)?, "Coming"));
         Ok(())
     }
 
-    /// Ben asks to see Ana's exact spot; Ana's phone raises the request and she allows it.
+    /// Ana sets a meet point; Ben's screens show where, who set it, and a line in the chat.
+    async fn meet_point(&self) -> TestResult {
+        let Self {
+            ana, ben, meetup, ..
+        } = *self;
+        let label = pingers_proto::MeetPointLabel::new("The big oak".to_owned())?;
+        let point = MeetPointDraft::Fixed {
+            position: Coordinate::new(SPOT_LATITUDE + 0.0003, SPOT_LONGITUDE)?,
+            label: Some(label.clone()),
+        };
+        ana.client.set_meet_point(meetup, point).await?;
+        let seen = ben
+            .until("the meet point on Ben's phone", |snapshot| {
+                snapshot
+                    .meetup(meetup)
+                    .is_ok_and(|shown| shown.meet_point.is_some())
+            })
+            .await?;
+        let shown = seen.meetup(meetup)?;
+        let point = shown
+            .meet_point
+            .clone()
+            .ok_or(TestError::Missing("the meet point"))?;
+        assert_eq!(point.set_by, self.ana_leaf);
+        assert!(matches!(
+            point.place,
+            MeetPlace::Fixed { label: Some(ref named), .. } if *named == label
+        ));
+        assert!(shown.chat.iter().any(|entry| matches!(
+            entry,
+            ChatEntry::MeetPointSet { author, label: Some(named) }
+                if *author == self.ana_leaf && *named == label
+        )));
+        Ok(())
+    }
+
+    /// Ben asks to see Ana's exact spot ("Request sent"); Ana's phone raises the request and
+    /// she allows it.
     async fn ask_and_allow(&self) -> TestResult {
         let Self {
             ana, ben, meetup, ..
         } = *self;
         let sent = ben.client.ask_location(meetup, self.ana_leaf).await?;
+        let asking = ben.client.snapshot();
+        let ana_shown = asking
+            .meetup(meetup)?
+            .others
+            .iter()
+            .find(|peer| peer.leaf == self.ana_leaf)
+            .map(|peer| peer.access);
+        assert_eq!(ana_shown, Some(PeerAccess::Asked));
         let asked = ana
             .until("Ben's request on Ana's phone", |snapshot| {
                 !snapshot.location_requests.is_empty()
@@ -456,7 +621,8 @@ impl Meeting<'_> {
         Ok(())
     }
 
-    /// Location frames: Ana's next background frame carries her fix, and Ben sees her pin.
+    /// Location frames: Ana's app is on screen, so her frames come every 2 s; her next one
+    /// carries her fix, and Ben sees her pin.
     async fn frames(&self) -> TestResult {
         let Self {
             ana, ben, meetup, ..
@@ -469,10 +635,10 @@ impl Meeting<'_> {
                     .any(|peer| matches!(peer.access, PeerAccess::Shared(_)))
             })
         };
+        // Well under the 60 s background cadence in all.
         for _frame in 0..10 {
             ana.at_the_spot().await?;
-            ben.at_the_spot().await?;
-            ana.clock.advance(Duration::from_secs(61));
+            ana.clock.advance(Duration::from_secs(3));
             let shown =
                 tokio::time::timeout(Duration::from_secs(3), ben.until("Ana's position", shared))
                     .await;
@@ -490,9 +656,63 @@ impl Meeting<'_> {
         Err(TestError::Missing("Ana's position on Ben's phone"))
     }
 
+    /// Ana stops sharing with Ben: her key rotates, and once her next frame comes under the
+    /// new key his phone is told and her pin goes.
+    async fn revoke(&self) -> TestResult {
+        let Self {
+            ana, ben, meetup, ..
+        } = *self;
+        ana.client.revoke_location(meetup, self.ben_leaf).await?;
+        let lost = RecordedEvent::LocationAccessChanged {
+            meetup,
+            peer: self.ana_leaf,
+            access: pingers_meetup::ExactLocation::Private,
+        };
+        for _frame in 0..10 {
+            if ben.events.events().contains(&lost) {
+                break;
+            }
+            ana.at_the_spot().await?;
+            ana.clock.advance(Duration::from_secs(3));
+            let _heard = tokio::time::timeout(
+                Duration::from_secs(2),
+                ben.told("access to Ana withdrawn", lost),
+            )
+            .await;
+        }
+        ben.told("access to Ana withdrawn", lost).await?;
+        let shown = ben.client.snapshot();
+        let access = shown
+            .meetup(meetup)?
+            .others
+            .iter()
+            .find(|peer| peer.leaf == self.ana_leaf)
+            .map(|peer| peer.access);
+        assert_eq!(access, Some(PeerAccess::Private));
+        assert!(
+            ana.client
+                .snapshot()
+                .meetup(meetup)?
+                .sharing_with
+                .is_empty()
+        );
+        Ok(())
+    }
+
+    /// Ben's app comes on screen: his phone switches to the 1 Hz Meetup location service.
+    async fn ben_on_screen(&self) -> TestResult {
+        self.ben.client.on_foreground(Foreground::Visible).await?;
+        assert_eq!(
+            self.ben.platform.location_mode(),
+            LocationMode::MeetupForeground
+        );
+        Ok(())
+    }
+
     /// Ana taps Leave: her keys go at once and Ben sees her go; then Ben, alone, walks out of
-    /// the Spot, his phone leaves once the exit is confirmed, and the Meetup is over on both.
-    async fn both_leave(&self) -> TestResult {
+    /// the Spot, his phone leaves once the exit is confirmed, the group goes on the server,
+    /// and the Meetup is over on both phones.
+    async fn both_leave(&self, harness: &InProcessHarness) -> TestResult {
         let Self {
             ana, ben, meetup, ..
         } = *self;
@@ -503,6 +723,7 @@ impl Meeting<'_> {
                 .is_ok_and(|shown| shown.others.is_empty())
         })
         .await?;
+        assert!(group_exists(harness, &ben.clock, meetup).await?);
         for _fix in 0..10 {
             if ben.client.snapshot().meetups.is_empty() {
                 break;
@@ -524,8 +745,11 @@ impl Meeting<'_> {
                 .clone()
                 .ok_or(TestError::Missing("the summary"))?;
             assert_eq!(summary.spot_name.as_str(), "The crag");
-            assert_eq!((summary.people, summary.messages), (2, 1));
+            // The greeting, Ana's message and Ben's reply.
+            assert_eq!((summary.people, summary.messages), (2, 3));
         }
+        // The last one out deleted the group on the server.
+        assert!(!group_exists(harness, &ben.clock, meetup).await?);
         Ok(())
     }
 }
@@ -534,32 +758,25 @@ impl Meeting<'_> {
 async fn two_clients_meet_chat_share_a_location_and_end_the_meetup() -> TestResult {
     let config = HarnessConfig::default();
     let harness = InProcessHarness::start(&config)?;
-    let ana = Phone::new(
-        &harness,
-        &config,
-        Who {
-            seed: 3,
-            pushes: Pushes::Off,
-        },
-    )
-    .await?;
-    let ben = Phone::new(
-        &harness,
-        &config,
-        Who {
-            seed: 4,
-            pushes: Pushes::Off,
-        },
-    )
-    .await?;
+    let off = |seed| Who {
+        seed,
+        pushes: Pushes::Off,
+    };
+    let ana = Phone::new(&harness, &config, off(3)).await?;
+    let ben = Phone::new(&harness, &config, off(4)).await?;
     let party = party_of_two(&ana, &ben).await?;
     spot(&ana, party).await?;
+    // Ana has the app open when the Meetup forms.
+    ana.client.on_foreground(Foreground::Visible).await?;
     let meeting = meet(&ana, &ben).await?;
-    meeting.started().await?;
+    meeting.started(&ana).await?;
     meeting.chat().await?;
+    meeting.meet_point().await?;
     meeting.ask_and_allow().await?;
     meeting.frames().await?;
-    meeting.both_leave().await
+    meeting.revoke().await?;
+    meeting.ben_on_screen().await?;
+    meeting.both_leave(&harness).await
 }
 
 const ANA_PUSH: &str = "https://push.harness.invalid/up/ana";
@@ -631,6 +848,8 @@ async fn a_member_removed_as_silent_is_no_longer_woken() -> TestResult {
     let party = party_of_two(&ana, &ben).await?;
     spot(&ana, party).await?;
     let meetup = meet(&ana, &ben).await?.meetup;
+    // Ana's phone recognises pushes for the Meetup by its own subscription.
+    assert!(ana.subscribed(meetup)?);
     drop(ben);
 
     // Still a member: Ana's message wakes Ben's phone.
@@ -671,5 +890,56 @@ async fn a_member_removed_as_silent_is_no_longer_woken() -> TestResult {
         .send_chat(meetup, ChatBody::new("Gone, then".to_owned())?, None)
         .await?;
     assert!(!pushed_within(&harness, BEN_PUSH, before, Duration::from_secs(3)).await);
+
+    // Alone for half an hour, Ana's Meetup ends on its own: on her phone, where its
+    // subscription goes too, and on the server.
+    for _minutes in 0..8 {
+        if ana.client.snapshot().meetups.is_empty() {
+            break;
+        }
+        ana.clock.advance(Duration::from_mins(5));
+        let _settled = tokio::time::timeout(
+            Duration::from_secs(1),
+            ana.until("the Meetup over", |snapshot| snapshot.meetups.is_empty()),
+        )
+        .await;
+    }
+    ana.told("the Meetup ended", RecordedEvent::MeetupEnded { meetup })
+        .await?;
+    assert!(ana.client.snapshot().meetups.is_empty());
+    assert_eq!(ana.meetup_rows()?, 0);
+    assert!(!ana.subscribed(meetup)?);
+    assert_eq!(ana.platform.location_mode(), LocationMode::Dwell);
+    assert!(!group_exists(&harness, &ana.clock, meetup).await?);
+    Ok(())
+}
+
+/// Ben turns Focus on: sharing is paused, so his phone leaves every Meetup at once, and Ana
+/// sees him go.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn focus_leaves_every_meetup() -> TestResult {
+    let config = HarnessConfig::default();
+    let harness = InProcessHarness::start(&config)?;
+    let off = |seed| Who {
+        seed,
+        pushes: Pushes::Off,
+    };
+    let ana = Phone::new(&harness, &config, off(7)).await?;
+    let ben = Phone::new(&harness, &config, off(8)).await?;
+    let party = party_of_two(&ana, &ben).await?;
+    spot(&ana, party).await?;
+    let meetup = meet(&ana, &ben).await?.meetup;
+    ben.platform.set_focus(pingers_gate::FocusState::On);
+    ben.client.on_dnd_changed().await?;
+    ben.told("the Meetup ended", RecordedEvent::MeetupEnded { meetup })
+        .await?;
+    assert!(ben.client.snapshot().meetups.is_empty());
+    assert_eq!(ben.meetup_rows()?, 0);
+    ana.until("Ben gone", |snapshot| {
+        snapshot
+            .meetup(meetup)
+            .is_ok_and(|shown| shown.others.is_empty())
+    })
+    .await?;
     Ok(())
 }
