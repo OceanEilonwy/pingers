@@ -8,7 +8,7 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 
 /**
- * FCM pushes (design B.7). The relay sends content-free data messages (`{"v":1,"h":handle}`);
+ * FCM pushes (design B.7). The relay sends content-free data messages (fields `v` and `h`, see [PushBody]);
  * this hands each to the same core entry point as UnifiedPush and posts only the notification
  * the core returns. The token goes to the core as an FCM push target; the core seals it to the
  * push relay's key, so the Pingers server never sees it (B.4.9).
@@ -27,8 +27,8 @@ class FcmService : FirebaseMessagingService() {
             sentHigh = message.originalPriority == RemoteMessage.PRIORITY_HIGH,
             deliveredHigh = message.priority == RemoteMessage.PRIORITY_HIGH,
         )
-        // The relay sends the body as the data field "p".
-        val payload = message.data["p"]?.toByteArray() ?: message.rawData ?: ByteArray(0)
+        // The relay sends the body's two fields, v and h, as the data message's map.
+        val payload = PushBody.fromFcmData(message.data)
         Push.wake(PushPlatform.FCM, payload, priority)
     }
 }

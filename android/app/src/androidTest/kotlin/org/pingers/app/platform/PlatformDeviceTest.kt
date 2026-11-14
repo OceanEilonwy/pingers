@@ -132,7 +132,7 @@ class PlatformDeviceTest {
         Log.i("PingersTest", "PINGERS_ENDPOINT ${String(tokens.token)}")
         val push = sink.await<RecordingSink.Pushed>(120)
         assertNotNull("no push reached the core", push)
-        assertEquals("""{"v":1,"h":"AQIDBAUGBwg="}""", push!!.payload)
+        assertEquals("""{"v":1,"h":"0102030405060708"}""", push!!.payload)
         // UnifiedPush has no priorities to report.
         assertEquals(null, push.priority)
         Log.i("PingersTest", "PINGERS_PUSH_OK")

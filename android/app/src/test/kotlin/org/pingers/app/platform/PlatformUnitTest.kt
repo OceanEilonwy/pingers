@@ -149,10 +149,31 @@ class PlatformUnitTest {
     @Test
     fun aPushReachesTheCoreWithItsFcmPriority() {
         val priority = FcmPriority(sentHigh = true, deliveredHigh = false)
-        Push.wake(PushPlatform.FCM, """{"v":1,"h":"AAAAAAAAAAA="}""".toByteArray(), priority)
+        Push.wake(PushPlatform.FCM, """{"v":1,"h":"0000000000000000"}""".toByteArray(), priority)
         val pushed = sink.await<RecordingSink.Pushed>()!!
-        assertEquals("""{"v":1,"h":"AAAAAAAAAAA="}""", pushed.payload)
+        assertEquals("""{"v":1,"h":"0000000000000000"}""", pushed.payload)
         assertEquals(priority, pushed.priority)
+    }
+
+    @Test
+    fun theRelayBodyGivesItsHandleWhetherItCameByUnifiedPushOrFcm() {
+        val handle = byteArrayOf(1, 2, 3, 4, 5, 6, 7, -1)
+        // The push relay writes the handle as 16 lowercase hex digits (pingers-push-relay).
+        assertArrayEquals(handle, PushBody.handle("""{"v":1,"h":"01020304050607ff"}""".toByteArray()))
+        val fromFcm = PushBody.fromFcmData(mapOf("v" to "1", "h" to "01020304050607ff"))
+        assertArrayEquals(handle, PushBody.handle(fromFcm))
+        assertArrayEquals(handle, PushBody.handle("""{"v":1,"h":"01020304050607FF"}""".toByteArray()))
+        for (body in listOf(
+            """{"v":2,"h":"01020304050607ff"}""",
+            """{"v":1,"h":"010203040506"}""",
+            """{"v":1,"h":"01020304050607zz"}""",
+            """{"v":1,"h":"AQIDBAUGBwg="}""",
+            """{"v":1}""",
+            "not json",
+        )) {
+            assertNull(body, PushBody.handle(body.toByteArray()))
+        }
+        assertNull(PushBody.handle(PushBody.fromFcmData(emptyMap())))
     }
 
     @Test

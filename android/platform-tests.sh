@@ -58,7 +58,7 @@ while kill -0 "$pid" 2>/dev/null && [ -z "$endpoint" ]; do
 done
 if [ -n "$endpoint" ]; then
     sleep 3
-    curl -fsS -X POST -d '{"v":1,"h":"AQIDBAUGBwg="}' "$(echo "$endpoint" | sed 's/10\.0\.2\.2/127.0.0.1/')" >/dev/null
+    curl -fsS -X POST -d '{"v":1,"h":"0102030405060708"}' "$(echo "$endpoint" | sed 's/10\.0\.2\.2/127.0.0.1/')" >/dev/null
 fi
 wait "$pid" || true
 tail -3 "$out"

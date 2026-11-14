@@ -2,7 +2,6 @@ package org.pingers.app.data
 
 import android.content.Context
 import android.os.SystemClock
-import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -10,9 +9,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import org.json.JSONException
 import org.pingers.app.BuildConfig
-import org.json.JSONObject
 import org.pingers.app.platform.AndroidPlatform
 import org.pingers.app.platform.CoreNotification
 import org.pingers.app.platform.CoreSink
@@ -23,6 +20,7 @@ import org.pingers.app.platform.NotificationKind
 import org.pingers.app.platform.Notifications
 import org.pingers.app.platform.PlatformException
 import org.pingers.app.platform.PlatformHost
+import org.pingers.app.platform.PushBody
 import org.pingers.app.platform.PushPlatform
 import org.pingers.app.platform.PushTokens
 import org.pingers.app.platform.SecureStoreKey
@@ -209,7 +207,7 @@ object CoreHost {
         }
 
         override fun onPush(platform: PushPlatform, payload: ByteArray, priority: FcmPriority?) {
-            val handle = handleOf(payload)
+            val handle = PushBody.handle(payload)
             if (handle == null) {
                 Log.i(TAG, "onPush $platform: not a Pingers push")
                 return
@@ -262,20 +260,6 @@ object CoreHost {
             uniffi.pingers.NotificationKind.LOCATION_REQUEST -> NotificationKind.LOCATION_REQUEST
         },
     )
-
-    /** `{"v":1,"h":"<base64 of 8 bytes>"}`, the push relay's content-free body. */
-    internal fun handleOf(payload: ByteArray): ByteArray? = try {
-        val json = JSONObject(String(payload, Charsets.UTF_8))
-        if (json.optInt("v") != 1) {
-            null
-        } else {
-            Base64.decode(json.getString("h"), Base64.DEFAULT).takeIf { it.size == 8 }
-        }
-    } catch (_: JSONException) {
-        null
-    } catch (_: IllegalArgumentException) {
-        null
-    }
 
     private fun Fix.toCore() = CoreFix(
         coordinate = Coordinate(latitude, longitude),
