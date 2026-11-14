@@ -301,6 +301,13 @@ pub(crate) fn run(workspace: &Path, options: &StackOptions) -> Result<Outcome> {
 }
 
 /// Whether the TLS front of a stack already answers on this machine.
+/// Whether server B and its relay answer behind the TLS front.
+pub(crate) fn second_front_is_up() -> bool {
+    [FRONT_SECOND_SERVER, FRONT_SECOND_OHTTP]
+        .into_iter()
+        .all(|port| answers(loopback(port)))
+}
+
 /// Server B's plain API listener, where its `/metrics` answers loopback callers.
 pub(crate) fn second_server_api() -> SocketAddr {
     loopback(SECOND_SERVER_PORT)

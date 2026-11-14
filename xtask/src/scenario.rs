@@ -337,6 +337,11 @@ fn setup_and_play(
     let mut own_stack: Option<Supervisor> = None;
     setup_step(report, "local stack up", || {
         if stack::front_is_up() {
+            if options.cross_server && !stack::second_front_is_up() {
+                bail!(
+                    "a stack without server B already holds the ports: stop it, or run without --cross-server"
+                );
+            }
             return Ok("using the stack already running".to_owned());
         }
         let prepared = stack::prepare(workspace, &options.stack)?;
