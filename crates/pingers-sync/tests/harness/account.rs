@@ -77,6 +77,32 @@ fn direct(device: &Device) -> Result<&crate::support::Direct, TestError> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_device_with_an_account_records_the_gateway_key_of_a_new_server() -> TestResult {
+    let world = World::start()?;
+    let device = world.account_device()?;
+    // The account key exists already (made for another server); this server has no pin yet.
+    let signing_key =
+        pingers_crypto::AccountSigningKey::from_bytes(zeroize::Zeroizing::new([7; 32]));
+    device
+        .session()?
+        .identity()
+        .save(&pingers_store::Identity {
+            account: pingers_crypto::account_id(&signing_key.public_key()),
+            signing_key,
+        })?;
+    let _prepared = device
+        .engine
+        .prepare_credentials(WakeBudget::UNLIMITED)
+        .await?;
+    assert_eq!(
+        device.session()?.servers().server_pin(&world.server_id)?,
+        Some(key_config_hash(&world.harness.endpoints().ohttp_key_config)),
+        "the account is registered on this server with the key its relay served"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_fresh_device_registers_stocks_tokens_and_takes_a_leaf_once() -> TestResult {
     let world = World::start()?;
     let device = world.account_device()?;
