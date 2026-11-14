@@ -11,8 +11,8 @@ use std::sync::Mutex;
 
 use pingers_crypto::{MailboxReadKey, mailbox_id, push_bind_for_mailbox};
 use pingers_proto::{
-    KeyConfigHash, MailboxSpec, PushHandle, PushRelayKeyId, RelayId, RelayRef, RelayUrl,
-    SealedPush, SealedPushBlob, SizeClass, TimeToLive, Urgency,
+    KeyConfigHash, MailboxPush, MailboxSpec, PushHandle, PushRelayKeyId, RelayId, RelayRef,
+    RelayUrl, SealedPush, SealedPushBlob, SizeClass, TimeToLive, Urgency,
 };
 use pingers_testkit::{ManualClock, TestRng, seeded_rng, test_clock};
 use pingers_time::UnixSeconds;
@@ -395,6 +395,69 @@ fn deleting_an_expired_mailbox_reports_it_absent() -> Result<(), TestError> {
     fixture.clock.advance(hour());
     assert!(matches!(
         fixture.service.delete(&spec.mailbox_id, &read_key(1)),
+        Err(MailboxError::NotFound)
+    ));
+    Ok(())
+}
+
+#[test]
+fn a_replaced_push_wakes_with_the_new_seal_and_keeps_the_messages() -> Result<(), TestError> {
+    let mut fixture = Fixture::new(10);
+    let spec = spec(1, hour(), Some(sealed_push(Urgency::Alert)))?;
+    fixture.service.register(&spec)?;
+    fixture.post(&spec.mailbox_id, &knock()?)?;
+    let mut renewed = sealed_push(Urgency::Quiet);
+    renewed.key_id = PushRelayKeyId::new(5);
+    renewed.handle = PushHandle::from_bytes([0x22; 8]);
+    let update = MailboxPush {
+        push: Some(renewed),
+    };
+    fixture
+        .service
+        .replace_push(&spec.mailbox_id, &read_key(1), &update)?;
+    let job = fixture
+        .post(&spec.mailbox_id, &knock()?)?
+        .wake
+        .ok_or(TestError::NoWake)?;
+    assert_eq!(job.request.key_id, PushRelayKeyId::new(5));
+    assert_eq!(job.request.handle, PushHandle::from_bytes([0x22; 8]));
+    assert_eq!(job.request.urgency, Urgency::Quiet);
+    let read = fixture.service.read(&spec.mailbox_id, &read_key(1), None)?;
+    assert_eq!(read.messages.len(), 2);
+    fixture
+        .service
+        .replace_push(&spec.mailbox_id, &read_key(1), &MailboxPush { push: None })?;
+    assert_eq!(fixture.post(&spec.mailbox_id, &knock()?)?.wake, None);
+    Ok(())
+}
+
+#[test]
+fn replacing_a_push_needs_the_read_key_a_live_mailbox_and_a_known_relay() -> Result<(), TestError> {
+    let mut fixture = Fixture::new(10);
+    let spec = spec(1, hour(), None)?;
+    fixture.service.register(&spec)?;
+    let update = MailboxPush {
+        push: Some(sealed_push(Urgency::Alert)),
+    };
+    assert!(matches!(
+        fixture
+            .service
+            .replace_push(&spec.mailbox_id, &read_key(2), &update),
+        Err(MailboxError::WrongReadKey)
+    ));
+    fixture.relay_enabled.set(false);
+    assert!(matches!(
+        fixture
+            .service
+            .replace_push(&spec.mailbox_id, &read_key(1), &update),
+        Err(MailboxError::UnknownRelay)
+    ));
+    fixture.relay_enabled.set(true);
+    fixture.clock.advance(hour());
+    assert!(matches!(
+        fixture
+            .service
+            .replace_push(&spec.mailbox_id, &read_key(1), &update),
         Err(MailboxError::NotFound)
     ));
     Ok(())

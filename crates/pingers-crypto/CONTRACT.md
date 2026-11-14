@@ -148,3 +148,16 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
   current 15-minute bucket; pingers-server accepts the current bucket, or the previous one
   within 60 s of a rollover. A replay inside the window only gets the same account another
   bearer. New label `pingers/v1/auth` (decision).
+
+### Push lifecycle (added 2026-11-14, v1-push)
+
+- **`push_seal_fingerprint` / `PushSealFingerprint`** (additive): `SHA-256("pingers/v1/push-seal-id"
+  || key id || relay public key || padded token plaintext with class Standard and not_after
+  0)[..16]`. Device-local: pingers-sync stores it beside every mailbox and subscription it
+  registers and seals again those whose fingerprint differs from the current token and relay
+  key. New label `pingers/v1/push-seal-id` (decision; never leaves the device, so no vector
+  file, a known-answer unit test instead).
+- **`Rs256Key` / `sign_compact_jws_rs256`** behind the `rs256` feature (additive): RS256
+  compact JWS for the push relay's FCM service-account assertion (RFC 7515, RFC 7523), moved
+  from pingers-push-relay. Google's header and claims, no Pingers label. The key is parsed from
+  PEM PKCS #8 into AWS-LC, which zeroizes it on free.

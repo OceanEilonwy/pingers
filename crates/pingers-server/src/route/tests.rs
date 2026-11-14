@@ -4,7 +4,7 @@
 use super::{Channel, Class, Resolved, Route, resolve};
 
 /// Design D, route by route: method, an example path, the route, its class.
-const TABLE: [(&str, &str, Route, Class); 26] = [
+const TABLE: [(&str, &str, Route, Class); 28] = [
     ("GET", "/v1/params", Route::Params, Class::Public),
     (
         "POST",
@@ -38,6 +38,12 @@ const TABLE: [(&str, &str, Route, Class); 26] = [
         "GET",
         "/v1/push-relays/1/config",
         Route::PushRelayConfig,
+        Class::Public,
+    ),
+    (
+        "GET",
+        "/v1/push-relays/1/config/next",
+        Route::PushRelayNextConfig,
         Class::Public,
     ),
     ("POST", "/v1/board/sync", Route::BoardSync, Class::Anonymous),
@@ -75,6 +81,12 @@ const TABLE: [(&str, &str, Route, Class); 26] = [
         "DELETE",
         "/v1/mailboxes/m1",
         Route::DeleteMailbox,
+        Class::Anonymous,
+    ),
+    (
+        "PUT",
+        "/v1/mailboxes/m1/push",
+        Route::MailboxPush,
         Class::Anonymous,
     ),
     ("POST", "/v1/groups", Route::CreateGroup, Class::Anonymous),

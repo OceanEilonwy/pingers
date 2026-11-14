@@ -8,6 +8,7 @@ use axum::http::StatusCode;
 use pingers_ohttp::{BinaryRequest, BinaryResponse, Header, OhttpError};
 
 use crate::route::{Channel, Resolved, Route, resolve};
+use crate::tasks::RelayConfigKind;
 use crate::wire::either;
 use crate::{LiveRoute, Shared, board_routes, groups, mailbox_routes, quota_routes};
 
@@ -109,13 +110,19 @@ pub(crate) fn key_config_reply(shared: &Shared) -> Reply {
 async fn dispatch(shared: &Arc<Shared>, route: Route, request: &BinaryRequest) -> Reply {
     let handler: Blocking = match route {
         Route::OhttpConfig => return key_config_reply(shared),
-        Route::PushRelayConfig => return push_relay_config(shared, request).await,
+        Route::PushRelayConfig => {
+            return push_relay_config(shared, request, RelayConfigKind::Published).await;
+        }
+        Route::PushRelayNextConfig => {
+            return push_relay_config(shared, request, RelayConfigKind::Next).await;
+        }
         Route::BoardPage => return board_routes::page(shared, request),
         Route::BoardRevokeLease => return board_routes::revoke(shared, request),
         Route::CreateMailbox => return either(mailbox_routes::register(shared, request).await),
         Route::PostToMailbox => return either(mailbox_routes::post(shared, request).await),
         Route::ReadMailbox => return either(mailbox_routes::read(shared, request).await),
         Route::DeleteMailbox => return either(mailbox_routes::delete(shared, request).await),
+        Route::MailboxPush => return either(mailbox_routes::replace_push(shared, request).await),
         Route::Live => match &shared.live {
             LiveRoute::Groups => groups::uplink,
             // A split channel's uplink frame; the chunked exchange goes through the gateway.
@@ -142,24 +149,34 @@ async fn dispatch(shared: &Arc<Shared>, route: Route, request: &BinaryRequest) -
     blocking(shared, request, handler).await
 }
 
-/// `GET /v1/push-relays/{relay id}/config`: the listed relay's key config as the relay
-/// publishes it. 404 for a relay this server does not list, 502 if it did not answer with a
-/// config. Devices check its hash against their pins: the server cannot substitute a key.
-async fn push_relay_config(shared: &Arc<Shared>, request: &BinaryRequest) -> Reply {
+/// `GET /v1/push-relays/{relay id}/config` and `.../config/next`: the listed relay's key
+/// config, or the one it publishes next with its activation time, as the relay serves it. 404
+/// for a relay this server does not list or, for the next key, when none is scheduled; 502 if
+/// it did not answer with a config. Devices check its hash against their pins: the server
+/// cannot substitute a key.
+async fn push_relay_config(
+    shared: &Arc<Shared>,
+    request: &BinaryRequest,
+    kind: RelayConfigKind,
+) -> Reply {
     let path = request
         .path
         .split_once('?')
         .map_or(request.path.as_str(), |(path, _query)| path);
     let relay = path
         .strip_prefix("/v1/push-relays/")
-        .and_then(|rest| rest.strip_suffix("/config"))
+        .and_then(|rest| match kind {
+            RelayConfigKind::Published => rest.strip_suffix("/config"),
+            RelayConfigKind::Next => rest.strip_suffix("/config/next"),
+        })
         .and_then(|id| id.parse::<u16>().ok())
         .map(pingers_proto::RelayId::new);
-    let Some(fetch) = relay.and_then(|relay| shared.tasks.push_relay_config(relay)) else {
+    let Some(fetch) = relay.and_then(|relay| shared.tasks.push_relay_config(relay, kind)) else {
         return Reply::status(StatusCode::NOT_FOUND);
     };
     match fetch.await {
-        Ok(body) => Reply {
+        Ok(None) => Reply::status(StatusCode::NOT_FOUND),
+        Ok(Some(body)) => Reply {
             status: StatusCode::OK,
             content_type: Some(CBOR),
             headers: Vec::new(),

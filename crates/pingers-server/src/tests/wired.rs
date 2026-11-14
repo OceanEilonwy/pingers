@@ -25,7 +25,7 @@ use zeroize::Zeroizing;
 
 use super::wallet::Wallet;
 use super::{Echo, Running, Setup, TestError, TestResult, connect, oblivious, start};
-use crate::tasks::{HttpPushRelay, push_url};
+use crate::tasks::{HttpPushRelay, RelayConfigKind, push_url};
 use crate::wire::READ_KEY_HEADER;
 
 /// An inner request with a body and headers.
@@ -440,8 +440,17 @@ async fn the_push_client_sends_the_credential_and_body_and_maps_the_status() -> 
 
 /// A push relay on loopback whose `GET /v1/config` answers `status` with `body`.
 async fn config_relay(status: StatusCode, body: Vec<u8>) -> Result<SocketAddr, TestError> {
+    config_relay_at("/v1/config", status, body).await
+}
+
+/// A push relay on loopback whose `GET path` answers `status` with `body`.
+async fn config_relay_at(
+    path: &'static str,
+    status: StatusCode,
+    body: Vec<u8>,
+) -> Result<SocketAddr, TestError> {
     let router = Router::new().route(
-        "/v1/config",
+        path,
         axum::routing::get(move || {
             let body = body.clone();
             async move { (status, body) }
@@ -499,7 +508,39 @@ async fn a_push_relay_config_is_passed_on_only_when_it_is_one() -> TestResult {
         (StatusCode::NOT_FOUND, small, Err(RelayUnreachable)),
     ] {
         let address = config_relay(status, body).await?;
-        let fetched = relay.fetch_config(&format!("http://{address}/")).await;
+        let fetched = relay
+            .fetch_config(&format!("http://{address}/"), RelayConfigKind::Published)
+            .await;
+        assert_eq!(fetched, expected.map(Some), "{status}");
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_next_key_config_is_passed_on_with_its_activation_or_reported_absent() -> TestResult {
+    let clock = ManualClock::new(UnixSeconds::new(1));
+    let relay = HttpPushRelay::new(Arc::new(clock), Duration::from_secs(10), Vec::new())?;
+    let published = config_of_length(400)?;
+    let scheduled = pingers_proto::ScheduledPushRelayConfig {
+        config: pingers_proto::PushRelayConfig::decode(&published)?,
+        activates_at: UnixSeconds::new(4_102_444_800),
+    }
+    .encode()?;
+    for (status, body, expected) in [
+        (StatusCode::OK, scheduled.clone(), Ok(Some(scheduled))),
+        // A bare config is the published key's body, not a schedule.
+        (StatusCode::OK, published, Err(RelayUnreachable)),
+        (StatusCode::NOT_FOUND, Vec::new(), Ok(None)),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Vec::new(),
+            Err(RelayUnreachable),
+        ),
+    ] {
+        let address = config_relay_at("/v1/config/next", status, body).await?;
+        let fetched = relay
+            .fetch_config(&format!("http://{address}"), RelayConfigKind::Next)
+            .await;
         assert_eq!(fetched, expected, "{status}");
     }
     Ok(())

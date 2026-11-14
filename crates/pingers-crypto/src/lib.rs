@@ -69,9 +69,9 @@ pub use location::{
     seal_location_ask, seal_location_grant,
 };
 pub use mailbox::{
-    MailboxReadKey, PushBind, PushRelayPrivateKey, PushRelayPublicKey, PushTokenToOpen,
-    PushTokenToSeal, key_config_hash, mailbox_id, open_push_token, push_bind_for_mailbox,
-    push_bind_for_subscription, seal_push_token,
+    MailboxReadKey, PushBind, PushRelayPrivateKey, PushRelayPublicKey, PushSealFingerprint,
+    PushTokenToOpen, PushTokenToSeal, key_config_hash, mailbox_id, open_push_token,
+    push_bind_for_mailbox, push_bind_for_subscription, push_seal_fingerprint, seal_push_token,
 };
 pub use presence::{
     BeaconHeader, KnockKey, KnockPlaintext, KnockSignedFields, MeetupPsk, PresenceRoot, SealKey,

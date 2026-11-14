@@ -6,7 +6,7 @@ use std::sync::{Mutex, PoisonError};
 
 use pingers_crypto::{MailboxReadKey, mailbox_id, push_bind_for_mailbox};
 use pingers_presence::{check_mailbox_post, check_mailbox_spec};
-use pingers_proto::{MailboxId, MailboxMessages, MailboxSpec, Padded, SequenceNumber};
+use pingers_proto::{MailboxId, MailboxMessages, MailboxPush, MailboxSpec, Padded, SequenceNumber};
 use pingers_time::Clock;
 use rand_core::CryptoRng;
 
@@ -202,6 +202,32 @@ impl<S: MailboxStorage, C: Clock, D: RelayDirectory, L: PostLimit> Mailboxes<S, 
         }
     }
 
+    /// `PUT /v1/mailboxes/{id}/push`: replaces the mailbox's sealed push (`None` removes it),
+    /// for the holder of the read key. The lifetime and the messages stay as they are.
+    ///
+    /// # Errors
+    ///
+    /// [`MailboxError::WrongReadKey`] if the key does not derive `id`;
+    /// [`MailboxError::NotFound`] if no live mailbox has the id;
+    /// [`MailboxError::UnknownRelay`] if the push names a relay this server does not forward
+    /// to; [`MailboxError::Storage`] if the storage fails.
+    pub fn replace_push(
+        &mut self,
+        id: &MailboxId,
+        read_key: &MailboxReadKey,
+        update: &MailboxPush,
+    ) -> Result<(), MailboxError> {
+        check_read_key(id, read_key)?;
+        self.live(id)?;
+        if let Some(push) = &update.push
+            && self.directory.resolve(&push.relay).is_none()
+        {
+            return Err(MailboxError::UnknownRelay);
+        }
+        self.storage.set_push(id, update.push.as_ref())?;
+        Ok(())
+    }
+
     /// Deletes every expired mailbox and its messages. The server calls this on a timer;
     /// requests already treat expired mailboxes as absent.
     ///
@@ -219,7 +245,7 @@ impl<S: MailboxStorage, C: Clock, D: RelayDirectory, L: PostLimit> Mailboxes<S, 
     ///
     /// [`MailboxError::Storage`] if the storage fails.
     pub fn push_gone(&mut self, id: &MailboxId) -> Result<(), MailboxError> {
-        self.storage.clear_push(id)?;
+        self.storage.set_push(id, None)?;
         Ok(())
     }
 
