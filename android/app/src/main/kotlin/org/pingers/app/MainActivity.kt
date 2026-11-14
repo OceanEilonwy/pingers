@@ -189,9 +189,13 @@ private fun App(repo: PingersRepository, nav: Navigator, pending: Intent?, consu
                 Notifications.cancelLetIn(context)
                 nav.reset(Route.LetIn)
             }
-            // A join link: Open invite remembers it; only "Ask to join" hands it to the core.
-            intent.action == Intent.ACTION_VIEW && intent.data != null -> {
-                repo.showInvite(intent.dataString.orEmpty())
+            // A join link (InviteLinks: any server's https link, pingers://join, or the landing
+            // page's intent): Open invite remembers it; only "Ask to join" hands it to the core.
+            intent.action == Intent.ACTION_VIEW &&
+                InviteLinks.fromView(intent.dataString, intent.getStringExtra(InviteLinks.EXTRA_INVITE)) != null -> {
+                repo.showInvite(
+                    InviteLinks.fromView(intent.dataString, intent.getStringExtra(InviteLinks.EXTRA_INVITE)).orEmpty(),
+                )
                 nav.go(Route.OpenInvite)
             }
             // Debug builds only: `adb shell am start -n ... --es screen Compass` opens a screen

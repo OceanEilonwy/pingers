@@ -15,6 +15,13 @@ delivery_db = "target/dev-stack/groups.sqlite"
 quota_db = "target/dev-stack/quota.sqlite"
 mailbox_db = "target/dev-stack/mailboxes.sqlite"
 
+# Debug app builds (`.debug` package ids, signed with the local debug keystore) open this
+# stack's invite links directly. Replace the fingerprint with your own debug keystore's:
+#   keytool -list -v -keystore ~/.android/debug.keystore -storepass android
+[app_links]
+packages = ["org.pingers.app.debug", "org.pingers.app.foss.debug"]
+certificates = ["C1:07:CB:BC:EF:B3:BE:DD:52:A6:17:85:92:D9:AE:C5:A9:E1:12:05:A6:C4:92:90:A0:AF:7D:BA:08:F9:6F:1C"]
+
 [ohttp]
 listen = "127.0.0.1:9471"
 relays = ["127.0.0.1"]

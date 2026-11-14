@@ -12,6 +12,12 @@ delivery_db = "/var/lib/apps/pingers-server/groups.sqlite"
 quota_db = "/var/lib/apps/pingers-server/quota.sqlite"
 mailbox_db = "/var/lib/apps/pingers-server/mailboxes.sqlite"
 
+# Invite links (https://<server_id>/j) open in the app directly: the official builds' package ids
+# (Play and F-Droid) and the signing certificate (docs/deploy-nodo.md, "App Links").
+[app_links]
+packages = ["org.pingers.app", "org.pingers.app.foss"]
+certificates = ["$(pingers-server.app_signing_certificate)"]
+
 [ohttp]
 # The gateway's own listener (P1): only POST /ohttp and GET /v1/ohttp/config, reachable by
 # pingers-ohttp-relay alone. The public listener answers /ohttp with 404.
