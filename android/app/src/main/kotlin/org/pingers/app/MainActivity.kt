@@ -150,8 +150,8 @@ private fun App(repo: PingersRepository, nav: Navigator, pending: Intent?, consu
 
     LaunchedEffect(pending) {
         val intent = pending ?: return@LaunchedEffect
-        // Debug builds only: `--es map_host http://10.0.2.2:8090` points maps at a host on the
-        // development machine (android/docs/maps.md, "Testing").
+        // Debug builds only: `--es map_host https://10.0.2.2:9446` points maps at a host on the
+        // development machine, such as the local stack's (android/docs/maps.md, "Testing").
         if (debuggable(context) && intent.hasExtra(EXTRA_MAP_HOST)) maps.setHostOverride(intent.getStringExtra(EXTRA_MAP_HOST))
         when {
             intent.getStringExtra(CoPresenceNotifier.EXTRA_ACTION) == CoPresenceNotifier.OPEN_MEETUP -> {

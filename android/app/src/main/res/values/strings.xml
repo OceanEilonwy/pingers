@@ -372,7 +372,16 @@
     <string name="maps_prepared_on_request">Prepared when you ask for it</string>
     <string name="maps_failed_network">Couldn\'t download. Check your connection and try again.</string>
     <string name="maps_failed_checksum">The download didn\'t match its checksum, so it was deleted.</string>
-    <string name="maps_failed_relay">Downloads through the privacy relay aren\'t available yet. Turn the setting off in Advanced to download directly.</string>
+    <string name="maps_failed_not_through_relay">This map host can\'t be reached through the privacy relay: your server passes map downloads only to its own map host.</string>
+    <string name="maps_failed_no_relay_route">Downloads through the privacy relay go through your Pingers server, and this app has none set up yet. Turn the setting off in Advanced to download directly.</string>
+    <string name="maps_failed_key_changed">The map host\'s key changed since this phone first saw it, so downloads through the privacy relay stopped.</string>
+    <string name="maps_failed_preparing">The map host is still preparing this area. Try again later.</string>
+    <string name="maps_failed_storage">Couldn\'t save the map on this phone.</string>
+    <string name="maps_no_core">Maps can\'t be downloaded right now: the app\'s core didn\'t start.</string>
+    <string name="maps_host_not_through_relay">%1$s can\'t be reached through the privacy relay</string>
+    <string name="maps_host_no_relay_route">%1$s: downloads through the privacy relay need your Pingers server</string>
+    <string name="maps_host_key_changed">%1$s: its key changed since this phone first saw it. Trust the new key only if you know the host changed it.</string>
+    <string name="maps_trust_new_key">Trust the new key</string>
     <string name="maps_failed_not_offered">This map host no longer has this area.</string>
     <string name="maps_loading">Getting the list of areas</string>
     <string name="maps_none">No map host answered. Check your connection, or the map host in Advanced.</string>

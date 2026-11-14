@@ -4,27 +4,32 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
 import java.io.File
-import java.io.IOException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 import org.pingers.app.BuildConfig
 import org.pingers.app.data.Coordinate
 import org.pingers.app.data.CoreHost
+import uniffi.pingers.Core
+import uniffi.pingers.CoreException
+import uniffi.pingers.MapDownloadListener
+import uniffi.pingers.MapDownloadRequest
+import uniffi.pingers.MapFailure
 
 /*
- * Region packs on this phone: which hosts to use, what they offer, what is installed, and
- * downloads. Everything a map shows comes from these files; the app never asks a host for
- * the part of the map on screen, and place search reads the installed indexes.
+ * Region packs on this phone, and the user's map settings. The Rust core fetches catalogs and
+ * downloads packs (design E.1: the shell makes no network calls), checks them against their
+ * manifests and installs them in the app's maps directory; this class asks it to, follows
+ * progress, and gives the map screens the installed packs to draw. Place search reads the
+ * installed indexes on the phone.
  */
 
 /** The user's map settings (Advanced). */
@@ -38,30 +43,36 @@ data class MapSettings(
 /** Where a region's download is. */
 sealed interface DownloadState {
     data class Running(val done: Long, val total: Long) : DownloadState
-    /** A cache-mode host is cutting the region; the app retries after [seconds]. */
+    /** A cache-mode host is cutting the region; the core asks again after [seconds]. */
     data class Preparing(val seconds: Int) : DownloadState
     data class Failed(val reason: Failure) : DownloadState
 }
 
-enum class Failure { Network, Checksum, RelayUnavailable, NotOffered }
+enum class Failure { Network, Checksum, NotOffered, Preparing, NotThroughRelay, NoRelayRoute, KeyChanged, Storage, NoCore }
 
 /** The region picker's list. */
 sealed interface CatalogState {
     data object Idle : CatalogState
     data object Loading : CatalogState
-    data class Loaded(val offers: List<RegionOffer>, val failedHosts: List<MapHost>, val relayUnavailable: Boolean = false) : CatalogState
+    data class Loaded(val offers: List<RegionOffer>, val failedHosts: List<FailedHost>) : CatalogState
+    /** The core did not open, so nothing can be fetched. */
+    data object NoCore : CatalogState
 }
 
 /**
  * The map host the user's Pingers server advertises (`map_host` in `/v1/params`), as the core
- * last read it ([CoreHost.serverMapHost]). Null until then: the chain goes from the user's
- * override straight to the publisher's default.
+ * last read it ([CoreHost.serverMapHost]), for the words about which host is in use. The core
+ * adds it to the chain itself.
  */
 fun interface ServerMapHost {
     fun url(): String?
 }
 
-class Maps(context: Context, private val serverMapHost: ServerMapHost = ServerMapHost { null }) {
+class Maps(
+    context: Context,
+    private val serverMapHost: ServerMapHost = ServerMapHost { null },
+    private val core: suspend () -> Core? = { CoreHost.core() },
+) {
     private val directory = File(context.filesDir, "maps").apply { mkdirs() }
     private val prefs: SharedPreferences = context.getSharedPreferences("maps", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -71,7 +82,7 @@ class Maps(context: Context, private val serverMapHost: ServerMapHost = ServerMa
     )
     val settings: StateFlow<MapSettings> = _settings.asStateFlow()
 
-    private val _installed = MutableStateFlow(readInstalled())
+    private val _installed = MutableStateFlow<List<Manifest>>(emptyList())
     val installed: StateFlow<List<Manifest>> = _installed.asStateFlow()
 
     private val _catalog = MutableStateFlow<CatalogState>(CatalogState.Idle)
@@ -83,7 +94,11 @@ class Maps(context: Context, private val serverMapHost: ServerMapHost = ServerMa
     private val jobs = HashMap<String, Job>()
     private val indexes = HashMap<String, PlaceIndex>()
 
-    /** The fallback chain, highest priority first, without repeats. */
+    init {
+        scope.launch { reloadInstalled() }
+    }
+
+    /** The fallback chain, highest priority first, without repeats: for the words only. */
     fun chain(): List<MapHost> = listOfNotNull(
         _settings.value.hostOverride?.let { MapHost(it.trimEnd('/'), MapHostSource.UserOverride) },
         serverMapHost.url()?.let { MapHost(it.trimEnd('/'), MapHostSource.Server) },
@@ -103,110 +118,101 @@ class Maps(context: Context, private val serverMapHost: ServerMapHost = ServerMa
     fun setThroughRelay(on: Boolean) {
         prefs.edit { putBoolean(KEY_RELAY, on) }
         _settings.update { it.copy(throughRelay = on) }
+        _catalog.value = CatalogState.Idle
     }
 
-    private fun fetcher(): Fetcher = if (_settings.value.throughRelay) RelayFetcher else DirectFetcher
+    private fun ffiSettings() = _settings.value.let {
+        uniffi.pingers.MapSettings(it.hostOverride, BuildConfig.MAP_HOST.trimEnd('/'), it.throughRelay)
+    }
 
-    /** Fetches each host's catalog in the chain. Catalogs say nothing about where the user is. */
+    /** Asks the core what the host chain offers. Catalogs say nothing about where the user is. */
     fun refreshCatalog() {
         _catalog.value = CatalogState.Loading
         scope.launch {
-            val fetcher = fetcher()
-            if (fetcher is RelayFetcher) {
-                // Nothing goes direct while the relay setting is on, catalogs included.
-                _catalog.value = CatalogState.Loaded(emptyList(), emptyList(), relayUnavailable = true)
+            val core = core()
+            if (core == null) {
+                _catalog.value = CatalogState.NoCore
                 return@launch
             }
-            val catalogs = chain().map { host ->
-                try {
-                    HostCatalog.Listed(host, parseCatalog(fetchText(fetcher, "${host.url}/catalog.json")))
-                } catch (e: IOException) {
-                    HostCatalog.Failed(host)
-                } catch (e: org.json.JSONException) {
-                    HostCatalog.Failed(host)
-                }
+            _catalog.value = try {
+                val catalog = core.mapCatalog(ffiSettings())
+                CatalogState.Loaded(catalog.offers.map(RegionOffer::of), catalog.failed.map(FailedHost::of))
+            } catch (e: CoreException) {
+                CatalogState.Loaded(emptyList(), emptyList())
             }
-            _catalog.value = CatalogState.Loaded(resolveRegions(catalogs), catalogs.filterIsInstance<HostCatalog.Failed>().map { it.host })
         }
     }
 
-    /** Downloads (or updates) a region from the host that offers it. */
+    /** Has the core download (or update) a region from the host that offers it. */
     fun download(offer: RegionOffer) {
         if (jobs[offer.id]?.isActive == true) return
         jobs[offer.id] = scope.launch {
-            val fetcher = fetcher()
-            var attempt = 0
-            while (true) {
-                try {
-                    val manifest = when (val entry = offer.entry) {
-                        is CatalogEntry.Ready -> entry.manifest
-                        is CatalogEntry.OnDemand -> Manifest.parse(JSONObject(fetchText(fetcher, "${offer.host.url}/${entry.id.replace('/', '.')}.json")))
-                            ?: throw HttpFailure(404)
-                    }
-                    install(fetcher, offer.host, manifest)
-                    _downloads.update { it - offer.id }
-                    return@launch
-                } catch (e: Preparing) {
-                    // A cache-mode host cuts the region on first request; wait as it asks, a bounded number of times.
-                    if (++attempt > 40) {
-                        fail(offer.id, Failure.Network)
-                        return@launch
-                    }
-                    _downloads.update { it + (offer.id to DownloadState.Preparing(e.seconds)) }
-                    delay(e.seconds.coerceIn(1, 120) * 1000L)
-                } catch (e: RelayUnavailable) {
-                    fail(offer.id, Failure.RelayUnavailable)
-                    return@launch
-                } catch (e: ChecksumMismatch) {
-                    fail(offer.id, Failure.Checksum)
-                    return@launch
-                } catch (e: HttpFailure) {
-                    fail(offer.id, if (e.status == 404) Failure.NotOffered else Failure.Network)
-                    return@launch
-                } catch (e: IOException) {
-                    fail(offer.id, Failure.Network)
-                    return@launch
-                } catch (e: org.json.JSONException) {
-                    fail(offer.id, Failure.Network)
-                    return@launch
-                }
+            val core = core()
+            if (core == null) {
+                fail(offer.id, Failure.NoCore)
+                return@launch
             }
+            val listener = object : MapDownloadListener {
+                override fun downloaded(done: ULong, total: ULong) =
+                    _downloads.update { it + (offer.id to DownloadState.Running(done.toLong(), total.toLong())) }
+
+                override fun preparing(retryAfterSeconds: ULong) =
+                    _downloads.update { it + (offer.id to DownloadState.Preparing(retryAfterSeconds.toInt())) }
+            }
+            try {
+                core.downloadMap(MapDownloadRequest(offer.offer, ffiSettings(), directory.absolutePath), listener)
+                _downloads.update { it - offer.id }
+                synchronized(indexes) { indexes.remove(offer.id) }
+                reloadInstalled(core)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: CoreException.Map) {
+                fail(offer.id, failureOf(e.failure))
+            } catch (e: CoreException) {
+                fail(offer.id, Failure.Network)
+            }
+        }
+    }
+
+    /** Trusts the map host's new gateway key after it changed, and asks again. */
+    fun trustNewKey() {
+        scope.launch {
+            val core = core() ?: return@launch
+            try {
+                core.forgetMapHostKey()
+            } catch (_: CoreException) {
+                return@launch
+            }
+            _downloads.update { downloads -> downloads.filterValues { (it as? DownloadState.Failed)?.reason != Failure.KeyChanged } }
+            refreshCatalog()
         }
     }
 
     private fun fail(id: String, reason: Failure) = _downloads.update { it + (id to DownloadState.Failed(reason)) }
 
-    private fun install(fetcher: Fetcher, host: MapHost, manifest: Manifest) {
-        val total = manifest.index.size + manifest.pack.size
-        val report = { done: Long -> _downloads.update { it + (manifest.id to DownloadState.Running(done, total)) } }
-        downloadFile(fetcher, "${host.url}/${manifest.index.file}", File(directory, manifest.index.file), manifest.index.size, manifest.index.sha256, report)
-        downloadFile(fetcher, "${host.url}/${manifest.pack.file}", File(directory, manifest.pack.file), manifest.pack.size, manifest.pack.sha256) {
-            report(manifest.index.size + it)
-        }
-        // The manifest goes last: a region is installed exactly when its manifest is on disk.
-        val json = File(directory, manifest.stem + ".json")
-        val partial = File(json.path + ".partial")
-        partial.writeText(manifest.toJson().toString())
-        partial.renameTo(json)
-        synchronized(indexes) { indexes.remove(manifest.id) }
-        _installed.value = readInstalled()
-    }
-
     fun delete(id: String) {
         jobs.remove(id)?.cancel()
-        val stem = id.replace('/', '.')
-        File(directory, "$stem.json").delete()
-        listOf(".pmtiles", ".places.tsv", ".pmtiles.partial", ".places.tsv.partial").forEach { File(directory, stem + it).delete() }
         synchronized(indexes) { indexes.remove(id) }
         _downloads.update { it - id }
-        _installed.value = readInstalled()
+        scope.launch {
+            val core = core() ?: return@launch
+            try {
+                core.deleteMap(directory.absolutePath, id)
+            } catch (_: CoreException) {
+                // What is left stays listed as installed or not by the reload below.
+            }
+            reloadInstalled(core)
+        }
     }
 
-    private fun readInstalled(): List<Manifest> =
-        directory.listFiles { f -> f.name.endsWith(".json") }.orEmpty().mapNotNull { file ->
-            runCatching { Manifest.parse(JSONObject(file.readText())) }.getOrNull()
-                ?.takeIf { File(directory, it.pack.file).length() == it.pack.size }
+    private suspend fun reloadInstalled(opened: Core? = null) {
+        val core = opened ?: core() ?: return
+        _installed.value = try {
+            core.installedMaps(directory.absolutePath).map(Manifest::of)
+        } catch (_: CoreException) {
+            emptyList()
         }
+    }
 
     /** The installed pack to draw [at] with, if any. */
     fun packFor(at: Coordinate): Manifest? = covering(_installed.value, at).firstOrNull()
@@ -234,6 +240,18 @@ class Maps(context: Context, private val serverMapHost: ServerMapHost = ServerMa
             instance ?: Maps(context.applicationContext, ServerMapHost { CoreHost.serverMapHost() }).also { instance = it }
         }
     }
+}
+
+/** Why the core's download failed, as the picker says it. */
+fun failureOf(failure: MapFailure): Failure = when (failure) {
+    MapFailure.NETWORK -> Failure.Network
+    MapFailure.CHECKSUM -> Failure.Checksum
+    MapFailure.NOT_OFFERED -> Failure.NotOffered
+    MapFailure.PREPARING -> Failure.Preparing
+    MapFailure.NOT_THROUGH_RELAY -> Failure.NotThroughRelay
+    MapFailure.NO_RELAY_ROUTE -> Failure.NoRelayRoute
+    MapFailure.KEY_CHANGED -> Failure.KeyChanged
+    MapFailure.STORAGE -> Failure.Storage
 }
 
 /** Whether [installed] is older than what the host offers: updates are offered, never automatic. */
