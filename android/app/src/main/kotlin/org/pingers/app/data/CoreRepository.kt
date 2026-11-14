@@ -48,6 +48,9 @@ class CoreRepository(
     private val sink = object : Events {
         override fun partiesChanged() = refreshLater()
         override fun joinRequested(party: uniffi.pingers.PartyId) = refreshLater()
+        // The refresh publishes [letIn]; MainActivity routes to You're in when it appears, and
+        // CoreHost posts the notification (it also runs with no activity).
+        override fun letIn(party: uniffi.pingers.PartyId) = refreshLater()
         override fun meetupStarted(meetup: uniffi.pingers.MeetupId) = refreshLater {
             currentMeetup = meetup.toUi()
             _events.tryEmit(Event.MeetupStarted(_home.value.alert))
@@ -87,6 +90,12 @@ class CoreRepository(
     private var compassSelection: CompassSelection = CompassSelection.MeetPoint
     private var createError: String? = null
 
+    // Join flow A: the link opened (kept until "Ask to join"), why asking failed, and the
+    // request "Ben asked to join" is showing.
+    private var inviteLink: String? = null
+    private var askError: String? = null
+    private var currentJoinRequest: InviteId? = null
+
     private var partyDraft = uniffi.pingers.PartyDraft(
         name = "",
         colour = uniffi.pingers.PartyColour.BLUE,
@@ -120,8 +129,14 @@ class CoreRepository(
     override val advanced: StateFlow<AdvancedState> = _advanced.asStateFlow()
     private val _invite = MutableStateFlow(InviteState("", null, null, emptyList()))
     override val invite: StateFlow<InviteState> = _invite.asStateFlow()
-    private val _acceptInvite = MutableStateFlow(AcceptInviteState("", "", "", PartyColour.Blue, emptyList(), 0, 0, 0, ""))
-    override val acceptInvite: StateFlow<AcceptInviteState> = _acceptInvite.asStateFlow()
+    private val _openInvite = MutableStateFlow(OpenInviteState("", "", "", emptyList(), "", "", "", ""))
+    override val openInvite: StateFlow<OpenInviteState> = _openInvite.asStateFlow()
+    private val _askedToJoin = MutableStateFlow<AskedToJoinState?>(null)
+    override val askedToJoin: StateFlow<AskedToJoinState?> = _askedToJoin.asStateFlow()
+    private val _letIn = MutableStateFlow<LetInState?>(null)
+    override val letIn: StateFlow<LetInState?> = _letIn.asStateFlow()
+    private val _joinRequest = MutableStateFlow<JoinRequestState?>(null)
+    override val joinRequest: StateFlow<JoinRequestState?> = _joinRequest.asStateFlow()
     private val _party = MutableStateFlow(
         PartyState(PartyId(""), "", emptyList(), emptyList(), cardFrame(emptyList()), "", PrivacyLevel.Full, null),
     )
@@ -200,7 +215,7 @@ class CoreRepository(
         publishNewParty()
         read("zones") { it.exclusionZones().toUi() }?.let { _exclusionZones.value = it }
         read("privacy") { it.privacy().toUi() }?.let { _privacy.value = it }
-        read("accept invite") { it.acceptInvite()?.toUi() }?.let { _acceptInvite.value = it }
+        publishJoin()
         read("meetup ended") { it.meetupEnded(localClock())?.toUi() }?.let { _meetupEnded.value = it }
         publishParty()
         publishSpotEditor()
@@ -221,6 +236,25 @@ class CoreRepository(
                     postQuantum = partyDraft.postQuantum,
                 )
             }
+    }
+
+    /** Join flow A: Open invite, Asked to join, You're in, and the request the inviter opened. */
+    private fun publishJoin() {
+        if (snapshot == null) return
+        publishOpenInvite()
+        _askedToJoin.value = read("asked to join") { it.askedToJoin()?.toUi() }
+        _letIn.value = read("let in") { it.letIn()?.toUi() }
+        val party = invitingParty()
+        val request = currentJoinRequest
+        _joinRequest.value = if (party != null && request != null) {
+            read("join request") { it.joinRequest(party.toFfi(), request.toFfi(), localClock()).toUi() }
+        } else {
+            null
+        }
+    }
+
+    private fun publishOpenInvite() {
+        read("open invite") { it.openInvite().toUi(askError) }?.let { _openInvite.value = it }
     }
 
     private fun publishParty() {
@@ -360,26 +394,64 @@ class CoreRepository(
     /** The Party Invite people is showing (publishParty's choice). */
     private fun invitingParty(): PartyId? = currentParty ?: _home.value.parties.firstOrNull()?.id
 
-    // Verifying admits whoever opened the invite. The core answers Unavailable until
-    // pingers-sync delivers join requests, so no invite shows as opened before then.
-    override fun verifyInvite(invitationId: InviteId) {
-        val party = invitingParty() ?: return
-        call("verify invite") { it.verifyInvite(party.toFfi(), invitationId.toFfi()) }
-    }
-
     override fun cancelInvite(invitationId: InviteId) {
         val party = invitingParty() ?: return
         call("cancel invite") { it.cancelInvite(party.toFfi(), invitationId.toFfi()) }
     }
 
-    override fun acceptInvite() = call("accept invite") { core ->
-        currentParty = core.acceptInvite().toUi()
+    // ------------------------------------------------------------ Join flow A, the joiner
+
+    override fun showInvite(link: String) {
+        inviteLink = link
+        askError = null
+        publishOpenInvite()
     }
 
-    override fun declineInvite() = Unit
+    override fun askToJoin(name: String, onAsked: () -> Unit) {
+        val link = inviteLink ?: return
+        askError = null
+        call("ask to join", onError = { askError = it; publishOpenInvite() }) { core ->
+            core.openInvite(link, name)
+            inviteLink = null
+            // Asked to join reads its code from the snapshot, so take it before going there.
+            refresh()
+            onAsked()
+        }
+    }
 
-    /** Opens an invite link: Accept invite then shows its preview. */
-    fun openInvite(link: String) = call("open invite") { it.openInvite(link, myName()) }
+    override fun withdrawJoin() = call("withdraw join") { it.withdrawJoin() }
+
+    override fun openJoinedParty() {
+        val party = _letIn.value?.party ?: return
+        currentParty = party
+        publishParty()
+        call("dismiss join") { it.dismissJoin() }
+    }
+
+    override fun leaveJoinedParty() {
+        val party = _letIn.value?.party ?: return
+        if (currentParty == party) currentParty = null
+        call("leave party") { it.leaveParty(party.toFfi()) }
+        call("dismiss join") { it.dismissJoin() }
+    }
+
+    // ------------------------------------------------------------ Join flow A, the inviter
+
+    override fun openJoinRequest(requestId: InviteId) {
+        currentJoinRequest = requestId
+        publishJoin()
+    }
+
+    override fun letIn() = decide("let in") { core, party, request -> core.letIn(party, request) }
+
+    override fun turnAway() = decide("turn away") { core, party, request -> core.turnAway(party, request) }
+
+    private fun decide(what: String, block: suspend (Core, uniffi.pingers.PartyId, uniffi.pingers.InviteId) -> Unit) {
+        val party = invitingParty() ?: return
+        val request = currentJoinRequest ?: return
+        currentJoinRequest = null
+        call(what) { block(it, party.toFfi(), request.toFfi()) }
+    }
 
     /** The name set on this phone, or the default until one is (no screen sets it yet). */
     private fun myName(): String =

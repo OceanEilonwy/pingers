@@ -26,3 +26,7 @@ reason = "equivalent in the client tests: they run without an instance, so there
 name = "crates/pingers-client/src/real/meetups.rs: replace <impl MeetupPort for Meetups>::leave -> Result<(), PortError> with Ok(())"
 reason = "equivalent in the client tests: without a harness server no Meetup goes live, so leave always finds none and answers Ok(()). Remove when a client test runs a Meetup against the harness server."
 
+
+[[mutant]]
+name = "crates/pingers-parties/src/joining.rs: replace match guard admitted == reply with true in PartyLifecycle<'_>::approve_join"
+reason = "defensive and unreachable through the API: letting someone in drops every other request through that invite, and a used invite refuses new ones, so the only request a used invite can still hold is the one it admitted (put back by commit_rejected)"

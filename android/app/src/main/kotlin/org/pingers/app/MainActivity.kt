@@ -38,14 +38,22 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.pingers.app.data.CoreRepositories
 import org.pingers.app.data.CoreRepository
 import org.pingers.app.data.FakeRepository
+import org.pingers.app.data.PartyId
 import org.pingers.app.data.PingersRepository
-import org.pingers.app.ui.screens.AcceptInviteScreen
+import org.pingers.app.platform.Notifications
 import org.pingers.app.ui.screens.AdvancedScreen
 import org.pingers.app.ui.screens.AlertScreen
+import org.pingers.app.ui.screens.AskedToJoinScreen
+import org.pingers.app.ui.screens.JoinRequestScreen
+import org.pingers.app.ui.screens.LetInScreen
+import org.pingers.app.ui.screens.OpenInviteScreen
 import org.pingers.app.ui.screens.ChatScreen
 import org.pingers.app.ui.screens.CompassScreen
 import org.pingers.app.ui.screens.DrawAreaScreen
@@ -120,7 +128,22 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        // You're in: once per Party, when Events.let_in published it or when the app starts
+        // with one not yet dismissed. CoreHost posts the notification.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                core.letIn.map { it?.party }.distinctUntilChanged().filterNotNull().collect { party ->
+                    if (party != shownLetIn) {
+                        shownLetIn = party
+                        if (nav.current != Route.LetIn) nav.go(Route.LetIn)
+                    }
+                }
+            }
+        }
     }
+
+    /** The Party You're in was last routed to, so coming back to the app doesn't route again. */
+    private var shownLetIn: PartyId? = null
 }
 
 private const val EXTRA_SCREEN = "screen"
@@ -157,9 +180,14 @@ private fun App(repo: PingersRepository, nav: Navigator, pending: Intent?, consu
                 repo.hideMeHere()
                 nav.reset(Route.Home)
             }
+            intent.getStringExtra(Notifications.EXTRA_OPEN) == Notifications.OPEN_LET_IN -> {
+                Notifications.cancelLetIn(context)
+                nav.reset(Route.LetIn)
+            }
+            // A join link: Open invite remembers it; only "Ask to join" hands it to the core.
             intent.action == Intent.ACTION_VIEW && intent.data != null -> {
-                (repo as? CoreRepository)?.openInvite(intent.dataString.orEmpty())
-                nav.go(Route.AcceptInvite)
+                repo.showInvite(intent.dataString.orEmpty())
+                nav.go(Route.OpenInvite)
             }
             // Debug builds only: `adb shell am start -n ... --es screen Compass` opens a screen
             // directly, for screenshots (android/docs/screenshots).
@@ -218,7 +246,10 @@ private fun Screen(route: Route, repo: PingersRepository, nav: Navigator, simula
         Route.NewParty -> NewPartyScreen(repo.newParty.collectAsStateWithLifecycle().value, repo, nav)
         Route.Advanced -> AdvancedScreen(repo.advanced.collectAsStateWithLifecycle().value, repo, nav)
         Route.Invite -> InviteScreen(repo.invite.collectAsStateWithLifecycle().value, repo, nav)
-        Route.AcceptInvite -> AcceptInviteScreen(repo.acceptInvite.collectAsStateWithLifecycle().value, repo, nav)
+        Route.JoinRequest -> JoinRequestScreen(repo.joinRequest.collectAsStateWithLifecycle().value, repo, nav)
+        Route.OpenInvite -> OpenInviteScreen(repo.openInvite.collectAsStateWithLifecycle().value, repo, nav)
+        Route.AskedToJoin -> AskedToJoinScreen(repo.askedToJoin.collectAsStateWithLifecycle().value, repo, nav)
+        Route.LetIn -> LetInScreen(repo.letIn.collectAsStateWithLifecycle().value, repo, nav)
         Route.Party -> PartyScreen(repo.party.collectAsStateWithLifecycle().value, repo, nav)
         Route.SpotEditor -> SpotEditorScreen(repo.spotEditor.collectAsStateWithLifecycle().value, repo, nav)
         Route.DrawArea -> DrawAreaScreen(repo.drawArea.collectAsStateWithLifecycle().value, repo, nav)

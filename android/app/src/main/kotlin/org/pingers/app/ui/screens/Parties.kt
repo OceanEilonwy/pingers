@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -51,16 +50,12 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.pingers.app.Navigator
 import org.pingers.app.R
 import org.pingers.app.Route
-import org.pingers.app.data.AcceptInviteState
 import org.pingers.app.data.AdvancedState
 import org.pingers.app.data.Fence
 import org.pingers.app.data.Invitation
@@ -74,7 +69,6 @@ import org.pingers.app.data.PushRelayChoice
 import org.pingers.app.data.Reachability
 import org.pingers.app.data.SpotRow
 import org.pingers.app.ui.components.Avatar
-import org.pingers.app.ui.components.AvatarStack
 import org.pingers.app.ui.components.Card
 import org.pingers.app.ui.components.IconAction
 import org.pingers.app.ui.components.IconBadge
@@ -360,14 +354,14 @@ fun InviteScreen(state: InviteState, repo: PingersRepository, nav: Navigator) {
         Card {
             state.invitations.forEachIndexed { i, inv ->
                 if (i > 0) RowDivider()
-                InvitationRow(inv, repo)
+                InvitationRow(inv, repo, nav)
             }
         }
     }
 }
 
 @Composable
-private fun InvitationRow(inv: Invitation, repo: PingersRepository) {
+private fun InvitationRow(inv: Invitation, repo: PingersRepository, nav: Navigator) {
     ListRow(null, padding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
         when (inv) {
             is Invitation.Opened -> {
@@ -376,7 +370,10 @@ private fun InvitationRow(inv: Invitation, repo: PingersRepository) {
                 Box(
                     Modifier
                         .height(48.dp)
-                        .clickable(role = Role.Button) { repo.verifyInvite(inv.id) },
+                        .clickable(role = Role.Button) {
+                            repo.openJoinRequest(inv.id)
+                            nav.go(Route.JoinRequest)
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
@@ -406,76 +403,6 @@ private fun InvitationRow(inv: Invitation, repo: PingersRepository) {
                 Icon(PIcons.CheckCircle, null, tint = Color.Unspecified, modifier = Modifier.size(22.dp))
             }
         }
-    }
-}
-
-// ---------------------------------------------------------------- Accept invite
-
-@Composable
-fun AcceptInviteScreen(state: AcceptInviteState, repo: PingersRepository, nav: Navigator) {
-    Page(
-        top = { Spacer(Modifier.statusBarsPadding().height(28.dp)) },
-        bottom = {
-            PillButton(stringResource(R.string.accept_join), { repo.acceptInvite(); nav.reset(Route.Party) })
-            PillButton(
-                stringResource(R.string.accept_decline), { repo.declineInvite(); nav.reset(Route.Home) },
-                background = Color.Transparent, content = Pc.Ink, height = 48.dp,
-            )
-        },
-        bodyPadding = PaddingValues(horizontal = 24.dp),
-        spacing = 22,
-    ) {
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Box(
-                Modifier.size(76.dp).clip(RoundedCornerShape(24.dp)).background(state.colour.color()),
-                contentAlignment = Alignment.Center,
-            ) { Text(state.partyInitials, style = heading(30.sp, 700).copy(color = Color.White)) }
-            Text(stringResource(R.string.accept_invited_by, state.inviter), style = body(15.sp, color = Pc.Muted))
-            Text(state.partyName, style = heading(30.sp, 700), modifier = Modifier.semantics { heading() })
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AvatarStack(state.preview, 30.dp, 11, ring = Pc.Paper, extra = "+${state.moreMembers}")
-                Text(
-                    partyCounts(state.members, state.spots),
-                    style = body(14.sp, color = Pc.Muted),
-                    modifier = Modifier.padding(start = 0.dp),
-                )
-            }
-        }
-        Card(radius = 20.dp, padding = PaddingValues(18.dp)) {
-            Text(stringResource(R.string.accept_what_joining), style = body(15.sp, 600), modifier = Modifier.semantics { heading() })
-            Spacer(Modifier.height(14.dp))
-            val spot = stringResource(R.string.word_spot)
-            val first = stringResource(R.string.accept_point_spot, spot)
-            val at = first.indexOf(spot)
-            JoinPoint(PIcons.Pin) {
-                Text(
-                    buildAnnotatedString {
-                        append(first)
-                        if (at >= 0) addStyle(SpanStyle(fontWeight = FontWeight.Bold), at, at + spot.length)
-                    },
-                    style = body(14.sp, lineHeight = 1.45f),
-                )
-            }
-            Spacer(Modifier.height(14.dp))
-            JoinPoint(PIcons.Lock) { Text(stringResource(R.string.accept_point_e2e), style = body(14.sp, lineHeight = 1.45f)) }
-            Spacer(Modifier.height(14.dp))
-            JoinPoint(PIcons.Moon) { Text(stringResource(R.string.accept_point_focus), style = body(14.sp, lineHeight = 1.45f)) }
-        }
-        Column(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Pc.BlueTint).padding(horizontal = 18.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(stringResource(R.string.accept_check_code, state.inviter), style = body(13.sp, 600, Pc.BlueDark))
-            Text(state.safetyCode, style = heading(28.sp, 600, 2.sp))
-        }
-    }
-}
-
-@Composable
-private fun JoinPoint(icon: ImageVector, text: @Composable () -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Icon(icon, null, tint = Pc.Blue, modifier = Modifier.padding(top = 1.dp).size(20.dp))
-        text()
     }
 }
 

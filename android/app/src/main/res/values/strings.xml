@@ -121,15 +121,6 @@
     <string name="invite_link_shared">Link shared %1$d h ago</string>
     <string name="invite_not_opened">Not opened yet · expires in %1$d h</string>
     <string name="invite_joined">Joined · code verified</string>
-    <string name="accept_invited_by">%1$s invited you to</string>
-    <string name="accept_what_joining">What joining means</string>
-    <string name="word_spot">Spot</string>
-    <string name="accept_point_spot">Members find out you\'re nearby only when you\'re in the same %1$s at the same time.</string>
-    <string name="accept_point_e2e">Your location is end-to-end encrypted. The server can\'t see where you are or which Spot you\'re in.</string>
-    <string name="accept_point_focus">Nothing is sent while you\'re in Focus or inside your exclusion zones.</string>
-    <string name="accept_check_code">Check this code matches %1$s\'s screen</string>
-    <string name="accept_join">Codes match · Join</string>
-    <string name="accept_decline">Decline</string>
 
     <!-- Party -->
     <string name="party_spots_private">Spots visible only to members</string>

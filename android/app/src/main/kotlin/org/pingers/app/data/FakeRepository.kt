@@ -132,7 +132,7 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
             link = "https://pingers.flat7.org/join#k7Qx-Climbing-crew",
             expiresInHours = 24,
             invitations = listOf(
-                Invitation.Opened(InviteId("i1"), ben, "4821"),
+                Invitation.Opened(InviteId("i1"), ben, "4821 0937 5512"),
                 Invitation.Pending(InviteId("i2"), sharedHoursAgo = 2, expiresInHours = 22),
                 Invitation.Joined(InviteId("i3"), chloe),
             ),
@@ -140,20 +140,75 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
     )
     override val invite: StateFlow<InviteState> = _invite.asStateFlow()
 
-    private val _acceptInvite = MutableStateFlow(
-        AcceptInviteState(
-            inviter = "Ana",
-            partyName = "Climbing crew",
-            partyInitials = "CC",
-            colour = PartyColour.Blue,
-            preview = listOf(ana, chloe, dev),
-            moreMembers = 2,
-            members = 5,
-            spots = 3,
-            safetyCode = "4821 0937 5512",
+    // Join flow A: the canvas's words (JoinA1 to JoinA3, InviteApprove), which pingers-words
+    // writes for the real app.
+    private val _openInvite = MutableStateFlow(
+        OpenInviteState(
+            title = "You've been invited to a Party",
+            subtitle = "You'll see its name and who's in it once the person who invited you lets you in.",
+            whatJoiningMeans = "What joining means",
+            points = listOf(
+                "Members find out you're nearby only when you're in the same Spot at the same time.",
+                "Your location is end-to-end encrypted. The server can't see where you are or which Spot you're in.",
+            ),
+            nameLabel = "Your name in this Party",
+            name = "Ben",
+            ask = "Ask to join",
+            notNow = "Not now",
         ),
     )
-    override val acceptInvite: StateFlow<AcceptInviteState> = _acceptInvite.asStateFlow()
+    override val openInvite: StateFlow<OpenInviteState> = _openInvite.asStateFlow()
+
+    private val _askedToJoin = MutableStateFlow<AskedToJoinState?>(
+        AskedToJoinState(
+            title = "Asked to join",
+            subtitle = "The person who invited you sees your request with the same code. When they let you in, " +
+                "the Party appears on your home screen.",
+            readCode = "Read this code to them, in person or on a call",
+            code = "4821 0937 5512",
+            warning = "If their code is different, someone else may have your link. Tell them not to let you in.",
+            leaveNote = "You can leave this screen. We'll notify you when you're in.",
+            done = "Done",
+            withdraw = "Withdraw request",
+        ),
+    )
+    override val askedToJoin: StateFlow<AskedToJoinState?> = _askedToJoin.asStateFlow()
+
+    private val _letIn = MutableStateFlow<LetInState?>(
+        LetInState(
+            party = cc,
+            colour = PartyColour.Blue,
+            partyInitials = "CC",
+            letInBy = "Ana let you in",
+            partyName = "Climbing crew",
+            preview = listOf(ana, chloe, dev),
+            more = "+3",
+            counts = "6 members · 3 spots",
+            checked = "Code 4821 0937 5512 was checked before Ana let you in. You can see it again in the Party's security details.",
+            open = "Open Climbing crew",
+            leave = "Leave Party",
+            notificationTitle = "Ana let you in",
+            notificationBody = "Climbing crew",
+        ),
+    )
+    override val letIn: StateFlow<LetInState?> = _letIn.asStateFlow()
+
+    private val _joinRequest = MutableStateFlow<JoinRequestState?>(
+        JoinRequestState(
+            id = InviteId("i1"),
+            avatar = "BE",
+            title = "Ben asked to join",
+            subtitle = "Climbing crew · from the link you shared 2 h ago",
+            ask = "Ask Ben to read his code. It should be:",
+            code = "4821 0937 5512",
+            warning = "A different code means someone else opened your link. Don't let them in.",
+            whenHeading = "When you let Ben in",
+            whenBody = "He sees the Party's name, its members and its Spots, and everyone gets a new key. The link stops working.",
+            letIn = "Codes match · Let Ben in",
+            turnAway = "Don't let in",
+        ),
+    )
+    override val joinRequest: StateFlow<JoinRequestState?> = _joinRequest.asStateFlow()
 
     private val _party = MutableStateFlow(partyDetails.getValue(cc))
     override val party: StateFlow<PartyState> = _party.asStateFlow()
@@ -334,21 +389,39 @@ class FakeRepository(private val res: Resources, private val scope: CoroutineSco
 
     override fun setPostQuantum(on: Boolean) = _advanced.update { it.copy(postQuantum = on) }
 
-    override fun verifyInvite(invitationId: InviteId) = _invite.update { s ->
-        s.copy(
-            invitations = s.invitations.map {
-                if (it is Invitation.Opened && it.id == invitationId) Invitation.Joined(it.id, it.person) else it
-            },
-        )
-    }
-
     override fun cancelInvite(invitationId: InviteId) = _invite.update { s ->
         s.copy(invitations = s.invitations.filterNot { it.id == invitationId })
     }
 
-    override fun acceptInvite() = openParty(cc)
+    // Join flow A. Every state stays filled, so `--es screen <Route>` shows each screen.
 
-    override fun declineInvite() = Unit
+    override fun showInvite(link: String) = Unit
+
+    override fun askToJoin(name: String, onAsked: () -> Unit) = onAsked()
+
+    override fun withdrawJoin() = Unit
+
+    override fun openJoinedParty() = openParty(cc)
+
+    override fun leaveJoinedParty() = Unit
+
+    private var joinRequestId: InviteId? = null
+
+    override fun openJoinRequest(requestId: InviteId) {
+        joinRequestId = requestId
+    }
+
+    override fun letIn() = _invite.update { s ->
+        s.copy(
+            invitations = s.invitations.map {
+                if (it is Invitation.Opened && it.id == joinRequestId) Invitation.Joined(it.id, it.person) else it
+            },
+        )
+    }
+
+    override fun turnAway() {
+        cancelInvite(joinRequestId ?: return)
+    }
 
     // ------------------------------------------------------------ Spots
 

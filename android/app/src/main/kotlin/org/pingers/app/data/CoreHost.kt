@@ -18,6 +18,7 @@ import org.pingers.app.platform.CoreNotification
 import org.pingers.app.platform.CoreSink
 import org.pingers.app.platform.Fix
 import org.pingers.app.platform.GeofenceTransition
+import org.pingers.app.platform.Notifications
 import org.pingers.app.platform.PlatformException
 import org.pingers.app.platform.PlatformHost
 import org.pingers.app.platform.PushPlatform
@@ -236,6 +237,22 @@ object CoreHost {
         }.start()
     }
 
+    /**
+     * This phone was let into a Party: posts You're in's notification, words from the core.
+     * Here rather than in the repository so it also shows when the OS started the process for
+     * a push alone. Off the callback's thread, so the snapshot is not taken inside the core's
+     * call.
+     */
+    private fun notifyLetIn() {
+        Thread {
+            blocking("letIn notification") { c ->
+                c.snapshot().use { s ->
+                    s.letIn()?.let { Notifications.letIn(app, it.notificationTitle, it.notificationBody) }
+                }
+            }
+        }.start()
+    }
+
     /** `{"v":1,"h":"<base64 of 8 bytes>"}`, the push relay's content-free body. */
     internal fun handleOf(payload: ByteArray): ByteArray? = try {
         val json = JSONObject(String(payload, Charsets.UTF_8))
@@ -262,6 +279,10 @@ object CoreHost {
 
         override fun partiesChanged() = each { it.partiesChanged() }
         override fun joinRequested(party: uniffi.pingers.PartyId) = each { it.joinRequested(party) }
+        override fun letIn(party: uniffi.pingers.PartyId) {
+            notifyLetIn()
+            each { it.letIn(party) }
+        }
         override fun meetupStarted(meetup: uniffi.pingers.MeetupId) = each { it.meetupStarted(meetup) }
         override fun meetupUpdated(meetup: uniffi.pingers.MeetupId) = each { it.meetupUpdated(meetup) }
         override fun meetupMessage(meetup: uniffi.pingers.MeetupId) = each { it.meetupMessage(meetup) }
