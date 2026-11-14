@@ -181,6 +181,10 @@ async fn rig(
         .map_err(|_locked| TestError::Setup("secure store"))?;
     let seeds = Arc::new(AtomicU64::new(500));
     let outside = Outside {
+        prover_self_test: pingers_sync::SelfTestPlan::new(
+            core::num::NonZeroU8::MIN,
+            core::time::Duration::from_millis(1_500),
+        ),
         clock: Arc::new(clock.clone()),
         timer: Arc::new(clock),
         rng: Arc::new(move || {

@@ -17,8 +17,8 @@ use pingers_transport::{
 use pingers_proto::AnonymousCredential;
 use pingers_store::Database;
 use pingers_sync::{
-    CommitAttempts, CredentialPolicy, ProcessRole, ProverStatus, QueueCapacity, SelfTestPlan,
-    SyncEngine, SyncParts, SyncSettings, TokenStock,
+    CommitAttempts, CredentialPolicy, ProcessRole, ProverStatus, QueueCapacity, SyncEngine,
+    SyncParts, SyncSettings, TokenStock,
 };
 
 use super::Outside;
@@ -150,7 +150,7 @@ pub(crate) fn engine(
             token_stock: TokenStock::design_default()?,
             commit_attempts: CommitAttempts::default(),
             queue_capacity: QueueCapacity::default(),
-            self_test: SelfTestPlan::DESIGN,
+            self_test: outside.prover_self_test,
         },
     )))
 }
