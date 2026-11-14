@@ -7,8 +7,37 @@ host. Two workflows use them (`.github/workflows/`):
 - `ci.yml`, on every push and pull request: `cargo xtask ci`, then for each flavour the debug
   APK, lint and unit tests. No signing key and no host; gms only when `GOOGLE_SERVICES_JSON` is
   set, otherwise it is skipped with a notice.
-- `release.yml`, by hand or on a tag `v*`: the signed release APK and AAB of both flavours,
-  uploaded as the run's artifacts. Its job runs in the `release` environment.
+- `release.yml`, on a tag `v*`: the signed release APK and AAB of both flavours, published as
+  a GitHub Release, which is where users install and update from with Obtainium
+  ([`docs/install.md`](../../docs/install.md)). Run by hand with a tag name, it builds and keeps
+  the files as the run's artifacts without a release. Its build job runs in the `release`
+  environment; only its publish job can write to the repository.
+
+## Publishing a release
+
+1. Push a tag `v<major>.<minor>.<patch>`, or `v<major>.<minor>.<patch>-rc.<n>` (also `-alpha.<n>`,
+   `-beta.<n>`) for a pre-release, on the commit to release. An annotated tag's message becomes
+   the release notes; for a lightweight tag the notes list the commit subjects since the
+   previous release tag.
+2. `release.yml`'s `version` job refuses a malformed tag, or one whose version does not come
+   after every other `v*` tag; then each flavour builds, and the `publish` job creates the
+   release with:
+   - `pingers-<version>-gms.apk` and `pingers-<version>-foss.apk`, the files Obtainium installs
+     (its APK filters are `pingers-.*-gms\.apk$` and `pingers-.*-foss\.apk$`);
+   - `pingers-<version>-gms.aab` and `pingers-<version>-foss.aab`, for app stores;
+   - `SHA256SUMS`;
+   - a body with the notes, which APK to choose, the upload certificate's SHA-256 (below) and
+     every file's SHA-256.
+
+   A pre-release tag makes a GitHub pre-release, which Obtainium offers only to users who turned
+   on "Include prereleases"; any other tag becomes the latest release.
+
+`versionName` is the tag without its `v`, and `versionCode` comes from the tag alone
+(`xtask/src/release_version.rs`): `major * 10_000_000 + minor * 100_000 + patch * 1_000 +
+stage`, where stage is `n` for `alpha.n`, `100 + n` for `beta.n`, `200 + n` for `rc.n` and 999 for
+a final release (minor, patch and `n` up to 99, major up to 209). So `v1.0.0-rc.1` is 10000201,
+`v1.0.0` 10000999 and `v1.0.1` 10001999: every later tag has a larger code, which Android and
+Obtainium need to accept the update. `cargo xtask release-version <tag>` prints the numbers.
 
 ## Building a release here
 
@@ -19,16 +48,22 @@ export PINGERS_KEYSTORE_PATH=~/.config/pingers/keys/android/upload-keystore.p12
 export PINGERS_KEYSTORE_PASSWORD="$(cat ~/.config/pingers/keys/android/upload-keystore.password)"
 export PINGERS_KEY_ALIAS=pingers-upload
 export PINGERS_SERVER_HOST=https://...   # and the other hosts below; unset, they are .invalid
-cargo xtask release-android               # foss, plus gms if PINGERS_GOOGLE_SERVICES_JSON is set
-cargo xtask release-android --flavour gms --flavour foss
+cargo xtask release-android                       # HEAD's v* tag; foss, plus gms if
+                                                  # PINGERS_GOOGLE_SERVICES_JSON is set
+cargo xtask release-android --tag v1.0.0-rc.1 --flavour gms --flavour foss
+cargo xtask release-notes --tag v1.0.0-rc.1 --dir target/release-android   # the release body
 ```
 
-It refuses to start without the three signing variables, warns about each host left unset, runs
-`./gradlew assemble<Flavour>Release bundle<Flavour>Release` (without the configuration cache, so
-the signing config is not stored in `android/.gradle`), and then checks every APK with
-`apksigner verify --print-certs` and every AAB with `keytool -printcert -jarfile`: each must be
-signed by the keystore's certificate and nothing else. The outputs are in
-`android/app/build/outputs/apk/<flavour>/release/` and `.../bundle/<flavour>Release/`.
+It takes the version from `--tag`, or from the `v*` tag on `HEAD`, and refuses a tag that does
+not come after every other `v*` tag. It refuses to start without the three signing variables, or
+when the keystore's certificate is not the published upload certificate below, and warns about
+each host left unset. It runs `./gradlew -PpingersVersionCode=<code>
+-PpingersVersionName=<name> assemble<Flavour>Release bundle<Flavour>Release` (without the
+configuration cache, so the signing config is not stored in `android/.gradle`), and then checks
+the APK with `apksigner verify --print-certs` and the AAB with `keytool -printcert -jarfile`:
+each must be signed by the keystore's certificate and nothing else. It then copies them to
+`target/release-android/pingers-<version>-<flavour>.apk` and `.aab`, the names the GitHub
+Release uses. `release-notes` writes `SHA256SUMS` beside them and prints the body.
 
 Gradle itself also refuses: any release task without `PINGERS_KEYSTORE_PATH`,
 `PINGERS_KEYSTORE_PASSWORD` and `PINGERS_KEY_ALIAS` stops at `checkReleaseSigning`, which names
@@ -39,8 +74,9 @@ Gradle stores the signing config (encrypted, but password included) under `andro
 ## Secrets and variables
 
 Local values live under `~/.config/pingers/keys/` (directory 0700, files 0600), described in
-its `README.md`. The repository has no remote yet, so none of these is set on GitHub; once it
-has one, run the commands from the repository's checkout. `--env release` puts a secret in the
+its `README.md`. On GitHub (`OceanEilonwy/pingers`) the `release` environment holds the
+signing secrets and the hosts are set; the key pin variables come later. Run the commands below
+from the repository's checkout to change one. `--env release` puts a secret in the
 `release` environment, where it can be limited to tags and protected by required reviewers;
 create the environment first under Settings > Environments.
 
