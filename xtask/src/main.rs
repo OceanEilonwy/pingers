@@ -27,7 +27,8 @@
 //!   filled-in xbps recipes for monokulo-nodo's builder; `cargo xtask dev-ca`: a throwaway CA
 //!   for the tier-1 local stack. See [`nodo`].
 //! - `cargo xtask local-stack`: the tier-1 stack (four services, ntfy, a TLS front) with fresh
-//!   keys outside the repository, until Ctrl-C. See [`stack`] and [`tls_front`].
+//!   keys outside the repository, until Ctrl-C; `--second-server` adds a second server and
+//!   relay for multi-server tests. See [`stack`] and [`tls_front`].
 //! - `cargo xtask local-app`: the foss debug APK built against it. See [`local_app`].
 //! - `cargo xtask e2e-emulators`: the two-emulator scenario from invite to the end of a Meetup.
 //!   See [`scenario`].
@@ -129,9 +130,11 @@ const USAGE: &str = "usage: cargo xtask <command>\n\n\
                      dev-ca [--san <name>]...\n          \
                      throwaway CA and server certificate in target/dev-ca/\n  \
                      local-stack [--dir <dir>] [--packs <dir>] [--ntfy <bin>] [--caddy <bin>]\n          \
-                     [--fresh] [--prepare-only]\n          \
+                     [--fresh] [--prepare-only] [--second-server]\n          \
                      the tier-1 stack with fresh keys in <dir> (default $PINGERS_LOCAL_STACK),\n          \
-                     behind Caddy or the built-in TLS front, until Ctrl-C\n  \
+                     behind Caddy or the built-in TLS front, until Ctrl-C; --second-server\n          \
+                     adds server B and its relay (https://10.0.2.2:9447, :9448/ohttp,\n          \
+                     values in <dir>/second-server.env)\n  \
                      local-app [<local-stack options>]\n          \
                      the foss debug APK built against that stack (its app.env)\n  \
                      e2e-emulators [<local-stack options>] [--avd <name>] [--leases <dir>]\n          \

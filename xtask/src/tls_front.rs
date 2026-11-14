@@ -495,6 +495,40 @@ mod tests {
     }
 
     #[test]
+    fn the_second_server_sites_are_understood() -> Result<()> {
+        let text = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../packaging/nodo/dev/caddy.json"),
+        )?;
+        let front = parse(&serde_json::from_str(
+            &crate::stack::with_second_server_sites(&text)?,
+        )?)?;
+        assert_eq!(front.sites.len(), 6);
+        let server = site(&front, "second-server")?;
+        assert_eq!(server.listen, SocketAddr::from(([127, 0, 0, 1], 9447)));
+        assert_eq!(
+            server.route("/ohttp"),
+            Some(&Action::Status(StatusCode::NOT_FOUND))
+        );
+        assert_eq!(
+            server.route("/v1/params"),
+            Some(&Action::Proxy(Upstream {
+                address: SocketAddr::from(([127, 0, 0, 1], 9475)),
+                protocol: Protocol::H2c,
+            }))
+        );
+        let relay = site(&front, "second-ohttp")?;
+        assert_eq!(relay.listen, SocketAddr::from(([127, 0, 0, 1], 9448)));
+        assert_eq!(
+            relay.route("/ohttp"),
+            Some(&Action::Proxy(Upstream {
+                address: SocketAddr::from(([127, 0, 0, 1], 9477)),
+                protocol: Protocol::H2c,
+            }))
+        );
+        Ok(())
+    }
+
+    #[test]
     fn unsupported_caddy_features_are_refused() -> Result<()> {
         let mut config: Value = serde_json::from_str(&std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../packaging/nodo/dev/caddy.json"),
