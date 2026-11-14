@@ -6,6 +6,8 @@ server_operator = "$(pingers-server.operator)"
 ohttp_relay_urls = ["$(pingers-server.ohttp_relay_url)"]
 map_host = "$(pingers-server.map_host)"
 logging = "$(pingers-server.logging)"
+# Only devices presenting this code can make an account (design B.1). Generated on install.
+registration_codes = ["$(pingers-server.registration_code)"]
 delivery_db = "/var/lib/apps/pingers-server/groups.sqlite"
 quota_db = "/var/lib/apps/pingers-server/quota.sqlite"
 mailbox_db = "/var/lib/apps/pingers-server/mailboxes.sqlite"

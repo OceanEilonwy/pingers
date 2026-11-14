@@ -84,7 +84,7 @@ only the web upstreams, so it cannot reach 9471. Only pingers-push-relay has
 or the app's encrypted volume after the owner unlocks the device, and included in backups.
 
 **pingers-server** (`server.toml.in`; encrypted 1 GiB volume for the databases, so the rendered
-config with the gateway keys stays inside the volume)
+config with the gateway keys and the registration code stays inside the volume)
 
 | Setting | Type | Default | Fills |
 |---|---|---|---|
@@ -93,6 +93,7 @@ config with the gateway keys stays inside the volume)
 | `ohttp_relay_url` | url, required | | `ohttp_relay_urls`, such as `https://ohttp.example.org/ohttp` |
 | `map_host` | url, required | | `map_host`, such as `https://maps.example.org` |
 | `logging` | enum `off`/`counts` | `off` | `logging` |
+| `registration_code` | **secret**, generated (16 bytes, hex); 16 to 128 of `A-Z a-z 0-9 - _` if set by hand | | `registration_codes`: only a device presenting it can make an account (design B.1, section 1.3) |
 | `ohttp_key_a`, `ohttp_key_b` | **secret**, generated (32 bytes, hex) | | `[[ohttp.keys]] secret` |
 | `ohttp_key_a_id`, `ohttp_key_b_id` | int 1 to 255 | 1, 2 | `[[ohttp.keys]] key_id` |
 | `ohttp_served_key_id` | int 1 to 255 | 1 | `[ohttp] served_key_id` (TODO p-server) |
@@ -126,6 +127,29 @@ in memory)
 **pingers-map-host** (`map-host.toml.in`; unencrypted data on the data drive): `max_disk`
 (default `40GB`), `hosted` (default `oceania/australia`, space-separated),
 `logging`.
+
+### 1.3 Registration code
+
+Without a registration code a Pingers server lets anyone who finds it make an account. The
+package generates one on install (`registration_code`, sealed), so it never runs open. How it
+reaches phones:
+
+- **The first phone** (the owner's) presents it at its first start. Until the app has a screen
+  for it (it needs a design first), that is a debug build made with
+  `PINGERS_DEV_REGISTRATION_CODE=<code>` (or `-PpingersDevRegistrationCode=<code>`); release
+  builds ignore the variable. Read the code over the owner's SSH from the rendered config,
+  `registration_codes` in `/run/nodo/volumes/pingers-server/config/server.toml`.
+- **Everyone else** gets it in the invite link: a phone that registered with a code puts it in
+  every invite it makes, and the friend's phone presents it when it opens the link. So the code
+  travels as far as invite links do; it is a bearer capability like the link itself.
+- **A refused code** (wrong, or reset since) is not tried again until another one is offered
+  (a new invite link, or another build), so a phone never retries a 403 in a loop.
+
+To stop new accounts from old invite links, Reset `registration_code` in nodo-tui, and give the
+new code to phones that should keep inviting (today: a new debug build). Caution: the server keeps
+accounts in memory for now, so after it restarts every phone registers again with the code it
+first used. Until accounts persist, a reset locks out phones registered with the old code at the
+server's next restart.
 
 ### 1.2 Keys and rotation
 
@@ -332,7 +356,8 @@ tests, `crates/pingers-e2e`, and the push relay's ntfy script.
 4. Build debug APKs with `PINGERS_SERVER_HOST=https://10.0.2.2:9443`,
    `PINGERS_OHTTP_RELAY=https://10.0.2.2:9444/ohttp`, `PINGERS_PUSH_RELAY=https://10.0.2.2:9445`,
    `PINGERS_MAP_HOST=https://10.0.2.2:9446` and `PINGERS_EXTRA_CA=target/dev-ca/ca.pem` (debug
-   builds only).
+   builds only), plus `PINGERS_DEV_REGISTRATION_CODE=dev-registration-code` for the first
+   emulator (the dev server.toml's code; the second joins by invite and needs none).
 5. Two emulators (one foss with UnifiedPush through a local ntfy, one gms only if a real service
    account is in place locally): create a Party, join by invite, define a Spot, walk both in with
    `adb -s emulator-5554 emu geo fix <lon> <lat>`, and expect the knock, the Meetup with a live
@@ -366,6 +391,7 @@ to a fresh VM and check the gateway key hash is unchanged.
    `/opt/nodo/apps/pingers-push-relay/libexec/pingers-push-relay pins
    /run/nodo/secrets/pingers-push-relay/config/push-relay.toml` prints over the owner's SSH. Leave
    `operator` at its default, the push relay's.
+   The registration code generates itself (section 1.3); note it for the first phone.
 5. **Relay.** Install `pingers-ohttp-relay`. Nothing to set.
 6. **Map host.** UseDataDrive on, install, check `max_disk` and `hosted`, rsync the packs.
 7. **Exposure.** Section 2 for each site; wait until the certificate status is valid for all four.

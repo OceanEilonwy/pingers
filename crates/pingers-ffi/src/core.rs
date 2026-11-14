@@ -206,7 +206,7 @@ impl From<GeofenceEvent> for GeofenceTransition {
 
 /// The Pingers instance the app talks to, from the app's build configuration
 /// (`PINGERS_SERVER_HOST`, `PINGERS_OHTTP_RELAY`, `PINGERS_PUSH_RELAY`, the key pins, and in
-/// debug builds `PINGERS_EXTRA_CA`) or an invite.
+/// debug builds `PINGERS_EXTRA_CA` and `PINGERS_DEV_REGISTRATION_CODE`) or an invite.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct InstanceConfig {
     /// The server and OHTTP gateway, `https://...`.
@@ -223,6 +223,10 @@ pub struct InstanceConfig {
     /// `PINGERS_EXTRA_CA`: a PEM bundle trusted instead of Mozilla's roots, for a local test
     /// stack. The app passes it only in debug builds; release builds pass `None`.
     pub extra_ca_pem: Option<String>,
+    /// `PINGERS_DEV_REGISTRATION_CODE`: the operator's registration code for this device's first
+    /// registration, for the first owner of a server that requires one. The app passes it only
+    /// in debug builds; release builds pass `None` (other devices get the code from an invite).
+    pub registration_code: Option<String>,
 }
 
 impl TryFrom<InstanceConfig> for pingers_client::Instance {
@@ -255,6 +259,10 @@ impl TryFrom<InstanceConfig> for pingers_client::Instance {
                     CoreError::invalid("the extra CA is not a PEM certificate")
                 })?,
             },
+            registration_code: config
+                .registration_code
+                .filter(|code| !code.trim().is_empty())
+                .map(pingers_proto::SecretText::new),
         })
     }
 }
@@ -805,6 +813,7 @@ mod tests {
             gateway_key_pins: None,
             push_relay_key_pins: None,
             extra_ca_pem: None,
+            registration_code: None,
         }
     }
 
@@ -830,6 +839,28 @@ mod tests {
 
         let unpinned = pingers_client::Instance::try_from(instance())?;
         assert_eq!(unpinned.gateway_pins, None);
+        Ok(())
+    }
+
+    #[test]
+    fn a_blank_registration_code_is_none() -> Result<(), CoreError> {
+        let with = pingers_client::Instance::try_from(InstanceConfig {
+            registration_code: Some("first-owner".into()),
+            ..instance()
+        })?;
+        assert_eq!(
+            with.registration_code
+                .as_ref()
+                .map(pingers_proto::SecretText::expose),
+            Some("first-owner")
+        );
+        for blank in [None, Some(String::new()), Some(" ".into())] {
+            let without = pingers_client::Instance::try_from(InstanceConfig {
+                registration_code: blank,
+                ..instance()
+            })?;
+            assert!(without.registration_code.is_none());
+        }
         Ok(())
     }
 

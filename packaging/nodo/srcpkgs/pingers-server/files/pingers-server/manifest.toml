@@ -16,7 +16,8 @@ name = "server.toml"
 
 [storage]
 # Mailboxes, groups, the RLN tree, Privacy Pass issuer keys and the spent set: kilobytes per
-# device. Encrypted, so the rendered config (with the gateway keys) stays inside the volume too.
+# device. Encrypted, so the rendered config (with the gateway keys and the registration code)
+# stays inside the volume too.
 encrypted = true
 size_mib = 1024
 data_layout = 1
