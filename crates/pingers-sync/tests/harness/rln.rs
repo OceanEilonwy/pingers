@@ -138,6 +138,16 @@ fn last_scheme(device: &Device) -> Option<String> {
         .and_then(|value| value.split(' ').next().map(str::to_owned))
 }
 
+/// `prepare_credentials` in a new hour: the tree refresh it made.
+async fn refresh(device: &Device) -> Result<pingers_sync::MembershipRefresh, TestError> {
+    device
+        .engine
+        .prepare_credentials(WakeBudget::UNLIMITED)
+        .await?
+        .membership
+        .ok_or(TestError::Unexpected("no refresh"))
+}
+
 /// Registers a leaf for an account by hand: `POST /v1/rln/leaf` with `bearer`.
 async fn register_leaf(
     world: &World,
@@ -302,21 +312,29 @@ async fn the_tree_follows_new_and_zeroed_leaves_hour_by_hour() -> TestResult {
 async fn a_new_process_rebuilds_the_tree_from_its_stored_leaves() -> TestResult {
     let world = World::start()?;
     let device = proving_device(&world).await?;
+    // Another account's leaf arrives and is zeroed a root later.
     let _other = register_leaf(&world, world.account.bearer().await?, 42).await?;
-    // A new process: the in-memory tree is gone, the stored leaves and path remain.
+    next_hour(&world);
+    let grown = refresh(&device).await?;
+    assert_eq!((grown.added, grown.zeroed), (1, 0));
+    let _replacement = register_leaf(&world, world.account.bearer().await?, 43).await?;
+    // A new process: the in-memory tree is gone, the stored leaves and path remain, and a
+    // proof needs only those.
     let device = world.restart(device)?;
     register_mailbox(&device).await?;
     assert_eq!(last_scheme(&device).as_deref(), Some("PingersRln"));
     next_hour(&world);
-    let refresh = device
-        .engine
-        .prepare_credentials(WakeBudget::UNLIMITED)
-        .await?
-        .membership
-        .ok_or(TestError::Unexpected("no refresh"))?;
-    assert_eq!(refresh.added, 1);
+    let rebuilt = refresh(&device).await?;
+    assert_eq!(
+        (rebuilt.added, rebuilt.zeroed),
+        (1, 1),
+        "rebuilt from the store, only the new zeroing counts"
+    );
     register_mailbox(&device).await?;
     assert_eq!(last_scheme(&device).as_deref(), Some("PingersRln"));
+    next_hour(&world);
+    let quiet = refresh(&device).await?;
+    assert_eq!((quiet.added, quiet.zeroed), (0, 0));
     Ok(())
 }
 

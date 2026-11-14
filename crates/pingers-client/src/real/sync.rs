@@ -27,8 +27,9 @@ use pingers_proto::{
 };
 use pingers_store::{MailboxPurpose as StoredPurpose, WakePushes as StoredPushes};
 use pingers_sync::{
-    ApiRequest, CodeSource, Committed, Delivered, GroupCall, GroupError, GroupLifetime,
-    GroupSigner, GroupStart, NewLease, PoolTarget, Sending, SyncEngine, SyncError, WakeBudget,
+    ApiRequest, CodeSource, Committed, CredentialChoice, Delivered, GroupCall, GroupError,
+    GroupLifetime, GroupSigner, GroupStart, NewLease, PoolTarget, Sending, SyncEngine, SyncError,
+    WakeBudget,
 };
 use pingers_time::{Bucket, UnixSeconds};
 use pingers_wake::PortError;
@@ -38,7 +39,7 @@ use super::Backend;
 use super::party_log::{self, PartyLog};
 use crate::ports::{ServerSection, SyncPort};
 use crate::snapshot::{RelayStatus, WakePushes};
-use crate::{ClientError, Notice, PushTokens, Unavailable};
+use crate::{ClientError, Fallback, Notice, PushTokens, Unavailable};
 
 /// A Party group: kept for months, uploaded at epoch 0 (pingers-parties' new group).
 const PARTY_START: GroupStart = GroupStart {
@@ -152,8 +153,9 @@ impl Net {
         Sending::or_keep_until(until, WakeBudget::UNLIMITED)
     }
 
-    /// pingers-sync's `prepare_credentials`, with the build's registration code on offer: the
-    /// account registered, its leaf, and the token stock. Once done it costs a few store reads.
+    /// pingers-sync's `prepare_credentials`, with the build's registration code on offer and the
+    /// server's parameters read: the account registered, the token stock, the membership tree
+    /// and leaf, and the prover self-test started. Once done it costs a few store reads.
     /// Only a store failure is an error; a network failure or a refusal leaves credentialed
     /// requests waiting for a later call (each command's flush and each wake).
     ///
@@ -166,6 +168,14 @@ impl Net {
             engine
                 .offer_registration_code(code.clone(), CodeSource::Build)
                 .await?;
+        }
+        // The server's parameters first (once per process): they say which credentials it
+        // accepts and its daily token limit, which the steps below size themselves by. A network
+        // failure here leaves the defaults; only a store failure is an error.
+        if let Err(error @ (ClientError::Store(_) | ClientError::Records(_))) =
+            self.server_params().await
+        {
+            return Err(error);
         }
         let result = engine.prepare_credentials(WakeBudget::UNLIMITED).await;
         self.observe(&result);
@@ -646,10 +656,21 @@ impl SyncPort for Sync {
         }
     }
 
+    /// Privacy Pass for everything is a fallback while the main app cannot prove (design B.4.8:
+    /// the leaf not yet live, the prover not passed or too slow, proofs turned off).
     async fn section(&self) -> Result<ServerSection, ClientError> {
         let map_host = self.0.map_host().await?;
+        let mut fallbacks = Vec::new();
+        if let Some(engine) = &self.0.engine {
+            match engine.credential_choice().await {
+                Ok(CredentialChoice::PrivacyPass) => fallbacks.push(Fallback::PrivacyPassOnly),
+                Err(SyncError::Store(error)) => return Err(SyncError::Store(error).into()),
+                // Proving, or nothing usable at all (not a fallback to name).
+                Ok(_) | Err(_) => {}
+            }
+        }
         Ok(ServerSection {
-            fallbacks: Vec::new(),
+            fallbacks,
             relay: *self.0.relay.lock().unwrap_or_else(PoisonError::into_inner),
             map_host,
             operators: self.0.operators(),

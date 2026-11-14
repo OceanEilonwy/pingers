@@ -227,21 +227,23 @@ fn apply_fetched(
                 .as_ref()
                 .is_some_and(|state| state.root == cache.tree.root())
     });
-    let newly_zeroed: Vec<u32> = listed
-        .iter()
-        .copied()
-        .filter(|position| {
-            cache
-                .as_ref()
-                .is_none_or(|cache| !cache.zeroed.contains(position))
-        })
-        .collect();
+    let zero = LeafValue::from_bytes([0; 32]);
+    let mut newly_zeroed = Vec::new();
+    for &position in &listed {
+        let already = match &cache {
+            Some(cache) => cache.zeroed.contains(&position),
+            None => session.rln_tree().leaf(TreePosition::new(position))? == Some(zero),
+        };
+        if !already {
+            newly_zeroed.push(position);
+        }
+    }
     session.rln_tree().set_leaves(
         &newly_zeroed
             .iter()
             .map(|position| TreeLeaf {
                 position: TreePosition::new(*position),
-                value: LeafValue::from_bytes([0; 32]),
+                value: zero,
             })
             .collect::<Vec<_>>(),
     )?;
