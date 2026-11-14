@@ -229,6 +229,8 @@ async fn a_pinned_instance_is_reachable_and_seals_wake_pushes_to_the_pinned_key(
     }));
     rig.client.set_wake_pushes(WakePushes::On).await?;
     assert_eq!(rig.client.snapshot().settings.wake_pushes, WakePushes::On);
+    // The key matched the build's pins: nothing is recorded as a first-use pin.
+    assert_eq!(recorded_pin(&rig)?, None);
     rig.client.push_tokens_changed().await?;
     // Fetching the push relay's id read /v1/params, which carries the map host.
     assert_eq!(
