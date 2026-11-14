@@ -36,5 +36,15 @@ return {
       choices = { "off", "counts" },
       default = "off",
     },
+    {
+      name = "gateway_url",
+      type = "url",
+      label = "Gateway (server leg)",
+      help = "Where pingers-server on this device forwards map downloads made through the "
+        .. "privacy relay, on loopback (the host's own OHTTP gateway). Leave it as it is.",
+      default = "http://127.0.0.1:9474",
+      public = "gateway-url",
+      endpoint = "tcp",
+    },
   },
 }
