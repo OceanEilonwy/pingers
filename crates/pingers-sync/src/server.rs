@@ -60,6 +60,7 @@ impl SyncEngine {
             .success()?
             .decode()?;
         let _status = self.observe_server_time(params.server_time);
+        self.apply_params(&params).await?;
         Ok(params)
     }
 

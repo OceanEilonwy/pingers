@@ -83,6 +83,11 @@
 //!   passes them. Queued requests and own positions carry their group, and triggers delete
 //!   them when that Meetup ends or that Party is deleted (a cascade included), so no group
 //!   request outlives its group (style guide §8). None of these tables is in design C.2.
+//! - **The main app's proving state** (schema version 5, not in design C.2): `rln_tree_state`
+//!   records which hourly root the leaf copy reproduces and this device's Merkle path in it, so a
+//!   proof reads one row instead of rebuilding the tree; `pp_allowance` the server's daily token
+//!   limit and what was issued today, so a refill never exceeds it; `prover_self_test` the last
+//!   self-test and the parameters it tested.
 //! - **Unsigned values past `i64::MAX`** are refused ([`StoreError::OutOfRange`]), never
 //!   wrapped.
 //!
@@ -131,6 +136,10 @@ pub use repo::meetup::{
 pub use repo::party::{
     AlwaysAllow, Identities, Identity, LocationVisibility, Member, Members, Parties, Party,
     Verification,
+};
+pub use repo::prover::{
+    PATH_LENGTH, ProverSelfTests, ProverVerdict, RlnTreeStates, SelfTestRecord, StoredPath,
+    TokenAllowances, TokenLedger, TreeState,
 };
 pub use repo::relay::{
     ActiveFallback, FallbackKind, Fallbacks, PushRelay, PushRelays, RelaySource, Settings,

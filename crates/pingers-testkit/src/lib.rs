@@ -76,6 +76,9 @@ pub use harness::{
 };
 #[cfg(feature = "harness")]
 pub use harness::{TlsFront, send_direct};
+/// Whether the harness server accepts membership proofs (`HarnessConfig::membership_proofs`).
+#[cfg(feature = "harness")]
+pub use pingers_server::MembershipProofs;
 pub use pingers_time::ManualClock;
 pub use platform::{
     FakePlatform, FixQuality, FixRequest, Geofence, LocationMode, PushRegistration,

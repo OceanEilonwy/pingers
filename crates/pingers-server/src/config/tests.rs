@@ -41,6 +41,21 @@ fn minimal_file_gets_the_quiet_defaults() -> TestResult {
     assert!(!config.relays.allows(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 6))));
     assert_eq!(config.ohttp_keys.served().key_id(), 1);
     assert_eq!(config.listen.port(), 8080);
+    assert_eq!(config.membership_proofs, super::MembershipProofs::On);
+    Ok(())
+}
+
+#[test]
+fn membership_proofs_can_be_switched_off_and_nothing_else_is_accepted() -> TestResult {
+    let with_key = minimal(&key(1, SECRET_A));
+    let off = ServerConfig::parse(&format!("membership_proofs = \"off\"\n{with_key}"))?;
+    assert_eq!(off.membership_proofs, super::MembershipProofs::Off);
+    let on = ServerConfig::parse(&format!("membership_proofs = \"on\"\n{with_key}"))?;
+    assert_eq!(on.membership_proofs, super::MembershipProofs::On);
+    assert!(matches!(
+        ServerConfig::parse(&format!("membership_proofs = \"maybe\"\n{with_key}")),
+        Err(ConfigError::Syntax { .. })
+    ));
     Ok(())
 }
 

@@ -83,8 +83,8 @@ pub use crate::admin::{
     Command, OhttpSecret, new_ohttp_secret, os_ohttp_secret, pin_set, pins_output,
 };
 pub use crate::config::{
-    AddressList, CertificateSource, ConfigError, Database, Logging, MapHostGateway, OhttpKeys,
-    RelayAllowList, Required, ServedKey, ServerConfig,
+    AddressList, CertificateSource, ConfigError, Database, Logging, MapHostGateway,
+    MembershipProofs, OhttpKeys, RelayAllowList, Required, ServedKey, ServerConfig,
 };
 pub use crate::error::ServerError;
 pub use crate::forwarded::TrustedProxies;
@@ -151,6 +151,7 @@ pub(crate) struct PublishedParams {
     pub(crate) ohttp_relays: Vec<RelayUrl>,
     pub(crate) push_relays: Vec<PushRelayInfo>,
     pub(crate) map_host: Option<pingers_proto::MapHostUrl>,
+    pub(crate) membership_proofs: MembershipProofs,
 }
 
 /// Where live exchanges go.
@@ -455,6 +456,7 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
             ohttp_relays: config.ohttp_relay_urls,
             push_relays: config.advertised_push_relays,
             map_host: config.map_host,
+            membership_proofs: config.membership_proofs,
         },
         rng: Mutex::new(rng),
     });

@@ -122,8 +122,10 @@ pub(crate) fn router(
 
 /// pingers-sync's engine over the instance, for the whole process.
 ///
-/// Credentials start as Privacy Pass only with the prover off: the server's `/v1/config` says
-/// what it accepts, and RLN proofs need a live leaf first.
+/// Credentials start as Privacy Pass only until the server's `/v1/params` say what it accepts
+/// (read before credentials are prepared, `sync.rs`). The prover is allowed: pingers-sync proves
+/// only once its self-test has passed and the leaf is in an accepted root (design B.4.8), and
+/// uses Privacy Pass otherwise.
 pub(crate) fn engine(
     instance: &Instance,
     transport: Arc<dyn Transport>,
@@ -143,11 +145,12 @@ pub(crate) fn engine(
             role: ProcessRole::MainApp,
             credentials: CredentialPolicy {
                 accepted: vec![AnonymousCredential::PrivacyPass],
-                prover: ProverStatus::Disabled,
+                prover: ProverStatus::Enabled,
             },
             token_stock: TokenStock::design_default()?,
             commit_attempts: CommitAttempts::default(),
             queue_capacity: QueueCapacity::default(),
+            self_test: outside.prover_self_test,
         },
     )))
 }

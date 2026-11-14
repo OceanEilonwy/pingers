@@ -73,6 +73,10 @@ pub struct HarnessConfig {
     /// `map_host_gateway`, such as `http://127.0.0.1:<port>` of an in-process map host); `None`
     /// forwards to [`HARNESS_MAP_HOST`], which never resolves.
     pub map_host_gateway: Option<String>,
+    /// Whether the server accepts RLN membership proofs (on by default; off is the operator's
+    /// kill switch, design B.4.8 fallback 3).
+    #[cfg(feature = "harness")]
+    pub membership_proofs: pingers_server::MembershipProofs,
 }
 
 impl Default for HarnessConfig {
@@ -84,6 +88,8 @@ impl Default for HarnessConfig {
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
             registration_codes: Vec::new(),
             map_host_gateway: None,
+            #[cfg(feature = "harness")]
+            membership_proofs: pingers_server::MembershipProofs::On,
         }
     }
 }

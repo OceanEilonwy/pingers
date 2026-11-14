@@ -123,6 +123,7 @@ async fn open(
         .map_err(|_locked| "secure store")?;
     let seeds = Arc::new(AtomicU64::new(500));
     let outside = Outside {
+        prover_self_test: pingers_sync::SelfTestPlan::DESIGN,
         clock: Arc::new(clock.clone()),
         timer: Arc::new(clock.clone()),
         rng: Arc::new(move || {
