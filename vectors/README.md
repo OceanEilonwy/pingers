@@ -13,6 +13,14 @@ pingers-proto). `example.json` shows the format and is used by pingers-testkit's
 A crate with several files may group them in a subdirectory: `vectors/geo/polygon.json` is
 loaded as `load_vectors("geo/polygon")`, and its `name` is `geo/polygon`.
 
+## Generated files
+
+`proto/` and `meetup/` are written by `cargo xtask vectors` (`xtask/src/vectors/`), which
+computes them independently of pingers-proto and pingers-meetup: its own canonical CBOR writer
+for the wire formats, and the formulas written out for coordinates, compass readings and meet
+points. Change those files by changing the generator and rerunning it; `cargo test` fails if a
+committed file differs from the generator's output. Every other file here is written by hand.
+
 ## Format
 
 ```json

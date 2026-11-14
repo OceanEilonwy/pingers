@@ -191,6 +191,7 @@ CI runs, on every pull request:
 - `cargo clippy --all-targets -- -D warnings`
 - `cargo test`
 - `cargo xtask layers`
+- `cargo xtask no-python`
 - `cargo deny check`
 - `cargo mutants` on changed crates
 - the fuzz targets for a short time box

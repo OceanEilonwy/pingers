@@ -14,6 +14,10 @@
 //! - `cargo xtask ci --full [--base <ref>] [--fuzz-seconds <n>]`: `ci`, then `cargo mutants`
 //!   on the crates changed since `<ref>` (default `main`) and every fuzz target for `<n>`
 //!   seconds (default 10). See [`full`].
+//! - `cargo xtask vectors [--check]`: writes the generated vector files, or checks them. See
+//!   [`vectors`].
+//! - `cargo xtask no-python`: fails if a Python file is in the repository (also a `ci` step).
+//!   See [`no_python`].
 //! - `cargo xtask pins <server.toml> <push-relay.toml>`: the app's two key pin build
 //!   variables from the deployed configurations. See [`pins`].
 //! - `cargo xtask release-android [--flavour gms|foss]...`: the signed release build CI's
@@ -32,6 +36,7 @@ mod device;
 mod emulator;
 mod full;
 mod local_app;
+mod no_python;
 mod nodo;
 mod pins;
 mod release_android;
@@ -39,6 +44,7 @@ mod scenario;
 mod stack;
 mod supervise;
 mod tls_front;
+mod vectors;
 mod wait;
 
 use std::collections::BTreeMap;
@@ -96,11 +102,16 @@ enum Outcome {
 const USAGE: &str = "usage: cargo xtask <command>\n\n\
                      commands:\n  \
                      layers  check the layer rule and the I/O ban below L2\n  \
-                     ci      fmt --check, clippy -D warnings, test, layers, deny\n  \
+                     ci      fmt --check, clippy -D warnings, test, layers, no-python, deny\n  \
                      ci --full [--base <ref>] [--fuzz-seconds <n>]\n          \
                      ci, then cargo mutants on crates changed since <ref> (main) and\n          \
                      every fuzz target for <n> seconds (10); survivors must be listed\n          \
                      with a reason in mutants-allow.toml\n  \
+                     vectors [--check]\n          \
+                     write vectors/proto/ and vectors/meetup/ from their generator, or\n          \
+                     with --check fail if a committed file differs (cargo test checks too)\n  \
+                     no-python\n          \
+                     fail if the repository holds a Python file (extension or shebang)\n  \
                      pins <server.toml> <push-relay.toml>\n          \
                      print PINGERS_GATEWAY_KEY_PINS and PINGERS_PUSH_RELAY_KEY_PINS\n          \
                      from the deployed configurations (public values only)\n  \
@@ -149,6 +160,11 @@ fn run() -> Result<Outcome> {
             }
             None => usage(),
         },
+        Some("vectors") => match vectors::Mode::parse(options) {
+            Some(mode) => vectors::run(&workspace_root()?, mode),
+            None => usage(),
+        },
+        Some("no-python") if options.is_empty() => no_python::run(&workspace_root()?),
         Some("pins") => match options {
             [server, push_relay] => {
                 let output = pins::run(Path::new(server), Path::new(push_relay))?;
@@ -601,6 +617,11 @@ fn run_ci(root: &Path) -> Result<Outcome> {
 
     announce("cargo xtask layers")?;
     if check_layers(root)? == Outcome::Failed {
+        return Ok(Outcome::Failed);
+    }
+
+    announce("cargo xtask no-python")?;
+    if no_python::run(root)? == Outcome::Failed {
         return Ok(Outcome::Failed);
     }
 

@@ -24,8 +24,9 @@ Requires Rust 1.98 or later.
 ```sh
 cargo build --workspace
 cargo test --workspace --all-features
-cargo xtask ci        # everything CI runs: fmt, clippy, tests, layer check, cargo deny
+cargo xtask ci        # everything CI runs: fmt, clippy, tests, layer check, no-python, cargo deny
 cargo xtask layers    # just the layer rule
+cargo xtask vectors   # regenerate vectors/proto and vectors/meetup
 ```
 
 `cargo xtask ci` runs `cargo deny check` only if `cargo-deny` is installed
