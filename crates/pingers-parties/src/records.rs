@@ -38,6 +38,8 @@ pub(crate) enum Key<'id> {
     Approval(&'id PartyId, &'id MailboxId),
     /// Members' group subscriptions (so a removal can drop the removed member's).
     Subscriptions(&'id PartyId),
+    /// Present while this device's changed profile waits for a commit to settle.
+    ProfileWaiting(&'id PartyId),
     /// Which Party an invite mailbox belongs to.
     InviteIndex(&'id MailboxId),
     /// A join this device started, by its reply mailbox.
@@ -66,6 +68,7 @@ impl Key<'_> {
                 key.extend_from_slice(mailbox.as_bytes());
             }
             Self::Subscriptions(party) => party_key(&mut key, party, b"subscriptions"),
+            Self::ProfileWaiting(party) => party_key(&mut key, party, b"profile-waiting"),
             Self::InviteIndex(mailbox) => {
                 key.extend_from_slice(b"invite-index/");
                 key.extend_from_slice(mailbox.as_bytes());

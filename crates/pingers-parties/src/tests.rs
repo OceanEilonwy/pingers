@@ -1285,3 +1285,219 @@ fn operations_that_misattribute_spots_or_profiles_are_refused() -> Result<(), Te
     assert_eq!(verification()?, Some(Verification::Unverified));
     Ok(())
 }
+
+// --- profile changes and subscriptions on removal ---
+
+fn sent(publication: crate::ProfilePublication) -> Result<MlsMessageBytes, TestError> {
+    match publication {
+        crate::ProfilePublication::Send(outbound) => group_message(*outbound),
+        crate::ProfilePublication::Waiting => Err(TestError::Unexpected("expected a profile")),
+    }
+}
+
+fn renamed(name: &str) -> Result<crate::ProfileChange, TestError> {
+    Ok(crate::ProfileChange::Name(MemberName::new(name.into())?))
+}
+
+#[test]
+fn a_changed_name_reaches_the_other_member_with_the_subscription() -> Result<(), TestError> {
+    let TwoMembers {
+        alice,
+        bob,
+        party,
+        group,
+        alice_subscription,
+        mut rng,
+        ..
+    } = two_members()?;
+    let message = sent(
+        alice
+            .parties()
+            .update_profile(&party, renamed("Ali")?, &mut rng)?,
+    )?;
+    // Shown on this device at once, nothing left waiting.
+    assert_eq!(names(&alice.parties(), &party)?, ["Ali", "Bob"]);
+    assert!(!alice.parties().profile_waiting(&party)?);
+    assert!(
+        alice
+            .parties()
+            .publish_waiting_profile(&party, &mut rng)?
+            .is_none()
+    );
+    let incoming = bob.parties().process_group_message(&group, &message)?;
+    assert!(matches!(incoming, Incoming::ProfileUpdated { leaf, .. } if leaf == LEAF_ALICE));
+    assert_eq!(names(&bob.parties(), &party)?, ["Ali", "Bob"]);
+    // The profile still names Alice's subscription, so Bob can drop it.
+    let commit = bob.parties().remove_member(&party, LEAF_ALICE, &mut rng)?;
+    assert_eq!(
+        commit.request.subscriptions_removed,
+        vec![alice_subscription]
+    );
+    Ok(())
+}
+
+#[test]
+fn a_profile_change_waits_for_this_devices_commit() -> Result<(), TestError> {
+    let TwoMembers {
+        alice,
+        bob,
+        party,
+        group,
+        mut rng,
+        ..
+    } = two_members()?;
+    let update = alice.parties().self_update(&party, &mut rng)?;
+    assert!(matches!(
+        alice
+            .parties()
+            .update_profile(&party, renamed("Ali")?, &mut rng)?,
+        crate::ProfilePublication::Waiting
+    ));
+    assert_eq!(names(&alice.parties(), &party)?, ["Ali", "Bob"]);
+    assert!(alice.parties().profile_waiting(&party)?);
+    assert!(
+        alice
+            .parties()
+            .publish_waiting_profile(&party, &mut rng)?
+            .is_none()
+    );
+    alice.parties().commit_accepted(&party)?;
+    let Some(outbound) = alice.parties().publish_waiting_profile(&party, &mut rng)? else {
+        return Err(TestError::Unexpected("expected the waiting profile"));
+    };
+    assert!(!alice.parties().profile_waiting(&party)?);
+    bob.parties()
+        .process_group_message(&group, &update.request.commit)?;
+    bob.parties()
+        .process_group_message(&group, &group_message(outbound)?)?;
+    assert_eq!(names(&bob.parties(), &party)?, ["Ali", "Bob"]);
+    Ok(())
+}
+
+#[test]
+fn a_profile_change_waits_for_a_leavers_proposal_to_be_committed() -> Result<(), TestError> {
+    let TwoMembers {
+        alice,
+        bob,
+        party,
+        group,
+        mut rng,
+        ..
+    } = two_members()?;
+    // Alice leaves; Bob holds her proposal and cannot send in this epoch.
+    let outbound = alice.parties().leave_party(&party, &mut rng)?;
+    let Some(Outbound::Leave(leave)) = outbound.into_iter().next() else {
+        return Err(TestError::Unexpected("expected a leave request"));
+    };
+    bob.parties()
+        .process_group_message(&group, &leave.proposal.body)?;
+    assert!(matches!(
+        bob.parties()
+            .update_profile(&party, renamed("Robert")?, &mut rng)?,
+        crate::ProfilePublication::Waiting
+    ));
+    assert!(
+        bob.parties()
+            .publish_waiting_profile(&party, &mut rng)?
+            .is_none()
+    );
+    bob.parties().commit_pending_proposals(&party, &mut rng)?;
+    bob.parties().commit_accepted(&party)?;
+    assert!(
+        bob.parties()
+            .publish_waiting_profile(&party, &mut rng)?
+            .is_some()
+    );
+    assert!(!bob.parties().profile_waiting(&party)?);
+    Ok(())
+}
+
+#[test]
+fn a_replaced_subscription_is_the_one_a_remover_drops() -> Result<(), TestError> {
+    let TwoMembers {
+        alice,
+        bob,
+        party,
+        group,
+        mut rng,
+        ..
+    } = two_members()?;
+    let replacement = SubscriptionId::from_bytes([0x55; 16]);
+    let message = sent(bob.parties().update_profile(
+        &party,
+        crate::ProfileChange::Subscription(Some(replacement)),
+        &mut rng,
+    )?)?;
+    alice.parties().process_group_message(&group, &message)?;
+    let commit = alice.parties().remove_member(&party, LEAF_BOB, &mut rng)?;
+    assert_eq!(commit.request.subscriptions_removed, vec![replacement]);
+    // Turning wake-up pushes off drops it: nothing to remove then.
+    alice.parties().commit_rejected(&party)?;
+    let message = sent(bob.parties().update_profile(
+        &party,
+        crate::ProfileChange::Subscription(None),
+        &mut rng,
+    )?)?;
+    alice.parties().process_group_message(&group, &message)?;
+    let commit = alice.parties().remove_member(&party, LEAF_BOB, &mut rng)?;
+    assert!(commit.request.subscriptions_removed.is_empty());
+    Ok(())
+}
+
+#[test]
+fn a_later_member_drops_a_removed_members_subscription() -> Result<(), TestError> {
+    let TwoMembers {
+        alice,
+        bob,
+        party,
+        group,
+        bob_subscription,
+        mut rng,
+        ..
+    } = two_members()?;
+    let carol = Device::new(3)?;
+    let created = invite(&alice, &party, InviteUses::Single, &mut rng)?;
+    let posted = post_join(&carol, created.link.as_str(), &mut rng)?;
+    let add = admitted(alice.parties().receive_join_request(
+        created.invite,
+        &posted.body,
+        &mut rng,
+    )?)?;
+    alice.parties().commit_accepted(&party)?;
+    bob.parties()
+        .process_group_message(&group, &add.request.commit)?;
+    carol
+        .parties()
+        .accept_welcome(&arrived(&posted, &add)?, &mut rng)?;
+    // Carol learned Bob's subscription from the snapshot alone.
+    let commit = carol.parties().remove_member(&party, LEAF_BOB, &mut rng)?;
+    assert_eq!(commit.request.subscriptions_removed, vec![bob_subscription]);
+    Ok(())
+}
+
+#[test]
+fn committing_a_leave_drops_the_leavers_subscription() -> Result<(), TestError> {
+    let TwoMembers {
+        alice,
+        bob,
+        party,
+        group,
+        bob_subscription,
+        mut rng,
+        ..
+    } = two_members()?;
+    let outbound = bob.parties().leave_party(&party, &mut rng)?;
+    let Some(Outbound::Leave(leave)) = outbound.into_iter().next() else {
+        return Err(TestError::Unexpected("expected a leave request"));
+    };
+    alice
+        .parties()
+        .process_group_message(&group, &leave.proposal.body)?;
+    let commit = alice.parties().commit_pending_proposals(&party, &mut rng)?;
+    assert_eq!(commit.request.subscriptions_removed, vec![bob_subscription]);
+    // A self-update removes nobody.
+    alice.parties().commit_accepted(&party)?;
+    let update = alice.parties().self_update(&party, &mut rng)?;
+    assert!(update.request.subscriptions_removed.is_empty());
+    Ok(())
+}

@@ -762,6 +762,16 @@ impl<S: MlsStorage, Kind: GroupKind> Group<'_, S, Kind> {
         serialize(&message).map(MlsMessageBytes::from_bytes)
     }
 
+    /// The leaves this member's pending commit removes (empty with none pending), so the
+    /// caller can name what goes with them, such as their subscriptions, before the merge.
+    #[must_use]
+    pub fn pending_removals(&self) -> Vec<LeafIndex> {
+        self.inner
+            .pending_commit()
+            .map(removed_leaves)
+            .unwrap_or_default()
+    }
+
     /// Applies this member's pending commit after the server accepted it.
     ///
     /// # Errors

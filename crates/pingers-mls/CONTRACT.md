@@ -14,7 +14,8 @@ A narrow wrapper over OpenMLS 0.9. No other crate touches OpenMLS types.
   `join_meetup_group(welcome, &MeetupPskBinding, &Roster)`, `meetup_group`, `delete_group`.
 - `Group<'_, S, Party>` / `Group<'_, S, Meetup>` (typestate). Common: `group_id`, `epoch`,
   `own_leaf`, `roster`, `process`, `seal_application(&Padded)`, `remove_member`,
-  `commit_pending_proposals`, `self_update`, `propose_leave`, `merge_pending_commit`,
+  `commit_pending_proposals`, `self_update`, `propose_leave`, `pending_removals` (added
+  2026-11-14), `merge_pending_commit`,
   `discard_pending_commit`, `state_key`, `log_auth_key_pair`. Party only: `add_members`,
   `presence_root(&PartyId)`. Meetup only: `add_members(.., &Roster, ..)` with the roster check,
   `grant_keys`.

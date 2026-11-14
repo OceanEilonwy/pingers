@@ -488,6 +488,18 @@ impl<'session> PartyLifecycle<'session> {
                     group.commit_pending_proposals(rng)?
                 }
             };
+            // Leavers' self-removes: their subscriptions go with the commit (design D), in case
+            // a leaver could not delete its own, and their profiles leave the snapshot.
+            let roster = group.roster();
+            let leavers: Vec<AccountPublicKey> = group
+                .pending_removals()
+                .into_iter()
+                .filter_map(|leaf| roster.signature_key(leaf).copied())
+                .collect();
+            let mut removed = Vec::new();
+            for key in &leavers {
+                removed.extend(subscription_of(session, party, key)?);
+            }
             finish_commit(
                 session,
                 &group,
@@ -496,9 +508,9 @@ impl<'session> PartyLifecycle<'session> {
                     epoch,
                     commit,
                     pending,
-                    excluded: &[],
+                    excluded: &leavers,
                     added: None,
-                    removed: Vec::new(),
+                    removed,
                 },
                 rng,
             )
@@ -711,6 +723,7 @@ pub(crate) fn snapshot(
     excluded: &[AccountPublicKey],
 ) -> Result<Snapshot, PartiesError> {
     let row = party_row(session, party)?;
+    let subscriptions = subscriptions(session, party)?;
     let profiles = session
         .members()
         .list(party)?
@@ -718,6 +731,10 @@ pub(crate) fn snapshot(
         .filter(|member| !excluded.contains(&member.signature_key))
         .map(|member| Profile {
             key: member.signature_key,
+            subscription: subscriptions
+                .iter()
+                .find(|(key, _)| *key == member.signature_key)
+                .map(|(_, subscription)| *subscription),
             name: member.name,
         })
         .collect();

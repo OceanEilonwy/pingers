@@ -34,6 +34,7 @@ mod lifecycle;
 mod link;
 mod ops;
 mod outbound;
+mod profile;
 mod records;
 mod roster;
 mod safety;
@@ -55,6 +56,7 @@ pub use joining::{
 pub use lifecycle::{CommitApplied, CreatedParty, Incoming, NewParty, PartyLifecycle};
 pub use link::InviteLink;
 pub use outbound::{LeaveRequest, Outbound, OutgoingCommit, WelcomeDelivery};
+pub use profile::{ProfileChange, ProfilePublication};
 pub use roster::{Myself, RosterMember, RosterView};
 pub use safety::{SafetyCode, inviter_fingerprint};
 pub use settings::{PartySettings, PostQuantum, RelayChoice};

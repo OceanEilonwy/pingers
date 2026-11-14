@@ -514,6 +514,7 @@ impl PartyLifecycle<'_> {
                         avatar: None,
                         verification: Verification::Unverified,
                     })?;
+                    set_subscription(session, &party, profile.key, profile.subscription)?;
                 }
             }
             for spot in &snapshot.spots {

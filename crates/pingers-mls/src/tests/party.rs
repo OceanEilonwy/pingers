@@ -294,11 +294,14 @@ fn leaver_proposes_and_another_member_commits() -> TestResult {
         group_a.seal_application(&padded(b"wait")?, &mut rng),
         Err(MlsError::CommitPending)
     ));
+    assert!(group_a.pending_removals().is_empty());
     let commit = group_a.commit_pending_proposals(&mut rng)?;
+    assert_eq!(group_a.pending_removals(), vec![LeafIndex::new(1)]);
     assert_eq!(
         group_a.merge_pending_commit()?.removed,
         vec![LeafIndex::new(1)]
     );
+    assert!(group_a.pending_removals().is_empty());
     let summary = commit_summary(group_c.process(&commit.commit)?)?;
     assert_eq!(summary.removed, vec![LeafIndex::new(1)]);
     assert_eq!(group_c.roster(), group_a.roster());
