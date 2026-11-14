@@ -42,8 +42,23 @@ pub struct GroupMembership {
     pub key: LogAuthKeyPair,
 }
 
+/// What the registrations should carry this wake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pushes {
+    /// The wake push set with [`SyncEngine::set_wake_push`]: seal stale registrations to it.
+    /// Without one set, as [`Pushes::Unknown`].
+    Current,
+    /// "No wake-up pushes": clear the push of every registration.
+    Off,
+    /// Not known this wake (the relay key could not be fetched, the platform has no token):
+    /// leave every seal as it is and only keep the pool filled.
+    Unknown,
+}
+
 /// What one maintenance step works from.
 pub struct Maintenance<'groups> {
+    /// What the registrations should carry.
+    pub pushes: Pushes,
     /// The knock mailbox pool to keep filled when no registration is stale.
     pub pool: PoolTarget,
     /// Every group this device is in (Parties and live Meetups). A stored subscription for a
@@ -308,7 +323,14 @@ impl SyncEngine {
         if self.pooled_mailboxes(maintenance.pool.purpose).await? == 0 {
             return self.refill(&maintenance.pool, budget).await;
         }
-        let desired = self.desired()?;
+        let desired = match maintenance.pushes {
+            Pushes::Current => match self.desired()? {
+                Some(desired) => Some(desired),
+                None => return self.refill(&maintenance.pool, budget).await,
+            },
+            Pushes::Off => None,
+            Pushes::Unknown => return self.refill(&maintenance.pool, budget).await,
+        };
         let rows = Registrations {
             mailboxes: &mailboxes,
             subscriptions: &subscriptions,

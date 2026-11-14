@@ -371,6 +371,24 @@ pub async fn join(
     Ok(spawn(runtime, core, own_subscription))
 }
 
+/// The current log-auth key of a Meetup group this device is in, for the requests it makes
+/// about the group outside the session: renewing its own sealed-push subscription when the
+/// push token or the relay key changes (design B.4.9).
+///
+/// # Errors
+///
+/// [`SessionError::NotFound`] without an identity; [`SessionError::Mls`] if the group is
+/// not held; [`SessionError::Store`].
+pub async fn meetup_log_auth_key(
+    database: &Arc<Database>,
+    group: GroupId,
+) -> Result<LogAuthKeyPair, SessionError> {
+    run_blocking(database, move |local| {
+        Ok(local.mls().meetup_group(&group)?.log_auth_key_pair()?)
+    })
+    .await
+}
+
 /// Deletes every Meetup left in the store, with its MLS state: call once at launch. A
 /// Meetup's state machine lives only in its task, so one that outlived its task (the process
 /// was killed) cannot be resumed, and its keys must not linger (design B.5).

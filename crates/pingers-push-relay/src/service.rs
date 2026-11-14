@@ -6,8 +6,8 @@ use std::sync::{Mutex, PoisonError};
 
 use pingers_crypto::{KeyedHashKey, KeyedHashPurpose, keyed_hash};
 use pingers_proto::{
-    PushPlatform, PushRelayConfig, PushRelayKeyId, PushRequest, ScheduledPushRelayConfig, TimeToLive,
-    WireDecode as _,
+    PushPlatform, PushRelayConfig, PushRelayKeyId, PushRequest, ScheduledPushRelayConfig,
+    TimeToLive, WireDecode as _,
 };
 use pingers_time::{Clock, UnixSeconds};
 

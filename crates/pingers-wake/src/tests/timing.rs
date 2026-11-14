@@ -85,7 +85,10 @@ async fn budget_running_out_after_the_upload_skips_the_rest() -> Result<(), Test
         .script_fix(town.spot("canal")?.fix_outside(alice.now())?);
     let woken = alice.wake(WakeTrigger::Scheduled).await?;
     assert!(matches!(woken.upload, UploadOutcome::Uploaded { .. }));
-    assert_eq!(woken.ending, WakeEnding::OutOfBudget(WakeStep::MailboxPool));
+    assert_eq!(
+        woken.ending,
+        WakeEnding::OutOfBudget(WakeStep::PushRegistration)
+    );
     assert_eq!(alice.state.snapshot().leases.len(), 1);
     assert_eq!(
         alice.state.snapshot().last_upload,

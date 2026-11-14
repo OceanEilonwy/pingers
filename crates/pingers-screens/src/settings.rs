@@ -8,7 +8,8 @@ use crate::ScreenError;
 use crate::clock::LocalTime;
 use crate::common::Name;
 use crate::snapshot::{
-    ClientSnapshot, PauseInFocus, QuietHoursPreference, Toggle, WakePushes, daily_window,
+    ClientSnapshot, PauseInFocus, PushDelivery, QuietHoursPreference, Toggle, WakePushes,
+    daily_window,
 };
 
 /// Quiet hours as the row shows them.
@@ -40,6 +41,8 @@ pub struct Privacy {
     pub visibility: LocationVisibility,
     /// "No wake-up pushes".
     pub wake_pushes: WakePushes,
+    /// Whether wake-up pushes reach this phone, for the delivery row's warning.
+    pub push_delivery: PushDelivery,
 }
 
 /// The Privacy settings screen.
@@ -62,6 +65,7 @@ pub fn privacy(snapshot: &ClientSnapshot) -> Privacy {
         exclusion_zones: snapshot.zones.len(),
         visibility: settings.visibility,
         wake_pushes: settings.wake_pushes,
+        push_delivery: snapshot.push_delivery,
     }
 }
 

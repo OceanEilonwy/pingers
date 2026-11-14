@@ -177,8 +177,8 @@ pub enum WakeStep {
     LivenessFix,
     /// Handing a knock or a Welcome to pingers-meetup-session.
     Handoff,
-    /// Registering a mailbox for the pool.
-    MailboxPool,
+    /// The one push registration of the wake: a stale seal renewed, or a mailbox for the pool.
+    PushRegistration,
 }
 
 /// How a wake ended. Whatever the ending, presence is up to date, every lease the server may
@@ -404,8 +404,11 @@ where
         }
         if network_needed {
             let server = self.env.server;
-            self.port(WakeStep::MailboxPool, server.refill_mailbox_pool())
-                .await;
+            self.port(
+                WakeStep::PushRegistration,
+                server.maintain_push_registrations(),
+            )
+            .await;
         }
 
         let next_wake = self.finish(state);

@@ -14,7 +14,7 @@ use pingers_proto::{
 use pingers_store::MailboxPurpose;
 use pingers_sync::{
     GroupMembership, Maintained, Maintenance, NextPushRelayKey, PoolRefill, PoolTarget, PushSeal,
-    Sending, WakeBudget, WakePush,
+    Pushes, Sending, WakeBudget, WakePush,
 };
 use pingers_testkit::{HARNESS_PUSH_RELAY_ID, HarnessConfig};
 use pingers_time::{Clock as _, UnixSeconds};
@@ -54,7 +54,7 @@ fn wake_push(world: &World, token: &str) -> Result<WakePush, TestError> {
     })
 }
 
-fn maintenance(groups: &[GroupMembership]) -> Result<Maintenance<'_>, TestError> {
+fn maintenance(groups: &[GroupMembership], pushes: Pushes) -> Result<Maintenance<'_>, TestError> {
     Ok(Maintenance {
         pool: PoolTarget {
             purpose: MailboxPurpose::Knock,
@@ -63,13 +63,22 @@ fn maintenance(groups: &[GroupMembership]) -> Result<Maintenance<'_>, TestError>
         },
         groups,
         subscription_lifetime: TimeToLive::new(Duration::from_hours(24 * 30))?,
+        pushes,
     })
 }
 
 async fn step(device: &Device, groups: &[GroupMembership]) -> Result<Maintained, TestError> {
+    step_with(device, groups, Pushes::Current).await
+}
+
+async fn step_with(
+    device: &Device,
+    groups: &[GroupMembership],
+    pushes: Pushes,
+) -> Result<Maintained, TestError> {
     Ok(device
         .engine
-        .maintain_push_registrations(&maintenance(groups)?, WakeBudget::UNLIMITED)
+        .maintain_push_registrations(&maintenance(groups, pushes)?, WakeBudget::UNLIMITED)
         .await?)
 }
 
@@ -189,17 +198,14 @@ async fn subscriptions_are_added_resealed_cleared_and_forgotten() -> TestResult 
     assert_eq!(step(&device, &groups).await?, Maintained::MailboxResealed);
     assert_eq!(step(&device, &groups).await?, Maintained::UpToDate);
 
+    // Not known this wake: no seal is touched.
+    let unknown = step_with(&device, &groups, Pushes::Unknown).await?;
+    assert_eq!(unknown, Maintained::UpToDate);
     // "No wake-up pushes": the subscription goes, then the mailbox's push.
-    device.engine.set_wake_push(None);
-    assert_eq!(
-        step(&device, &groups).await?,
-        Maintained::SubscriptionRemoved
-    );
-    assert_eq!(
-        step(&device, &groups).await?,
-        Maintained::MailboxPushRemoved
-    );
-    assert_eq!(step(&device, &groups).await?, Maintained::UpToDate);
+    let off = |device| step_with(device, &groups, Pushes::Off);
+    assert_eq!(off(&device).await?, Maintained::SubscriptionRemoved);
+    assert_eq!(off(&device).await?, Maintained::MailboxPushRemoved);
+    assert_eq!(off(&device).await?, Maintained::UpToDate);
 
     // Pushes back on: the group gets a subscription again.
     device

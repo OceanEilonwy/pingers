@@ -37,6 +37,9 @@ pub(crate) enum Key<'id> {
     PushRelayPin,
     /// The join this device started from an invite link: its reply mailbox and subscription.
     PendingJoin,
+    /// FCM's priority downgrades of the last high-priority pushes (pingers-wake's
+    /// `PriorityWindow`).
+    PushPriority,
 }
 
 impl Key<'_> {
@@ -58,6 +61,7 @@ impl Key<'_> {
             Self::ServerMapHost => key.extend_from_slice(b"server-map-host"),
             Self::PushRelayPin => key.extend_from_slice(b"push-relay-pin"),
             Self::PendingJoin => key.extend_from_slice(b"pending-join"),
+            Self::PushPriority => key.extend_from_slice(b"push-priority"),
         }
         key
     }

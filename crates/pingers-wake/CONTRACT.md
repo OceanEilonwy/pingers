@@ -85,6 +85,8 @@ pingers-meetup-session and the shell.
 
 - pingers-geo: store the Inside confirmation time in `PresenceSnapshot` (review wave 1); the
   restart rule above then becomes a second line of defence.
-- pingers-sync: the mailbox pool behind `take_mailbox` and `refill_mailbox_pool`, the previous
+- pingers-sync: the mailbox pool behind `take_mailbox` and `maintain_push_registrations` (renamed
+  from `refill_mailbox_pool` on 2026-11-14: the one registration a wake makes may also renew a
+  stale sealed push), the previous
   lease's revoke key for `replaces`, and a sealed Meetup subscription for knocks (sent as
   `None` today). Clock skew from `server_time` (F.1) is not handled here yet.

@@ -104,6 +104,7 @@ async fn rig() -> Result<Rig, TestError> {
             purpose: MailboxPurpose::Invite,
             state: MailboxState::Pooled,
             push: None,
+            seal: None,
             expires_at: UnixSeconds::new(clock.now().get().saturating_add(7 * 86_400)),
         })?;
     }

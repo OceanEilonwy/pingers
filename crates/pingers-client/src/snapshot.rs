@@ -226,6 +226,8 @@ pub struct ClientSnapshot {
     pub map_host: Option<pingers_proto::MapHostUrl>,
     /// Who runs the server and its push relay, once `/v1/params` has been read this process.
     pub operators: Option<ServerOperators>,
+    /// Whether wake-up pushes reach this phone (design B.4.9).
+    pub push_delivery: PushDelivery,
 }
 
 /// Device-wide settings (design C.2 `settings`).
@@ -297,6 +299,30 @@ pub enum WakePushes {
     On,
     /// No token is registered; knocks are found on the phone's own wakes.
     NoWakePushes,
+}
+
+/// Whether wake-up pushes reach this phone as the design intends (design B.4.9, B.7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PushDelivery {
+    /// A sealed push token is registered and pushes arrive at the priority they were sent with.
+    Full,
+    /// Knocks and alerts arrive late, or only on the phone's own wakes.
+    Downgraded(PushDowngrade),
+}
+
+/// Why wake-up pushes are downgraded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PushDowngrade {
+    /// "No wake-up pushes (maximum privacy)" is on.
+    WakePushesOff,
+    /// The platform has no push token: no UnifiedPush distributor, or no FCM registration.
+    NoPushToken,
+    /// The build names no push relay, or the server does not list it.
+    NoPushRelay,
+    /// The push relay's key does not match its pins: no token is sealed to it.
+    RelayKeyMismatch,
+    /// FCM has been delivering high-priority pushes at normal priority (`Notice::PushDowngraded`).
+    PriorityLowered,
 }
 
 /// "Hide trail near zones".
@@ -955,6 +981,7 @@ mod tests {
             relay: RelayStatus::Reachable,
             map_host: None,
             operators: None,
+            push_delivery: PushDelivery::Full,
         })
     }
 

@@ -10,7 +10,10 @@
 //!    (pingers-presence), only against Spots that are confirmed `Inside`;
 //! 4. knock on matches, and answer knocks with a liveness check;
 //! 5. hand accepted knocks and Welcomes to pingers-meetup-session;
-//! 6. refill the mailbox pool, set the location mode and schedule the next wake.
+//! 6. make the wake's one push registration (renew a stale sealed push, or refill the
+//!    mailbox pool), set the location mode and schedule the next wake.
+//!
+//! [`PriorityWindow`] watches FCM's priority downgrades of the pushes that start wakes.
 //!
 //! The wake owns its budget: every outside call is bounded by it, and when it runs out the
 //! wake skips the remaining network steps, keeps its state consistent and still schedules
@@ -25,6 +28,7 @@ mod budget;
 mod error;
 mod pipeline;
 pub mod ports;
+mod push_priority;
 mod state;
 
 #[cfg(test)]
@@ -36,6 +40,7 @@ pub use pipeline::{
     MailboxReads, PushReason, RETRY_AFTER, ROUTINE_FIX_TIMEOUT, UploadOutcome, WakeEnding, WakeEnv,
     WakeInput, WakeNotice, WakeReport, WakeSettings, WakeStep, WakeTrigger,
 };
+pub use push_priority::{PriorityChange, PriorityWindow, PushPriority};
 pub use state::{
     DecidedKnock, KnockStatus, KnownEpoch, LeaseSlot, LiveLease, PeerActivity, RealRecord,
     SentKnock, SpotSnapshot, SpotTransition, WakeSnapshot, WakeState,

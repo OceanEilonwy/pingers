@@ -988,6 +988,7 @@ mod tests {
                         .map_err(|_| CoreError::invalid("operator"))?,
                 ),
             }),
+            push_delivery: pingers_client::snapshot::PushDelivery::Full,
         });
         let check = core.check_reachability().await?;
         assert_eq!(check.status, RelayStatus::KeyMismatch);

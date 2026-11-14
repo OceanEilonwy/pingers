@@ -281,6 +281,29 @@ impl Client {
             .await
     }
 
+    /// Records the priority FCM delivered a push at against the one it was sent with (the
+    /// shell compares them on every message, design B.4.9); raises `Notice::PushDowngraded`
+    /// when downgrades have just become frequent.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] if the count cannot be stored.
+    pub async fn report_push_priority(
+        &self,
+        original: pingers_wake::PushPriority,
+        delivered: pingers_wake::PushPriority,
+    ) -> Result<(), ClientError> {
+        let notice = self
+            .crates
+            .sync
+            .report_push_priority(original, delivered)
+            .await?;
+        if let Some(notice) = notice {
+            self.emit(ClientEvent::Notice(notice));
+        }
+        self.publish_snapshot().await.map(drop)
+    }
+
     /// Checks whether this device reaches its server through the privacy relay ("What your
     /// server sees"); the snapshot's relay status then shows the answer.
     ///
@@ -531,5 +554,6 @@ async fn assemble(crates: &Crates) -> Result<ClientSnapshot, ClientError> {
         relay: server.relay,
         map_host: server.map_host,
         operators: server.operators,
+        push_delivery: server.push_delivery,
     })
 }

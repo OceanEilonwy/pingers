@@ -146,20 +146,38 @@ impl Meetups {
             })
             .await
             .map_err(|_failed| PortError::Unavailable)?;
+        // This device's own subscription goes in with the knocker's, so a member's chat or meet
+        // point wakes it while the app is not running (design B.4.9). A knocker that joins
+        // gets its own from its next maintenance step.
+        let own = self
+            .net
+            .own_subscription()
+            .await
+            .map_err(|_failed| PortError::Unavailable)?;
         let created = create(
             &runtime,
             CreateMeetup {
                 key,
                 group,
                 knocker: knocker.key_package,
-                subscriptions: knocker.subscription.into_iter().collect(),
-                own_subscription: None,
+                subscriptions: knocker
+                    .subscription
+                    .into_iter()
+                    .chain(own.clone())
+                    .collect(),
+                own_subscription: own.as_ref().map(|own| own.id),
                 suite,
             },
             (self.backend.outside.rng)(),
         )
         .await
         .map_err(|_failed| PortError::Unavailable)?;
+        if let Some(own) = &own {
+            self.net
+                .remember_own_subscription(&group, own)
+                .await
+                .map_err(|_failed| PortError::Unavailable)?;
+        }
         // WAITING(client events): Meetup events are not forwarded to the shell yet.
         drop(created.events);
         self.live().push(Live {

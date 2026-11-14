@@ -178,8 +178,11 @@ pub trait ServerPort: Send + Sync {
     /// lease starting in `lease_start`, or `None` if the pool has none.
     fn take_mailbox(&self, purpose: MailboxPurpose, lease_start: Bucket) -> Option<MailboxId>;
 
-    /// Registers at most one new mailbox for the pool (design E.2, F.3).
-    fn refill_mailbox_pool(&self) -> impl Future<Output = Result<(), PortError>> + Send;
+    /// Makes at most one push registration (design E.2, F.3): seals one stale mailbox or
+    /// subscription again (a new push token or relay key, pushes switched on or off, a seal
+    /// running out), or else registers one new mailbox for the pool. One per wake, so the
+    /// server cannot group a device's registrations by when they were made.
+    fn maintain_push_registrations(&self) -> impl Future<Output = Result<(), PortError>> + Send;
 }
 
 /// An accepted knock, for pingers-meetup-session to create or extend the Meetup group and post

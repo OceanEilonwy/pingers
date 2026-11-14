@@ -23,19 +23,21 @@ use pingers_presence::{MailboxPurpose, OutgoingKnock};
 use pingers_proto::{
     AppMessage, BoardCursor, BoardPage, CommitRequest, CommitResponse, CreateGroup, Epoch, GroupId,
     GroupLogEntry, MailboxId, Padded, SecretText, SequenceNumber, SizeClass, SubscriptionId,
-    TimeToLive, WelcomeBytes,
+    WelcomeBytes,
 };
 use pingers_store::{MailboxPurpose as StoredPurpose, WakePushes as StoredPushes};
 use pingers_sync::{
     ApiRequest, CodeSource, Committed, Delivered, GroupCall, GroupError, GroupLifetime,
-    GroupSigner, GroupStart, NewLease, PoolTarget, Sending, SyncEngine, SyncError, WakeBudget,
+    GroupSigner, GroupStart, NewLease, Sending, SyncEngine, SyncError, WakeBudget,
 };
 use pingers_time::{Bucket, UnixSeconds};
-use pingers_wake::PortError;
 use pingers_wake::ports::{LeaseUpload, ServerPort};
+use pingers_wake::{PortError, PriorityChange, PushPriority};
 
 use super::Backend;
 use super::party_log::{self, PartyLog};
+use super::records::{self, Key};
+use super::registrations::priority_window;
 use crate::ports::{ServerSection, SyncPort};
 use crate::snapshot::{RelayStatus, WakePushes};
 use crate::{ClientError, Notice, PushTokens, Unavailable};
@@ -51,8 +53,8 @@ const KEEP_FOR: Duration = Duration::from_hours(1);
 
 /// How many knock mailboxes the pool keeps, and for how long each is registered: a lease is
 /// an hour, so a day covers every lease started while it is pooled.
-const KNOCK_POOL: u32 = 4;
-const MAILBOX_LIFETIME: Duration = Duration::from_hours(24);
+pub(super) const KNOCK_POOL: u32 = 4;
+pub(super) const MAILBOX_LIFETIME: Duration = Duration::from_hours(24);
 
 /// What a client with an instance talks through: the engine, and the build's registration
 /// code for the first registration.
@@ -551,16 +553,11 @@ impl ServerPort for Net {
             .flatten()
     }
 
-    async fn refill_mailbox_pool(&self) -> Result<(), PortError> {
-        let engine = self.engine().map_err(|_none| PortError::Unavailable)?;
-        let target = PoolTarget {
-            purpose: StoredPurpose::Knock,
-            size: KNOCK_POOL,
-            lifetime: TimeToLive::new(MAILBOX_LIFETIME).map_err(|_never| PortError::Unavailable)?,
-        };
-        self.server(engine.refill_mailbox_pool(&target, WakeBudget::UNLIMITED))
+    async fn maintain_push_registrations(&self) -> Result<(), PortError> {
+        self.maintain_push_registrations()
             .await
             .map(drop)
+            .map_err(|error| port_error(&error))
     }
 }
 
@@ -569,9 +566,11 @@ pub(crate) struct Sync(pub(crate) Arc<Net>);
 
 #[async_trait]
 impl SyncPort for Sync {
-    /// New mailboxes and subscriptions are sealed with the new tokens from now on; with pushes
-    /// off nothing is sealed. Mailboxes and subscriptions already registered keep their old
-    /// seal until they expire or are renewed.
+    /// New mailboxes and subscriptions are sealed with the new tokens from now on, and the
+    /// registrations already made are sealed again, one now and one at each wake after
+    /// (pingers-sync's maintenance), so the server cannot group them. With pushes off nothing
+    /// is sealed. Without a token nothing new is sealed and the old seals stay: the relay
+    /// answers 410 for a dead token, and the server then drops that blob itself.
     async fn push_tokens_changed(&self, tokens: Option<PushTokens>) -> Result<(), ClientError> {
         let setting = self
             .0
@@ -585,7 +584,10 @@ impl SyncPort for Sync {
                 self.0.clear_wake_push();
                 Ok(())
             }
-            (StoredPushes::Enabled, Some(tokens)) => self.0.seal_wake_push(&tokens).await,
+            (StoredPushes::Enabled, Some(tokens)) => {
+                self.0.seal_wake_push(&tokens).await?;
+                self.0.maintain_now().await
+            }
         }
     }
 
@@ -605,7 +607,8 @@ impl SyncPort for Sync {
                     .store(|session, _clock, _rng| {
                         Ok(session.settings().set_wake_pushes(StoredPushes::Enabled)?)
                     })
-                    .await
+                    .await?;
+                self.0.maintain_now().await
             }
             WakePushes::NoWakePushes => {
                 self.0.clear_wake_push();
@@ -614,7 +617,8 @@ impl SyncPort for Sync {
                     .store(|session, _clock, _rng| {
                         Ok(session.settings().set_wake_pushes(StoredPushes::Disabled)?)
                     })
-                    .await
+                    .await?;
+                self.0.maintain_now().await
             }
         }
     }
@@ -646,13 +650,39 @@ impl SyncPort for Sync {
         }
     }
 
+    async fn report_push_priority(
+        &self,
+        original: PushPriority,
+        delivered: PushPriority,
+    ) -> Result<Option<Notice>, ClientError> {
+        let change = self
+            .0
+            .backend
+            .store(move |session, _clock, _rng| {
+                let mut window = priority_window(session)?;
+                let change = window.record(original, delivered);
+                records::write(session, &Key::PushPriority, |writer| {
+                    writer.u32(window.downgraded_bits());
+                    writer.byte(window.seen());
+                })?;
+                Ok(change)
+            })
+            .await?;
+        Ok(match change {
+            PriorityChange::BecameDowngraded => Some(Notice::PushDowngraded),
+            PriorityChange::Unchanged | PriorityChange::Recovered => None,
+        })
+    }
+
     async fn section(&self) -> Result<ServerSection, ClientError> {
         let map_host = self.0.map_host().await?;
+        let push_delivery = self.0.push_delivery().await?;
         Ok(ServerSection {
             fallbacks: Vec::new(),
             relay: *self.0.relay.lock().unwrap_or_else(PoisonError::into_inner),
             map_host,
             operators: self.0.operators(),
+            push_delivery,
         })
     }
 }
