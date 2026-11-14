@@ -464,3 +464,41 @@ async fn a_server_that_is_gone_does_not_stop_the_other_server_s_upload() -> Test
     assert!(!ana.uploaded_to(&b)?, "B is gone");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_wake_restocks_each_server_s_tokens() -> TestResult {
+    let world = World::start()?;
+    let (ana, _on_a, _on_b) = ana_on_both(&world).await?;
+    let servers = [
+        ServerId::new(world.a.endpoints().server_id.clone())?,
+        world.b_server()?,
+    ];
+    let tokens = |server: &ServerId| -> Result<u32, TestError> {
+        let database = Database::open(&ana.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+        let session = database.session()?;
+        Ok(session.server(server)?.privacy_pass_tokens().count()?)
+    };
+    {
+        let database = Database::open(&ana.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+        let session = database.session()?;
+        for server in &servers {
+            let _spent = session
+                .server(server)?
+                .privacy_pass_tokens()
+                .retain_keys(&[])?;
+        }
+    }
+    for server in &servers {
+        assert_eq!(tokens(server)?, 0);
+    }
+    // The next day, when each server issues a fresh allowance of tokens.
+    world.clock.advance(std::time::Duration::from_hours(25));
+    tokio::time::timeout(STEP, ana.client.on_wake())
+        .await
+        .map_err(|_elapsed| TestError::Setup("the wake did not finish"))??;
+    for server in &servers {
+        let held = tokens(server)?;
+        assert!(held > 0, "{server:?}: {held} tokens after the wake");
+    }
+    Ok(())
+}
