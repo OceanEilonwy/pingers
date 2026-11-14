@@ -7,9 +7,34 @@
 use pingers_crypto::{PushRelayPublicKey, key_config_hash};
 use pingers_ohttp::{KeyPins, OhttpError};
 use pingers_proto::{Params, PushRelayConfig, RelayId};
-use pingers_transport::TransportError;
+use pingers_transport::{PrivacyClass, Transport, TransportError};
 
+use crate::engine::Response;
 use crate::{ApiRequest, Route, SyncEngine, SyncError, WakeBudget};
+
+/// A server's parameters fetched direct (`GET /v1/params` on the identified route), before
+/// the device knows which OHTTP relays the server advertises.
+///
+/// Used once per server, when a server is added by address or an invite names one this device
+/// has not used. It tells the server this address is about to use it, which the registration
+/// that follows on the same direct route (design B.12, `Identified`) tells it anyway; nothing
+/// else goes with it. Everything after it goes through the advertised relay, including the
+/// parameters again (so a server cannot show this address a relay list of its own without
+/// the relay seeing a different one), the gateway key and the push relay key.
+///
+/// # Errors
+///
+/// [`SyncError::Transport`] if the server cannot be reached; [`SyncError::Status`];
+/// [`SyncError::BadResponse`].
+pub async fn params_direct(direct: &dyn Transport) -> Result<Params, SyncError> {
+    let request = ApiRequest::params();
+    let route = request.route();
+    let answer = direct
+        .request(PrivacyClass::Identified, request.to_binary(None))
+        .await
+        .map_err(SyncError::Transport)?;
+    Response::new(route, answer).success()?.decode()
+}
 
 /// A push relay key config that matched its pins (or was taken on first use).
 #[derive(Clone, Debug, PartialEq, Eq)]

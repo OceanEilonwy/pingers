@@ -62,10 +62,15 @@ pub enum SyncError {
     /// or the Privacy Pass stock is empty and proofs are not possible here.
     #[error("no anonymous credential available")]
     NoCredential,
-    /// The server refused this account's registration (403), now or earlier with the code on
-    /// offer. Nothing is retried until another registration code is offered.
-    #[error("the server refused the account registration")]
-    RegistrationRefused,
+    /// The server refused a registration that came without a registration code (403): it only
+    /// takes devices with a code from its operator (design B.1). Nothing is retried until a
+    /// code is offered.
+    #[error("the server needs a registration code")]
+    RegistrationCodeRequired,
+    /// The server refused the registration code presented (403), now or earlier. Nothing is
+    /// retried until another code is offered.
+    #[error("the server refused the registration code")]
+    RegistrationCodeRefused,
     /// The account cannot be made yet: no gateway key config has been verified through the
     /// relay to record as its server pin.
     #[error("no verified gateway key to record with the account")]

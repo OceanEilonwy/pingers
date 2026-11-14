@@ -137,10 +137,8 @@ impl SyncEngine {
     /// `own_group_entry`, so they outlive a restart).
     async fn own_entries(&self, group: &GroupId) -> Result<Vec<SequenceNumber>, SyncError> {
         let group = *group;
-        crate::engine::blocking(&self.database, move |session| {
-            Ok(session.own_group_entries().positions(&group)?)
-        })
-        .await
+        self.blocking(move |session| Ok(session.own_group_entries().positions(&group)?))
+            .await
     }
 
     /// Forgets own positions in `group` up to `through`: the pull has handed them over.
@@ -153,7 +151,7 @@ impl SyncEngine {
             return Ok(());
         };
         let group = *group;
-        crate::engine::blocking(&self.database, move |session| {
+        self.blocking(move |session| {
             Ok(session
                 .own_group_entries()
                 .forget_through(&group, through)?)
@@ -354,10 +352,8 @@ impl SyncEngine {
             response.success()?;
         }
         let group = *call.group;
-        crate::engine::blocking(&self.database, move |session| {
-            Ok(session.subscriptions().delete(&group)?)
-        })
-        .await
+        self.blocking(move |session| Ok(session.subscriptions().delete(&group)?))
+            .await
     }
 
     /// The group's latest sealed state snapshot (a joiner's first read).

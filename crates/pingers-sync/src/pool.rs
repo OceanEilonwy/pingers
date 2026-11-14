@@ -141,9 +141,9 @@ impl SyncEngine {
         purpose: MailboxPurpose,
         until: UnixSeconds,
     ) -> Result<Option<MailboxId>, SyncError> {
-        Ok(self
-            .database
-            .session()?
+        let session = self.database.session()?;
+        Ok(session
+            .server(&self.server())?
             .mailboxes()
             .take_pooled(purpose, until)?
             .map(|mailbox| mailbox.id()))

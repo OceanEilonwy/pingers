@@ -65,5 +65,5 @@ pub use mailbox::{Delivered, NewMailbox, PushSeal};
 pub use pool::{LEASE_BUCKETS, PoolRefill, PoolTarget, WakePush};
 pub use queue::{QueueCapacity, QueuePolicy, Sending};
 pub use request::{ApiRequest, GroupLifetime, GroupSigner, GroupStart, Route};
-pub use server::VerifiedPushRelay;
+pub use server::{VerifiedPushRelay, params_direct};
 pub use tokens::{Refill, TokenIssuer, TokenStock};

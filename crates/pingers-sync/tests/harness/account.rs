@@ -21,10 +21,14 @@ fn code(text: &str) -> SecretText {
 
 /// A bearer the server never issued, stored as valid until `expires_at`.
 fn stale_bearer(device: &Device, expires_at: pingers_time::UnixSeconds) -> TestResult {
-    device.session()?.account().set_bearer(&AccountBearer {
-        bearer: code(&"ab".repeat(32)),
-        expires_at,
-    })?;
+    device
+        .scoped()?
+        .server()?
+        .account()
+        .set_bearer(&AccountBearer {
+            bearer: code(&"ab".repeat(32)),
+            expires_at,
+        })?;
     Ok(())
 }
 
@@ -99,18 +103,13 @@ async fn a_fresh_device_registers_stocks_tokens_and_takes_a_leaf_once() -> TestR
         direct(&device)?.take_seen(),
         ["/v1/accounts", "/v1/auth", "/v1/pp/issue", "/v1/rln/leaf"]
     );
-    let identity = device
-        .session()?
-        .identity()
-        .load()?
-        .ok_or(TestError::Unexpected("no identity"))?;
-    assert_eq!(identity.server, world.server_id);
+    assert!(device.session()?.identity().load()?.is_some());
     assert_eq!(
-        identity.server_pin,
-        key_config_hash(&world.harness.endpoints().ohttp_key_config),
+        device.session()?.servers().server_pin(&world.server_id)?,
+        Some(key_config_hash(&world.harness.endpoints().ohttp_key_config)),
         "the account records the gateway key the relay served"
     );
-    assert!(device.session()?.rln_identity().load()?.is_some());
+    assert!(device.scoped()?.server()?.rln_identity().load()?.is_some());
 
     // pingers-sync's credential choice now finds tokens, and the server takes them.
     assert_eq!(
@@ -149,7 +148,11 @@ async fn the_bearer_survives_a_restart_within_its_hour() -> TestResult {
         .await?;
     let device = world.restart(device)?;
     let _ = direct(&device)?.take_seen();
-    device.session()?.privacy_pass_tokens().retain_keys(&[])?;
+    device
+        .scoped()?
+        .server()?
+        .privacy_pass_tokens()
+        .retain_keys(&[])?;
     assert_eq!(
         device.engine.stock_tokens(WakeBudget::UNLIMITED).await?,
         Refill::Fetched { added: 5, held: 5 }
@@ -169,7 +172,8 @@ async fn a_server_that_forgot_the_account_gets_it_again_once() -> TestResult {
     // The server forgets the account and its bearers (as one whose quota store is in memory
     // does when it restarts); the device still holds a bearer it believes in.
     let bearer = device
-        .session()?
+        .scoped()?
+        .server()?
         .account()
         .bearer()?
         .ok_or(TestError::Unexpected("no bearer"))?;
@@ -186,7 +190,11 @@ async fn a_server_that_forgot_the_account_gets_it_again_once() -> TestResult {
         })
         .await?;
     assert_eq!(deleted.status.get(), 204);
-    device.session()?.privacy_pass_tokens().retain_keys(&[])?;
+    device
+        .scoped()?
+        .server()?
+        .privacy_pass_tokens()
+        .retain_keys(&[])?;
     let _ = direct(&device)?.take_seen();
 
     assert_eq!(
@@ -204,6 +212,47 @@ async fn a_server_that_forgot_the_account_gets_it_again_once() -> TestResult {
             "/v1/auth",
             "/v1/pp/issue"
         ]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_with_codes_refusing_no_code_asks_for_one_and_takes_a_typed_one() -> TestResult {
+    let world = World::start_with(&HarnessConfig {
+        registration_codes: vec!["friends".to_owned()],
+        ..HarnessConfig::default()
+    })?;
+    let device = world.account_device()?;
+    assert!(matches!(
+        device.engine.ensure_registered(WakeBudget::UNLIMITED).await,
+        Err(SyncError::RegistrationCodeRequired)
+    ));
+    // Asked once; not again until a code is offered.
+    assert!(matches!(
+        device.engine.ensure_registered(WakeBudget::UNLIMITED).await,
+        Err(SyncError::RegistrationCodeRequired)
+    ));
+    assert_eq!(direct(&device)?.take_seen(), ["/v1/accounts"]);
+    device
+        .engine
+        .offer_registration_code(code("frends"), CodeSource::User)
+        .await?;
+    assert!(matches!(
+        device.engine.ensure_registered(WakeBudget::UNLIMITED).await,
+        Err(SyncError::RegistrationCodeRefused)
+    ));
+    device
+        .engine
+        .offer_registration_code(code("friends"), CodeSource::User)
+        .await?;
+    device.engine.ensure_registered(WakeBudget::UNLIMITED).await?;
+    assert_eq!(
+        device
+            .engine
+            .shared_registration_code()
+            .await?
+            .map(|code| code.expose().to_owned()),
+        Some("friends".to_owned())
     );
     Ok(())
 }
@@ -235,12 +284,12 @@ async fn a_refused_code_is_not_tried_again_until_another_is_offered() -> TestRes
                 .engine
                 .prepare_credentials(WakeBudget::UNLIMITED)
                 .await,
-            Err(SyncError::RegistrationRefused)
+            Err(SyncError::RegistrationCodeRefused)
         ));
     }
     assert_eq!(direct(&device)?.take_seen(), ["/v1/accounts"]);
     assert!(matches!(
-        device.session()?.account().registration()?,
+        device.scoped()?.server()?.account().registration()?,
         AccountRegistration::Refused { code: Some(refused) } if refused.expose() == "strangers"
     ));
 
@@ -255,7 +304,7 @@ async fn a_refused_code_is_not_tried_again_until_another_is_offered() -> TestRes
         .await?;
     assert!(matches!(
         device.engine.ensure_registered(WakeBudget::UNLIMITED).await,
-        Err(SyncError::RegistrationRefused)
+        Err(SyncError::RegistrationCodeRefused)
     ));
     assert!(direct(&device)?.take_seen().is_empty());
 

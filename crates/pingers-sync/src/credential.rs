@@ -10,7 +10,7 @@ use pingers_anon::{
 };
 use pingers_ohttp::Header;
 use pingers_proto::{AnonymousCredential, RlnAuth, RlnScope, ServerId, WireEncode};
-use pingers_store::{HeldToken, RlnIdentity, Session, TreeLeaf};
+use pingers_store::{HeldToken, RlnIdentity, ServerSession, TreeLeaf};
 use pingers_time::{Bucket, UnixSeconds};
 
 use crate::request::AUTHORIZATION;
@@ -186,7 +186,7 @@ pub(crate) struct ProofInput<'input> {
 /// never reuse it (design B.4.8, self-slashing risk). `None` if there is no identity or the
 /// bucket's message ids are spent.
 pub(crate) fn prove_request(
-    session: &Session,
+    session: &ServerSession<'_>,
     rng: &mut SyncRng,
     input: &ProofInput<'_>,
 ) -> Result<Option<RlnAuth>, SyncError> {

@@ -6,7 +6,6 @@ use pingers_anon::{TokenCount, begin_token_issuance};
 use pingers_proto::{PrivacyPassIssueRequest, PrivacyPassIssueResponse, SecretText};
 use pingers_store::{TokenKeyId, UnspentToken};
 
-use crate::engine::blocking;
 use crate::{ApiRequest, SyncEngine, SyncError, WakeBudget};
 
 /// How many tokens to keep and to fetch.
@@ -97,10 +96,8 @@ impl SyncEngine {
     ///
     /// [`SyncError::Store`].
     pub async fn token_count(&self) -> Result<u32, SyncError> {
-        blocking(&self.database, |session| {
-            Ok(session.privacy_pass_tokens().count()?)
-        })
-        .await
+        self.blocking(|session| Ok(session.privacy_pass_tokens().count()?))
+            .await
     }
 
     /// Tops the token stock up if it is below its minimum: one `POST /v1/pp/issue`
@@ -137,12 +134,13 @@ impl SyncEngine {
             .collect();
         let added = u16::try_from(tokens.len()).map_err(|_| SyncError::OutOfRange("tokens"))?;
         let key_id = issuer.key_id;
-        let held = blocking(&self.database, move |session| {
-            let repository = session.privacy_pass_tokens();
-            repository.add(&tokens, &key_id)?;
-            Ok(repository.count()?)
-        })
-        .await?;
+        let held = self
+            .blocking(move |session| {
+                let repository = session.privacy_pass_tokens();
+                repository.add(&tokens, &key_id)?;
+                Ok(repository.count()?)
+            })
+            .await?;
         Ok(Refill::Fetched { added, held })
     }
 }

@@ -27,7 +27,9 @@ use pingers_proto::{
     GroupId, MessageAccepted, PrivacyPassKeys, RegisterRequest, RegisterResponse, SecretText,
     SequenceNumber, ServerId, Subscription, SubscriptionId, WireDecode, WireEncode,
 };
-use pingers_store::{Database, DatabaseKey, Session, TokenKeyId};
+use pingers_store::{
+    Database, DatabaseKey, ServerRecord, ServerSession, ServerTrust, Session, TokenKeyId,
+};
 use pingers_sync::{
     CommitAttempts, CredentialPolicy, ProcessRole, ProverStatus, QueueCapacity, SyncEngine,
     SyncError, SyncParts, SyncSettings, TokenIssuer, TokenStock, WakeBudget,
@@ -825,6 +827,14 @@ impl World {
                 [u8::try_from(number % 200).unwrap_or(1); 32],
             )),
         )?;
+        database.session()?.servers().put(&ServerRecord {
+            server: self.server_id.clone(),
+            ohttp_relays: Vec::new(),
+            push_relay: None,
+            gateway_pins: Vec::new(),
+            push_relay_pins: Vec::new(),
+            trust: ServerTrust::BuiltIn,
+        })?;
         let database = Arc::new(database);
         let router = Router::new(Routes {
             anonymous: link.clone(),
@@ -863,6 +873,19 @@ impl World {
     }
 }
 
+/// A store session and the server whose rows a check reads.
+pub(crate) struct Scoped {
+    session: Session,
+    server: ServerId,
+}
+
+impl Scoped {
+    /// The server's rows.
+    pub(crate) fn server(&self) -> Result<ServerSession<'_>, TestError> {
+        Ok(self.session.server(&self.server)?)
+    }
+}
+
 /// What a device is opened with, first or after a restart.
 struct Boot {
     number: u64,
@@ -877,6 +900,14 @@ impl Device {
     /// A store session of the test's own, for a check between engine steps.
     pub(crate) fn session(&self) -> Result<Session, TestError> {
         Ok(self.database.session()?)
+    }
+
+    /// A store session for checks of the harness server's rows.
+    pub(crate) fn scoped(&self) -> Result<Scoped, TestError> {
+        Ok(Scoped {
+            session: self.database.session()?,
+            server: self.engine.server(),
+        })
     }
 
     /// Fills the token stock.

@@ -38,7 +38,6 @@ use pingers_store::{
 use pingers_time::UnixSeconds;
 use subtle::ConstantTimeEq as _;
 
-use crate::engine::blocking;
 use crate::{ApiRequest, Refill, Response, Route, SyncEngine, SyncError, TokenIssuer, WakeBudget};
 
 /// How long the server accepts a bearer (design D: one hour).
@@ -60,6 +59,8 @@ pub enum CodeSource {
     Build,
     /// An invite link the user opened.
     Invite,
+    /// Typed by the user on "This server needs a code".
+    User,
 }
 
 /// This device's membership leaf.
@@ -120,6 +121,14 @@ fn choose_issuer(keys: &PrivacyPassKeys, now: UnixSeconds) -> Result<IssuerChoic
     })
 }
 
+/// The refusal of a registration that presented `code`.
+const fn refusal(code: Option<&SecretText>) -> SyncError {
+    match code {
+        None => SyncError::RegistrationCodeRequired,
+        Some(_) => SyncError::RegistrationCodeRefused,
+    }
+}
+
 /// Whether a status means "fetch a fresh bearer and try once more".
 const fn needs_fresh_bearer(response: &Response) -> bool {
     response.status() == UNAUTHORIZED
@@ -143,7 +152,7 @@ impl SyncEngine {
         if code.expose().is_empty() {
             return Ok(());
         }
-        blocking(&self.database, move |session| {
+        self.blocking(move |session| {
             let accounts = session.account();
             let offered = match accounts.registration()? {
                 AccountRegistration::Registered { .. } => return Ok(()),
@@ -169,7 +178,7 @@ impl SyncEngine {
     ///
     /// [`SyncError::Store`].
     pub async fn shared_registration_code(&self) -> Result<Option<SecretText>, SyncError> {
-        blocking(&self.database, |session| {
+        self.blocking(|session| {
             Ok(match session.account().registration()? {
                 AccountRegistration::Registered { code } => code,
                 AccountRegistration::Pending { .. } | AccountRegistration::Refused { .. } => None,
@@ -188,7 +197,8 @@ impl SyncEngine {
     ///
     /// # Errors
     ///
-    /// [`SyncError::RegistrationRefused`]; [`SyncError::NoGatewayKey`]; [`SyncError::IssuerKeys`];
+    /// [`SyncError::RegistrationCodeRequired`]; [`SyncError::RegistrationCodeRefused`];
+    /// [`SyncError::NoGatewayKey`]; [`SyncError::IssuerKeys`];
     /// [`SyncError::Status`]; as [`SyncEngine::send`].
     pub async fn prepare_credentials(&self, budget: WakeBudget) -> Result<Prepared, SyncError> {
         self.ensure_registered(budget).await?;
@@ -197,14 +207,17 @@ impl SyncEngine {
         Ok(Prepared { tokens, leaf })
     }
 
-    /// The account, made on first use: a fresh Ed25519 key for the engine's server, recorded
-    /// with the gateway key config hash the relay served (fetched and checked against the
-    /// transport's pin first).
+    /// The account, made on first use: a fresh Ed25519 key for the device (the same key is
+    /// registered on every server it has Parties on), and for this server the gateway key
+    /// config hash the relay served (fetched and checked against the transport's pin first),
+    /// recorded as the server pin the account was made with.
     async fn ensure_identity(&self, budget: WakeBudget) -> Result<(), SyncError> {
-        let held = blocking(&self.database, |session| {
-            Ok(session.identity().load()?.is_some())
-        })
-        .await?;
+        let held = self
+            .blocking(|session| {
+                Ok(session.identity().load()?.is_some()
+                    && session.servers().server_pin(session.server())?.is_some())
+            })
+            .await?;
         if held {
             return Ok(());
         }
@@ -214,18 +227,20 @@ impl SyncEngine {
             .gateway_key_hash()
             .ok_or(SyncError::NoGatewayKey)?;
         let signing_key = self.with_rng(AccountSigningKey::generate);
-        let server = self.settings().server;
-        blocking(&self.database, move |session| {
+        self.blocking(move |session| {
             session.transaction(|session| {
                 // Another process may have made it meanwhile; keep the first.
                 if session.identity().load()?.is_none() {
                     session.identity().save(&Identity {
                         account: account_id(&signing_key.public_key()),
                         signing_key,
-                        server,
-                        server_pin,
                     })?;
                     session.account().forget_bearer()?;
+                }
+                if session.servers().server_pin(session.server())?.is_none() {
+                    session
+                        .servers()
+                        .set_server_pin(session.server(), &server_pin)?;
                 }
                 Ok::<_, SyncError>(())
             })
@@ -237,17 +252,17 @@ impl SyncEngine {
     ///
     /// # Errors
     ///
-    /// [`SyncError::RegistrationRefused`] if the server refused it, now or before with the
-    /// code on offer; as [`SyncEngine::prepare_credentials`].
+    /// [`SyncError::RegistrationCodeRequired`] if the server refused it without a code, or
+    /// [`SyncError::RegistrationCodeRefused`] if it refused the code on offer, now or before;
+    /// as [`SyncEngine::prepare_credentials`].
     pub async fn ensure_registered(&self, budget: WakeBudget) -> Result<(), SyncError> {
         self.ensure_identity(budget).await?;
-        let registration = blocking(&self.database, |session| {
-            Ok(session.account().registration()?)
-        })
-        .await?;
+        let registration = self
+            .blocking(|session| Ok(session.account().registration()?))
+            .await?;
         match registration {
             AccountRegistration::Registered { .. } => Ok(()),
-            AccountRegistration::Refused { .. } => Err(SyncError::RegistrationRefused),
+            AccountRegistration::Refused { code } => Err(refusal(code.as_ref())),
             AccountRegistration::Pending { code } => self.register(code, budget).await,
         }
     }
@@ -260,26 +275,28 @@ impl SyncEngine {
     ) -> Result<(), SyncError> {
         let server = self.settings().server;
         let sent_code = code.clone();
-        let (request, account) = blocking(&self.database, move |session| {
-            let identity = session.identity().load()?.ok_or(SyncError::Internal)?;
-            let request = RegisterRequest {
-                signature_key: *identity.signing_key.public_key().as_bytes(),
-                proof: *sign_registration(&identity.signing_key, &server)?.as_bytes(),
-                registration_code: sent_code,
-            };
-            Ok((ApiRequest::create_account(&request)?, identity.account))
-        })
-        .await?;
+        let (request, account) = self
+            .blocking(move |session| {
+                let identity = session.identity().load()?.ok_or(SyncError::Internal)?;
+                let request = RegisterRequest {
+                    signature_key: *identity.signing_key.public_key().as_bytes(),
+                    proof: *sign_registration(&identity.signing_key, &server)?.as_bytes(),
+                    registration_code: sent_code,
+                };
+                Ok((ApiRequest::create_account(&request)?, identity.account))
+            })
+            .await?;
         let response = self.exchange(request, budget).await?;
         if response.status() == FORBIDDEN {
-            blocking(&self.database, move |session| {
+            let refused = refusal(code.as_ref());
+            self.blocking(move |session| {
                 session.account().forget_bearer()?;
                 Ok(session
                     .account()
                     .set_registration(&AccountRegistration::Refused { code })?)
             })
             .await?;
-            return Err(SyncError::RegistrationRefused);
+            return Err(refused);
         }
         let registered: RegisterResponse = response.success()?.decode()?;
         if registered.account_id != account {
@@ -290,7 +307,7 @@ impl SyncEngine {
                 },
             });
         }
-        blocking(&self.database, move |session| {
+        self.blocking(move |session| {
             Ok(session
                 .account()
                 .set_registration(&AccountRegistration::Registered { code })?)
@@ -301,7 +318,9 @@ impl SyncEngine {
     /// A bearer the server accepts for a while yet: the stored one, or a fresh one.
     async fn bearer(&self, budget: WakeBudget) -> Result<SecretText, SyncError> {
         let now = self.now();
-        let stored = blocking(&self.database, |session| Ok(session.account().bearer()?)).await?;
+        let stored = self
+            .blocking(|session| Ok(session.account().bearer()?))
+            .await?;
         if let Some(stored) = stored
             && now < stored.expires_at
         {
@@ -315,7 +334,7 @@ impl SyncEngine {
     async fn authenticate(&self, budget: WakeBudget) -> Result<SecretText, SyncError> {
         let response = self.auth_exchange(budget).await?;
         let response = if response.status() == FORBIDDEN {
-            blocking(&self.database, |session| {
+            self.blocking(|session| {
                 let accounts = session.account();
                 if let AccountRegistration::Registered { code } = accounts.registration()? {
                     accounts.set_registration(&AccountRegistration::Pending { code })?;
@@ -339,25 +358,24 @@ impl SyncEngine {
             bearer: bearer.clone(),
             expires_at,
         };
-        blocking(&self.database, move |session| {
-            Ok(session.account().set_bearer(&stored)?)
-        })
-        .await?;
+        self.blocking(move |session| Ok(session.account().set_bearer(&stored)?))
+            .await?;
         Ok(bearer)
     }
 
     async fn auth_exchange(&self, budget: WakeBudget) -> Result<Response, SyncError> {
         let server = self.settings().server;
         let bucket = self.now().bucket();
-        let request = blocking(&self.database, move |session| {
-            let identity = session.identity().load()?.ok_or(SyncError::Internal)?;
-            ApiRequest::auth(&AuthRequest {
-                account_id: identity.account,
-                nonce_signature: *sign_auth_challenge(&identity.signing_key, &server, bucket)?
-                    .as_bytes(),
+        let request = self
+            .blocking(move |session| {
+                let identity = session.identity().load()?.ok_or(SyncError::Internal)?;
+                ApiRequest::auth(&AuthRequest {
+                    account_id: identity.account,
+                    nonce_signature: *sign_auth_challenge(&identity.signing_key, &server, bucket)?
+                        .as_bytes(),
+                })
             })
-        })
-        .await?;
+            .await?;
         self.exchange(request, budget).await
     }
 
@@ -374,10 +392,8 @@ impl SyncEngine {
         if !needs_fresh_bearer(&response) {
             return Ok(response);
         }
-        blocking(&self.database, |session| {
-            Ok(session.account().forget_bearer()?)
-        })
-        .await?;
+        self.blocking(|session| Ok(session.account().forget_bearer()?))
+            .await?;
         let bearer = self.authenticate(budget).await?;
         self.exchange(build(&bearer)?, budget).await
     }
@@ -394,10 +410,9 @@ impl SyncEngine {
         &self,
         budget: WakeBudget,
     ) -> Result<LeafStanding, SyncError> {
-        let held = blocking(&self.database, |session| {
-            Ok(session.rln_identity().load()?.is_some())
-        })
-        .await?;
+        let held = self
+            .blocking(|session| Ok(session.rln_identity().load()?.is_some()))
+            .await?;
         if held {
             return Ok(LeafStanding::Held);
         }
@@ -416,10 +431,8 @@ impl SyncEngine {
             leaf: TreePosition::new(leaf.index.get()),
             live_from: leaf.live_from,
         };
-        blocking(&self.database, move |session| {
-            Ok(session.rln_identity().save(&identity)?)
-        })
-        .await?;
+        self.blocking(move |session| Ok(session.rln_identity().save(&identity)?))
+            .await?;
         Ok(LeafStanding::Registered)
     }
 
@@ -437,10 +450,8 @@ impl SyncEngine {
             .success()?
             .decode()?;
         let IssuerChoice { issuer, redeemable } = choose_issuer(&keys, self.now())?;
-        blocking(&self.database, move |session| {
-            Ok(session.privacy_pass_tokens().retain_keys(&redeemable)?)
-        })
-        .await?;
+        self.blocking(move |session| Ok(session.privacy_pass_tokens().retain_keys(&redeemable)?))
+            .await?;
         Ok(issuer)
     }
 
@@ -465,10 +476,8 @@ impl SyncEngine {
                 route: Route::PrivacyPassIssue,
                 status: UNAUTHORIZED,
             }) => {
-                blocking(&self.database, |session| {
-                    Ok(session.account().forget_bearer()?)
-                })
-                .await?;
+                self.blocking(|session| Ok(session.account().forget_bearer()?))
+                    .await?;
                 let bearer = self.authenticate(budget).await?;
                 self.refill_tokens(&issuer, &bearer, budget).await
             }

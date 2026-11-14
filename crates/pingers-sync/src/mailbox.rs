@@ -15,7 +15,6 @@ use pingers_proto::{
 use pingers_store::{Mailbox, MailboxPurpose, MailboxState, StoredSubscription};
 use pingers_time::UnixSeconds;
 
-use crate::engine::blocking;
 use crate::{
     ApiRequest, NotSentReason, Outcome, Sending, SyncEngine, SyncError, SyncRng, WakeBudget,
 };
@@ -147,10 +146,8 @@ impl SyncEngine {
             push: handle,
             expires_at: expiry(self.now(), mailbox.lifetime)?,
         };
-        blocking(&self.database, move |session| {
-            Ok(session.mailboxes().insert(&stored)?)
-        })
-        .await?;
+        self.blocking(move |session| Ok(session.mailboxes().insert(&stored)?))
+            .await?;
         Ok(Delivered::Done(id))
     }
 
@@ -161,10 +158,8 @@ impl SyncEngine {
     /// [`SyncError::Store`].
     pub async fn pooled_mailboxes(&self, purpose: MailboxPurpose) -> Result<u32, SyncError> {
         let now = self.now();
-        blocking(&self.database, move |session| {
-            Ok(session.mailboxes().pooled_count(purpose, now)?)
-        })
-        .await
+        self.blocking(move |session| Ok(session.mailboxes().pooled_count(purpose, now)?))
+            .await
     }
 
     /// Hands out a pooled mailbox of `purpose` (marked in use), to be named in a record,
@@ -178,7 +173,7 @@ impl SyncEngine {
         purpose: MailboxPurpose,
     ) -> Result<Option<MailboxId>, SyncError> {
         let now = self.now();
-        blocking(&self.database, move |session| {
+        self.blocking(move |session| {
             Ok(session
                 .mailboxes()
                 .take_pooled(purpose, now)?
@@ -194,7 +189,7 @@ impl SyncEngine {
         build: impl FnOnce(&MailboxId, &MailboxReadKey) -> ApiRequest + Send + 'static,
     ) -> Result<ApiRequest, SyncError> {
         let id = *mailbox;
-        blocking(&self.database, move |session| {
+        self.blocking(move |session| {
             let stored = session
                 .mailboxes()
                 .get(&id)?
@@ -264,10 +259,8 @@ impl SyncEngine {
             response.success()?;
         }
         let id = *mailbox;
-        blocking(&self.database, move |session| {
-            Ok(session.mailboxes().delete(&id)?)
-        })
-        .await
+        self.blocking(move |session| Ok(session.mailboxes().delete(&id)?))
+            .await
     }
 
     /// Forgets mailboxes and subscriptions whose lifetime has passed (the server has dropped
@@ -278,7 +271,7 @@ impl SyncEngine {
     /// [`SyncError::Store`].
     pub async fn forget_expired(&self) -> Result<usize, SyncError> {
         let now = self.now();
-        blocking(&self.database, move |session| {
+        self.blocking(move |session| {
             let mailboxes = session.mailboxes().delete_expired(now)?;
             let subscriptions = session.subscriptions().delete_expired(now)?;
             Ok(mailboxes.saturating_add(subscriptions))
@@ -328,9 +321,7 @@ impl SyncEngine {
             handle: subscription.push.handle,
             expires_at: expiry(self.now(), subscription.time_to_live)?,
         };
-        blocking(&self.database, move |session| {
-            Ok(session.subscriptions().put(&stored)?)
-        })
-        .await
+        self.blocking(move |session| Ok(session.subscriptions().put(&stored)?))
+            .await
     }
 }

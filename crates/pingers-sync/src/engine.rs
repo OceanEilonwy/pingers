@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use pingers_ohttp::{BinaryResponse, OhttpError};
 use pingers_proto::{CommitResponse, MessageAccepted, ServerId, WireDecode};
-use pingers_store::{Database, NewQueuedRequest, Pushed, Session};
+use pingers_store::{Database, NewQueuedRequest, Pushed, ServerSession};
 use pingers_time::{Clock, Timer, UnixSeconds};
 use pingers_transport::{DuplexStream, PrivacyClass, Transport, TransportError};
 
@@ -88,7 +88,7 @@ pub struct Response {
 }
 
 impl Response {
-    fn new(route: Route, response: BinaryResponse) -> Self {
+    pub(crate) fn new(route: Route, response: BinaryResponse) -> Self {
         Self {
             route,
             status: response.status.get(),
@@ -215,6 +215,7 @@ pub struct SyncEngine {
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) timer: Arc<dyn Timer>,
     pub(crate) rng: Arc<Mutex<SyncRng>>,
+    server: ServerId,
     pub(crate) settings: Mutex<SyncSettings>,
     clock_status: Mutex<ClockStatus>,
     pub(crate) wake_push: Mutex<Option<WakePush>>,
@@ -225,16 +226,21 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// Runs `work` against the store on the blocking pool (SQLCipher blocks), in a session of its
-/// own: the cross-process lock is held for this step only. A step that must be atomic runs
-/// its writes in `session.transaction`.
+/// own scoped to `server`'s rows: the cross-process lock is held for this step only. A step
+/// that must be atomic runs its writes in `session.transaction`.
 pub(crate) async fn blocking<T: Send + 'static>(
     database: &Arc<Database>,
-    work: impl FnOnce(&Session) -> Result<T, SyncError> + Send + 'static,
+    server: &ServerId,
+    work: impl FnOnce(&ServerSession<'_>) -> Result<T, SyncError> + Send + 'static,
 ) -> Result<T, SyncError> {
     let database = Arc::clone(database);
-    tokio::task::spawn_blocking(move || work(&database.session()?))
-        .await
-        .map_err(|_| SyncError::Internal)?
+    let server = server.clone();
+    tokio::task::spawn_blocking(move || {
+        let session = database.session()?;
+        work(&session.server(&server)?)
+    })
+    .await
+    .map_err(|_| SyncError::Internal)?
 }
 
 impl SyncEngine {
@@ -249,14 +255,25 @@ impl SyncEngine {
             rng: Arc::new(Mutex::new(parts.rng)),
             clock_status: Mutex::new(ClockStatus::Unchecked),
             wake_push: Mutex::new(None),
+            server: settings.server.clone(),
             settings: Mutex::new(settings),
         }
     }
 
-    /// The server this engine talks to.
+    /// The server this engine talks to. Every store step of the engine reads and writes only
+    /// this server's rows (pingers-store's `ServerSession`); the server must have a row before
+    /// the engine is used.
     #[must_use]
     pub fn server(&self) -> ServerId {
-        lock(&self.settings).server.clone()
+        self.server.clone()
+    }
+
+    /// [`blocking`] on this engine's server.
+    pub(crate) async fn blocking<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&ServerSession<'_>) -> Result<T, SyncError> + Send + 'static,
+    ) -> Result<T, SyncError> {
+        blocking(&self.database, &self.server, work).await
     }
 
     /// Replaces the credential policy, after fetching `Params` again or a prover self-test.
@@ -307,10 +324,8 @@ impl SyncEngine {
     ///
     /// [`SyncError::Store`].
     pub async fn queued(&self) -> Result<usize, SyncError> {
-        blocking(&self.database, |session| {
-            Ok(session.request_queue().count()?)
-        })
-        .await
+        self.blocking(|session| Ok(session.request_queue().count()?))
+            .await
     }
 
     /// The credential the next anonymous request would carry, for "What your server sees"
@@ -322,10 +337,9 @@ impl SyncEngine {
     pub async fn credential_choice(&self) -> Result<CredentialChoice, SyncError> {
         let settings = self.settings();
         let now = self.now();
-        let readiness = blocking(&self.database, move |session| {
-            Ok(readiness(session.rln_identity().load()?.as_ref(), now))
-        })
-        .await?;
+        let readiness = self
+            .blocking(move |session| Ok(readiness(session.rln_identity().load()?.as_ref(), now)))
+            .await?;
         choose_credential(settings.role, &settings.credentials, readiness)
     }
 
@@ -339,21 +353,22 @@ impl SyncEngine {
             let rng = Arc::clone(&self.rng);
             let request = request.clone();
             let bucket = self.now().bucket();
-            let proof = blocking(&self.database, move |session| {
-                prove_request(
-                    session,
-                    &mut lock(&rng),
-                    &ProofInput {
-                        server: &settings.server,
-                        scope,
-                        bucket,
-                        method: request.method(),
-                        path: request.path(),
-                        body: request.body(),
-                    },
-                )
-            })
-            .await?;
+            let proof = self
+                .blocking(move |session| {
+                    prove_request(
+                        session,
+                        &mut lock(&rng),
+                        &ProofInput {
+                            server: &settings.server,
+                            scope,
+                            bucket,
+                            method: request.method(),
+                            path: request.path(),
+                            body: request.body(),
+                        },
+                    )
+                })
+                .await?;
             if let Some(auth) = proof {
                 return Ok(Attached::Proof {
                     header: proof_header(&auth)?,
@@ -369,11 +384,10 @@ impl SyncEngine {
                 return Err(SyncError::NoCredential);
             }
         }
-        let token = blocking(&self.database, |session| {
-            Ok(session.privacy_pass_tokens().take()?)
-        })
-        .await?
-        .ok_or(SyncError::NoCredential)?;
+        let token = self
+            .blocking(|session| Ok(session.privacy_pass_tokens().take()?))
+            .await?
+            .ok_or(SyncError::NoCredential)?;
         Ok(Attached::Token {
             header: token_header(&token),
             token,
@@ -383,7 +397,7 @@ impl SyncEngine {
     /// Returns an unspent token to the store: the request carrying it never left the device.
     async fn restore(&self, attached: Attached) -> Result<(), SyncError> {
         if let Attached::Token { token, .. } = attached {
-            blocking(&self.database, move |session| {
+            self.blocking(move |session| {
                 Ok(session
                     .privacy_pass_tokens()
                     .add(&[token.token], &token.key_id)?)
@@ -426,7 +440,7 @@ impl SyncEngine {
                 let bytes = request.to_queued()?;
                 let group = request.group();
                 let capacity = self.settings().queue_capacity;
-                blocking(&self.database, move |session| {
+                self.blocking(move |session| {
                     // A full queue drops its oldest entry: newer requests are more likely to
                     // still matter.
                     let _: Pushed = session.request_queue().push(
@@ -511,10 +525,8 @@ impl SyncEngine {
         let Some(sequence) = sequence else {
             return Ok(());
         };
-        blocking(&self.database, move |session| {
-            Ok(session.own_group_entries().remember(&group, sequence)?)
-        })
-        .await
+        self.blocking(move |session| Ok(session.own_group_entries().remember(&group, sequence)?))
+            .await
     }
 
     /// Sends `request` in its route's privacy class with the credential it needs, inside the
@@ -572,19 +584,17 @@ impl SyncEngine {
     pub async fn flush_queue(&self, budget: WakeBudget) -> Result<FlushReport, SyncError> {
         let now = self.now();
         let mut report = FlushReport {
-            expired: blocking(&self.database, move |session| {
-                Ok(session.request_queue().drop_expired(now)?)
-            })
-            .await?,
+            expired: self
+                .blocking(move |session| Ok(session.request_queue().drop_expired(now)?))
+                .await?,
             ..FlushReport::default()
         };
         loop {
             // Taken off the queue before sending: a crash mid-send loses the request rather
             // than sending it twice.
-            let Some(queued) = blocking(&self.database, |session| {
-                Ok(session.request_queue().take_oldest()?)
-            })
-            .await?
+            let Some(queued) = self
+                .blocking(|session| Ok(session.request_queue().take_oldest()?))
+                .await?
             else {
                 break;
             };
@@ -592,10 +602,8 @@ impl SyncEngine {
             match self.attempt(request, budget).await? {
                 Attempt::Answered(response) => report.sent.push(response),
                 Attempt::NotSent(..) => {
-                    blocking(&self.database, move |session| {
-                        Ok(session.request_queue().put_back(&queued)?)
-                    })
-                    .await?;
+                    self.blocking(move |session| Ok(session.request_queue().put_back(&queued)?))
+                        .await?;
                     break;
                 }
             }
