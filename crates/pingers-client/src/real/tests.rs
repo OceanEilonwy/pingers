@@ -120,7 +120,11 @@ fn wake(store: &Store) -> Wake {
     Wake::new(
         Arc::clone(&store.backend),
         Arc::new(Quiet),
-        Arc::new(Meetups::new(Arc::clone(&store.backend), offline(store))),
+        Arc::new(Meetups::new(
+            Arc::clone(&store.backend),
+            offline(store),
+            Arc::new(Quiet),
+        )),
         offline(store),
     )
 }
@@ -703,7 +707,7 @@ async fn an_admission_the_client_cannot_carry_out_is_reported() -> TestResult {
     use pingers_wake::ports::{MeetupAdmission, MeetupPort as _};
 
     let store = store()?;
-    let meetups = Meetups::new(Arc::clone(&store.backend), offline(&store));
+    let meetups = Meetups::new(Arc::clone(&store.backend), offline(&store), Arc::new(Quiet));
     let key_package = knock_key_package(
         &store.backend.database,
         CipherSuitePolicy::Classical,

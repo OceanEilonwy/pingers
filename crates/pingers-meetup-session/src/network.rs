@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! The group log requests a live Meetup needs, behind a small trait.
+//! The group requests a live Meetup needs, behind a small trait: the group log, and the live
+//! channel.
 //!
 //! pingers-sync owns talking to the server (Grp request signing, Privacy Pass, retries,
-//! paging); this crate only says what it needs. pingers-client implements [`GroupNetwork`]
-//! over pingers-sync, which keeps the two L3 crates independent of each other.
+//! paging, and opening the live channel on the router's Stream route: chunked OHTTP through
+//! the relay); this crate only says what it needs. pingers-client implements
+//! [`GroupNetwork`] over pingers-sync, which keeps the two L3 crates independent of each
+//! other.
 
 use pingers_crypto::LogAuthKeyPair;
-use pingers_ohttp::BinaryRequest;
 use pingers_proto::{
     AppMessage, CommitRequest, CommitResponse, CreateGroup, GroupId, GroupLogEntry, SequenceNumber,
     SubscriptionId,
 };
+use pingers_transport::DuplexStream;
 
 /// Why a group log request failed. Kinds only: the implementation keeps the details, so no
 /// server message or request content reaches the UI through this crate.
@@ -84,17 +87,33 @@ pub trait GroupNetwork: Send + Sync {
         auth: &LogAuthKeyPair,
     ) -> Result<(), NetworkError>;
 
-    /// The signed inner request head of `POST /v1/groups/{id}/live?sub=` for
-    /// [`pingers_transport::Transport::stream`]. `subscription` is this device's own, so the
-    /// server does not push to it while the channel is open.
+    /// `DELETE /v1/groups/{id}/subs/{sub_id}`: a leaver takes its own subscription off the
+    /// group before it goes, so the server stops waking it for a Meetup it left (design G.6).
     ///
     /// # Errors
     ///
-    /// [`NetworkError::Rejected`] if the head cannot be built.
-    fn live_head(
+    /// Any [`NetworkError`].
+    async fn delete_subscription(
+        &self,
+        group: &GroupId,
+        auth: &LogAuthKeyPair,
+        subscription: SubscriptionId,
+    ) -> Result<(), NetworkError>;
+
+    /// `POST /v1/groups/{id}/live?sub=`: opens the Meetup's live channel, a chunked OHTTP
+    /// exchange through the relay (privacy class Stream, never direct), its head signed with
+    /// `auth`. `subscription` is this device's own, so the server does not push to it while
+    /// the channel is open.
+    ///
+    /// # Errors
+    ///
+    /// [`NetworkError::Unavailable`] if no relay answered or the exchange failed;
+    /// [`NetworkError::Rejected`] if the head cannot be built or the relay's key does not
+    /// match its pin.
+    async fn open_live(
         &self,
         group: &GroupId,
         auth: &LogAuthKeyPair,
         subscription: Option<SubscriptionId>,
-    ) -> Result<BinaryRequest, NetworkError>;
+    ) -> Result<Box<dyn DuplexStream>, NetworkError>;
 }

@@ -64,6 +64,8 @@ pub struct MeetupView {
     pub channel: ChannelState,
     /// The current meet point.
     pub meet_point: Option<MeetPoint>,
+    /// Who set it, while there is one.
+    pub meet_point_set_by: Option<LeafIndex>,
     /// The other members, in leaf order.
     pub peers: Vec<PeerView>,
 }

@@ -223,7 +223,6 @@ impl World {
                 key: key.public_key(),
                 runtime: Runtime {
                     database: Arc::new(database),
-                    transport: Arc::<FakeNetwork>::clone(&network),
                     network,
                     clock: Arc::new(clock.clone()),
                     timer: Arc::new(clock.clone()),
@@ -285,7 +284,7 @@ impl World {
                 group: GROUP,
                 knocker: knock.key_package,
                 subscriptions: Vec::new(),
-                own_subscription: None,
+                own_subscription: Some(subscription_of(0)),
                 suite: CipherSuitePolicy::Classical,
             },
             Box::new(pingers_testkit::seeded_rng(1)),
@@ -327,7 +326,7 @@ impl World {
                 key,
                 welcome,
                 grant_key,
-                own_subscription: None,
+                own_subscription: Some(subscription_of(index)),
             },
             Box::new(pingers_testkit::seeded_rng(
                 u64::try_from(index).unwrap_or(0).saturating_add(10),
@@ -339,6 +338,12 @@ impl World {
             events: joined.events,
         })
     }
+}
+
+/// Device `index`'s own subscription in the Meetup.
+pub(crate) fn subscription_of(index: usize) -> pingers_proto::SubscriptionId {
+    let fill = 0xa0_u8.saturating_add(u8::try_from(index).unwrap_or(0));
+    pingers_proto::SubscriptionId::from_bytes([fill; 16])
 }
 
 /// What a joiner got back for its knock: the Welcome, and the grant secret of the KeyPackage

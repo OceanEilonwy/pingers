@@ -14,8 +14,9 @@ use pingers_store::{Database, DatabaseKey};
 use tokio::sync::watch;
 use zeroize::Zeroizing;
 
+use crate::forward::{Forwarder, Forwarding, emit, forward};
 use crate::ports::{
-    AllowListChange, ClientEvent, Crates, Foreground, GeofenceTransition, JoinDecision, PartyDraft,
+    AllowListChange, Crates, Foreground, GeofenceTransition, JoinDecision, PartyDraft,
     SettingChange, SpotDraft, WakeInput, WakeOutcome,
 };
 use crate::snapshot::{ClientSnapshot, InviteLink, InviteUrl, Name, RelayStatus, WakePushes};
@@ -36,6 +37,8 @@ pub struct Client {
     events: Arc<dyn Events>,
     crates: Crates,
     snapshot: watch::Sender<Arc<ClientSnapshot>>,
+    /// Passes on what the live Meetups raise on their own.
+    _meetup_events: Option<Forwarder>,
 }
 
 impl Client {
@@ -83,12 +86,21 @@ impl Client {
             .await
             .map_err(|_panicked| ClientError::Internal)??;
         let crates = build(database)?;
-        let snapshot = Arc::new(assemble(&crates).await?);
+        let snapshot = watch::channel(Arc::new(assemble(&crates).await?)).0;
+        let meetup_events = crates.meetups.take_events().map(|incoming| {
+            forward(Forwarding {
+                incoming,
+                crates: crates.clone(),
+                snapshot: snapshot.clone(),
+                events: Arc::clone(&events),
+            })
+        });
         Ok(Self {
             platform,
             events,
             crates,
-            snapshot: watch::channel(snapshot).0,
+            snapshot,
+            _meetup_events: meetup_events,
         })
     }
 
@@ -478,20 +490,7 @@ impl Client {
             self.platform.schedule_wake(after);
         }
         for event in outcome.events {
-            self.emit(event);
-        }
-    }
-
-    fn emit(&self, event: ClientEvent) {
-        let events = self.events.as_ref();
-        match event {
-            ClientEvent::PartiesChanged => events.parties_changed(),
-            ClientEvent::JoinRequested(party) => events.join_requested(party),
-            ClientEvent::MeetupStarted(meetup) => events.meetup_started(meetup),
-            ClientEvent::MeetupUpdated(meetup) => events.meetup_updated(meetup),
-            ClientEvent::MeetupEnded(meetup) => events.meetup_ended(meetup),
-            ClientEvent::Notice(notice) => events.notice(notice),
-            ClientEvent::PrivacyStatusChanged => events.privacy_status_changed(),
+            emit(self.events.as_ref(), event);
         }
     }
 }
@@ -510,7 +509,7 @@ fn database_key(platform: &dyn Platform) -> Result<DatabaseKey, ClientError> {
 }
 
 /// One snapshot from the four crates' sections.
-async fn assemble(crates: &Crates) -> Result<ClientSnapshot, ClientError> {
+pub(crate) async fn assemble(crates: &Crates) -> Result<ClientSnapshot, ClientError> {
     let parties = crates.parties.section().await?;
     let pipeline = crates.wake.section().await?;
     let server = crates.sync.section().await?;

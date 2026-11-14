@@ -12,10 +12,9 @@ use pingers_geo::Fix;
 use pingers_mls::MlsContext;
 use pingers_parties::{PartiesError, PartyLifecycle, PostQuantum, RosterView};
 use pingers_presence::{EpochState, EpochTransition, RosterLookup as _, SpotRef};
-use pingers_proto::{Epoch, KeyPackageBytes, LeafIndex, PartyId, SizeClass, SpotId};
+use pingers_proto::{Epoch, LeafIndex, PartyId, SizeClass, SpotId};
 use pingers_store::Session;
 use pingers_time::{Clock, MonotonicTime, Sleep, Timer, UnixSeconds};
-use pingers_wake::PortError;
 use pingers_wake::ports::{
     DevicePort, FixQuality as WakeFixQuality, LocationMode as WakeLocationMode, OsRegion,
     PartyInfo, PartyView, RegionId, SpotInfo,
@@ -257,13 +256,6 @@ impl PartyView for Lens {
 
     fn signing_key(&self) -> &AccountSigningKey {
         &self.signing_key
-    }
-
-    /// WAITING(contracts): pingers-meetup-session's `knock_key_package` is async and returns
-    /// the grant key the later `join` needs, while this port is synchronous and drops it. A
-    /// knock follows a board match, which needs pingers-sync, so nothing reaches this yet.
-    fn key_package(&self, _party: PartyId) -> Result<KeyPackageBytes, PortError> {
-        Err(PortError::Unavailable)
     }
 }
 

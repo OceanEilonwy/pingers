@@ -137,6 +137,7 @@ fn view(meet_point: Option<MeetPoint>) -> Result<MeetupView, TestError> {
         visibility: LocationVisibility::AskEachTime,
         channel: ChannelState::Connected,
         meet_point,
+        meet_point_set_by: None,
         peers: vec![
             peer(
                 SEEN,

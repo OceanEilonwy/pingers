@@ -352,9 +352,15 @@ fn every_group_route_is_signed_with_its_own_path() -> Result<(), TestError> {
             format!("/v1/groups/{hex_group}/subs/{hex_subscription}"),
         ),
         (
-            ApiRequest::live(&group(), &subscription, &signer)?,
+            ApiRequest::live(&group(), Some(&subscription), &signer)?,
             "POST",
             format!("/v1/groups/{hex_group}/live?sub={hex_subscription}"),
+        ),
+        (
+            // Wake-up pushes off: no subscription to name.
+            ApiRequest::live(&group(), None, &signer)?,
+            "POST",
+            format!("/v1/groups/{hex_group}/live"),
         ),
     ];
     for (request, method, path) in cases {

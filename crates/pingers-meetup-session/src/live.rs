@@ -20,7 +20,7 @@ use pingers_proto::{
 };
 use pingers_store::{Database, Meetup};
 use pingers_time::{Clock, Timer, UnixSeconds};
-use pingers_transport::{DuplexStream, Transport};
+use pingers_transport::DuplexStream;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use zeroize::Zeroizing;
@@ -48,9 +48,7 @@ const COMMAND_BUFFER: usize = 16;
 pub struct Runtime {
     /// The encrypted store (Meetup rows, chat, MLS state, allow-list).
     pub database: Arc<Database>,
-    /// The router; the live channel uses its `Stream` class.
-    pub transport: Arc<dyn Transport>,
-    /// The group log, through pingers-sync.
+    /// The group log and the live channel, through pingers-sync.
     pub network: Arc<dyn GroupNetwork>,
     /// Wall time, for the state machine's timers.
     pub clock: Arc<dyn Clock>,
@@ -820,19 +818,31 @@ impl Driver {
 
     /// Carries out effects and the commits they lead to. Returns the first delivery failure
     /// (for the caller of an action) and whether the Meetup ended.
+    ///
+    /// The events go out after the view is published, so whoever reacts to one reads a view
+    /// that already shows it (a peer's position, a new chat message).
     async fn carry_out(
         &mut self,
         effects: Effects,
     ) -> Result<(Result<(), SessionError>, Option<Ended>), SessionError> {
+        let mut events = Vec::new();
+        let result = self.carry_out_all(effects, &mut events).await;
+        self.refresh();
+        for event in events {
+            let _sent = self.events.send(event);
+        }
+        result
+    }
+
+    async fn carry_out_all(
+        &mut self,
+        effects: Effects,
+        events: &mut Vec<MeetupEvent>,
+    ) -> Result<(Result<(), SessionError>, Option<Ended>), SessionError> {
         let mut delivered = Ok(());
         let mut queue = VecDeque::from([effects]);
         while let Some(effects) = queue.pop_front() {
-            for event in effects.events {
-                // Positions are in the view; everything else goes to the shell.
-                if !matches!(event, MeetupEvent::PeerLocation(_)) {
-                    let _sent = self.events.send(event);
-                }
-            }
+            events.extend(effects.events);
             for outgoing in effects.outgoing {
                 if let Err(error) = self.deliver(outgoing).await
                     && delivered.is_ok()
@@ -857,7 +867,6 @@ impl Driver {
                 }
             }
         }
-        self.refresh();
         Ok((delivered, None))
     }
 
@@ -959,23 +968,20 @@ impl Driver {
 
     async fn connect(&mut self) -> Result<(), SessionError> {
         let auth = self.auth()?;
-        let opened = match self
-            .runtime
-            .network
-            .live_head(&self.group, &auth, self.subscription)
-        {
-            Ok(head) => within(&*self.runtime.timer, self.runtime.transport.stream(head))
-                .await
-                .ok(),
-            Err(_) => None,
-        };
+        let opened = within(
+            &*self.runtime.timer,
+            self.runtime
+                .network
+                .open_live(&self.group, &auth, self.subscription),
+        )
+        .await;
         match opened {
-            Some(channel) => {
+            Ok(channel) => {
                 self.channel = Some(channel);
                 self.reconnect.at = None;
                 self.catch_up = CatchUp::Due;
             }
-            None => self.schedule_reconnect(),
+            Err(_) => self.schedule_reconnect(),
         }
         self.refresh();
         Ok(())
@@ -998,6 +1004,7 @@ impl Driver {
         if self.lock()?.is_alone() {
             self.delete_on_server().await;
         } else {
+            self.delete_own_subscription().await;
             let proposal = self.step(Core::propose_leave).await;
             if let Ok(proposal) = proposal {
                 // Best effort: if it is lost, the others remove this device as silent.
@@ -1018,6 +1025,20 @@ impl Driver {
         };
         self.delete_locally().await?;
         Ok(ended)
+    }
+
+    /// Takes this device's subscription off the group before leaving it, while the epoch's
+    /// key still signs (best effort: the subscription expires on the server anyway).
+    async fn delete_own_subscription(&mut self) {
+        if let (Some(subscription), Ok(auth)) = (self.subscription, self.auth()) {
+            let _deleted = within(
+                &*self.runtime.timer,
+                self.runtime
+                    .network
+                    .delete_subscription(&self.group, &auth, subscription),
+            )
+            .await;
+        }
     }
 
     async fn delete_on_server(&mut self) {

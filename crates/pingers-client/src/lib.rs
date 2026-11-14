@@ -25,6 +25,7 @@
 
 mod client;
 mod error;
+mod forward;
 pub mod ports;
 mod real;
 pub mod snapshot;

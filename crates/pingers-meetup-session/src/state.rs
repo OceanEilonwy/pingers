@@ -319,6 +319,7 @@ impl Core {
             visibility: self.meetup.visibility(),
             channel,
             meet_point: self.meetup.meet_point().cloned(),
+            meet_point_set_by: self.meetup.meet_point_set_by(),
             peers,
         }
     }

@@ -10,7 +10,7 @@ use pingers_meetup::{
 use pingers_mls::CipherSuitePolicy;
 use pingers_proto::{ChatBody, Delivery, LeafIndex, MeetPoint};
 
-use super::{GROUP, Leftovers, TestError, TestResult, World, fix};
+use super::{GROUP, Leftovers, TestError, TestResult, World, fix, subscription_of};
 use crate::{
     AddMember, ChannelState, Ended, MAX_RECONNECT_DELAY, MeetupScreen, NETWORK_TIMEOUT,
     SessionError, knock_key_package,
@@ -86,11 +86,13 @@ async fn members_exchange_frames_then_leaving_deletes_everything() -> TestResult
     // Alice's next background frame carries her fix; Bob's view shows it and its age.
     let fix_taken = world.now();
     world.clock.advance(Duration::from_secs(60));
-    let view = bob
-        .view_until("Alice's position", |view| {
-            view.peer(ALICE).is_some_and(|peer| peer.position.is_some())
-        })
-        .await?;
+    bob.event(
+        "Alice's position",
+        |event| matches!(event, MeetupEvent::PeerLocation(location) if location.leaf == ALICE),
+    )
+    .await?;
+    // The event follows the view that shows it, so the shell reads the position it announces.
+    let view = bob.handle.view().borrow().clone();
     assert_eq!(
         view.position_age(ALICE, world.now()),
         Some(world.now().saturating_duration_since(fix_taken))
@@ -121,12 +123,22 @@ async fn members_exchange_frames_then_leaving_deletes_everything() -> TestResult
     bob.view_until("Alice gone", |view| view.peers.is_empty())
         .await?;
     assert_eq!(world.server.commits(&GROUP), 2);
+    // She took her own subscription off the group first, so nothing wakes her for it.
+    assert_eq!(
+        world.server.deleted_subscriptions(),
+        vec![subscription_of(0)]
+    );
     assert!(world.server.deleted().is_empty());
 
     // Bob, alone, leaves last: the group goes on the server and on his phone.
     assert_eq!(bob.handle.leave().await?, Ended::Left);
     assert_eq!(bob_device.leftovers(&GROUP)?, Leftovers::NOTHING);
     assert_eq!(world.server.deleted(), vec![GROUP]);
+    // Alone, he deleted the whole group: no separate subscription delete.
+    assert_eq!(
+        world.server.deleted_subscriptions(),
+        vec![subscription_of(0)]
+    );
     Ok(())
 }
 
@@ -376,6 +388,9 @@ async fn a_late_joiner_gets_the_snapshot_but_no_history() -> TestResult {
         matches!(event, MeetupEvent::Chat { .. })
     })
     .await?;
+    let alice_leaf = alice.handle.view().borrow().own_leaf;
+    let bob_set_by = bob.handle.view().borrow().meet_point_set_by;
+    assert_eq!(bob_set_by, Some(alice_leaf));
 
     // Chloé knocks; Alice adds her and hands back the Welcome.
     let knock = knock_key_package(
@@ -403,6 +418,8 @@ async fn a_late_joiner_gets_the_snapshot_but_no_history() -> TestResult {
         Some(MeetPoint::Fixed { .. })
     ));
     assert_eq!(chloe_view.meet_point, alice_point);
+    // The snapshot came from Alice, the lowest leaf.
+    assert_eq!(chloe_view.meet_point_set_by, Some(alice_leaf));
     assert_eq!(chloe_view.peers.len(), 2);
     // The whole log was read before the snapshot applied: no earlier chat came with it.
     let events = chloe.drain();
