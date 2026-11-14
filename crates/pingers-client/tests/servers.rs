@@ -502,3 +502,64 @@ async fn a_wake_restocks_each_server_s_tokens() -> TestResult {
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_real_record_on_server_b_takes_a_knock_mailbox_of_server_b() -> TestResult {
+    use pingers_geo::{Circle, Coordinate, Fence, Fix, Meters};
+    let world = World::start()?;
+    let (ana, _on_a, on_b) = ana_on_both(&world).await?;
+    let b = world.b_server()?;
+    let centre =
+        Coordinate::new(51.5007, -0.1246).map_err(|_bad| TestError::Setup("coordinate"))?;
+    let fence = Fence::Circle(
+        Circle::new(
+            centre,
+            Meters::new(150.0).map_err(|_bad| TestError::Setup("radius"))?,
+        )
+        .map_err(|_bad| TestError::Setup("circle"))?,
+    );
+    ana.client
+        .save_spot(
+            on_b,
+            pingers_client::ports::SpotDraft {
+                id: None,
+                name: Name::new("The wall")?,
+                fence,
+            },
+        )
+        .await?;
+    let pooled = |server: &ServerId| -> Result<u32, TestError> {
+        let database = Database::open(&ana.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+        let session = database.session()?;
+        Ok(session.server(server)?.mailboxes().pooled_count(
+            pingers_store::MailboxPurpose::Knock,
+            pingers_time::Clock::now(&world.clock),
+        )?)
+    };
+    // A wake fills each server's knock pool.
+    tokio::time::timeout(STEP, ana.client.on_wake())
+        .await
+        .map_err(|_elapsed| TestError::Setup("the wake did not finish"))??;
+    let before = pooled(&b)?;
+    assert!(before > 0, "B's knock pool has a mailbox");
+    // Two fixes 31 s apart confirm Inside: the lease uploaded to B carries a real record,
+    // whose knock mailbox comes out of B's pool.
+    let fix = |clock: &ManualClock| Fix {
+        coordinate: centre,
+        accuracy: Meters::ZERO,
+        taken_at: pingers_time::Clock::now(clock),
+    };
+    ana.client.on_location(fix(&world.clock)).await?;
+    world.clock.advance(Duration::from_secs(31));
+    tokio::time::timeout(STEP, ana.client.on_location(fix(&world.clock)))
+        .await
+        .map_err(|_elapsed| TestError::Setup("the wake did not finish"))??;
+    // Each round registers one knock mailbox for the pool; the record took one, so the pool
+    // is the same size as before rather than one larger.
+    assert_eq!(
+        pooled(&b)?,
+        before,
+        "a knock mailbox of B went into the lease"
+    );
+    Ok(())
+}
