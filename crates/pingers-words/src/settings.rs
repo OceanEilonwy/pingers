@@ -3,10 +3,10 @@
 
 use pingers_gate::SuppressReason;
 use pingers_meetup::LocationVisibility;
+use pingers_screens::device::WakeupsSummary;
 use pingers_screens::settings::{Privacy, YourName};
 
 use crate::Language;
-use crate::common::time_range;
 
 /// Why sharing is paused, for a banner: "Focus is on".
 #[must_use]
@@ -68,31 +68,23 @@ pub struct PrivacyText {
     pub pause_in_focus: String,
     /// "Do Not Disturb, Sleep, any Focus".
     pub pause_in_focus_help: String,
-    /// "Quiet hours".
-    pub quiet_hours: String,
-    /// "23:00–07:00".
-    pub quiet_hours_range: String,
-    /// "Exclusion zones".
-    pub exclusion_zones: String,
-    /// "2".
-    pub exclusion_zone_count: String,
     /// "Who sees my exact spot in meetups".
     pub who_heading: String,
     /// The three choices.
     pub visibility: Vec<VisibilityOption>,
     /// "Delivery".
     pub delivery_heading: String,
-    /// "No wake-up pushes".
-    pub no_wake_pushes: String,
-    /// Its help line.
-    pub no_wake_pushes_help: String,
+    /// "Wake-ups", the link to the one home for delivery settings.
+    pub wakeups: String,
+    /// "On · through ntfy".
+    pub wakeups_summary: String,
     /// The link to Security details.
     pub security_link: String,
 }
 
 /// The Privacy settings screen, in words.
 #[must_use]
-pub fn privacy(language: Language, view: &Privacy) -> PrivacyText {
+pub fn privacy(language: Language, view: &Privacy, wakeups: &WakeupsSummary) -> PrivacyText {
     let Language::English = language;
     PrivacyText {
         title: "Privacy".into(),
@@ -106,10 +98,6 @@ pub fn privacy(language: Language, view: &Privacy) -> PrivacyText {
         sharing: "Location sharing".into(),
         pause_in_focus: "Pause during Focus".into(),
         pause_in_focus_help: "Do Not Disturb, Sleep, any Focus".into(),
-        quiet_hours: "Quiet hours".into(),
-        quiet_hours_range: time_range(language, view.quiet_hours.from, view.quiet_hours.to),
-        exclusion_zones: crate::zones::TITLE.into(),
-        exclusion_zone_count: view.exclusion_zones.to_string(),
         who_heading: "Who sees my exact spot in meetups".into(),
         visibility: vec![
             VisibilityOption {
@@ -129,37 +117,82 @@ pub fn privacy(language: Language, view: &Privacy) -> PrivacyText {
             },
         ],
         delivery_heading: "Delivery".into(),
-        no_wake_pushes: "No wake-up pushes".into(),
-        no_wake_pushes_help: "Nobody, not even Apple or Google, sees when you're woken. Meetups \
-                              can take up to an hour to start."
-            .into(),
+        wakeups: crate::wakeups::TITLE.into(),
+        wakeups_summary: crate::wakeups::summary(language, wakeups),
         security_link: crate::security::TITLE.into(),
     }
 }
 
-/// The name this device's user goes by, in words.
+/// A Party the name changes in, in words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PartyChipText {
+    /// "CC".
+    pub initials: String,
+    /// "Climbing crew".
+    pub name: String,
+}
+
+/// Your name (canvas `YourName`), in words.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct YourNameText {
     /// "Your name".
     pub title: String,
+    /// "Back to Settings", for screen readers.
+    pub back: String,
+    /// "BE", once a name is set.
+    pub avatar: Option<String>,
+    /// "How you appear to members".
+    pub appears_as: String,
+    /// "Name", the field's label.
+    pub label: String,
     /// The name set, if any.
     pub name: Option<String>,
     /// "First name or nickname", for an empty field.
     pub placeholder: String,
-    /// Who sees it: every member of every Party, as soon as it changes.
+    /// How long it may be and who sees it.
     pub help: String,
+    /// "Changes in every Party you're in", when there are Parties.
+    pub parties_heading: Option<String>,
+    /// The Parties.
+    pub parties: Vec<PartyChipText>,
+    /// When members see a new name.
+    pub note: String,
+    /// "Save".
+    pub save: String,
 }
 
-/// The name this device's user goes by, in words.
+/// Your name, in words.
 #[must_use]
 pub fn your_name(language: Language, view: &YourName) -> YourNameText {
     let Language::English = language;
     YourNameText {
         title: "Your name".into(),
+        back: "Back to Settings".into(),
+        avatar: view
+            .initials
+            .as_ref()
+            .map(|initials| initials.as_str().to_owned()),
+        appears_as: "How you appear to members".into(),
+        label: "Name".into(),
         name: view.name.as_ref().map(|name| name.as_str().to_owned()),
         placeholder: "First name or nickname".into(),
-        help: "Members of all your parties see this name. Changing it updates it everywhere."
+        help: "Up to 80 characters. Members see it, encrypted end to end. Your server never \
+               does."
             .into(),
+        parties_heading: (!view.parties.is_empty())
+            .then(|| "Changes in every Party you're in".into()),
+        parties: view
+            .parties
+            .iter()
+            .map(|chip| PartyChipText {
+                initials: chip.initials.as_str().to_owned(),
+                name: chip.name.as_str().to_owned(),
+            })
+            .collect(),
+        note: "Members see the new name the next time their phone checks in. Until then they \
+               see the name you had before."
+            .into(),
+        save: "Save".into(),
     }
 }
 
@@ -168,6 +201,7 @@ mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
     use pingers_gate::GateDecision;
+    use pingers_screens::device::{AppLabel, PushService};
     use pingers_screens::fixtures::{self, FixtureError};
     use pingers_screens::settings::privacy as screen;
 
@@ -175,15 +209,21 @@ mod tests {
 
     const EN: Language = Language::English;
 
+    fn wakeups() -> Result<WakeupsSummary, FixtureError> {
+        Ok(WakeupsSummary {
+            pushes: pingers_screens::snapshot::WakePushes::On,
+            service: PushService::PushApp(AppLabel::new("ntfy").ok_or(FixtureError::Missing)?),
+        })
+    }
+
     #[test]
     fn settings_read_like_the_canvas() -> Result<(), FixtureError> {
         let snapshot = fixtures::snapshot()?;
-        let text = privacy(EN, &screen(&snapshot));
+        let text = privacy(EN, &screen(&snapshot), &wakeups()?);
         assert_eq!(text.title, "Privacy");
         assert_eq!((text.paused, text.paused_detail), (None, None));
-        assert_eq!(text.quiet_hours_range, "23:00–07:00");
-        assert_eq!(text.exclusion_zone_count, "2");
-        assert_eq!(text.exclusion_zones, "Exclusion zones");
+        assert_eq!(text.wakeups, "Wake-ups");
+        assert_eq!(text.wakeups_summary, "On · through ntfy");
         let labels: Vec<_> = text
             .visibility
             .iter()
@@ -198,10 +238,6 @@ mod tests {
                 .first()
                 .and_then(|option| option.help.as_deref()),
             Some("Others see you're here, not where")
-        );
-        assert!(
-            text.no_wake_pushes_help
-                .starts_with("Nobody, not even Apple or Google")
         );
         assert_eq!(
             (
@@ -222,7 +258,7 @@ mod tests {
     fn the_banner_says_why_and_when_it_ends() -> Result<(), FixtureError> {
         let mut snapshot = fixtures::snapshot()?;
         snapshot.gate = GateDecision::Suppress(SuppressReason::Focus);
-        let text = privacy(EN, &screen(&snapshot));
+        let text = privacy(EN, &screen(&snapshot), &wakeups()?);
         assert_eq!(text.paused.as_deref(), Some("Paused · Focus is on"));
         assert_eq!(
             text.paused_detail.as_deref(),
@@ -270,7 +306,24 @@ mod tests {
         let text = your_name(EN, &pingers_screens::settings::your_name(&snapshot));
         assert_eq!(text.title, "Your name");
         assert_eq!(text.name.as_deref(), Some("Sam"));
-        assert!(text.help.contains("updates it everywhere"));
+        assert_eq!(text.avatar.as_deref(), Some("SA"));
+        assert_eq!(text.appears_as, "How you appear to members");
+        assert_eq!(
+            text.help,
+            "Up to 80 characters. Members see it, encrypted end to end. Your server never does."
+        );
+        assert_eq!(
+            text.parties_heading.as_deref(),
+            Some("Changes in every Party you're in")
+        );
+        assert_eq!(
+            text.parties.first(),
+            Some(&PartyChipText {
+                initials: "CC".into(),
+                name: "Climbing crew".into()
+            })
+        );
+        assert_eq!(text.save, "Save");
         snapshot.display_name = None;
         let unset = your_name(EN, &pingers_screens::settings::your_name(&snapshot));
         assert_eq!(unset.name, None);

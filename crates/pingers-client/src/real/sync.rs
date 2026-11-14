@@ -191,6 +191,32 @@ impl Net {
         self.prepare_credentials().await
     }
 
+    /// Registers this device's account if it has none yet, with the build's code on offer,
+    /// as a new Party needs. Without an instance there is nothing to register.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::RegistrationRefused`] if the server refused the account (it needs a
+    /// code, or a different one); [`ClientError::Sync`] with a store failure. Any other
+    /// failure, such as an unreachable server, is left for a later wake, as before.
+    pub(crate) async fn require_account(&self) -> Result<(), ClientError> {
+        let Some(engine) = &self.engine else {
+            return Ok(());
+        };
+        if let Some(code) = &self.registration_code {
+            engine
+                .offer_registration_code(code.clone(), CodeSource::Build)
+                .await?;
+        }
+        let result = engine.ensure_registered(WakeBudget::UNLIMITED).await;
+        self.observe(&result);
+        match result {
+            Err(SyncError::RegistrationRefused) => Err(ClientError::RegistrationRefused),
+            Err(SyncError::Store(error)) => Err(SyncError::Store(error).into()),
+            Ok(()) | Err(_) => Ok(()),
+        }
+    }
+
     /// Offers the registration code an invite link carries for the first registration, and
     /// prepares the credentials with it.
     ///
@@ -644,6 +670,16 @@ impl SyncPort for Sync {
     /// The gateway's key config fetched afresh through the relay and checked against its pin
     /// (pingers-sync's `check_relay`): nothing reaches the gateway, nothing about the device
     /// goes with it. Without an instance nothing is sent and the answer is `Unreachable`.
+    /// A code the user typed replaces any waiting code (as one from an invite link does), then
+    /// the account is registered with it.
+    async fn register_with_code(&self, code: SecretText) -> Result<(), ClientError> {
+        self.0
+            .engine()?
+            .offer_registration_code(code, CodeSource::Invite)
+            .await?;
+        self.0.require_account().await
+    }
+
     async fn check_reachability(&self) -> Result<RelayStatus, ClientError> {
         let Some(engine) = &self.0.engine else {
             *self.0.relay.lock().unwrap_or_else(PoisonError::into_inner) = RelayStatus::Unreachable;

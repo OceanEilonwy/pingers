@@ -546,7 +546,7 @@ fun ExclusionZonesScreen(state: ExclusionZonesState, repo: PingersRepository, na
         Spacer(Modifier.height(16.dp))
         Card {
             state.zones.forEach { z ->
-                ListRow(notYet) {
+                ListRow({ repo.openZoneTimes(z.id); nav.go(Route.ZoneTimes) }, Modifier.testTag(org.pingers.app.ui.E2eTags.ZONE_ROW)) {
                     val shape = when (val s = z.shape) {
                         is ZoneShape.Circle -> stringResource(R.string.zone_circle, s.radiusM)
                         ZoneShape.Area -> stringResource(R.string.zone_area)
