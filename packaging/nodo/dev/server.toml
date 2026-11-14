@@ -7,6 +7,8 @@ server_id = "https://10.0.2.2:9443"
 server_operator = "Local test"
 ohttp_relay_urls = ["https://10.0.2.2:9444/ohttp"]
 map_host = "https://10.0.2.2:9446"
+# Map downloads through the relay are forwarded to the map host's own gateway, on this machine.
+map_host_gateway = "http://127.0.0.1:9474"
 logging = "counts"
 counts_interval_s = 60
 # A debug app build presents it with PINGERS_DEV_REGISTRATION_CODE (docs/deploy-nodo.md).
