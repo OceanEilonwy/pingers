@@ -29,6 +29,9 @@
 //! 6. B asks to see A's exact location, A allows, and B's compass points at A.
 //! 7. Both walk out and the Meetup ends on both phones.
 //!
+//! Pushes are checked where they arrive (`dumpsys notification`): A is notified of B's join
+//! request, both of the Meetup, and B, sent to the launcher first, of A's chat message.
+//!
 //! Each step names what it waits for. The first failure stops the run and says which step
 //! failed and why; screenshots, UI dumps and logcat of both phones are saved in
 //! `<stack dir>/e2e-out/`, with `report.txt`. The emulators are shut down and the leases
