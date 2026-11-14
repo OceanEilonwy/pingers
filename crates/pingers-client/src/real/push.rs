@@ -93,6 +93,11 @@ impl Link {
         Ok(params)
     }
 
+    /// Starts with parameters read while the server was looked at.
+    pub(crate) fn learn_params(&self, params: Params) {
+        *lock(&self.learned.params) = Some(params);
+    }
+
     /// The parameters this process already read, if any.
     pub(crate) fn known_params(&self) -> Option<Params> {
         lock(&self.learned.params).clone()

@@ -43,10 +43,10 @@ pub(crate) struct InvitePins {
 
 /// Servers looked at and not yet trusted, by origin. In memory only.
 #[derive(Default)]
-pub(crate) struct Probes(Mutex<HashMap<ServerId, ServerRecord>>);
+pub(crate) struct Probes(Mutex<HashMap<ServerId, (ServerRecord, Params)>>);
 
 impl Probes {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<ServerId, ServerRecord>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<ServerId, (ServerRecord, Params)>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -54,6 +54,8 @@ impl Probes {
 /// What looking at a server found.
 struct Looked {
     record: ServerRecord,
+    /// The parameters fetched through the relay, which the new link starts with.
+    params: Params,
     probe: ServerProbe,
 }
 
@@ -150,7 +152,9 @@ impl Net {
                 ..looked.probe
             });
         }
-        self.probes.lock().insert(server, looked.record);
+        self.probes
+            .lock()
+            .insert(server, (looked.record, looked.params));
         Ok(looked.probe)
     }
 
@@ -162,12 +166,14 @@ impl Net {
     ///
     /// [`ServerProblem::NotProbed`] if it was not looked at in this process; a store failure.
     pub(crate) async fn trust_server(&self, server: &ServerId) -> Result<(), ClientError> {
-        let record = self
+        let (record, params) = self
             .probes
             .lock()
             .remove(server)
             .ok_or(ServerProblem::NotProbed)?;
-        self.servers.add(record).await.map(drop)
+        let link = self.servers.add(record).await?;
+        link.learn_params(params);
+        Ok(())
     }
 
     /// The link to the server an invite names: the known one, or a new one recorded with the
@@ -192,7 +198,9 @@ impl Net {
             }
             other => other?,
         };
-        self.servers.add(looked.record).await
+        let link = self.servers.add(looked.record).await?;
+        link.learn_params(looked.params);
+        Ok(link)
     }
 
     /// Steps 1 and 2 of the module docs.
@@ -290,7 +298,11 @@ impl Net {
             gateway_key,
             known: false,
         };
-        Ok(Looked { record, probe })
+        Ok(Looked {
+            record,
+            params: relayed,
+            probe,
+        })
     }
 }
 

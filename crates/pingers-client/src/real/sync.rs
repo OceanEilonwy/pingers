@@ -59,6 +59,9 @@ const KEEP_FOR: Duration = Duration::from_hours(1);
 const KNOCK_POOL: u32 = 4;
 const MAILBOX_LIFETIME: Duration = Duration::from_hours(24);
 
+/// An invite mailbox outlives the invite (24 hours, pingers-parties' `INVITE_LIFETIME`).
+const INVITE_MAILBOX_LIFETIME: Duration = Duration::from_hours(48);
+
 /// A request waiting for its server.
 struct Waiting {
     server: ServerId,
@@ -120,16 +123,13 @@ impl Net {
 
     /// The link to `server`, or [`Unavailable::Sync`].
     pub(crate) async fn link(&self, server: &ServerId) -> Result<Arc<Link>, ClientError> {
-        self.servers
-            .link(server)
-            .await
-            .map_err(|error| {
-                if matches!(error, ClientError::Unavailable(Unavailable::UnknownServer)) {
-                    Unavailable::Sync.into()
-                } else {
-                    error
-                }
-            })
+        self.servers.link(server).await.map_err(|error| {
+            if matches!(error, ClientError::Unavailable(Unavailable::UnknownServer)) {
+                Unavailable::Sync.into()
+            } else {
+                error
+            }
+        })
     }
 
     /// The account on `server`, made now if it is not yet (a new Party or a join).
@@ -374,6 +374,29 @@ impl Net {
             }
         }
         Ok(changed)
+    }
+
+    /// Registers one invite mailbox on `server` for the pool, with the alert seal when wake-up
+    /// pushes are sealed: an invite reads join requests from it until the invite expires.
+    ///
+    /// # Errors
+    ///
+    /// [`Unavailable::Sync`] for an unknown server; [`ClientError::Sync`].
+    pub(crate) async fn refill_invite_pool(&self, server: &ServerId) -> Result<(), ClientError> {
+        let link = self.link(server).await?;
+        link.prepare_credentials().await?;
+        let target = PoolTarget {
+            purpose: StoredPurpose::Invite,
+            size: 1,
+            lifetime: TimeToLive::new(INVITE_MAILBOX_LIFETIME).map_err(|_never| corrupt())?,
+        };
+        let refilled = link
+            .engine
+            .refill_mailbox_pool(&target, WakeBudget::UNLIMITED)
+            .await;
+        link.observe(&refilled);
+        let _registered: pingers_sync::PoolRefill = refilled?;
+        Ok(())
     }
 
     /// The built-in server's parameters, once per process, with its map host kept in a record

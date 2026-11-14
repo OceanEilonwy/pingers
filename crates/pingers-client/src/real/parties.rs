@@ -69,6 +69,25 @@ impl Parties {
         self.net.flush().await.map(drop)
     }
 
+    async fn make_invite(
+        &self,
+        party: PartyId,
+        registration_code: Option<pingers_proto::SecretText>,
+    ) -> Result<pingers_parties::CreatedInvite, ClientError> {
+        self.backend
+            .store(move |session, clock, rng| {
+                Ok(PartyLifecycle::new(session, clock).create_invite(
+                    &party,
+                    NewInvite {
+                        uses: InviteUses::Multiple,
+                        registration_code,
+                    },
+                    rng,
+                )?)
+            })
+            .await
+    }
+
     fn links(&self) -> std::sync::MutexGuard<'_, HashMap<PartyId, SharedLink>> {
         self.links.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -120,19 +139,14 @@ impl PartiesPort for Parties {
         // (design B.1).
         let server = self.net.party_server(party).await?;
         let registration_code = self.net.shared_registration_code(&server).await?;
-        let created = self
-            .backend
-            .store(move |session, clock, rng| {
-                Ok(PartyLifecycle::new(session, clock).create_invite(
-                    &party,
-                    NewInvite {
-                        uses: InviteUses::Multiple,
-                        registration_code,
-                    },
-                    rng,
-                )?)
-            })
-            .await?;
+        let created = match self.make_invite(party, registration_code.clone()).await {
+            // An invite takes a mailbox registered on the Party's server: register one now.
+            Err(ClientError::Parties(PartiesError::NoPooledMailbox)) => {
+                self.net.refill_invite_pool(&server).await?;
+                self.make_invite(party, registration_code).await?
+            }
+            other => other?,
+        };
         let link = InviteLink {
             url: InviteUrl::new(created.link.as_str()).map_err(|_invalid| corrupt())?,
             expires_at: created.expires,

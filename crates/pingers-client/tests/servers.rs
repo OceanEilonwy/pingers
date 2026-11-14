@@ -1,0 +1,418 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! Parties on two servers at once (decided 2026-11-14), against two in-process harnesses that
+//! share a clock: server A is both devices' built-in server; server B is another, with its own
+//! relay, keys and registration code.
+//!
+//! - Ana looks at B by address, trusts its keys, needs and then gives B's code, and creates a
+//!   Party on each server; her invites carry each server's own pins.
+//! - Ben, who has never used B, opens Ana's invite to the Party on B: he records B with the
+//!   pins from the invite (never the first key he is shown), registers there with the code
+//!   the link carries, and his join request lands on B.
+//! - An invite whose pins B's keys do not match is refused with the relay key warning, and
+//!   nothing is recorded.
+//! - With B gone, a wake still uploads Ana's lease to A.
+#![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
+use pingers_client::ports::PartyDraft;
+use pingers_client::snapshot::{InviteUrl, KeyTrust, Name, PartyColour, PostQuantum};
+use pingers_client::{
+    Client, ClientConfig, ClientError, Crates, Instance, KeyPins, Outside, ServerProblem, Trust,
+};
+use pingers_proto::{KeyConfigHash, PartyId, SecretText, ServerId};
+use pingers_store::{Database, DatabaseKey, ServerTrust};
+use pingers_testkit::{FakePlatform, HarnessConfig, InProcessHarness, NoticeKind, RecordingEvents};
+use pingers_time::ManualClock;
+use rand_chacha::ChaCha20Rng;
+use rand_core::SeedableRng as _;
+use zeroize::Zeroizing;
+
+#[derive(Debug, thiserror::Error)]
+enum TestError {
+    #[error(transparent)]
+    Client(#[from] ClientError),
+    #[error(transparent)]
+    Harness(#[from] pingers_testkit::HarnessError),
+    #[error(transparent)]
+    Proto(#[from] pingers_proto::ProtoError),
+    #[error(transparent)]
+    Parties(#[from] pingers_parties::PartiesError),
+    #[error(transparent)]
+    Store(#[from] pingers_store::StoreError),
+    #[error(transparent)]
+    Ohttp(#[from] pingers_ohttp::OhttpError),
+    #[error(transparent)]
+    Snapshot(#[from] pingers_client::snapshot::SnapshotError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Events(#[from] pingers_testkit::EventAssertion),
+    #[error("setup: {0}")]
+    Setup(&'static str),
+}
+
+type TestResult = Result<(), TestError>;
+
+const KEY: [u8; 32] = [8; 32];
+const B_CODE: &str = "b-friends";
+const STEP: Duration = Duration::from_secs(90);
+
+struct TestDir(PathBuf);
+
+impl TestDir {
+    fn new(name: &str) -> Result<Self, std::io::Error> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "pingers-client-servers-{name}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        drop(std::fs::remove_dir_all(&path));
+        std::fs::create_dir_all(&path)?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        drop(std::fs::remove_dir_all(&self.0));
+    }
+}
+
+/// Server A and server B on one clock.
+struct World {
+    clock: ManualClock,
+    a: InProcessHarness,
+    b: Option<InProcessHarness>,
+    /// Both harnesses' test CAs: a device built against A's test stack trusts both, as a
+    /// debug build's `PINGERS_EXTRA_CA` bundle would.
+    trust: String,
+}
+
+impl World {
+    fn start() -> Result<Self, TestError> {
+        let a_config = HarnessConfig {
+            seed: 1,
+            operator: Some("Server A".to_owned()),
+            ..HarnessConfig::default()
+        };
+        let a = InProcessHarness::start(&a_config)?;
+        let b = InProcessHarness::start(&HarnessConfig {
+            seed: 2,
+            clock: a_config.clock.clone(),
+            operator: Some("Server B".to_owned()),
+            registration_codes: vec![B_CODE.to_owned()],
+            ..HarnessConfig::default()
+        })?;
+        let trust = format!(
+            "{}\n{}",
+            a.endpoints().push_relay_ca,
+            b.endpoints().push_relay_ca
+        );
+        Ok(Self {
+            clock: a_config.clock,
+            a,
+            b: Some(b),
+            trust,
+        })
+    }
+
+    fn b(&self) -> Result<&InProcessHarness, TestError> {
+        self.b.as_ref().ok_or(TestError::Setup("server B is down"))
+    }
+
+    fn b_server(&self) -> Result<ServerId, TestError> {
+        Ok(ServerId::new(self.b()?.endpoints().server_id.clone())?)
+    }
+
+    /// The built-in server A, as a build pinned to it carries it.
+    fn instance(&self) -> Result<Instance, TestError> {
+        let endpoints = self.a.endpoints();
+        Ok(Instance {
+            server: ServerId::new(endpoints.server_id.clone())?,
+            relay: format!("http://{}/ohttp", endpoints.ohttp_relay),
+            push_relay: Some(format!("https://{}", endpoints.push_relay)),
+            gateway_pins: Some(KeyPins::from(pingers_crypto::key_config_hash(
+                &endpoints.ohttp_key_config,
+            ))),
+            push_relay_pins: None,
+            trust: Trust::from_pem(&self.trust)?,
+            registration_code: None,
+        })
+    }
+}
+
+/// One device.
+struct Device {
+    client: Client,
+    events: Arc<RecordingEvents>,
+    database: PathBuf,
+    _dir: TestDir,
+}
+
+impl Device {
+    async fn open(world: &World, name: &str, seed: u64) -> Result<Self, TestError> {
+        let dir = TestDir::new(name)?;
+        let database = dir.0.join("pingers.db");
+        let platform = FakePlatform::new(world.clock.clone());
+        platform
+            .secure_store_put("pingers.database-key", &KEY)
+            .map_err(|_locked| TestError::Setup("secure store"))?;
+        let seeds = Arc::new(AtomicU64::new(seed));
+        let outside = Outside {
+            clock: Arc::new(world.clock.clone()),
+            timer: Arc::new(world.clock.clone()),
+            rng: Arc::new(move || {
+                Box::new(ChaCha20Rng::seed_from_u64(
+                    seeds.fetch_add(1, Ordering::Relaxed),
+                ))
+            }),
+        };
+        let instance = world.instance()?;
+        let opened = instance.clone();
+        let events = Arc::new(RecordingEvents::new());
+        let crates_platform: Arc<dyn pingers_client::Platform> = Arc::new(platform.clone());
+        let client = Client::open_with(
+            ClientConfig {
+                database: database.clone(),
+                instance: Some(instance),
+            },
+            Arc::new(platform),
+            {
+                let shared: Arc<RecordingEvents> = Arc::clone(&events);
+                let events: Arc<dyn pingers_client::Events> = shared;
+                events
+            },
+            move |database| Crates::real(database, crates_platform, outside, Some(&opened)),
+        )
+        .await?;
+        Ok(Self {
+            client,
+            events,
+            database,
+            _dir: dir,
+        })
+    }
+
+    /// The servers this device has recorded, read from its store (the client holds the
+    /// store's lock only per call).
+    fn servers(&self) -> Result<Vec<pingers_store::ServerRecord>, TestError> {
+        let database =
+            Database::open(&self.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+        let session = database.session()?;
+        Ok(session.servers().list()?)
+    }
+
+    /// Whether this device's last upload to `server`'s board is recorded.
+    fn uploaded_to(&self, server: &ServerId) -> Result<bool, TestError> {
+        let database =
+            Database::open(&self.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+        let session = database.session()?;
+        Ok(session.server(server)?.board_upload().last()?.is_some())
+    }
+
+    async fn create_party(
+        &self,
+        server: Option<ServerId>,
+        name: &str,
+    ) -> Result<PartyId, ClientError> {
+        let draft = PartyDraft {
+            server,
+            name: Name::new(name).map_err(|_bad| ClientError::Internal)?,
+            my_name: Name::new("Ana").map_err(|_bad| ClientError::Internal)?,
+            colour: PartyColour::Blue,
+            post_quantum: PostQuantum::Off,
+        };
+        tokio::time::timeout(STEP, self.client.create_party(draft))
+            .await
+            .map_err(|_elapsed| ClientError::Internal)?
+    }
+}
+
+fn payload(url: &InviteUrl) -> Result<pingers_proto::InvitePayload, TestError> {
+    Ok(pingers_parties::InviteLink::from_text(url.as_str().to_owned()).payload()?)
+}
+
+/// Ana: a Party on A, B looked at and trusted, B's code given, a Party on B.
+async fn ana_on_both(world: &World) -> Result<(Device, PartyId, PartyId), TestError> {
+    let ana = Device::open(world, "ana", 100).await?;
+    let on_a = ana.create_party(None, "Climbing").await?;
+
+    // B by address: its operator, relay and keys, nothing recorded yet.
+    let b = world.b_server()?;
+    let probe = ana.client.probe_server(b.as_str().to_owned()).await?;
+    assert_eq!(probe.server, b);
+    assert!(!probe.known);
+    assert_eq!(
+        probe
+            .operator
+            .as_ref()
+            .map(pingers_client::snapshot::Operator::as_str),
+        Some("Server B")
+    );
+    assert_eq!(
+        probe.gateway_key,
+        pingers_crypto::key_config_hash(&world.b()?.endpoints().ohttp_key_config)
+    );
+    assert!(probe.push_relay.is_some(), "B lists its push relay");
+    assert_eq!(ana.servers()?.len(), 1, "looking records nothing");
+    // A Party cannot go on B before its keys are trusted.
+    assert!(matches!(
+        ana.create_party(Some(b.clone()), "Book club").await,
+        Err(ClientError::Unavailable(_))
+    ));
+    ana.client.trust_server(b.clone()).await?;
+
+    // B takes only devices with its code: missing, then refused, are told apart.
+    assert!(matches!(
+        ana.create_party(Some(b.clone()), "Book club").await,
+        Err(ClientError::RegistrationCodeRequired)
+    ));
+    assert!(matches!(
+        ana.client
+            .submit_registration_code(b.clone(), SecretText::new("b-fiends".to_owned()))
+            .await,
+        Err(ClientError::RegistrationCodeRefused)
+    ));
+    ana.client
+        .submit_registration_code(b.clone(), SecretText::new(B_CODE.to_owned()))
+        .await?;
+    let on_b = ana.create_party(Some(b), "Book club").await?;
+    Ok((ana, on_a, on_b))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_device_holds_parties_on_two_servers_with_their_own_pins() -> TestResult {
+    let world = World::start()?;
+    let (ana, on_a, on_b) = ana_on_both(&world).await?;
+    let a = ServerId::new(world.a.endpoints().server_id.clone())?;
+    let b = world.b_server()?;
+
+    // Each Party shows its own server, and how its keys were trusted.
+    let snapshot = ana.client.snapshot();
+    let config = |party| snapshot.party(party).map(|shown| shown.config.clone());
+    assert_eq!(config(on_a)?.origin, a);
+    assert_eq!(config(on_a)?.keys, KeyTrust::BuiltIn);
+    assert_eq!(config(on_b)?.origin, b);
+    assert_eq!(config(on_b)?.keys, KeyTrust::Confirmed);
+    assert_eq!(config(on_b)?.server.operator.as_str(), "Server B");
+
+    // Each invite carries its own server's pins, and the code registered there.
+    let link_a = ana.client.create_invite(on_a).await?;
+    let link_b = ana.client.create_invite(on_b).await?;
+    let (invite_a, invite_b) = (payload(&link_a.url)?, payload(&link_b.url)?);
+    assert_eq!(invite_a.server, a);
+    assert_eq!(
+        invite_a.gateway_pins,
+        [pingers_crypto::key_config_hash(
+            &world.a.endpoints().ohttp_key_config
+        )]
+    );
+    assert!(invite_a.registration_code.is_none());
+    assert_eq!(invite_b.server, b);
+    assert_eq!(
+        invite_b.gateway_pins,
+        [pingers_crypto::key_config_hash(
+            &world.b()?.endpoints().ohttp_key_config
+        )]
+    );
+    assert_eq!(
+        invite_b.registration_code.as_ref().map(SecretText::expose),
+        Some(B_CODE)
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_joiner_new_to_a_server_registers_there_with_the_invite_s_pins() -> TestResult {
+    let world = World::start()?;
+    let (ana, _on_a, on_b) = ana_on_both(&world).await?;
+    let link = ana.client.create_invite(on_b).await?;
+    let invited = payload(&link.url)?;
+
+    let ben = Device::open(&world, "ben", 500).await?;
+    let b = world.b_server()?;
+    // Ben has wake-up pushes off and no push token: the join request goes without a
+    // subscription once r-invite's optional subscriptions land; on this layout it needs one.
+    let opened = tokio::time::timeout(
+        STEP,
+        ben.client.open_invite(link.url.clone(), Name::new("Ben")?),
+    )
+    .await
+    .map_err(|_elapsed| TestError::Setup("opening the invite did not finish"))?;
+    assert!(
+        matches!(
+            opened,
+            Ok(())
+                | Err(ClientError::Unavailable(
+                    pingers_client::Unavailable::NoPushToken
+                ))
+        ),
+        "{opened:?}"
+    );
+
+    // B was recorded with the invite's pins, as an invited server, and Ben registered there
+    // with the link's code.
+    let recorded = ben
+        .servers()?
+        .into_iter()
+        .find(|record| record.server == b)
+        .ok_or(TestError::Setup("B not recorded"))?;
+    assert_eq!(recorded.trust, ServerTrust::Invite);
+    assert_eq!(recorded.gateway_pins, invited.gateway_pins);
+    let database = Database::open(&ben.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+    let session = database.session()?;
+    assert!(matches!(
+        session.server(&b)?.account().registration()?,
+        pingers_store::AccountRegistration::Registered { code: Some(code) } if code.expose() == B_CODE
+    ));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_invite_whose_pins_the_server_s_keys_do_not_match_is_refused() -> TestResult {
+    let world = World::start()?;
+    let (ana, _on_a, on_b) = ana_on_both(&world).await?;
+    let link = ana.client.create_invite(on_b).await?;
+    // Someone swapped the pins: B's real key is not among them.
+    let mut forged = payload(&link.url)?;
+    forged.gateway_pins = vec![KeyConfigHash::from_bytes([0x5a; 32])];
+    let forged = pingers_parties::InviteLink::new(&forged)?;
+
+    let ben = Device::open(&world, "ben", 700).await?;
+    let opened = ben
+        .client
+        .open_invite(InviteUrl::new(forged.as_str())?, Name::new("Ben")?)
+        .await;
+    assert!(
+        matches!(opened, Err(ClientError::Server(ServerProblem::KeyMismatch))),
+        "{opened:?}"
+    );
+    // Nothing about B was recorded, and the user is warned as for any relay key mismatch.
+    let b = world.b_server()?;
+    assert!(ben.servers()?.iter().all(|record| record.server != b));
+    ben.client.on_wake().await?;
+    ben.events.expect_notice(NoticeKind::RelayKeyMismatch)?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_that_is_gone_does_not_stop_the_other_server_s_upload() -> TestResult {
+    let mut world = World::start()?;
+    let (ana, _on_a, _on_b) = ana_on_both(&world).await?;
+    let a = ServerId::new(world.a.endpoints().server_id.clone())?;
+    let b = world.b_server()?;
+    if let Some(gone) = world.b.take() {
+        gone.shutdown();
+    }
+    tokio::time::timeout(STEP, ana.client.on_wake())
+        .await
+        .map_err(|_elapsed| TestError::Setup("the wake did not finish"))??;
+    assert!(ana.uploaded_to(&a)?, "A's board has Ana's lease");
+    assert!(!ana.uploaded_to(&b)?, "B is gone");
+    Ok(())
+}
