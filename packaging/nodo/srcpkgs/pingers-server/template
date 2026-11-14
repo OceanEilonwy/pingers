@@ -21,7 +21,8 @@ _commit=@COMMIT@
 _rust=1.98.1
 archs="aarch64 x86_64"
 # perl and make: OpenSSL, vendored by rusqlite for SQLCipher. cmake and clang: aws-lc-rs (rustls).
-hostmakedepends="gcc cmake make perl pkg-config clang"
+# xz: the Rust toolchain distfiles.
+hostmakedepends="gcc cmake make perl pkg-config clang xz"
 short_desc="Pingers server (API and OHTTP gateway) for monokulo-nodo"
 maintainer="Pingers <noreply@localhost>"
 license="AGPL-3.0-only"
