@@ -70,6 +70,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd307490d624467aa6f74b0eabb77633d1f758a7b25f12bceb0b22e08d9726f6"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "bhttp"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -938,10 +944,10 @@ dependencies = [
  "hex",
  "hkdf",
  "hpke",
- "log",
  "rand_core",
  "sha2",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]
@@ -1001,6 +1007,7 @@ dependencies = [
  "hkdf",
  "hmac",
  "hpke-rs",
+ "hpke-rs-crypto",
  "pingers-proto",
  "pingers-time",
  "rand_core",
@@ -1008,6 +1015,22 @@ dependencies = [
  "subtle",
  "thiserror",
  "zeroize",
+]
+
+[[package]]
+name = "pingers-gate"
+version = "0.1.0"
+dependencies = [
+ "pingers-geo",
+ "thiserror",
+]
+
+[[package]]
+name = "pingers-geo"
+version = "0.1.0"
+dependencies = [
+ "pingers-time",
+ "thiserror",
 ]
 
 [[package]]
@@ -1037,10 +1060,12 @@ dependencies = [
 name = "pingers-proto"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "minicbor",
  "pingers-time",
- "serde",
+ "subtle",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]
@@ -1048,12 +1073,16 @@ name = "pingers-testkit"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "pingers-gate",
+ "pingers-geo",
+ "pingers-proto",
  "pingers-time",
  "rand_chacha",
  "rand_core",
  "serde",
  "serde_json",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]
