@@ -195,6 +195,49 @@ fn auth_challenge_message(
     .concat()
 }
 
+secret_key!(
+    /// The bearer of design D's Acct mode: 32 random bytes the server hands out for a signed
+    /// challenge, valid for an hour. `from_bytes` and `expose_bytes` are public because the
+    /// server sends it to the device (hex in `AuthResponse`) and parses it back from the
+    /// `Authorization` header.
+    BearerToken,
+    32,
+    pub
+);
+random_secret!(BearerToken);
+
+/// What the server stores in place of a bearer, so its database never holds a usable one:
+/// `SHA-256("pingers/v1/bearer" || bearer)`. A bearer is 32 random bytes, so no key is
+/// needed to stop guessing. `Debug` does not print it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BearerDigest([u8; 32]);
+
+impl BearerDigest {
+    /// Wraps digest bytes read back from the store.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// The digest bytes, for the store.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for BearerDigest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BearerDigest(redacted)")
+    }
+}
+
+/// The digest a bearer is stored and looked up by (server side).
+#[must_use]
+pub fn bearer_digest(bearer: &BearerToken) -> BearerDigest {
+    BearerDigest(primitives::sha256(&[labels::BEARER, bearer.expose_bytes()]))
+}
+
 #[cfg(test)]
 mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]

@@ -1,7 +1,16 @@
 {
   "name": "hashes",
-  "description": "revoke_commit = SHA-256(revoke_key) (design B.4.2); key config hash = SHA-256(encoded config) (B.4.9, B.12); segment hash = SHA-256 of the segment's 96-byte records concatenated in board order (B.4.3)",
+  "description": "revoke_commit = SHA-256(revoke_key) (design B.4.2); key config hash = SHA-256(encoded config) (B.4.9, B.12); segment hash = SHA-256 of the segment's 96-byte records concatenated in board order (B.4.3); bearer digest = SHA-256(\"pingers/v1/bearer\" || bearer), what the server stores for an Acct bearer (D)",
   "vectors": [
+    {
+      "name": "bearer-digest",
+      "inputs": {
+        "bearer": "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f"
+      },
+      "expected": {
+        "bearer_digest": "a61400a1715b7a290cd95ca347e098b5d723700ca4a58055fabf8ee0d6041c73"
+      }
+    },
     {
       "name": "revoke-commitment",
       "inputs": {
