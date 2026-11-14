@@ -32,6 +32,9 @@
 //!
 //! Pushes are checked where they arrive (`dumpsys notification`): A is notified of B's join
 //! request, both of the Meetup, and B, sent to the launcher first, of A's chat message.
+//! With `--flavour gms` against a stack started with `--fcm-service-account`, one push also
+//! goes from the local push relay through FCM to A ([`crate::fcm_push`]), and A's core must
+//! take it.
 //!
 //! Each step names what it waits for. The first failure stops the run and says which step
 //! failed and why; screenshots, UI dumps and logcat of both phones are saved in
@@ -240,6 +243,8 @@ struct Scene {
     out: PathBuf,
     /// The application id of the build under test.
     package: &'static str,
+    /// The stack's push relay configuration when the build is gms, for the FCM step.
+    gms_push_relay: Option<PathBuf>,
     a: Device,
     b: Device,
     link: Option<String>,
@@ -418,6 +423,7 @@ fn setup_and_play(
     let mut scene = Scene {
         out: layout.e2e_out(),
         package: options.flavour.package(),
+        gms_push_relay: (options.flavour == Flavour::Gms).then(|| layout.push_relay_config()),
         a: Device::new("A", first.serial.clone(), sdk.adb.clone()),
         b: Device::new("B", second.serial.clone(), sdk.adb.clone()),
         link: None,
@@ -515,7 +521,13 @@ fn play(
             // A content-free push naming no handle of A's: the core wakes, reads nothing, shows
             // nothing. What a real one leads to is checked at the Meetup and chat steps.
             let sent = std::process::Command::new("curl")
-                .args(["-fsS", "-X", "POST", "-d", r#"{"v":1,"h":"AAAAAAAAAAA="}"#])
+                .args([
+                    "-fsS",
+                    "-X",
+                    "POST",
+                    "-d",
+                    r#"{"v":1,"h":"0000000000000000"}"#,
+                ])
                 .arg(endpoint.replace("10.0.2.2", "127.0.0.1"))
                 .output()
                 .context("running curl")?;
@@ -541,6 +553,15 @@ fn play(
             }
         },
     )?;
+
+    if scene.gms_push_relay.is_some() {
+        step(
+            report,
+            scene,
+            "an FCM message through the push relay wakes A's core",
+            fcm_wakes_the_core,
+        )?;
+    }
 
     step(report, scene, "A shares the invite link", |scene| {
         let a = &scene.a;
@@ -847,31 +868,75 @@ fn play(
     Ok(())
 }
 
-/// The UnifiedPush endpoint the app on `device` registered (a debug build's preferences,
-/// read with run-as).
-fn unifiedpush_endpoint(device: &Device, package: &str) -> Result<String> {
+/// The gms flavour's FCM check (see [`crate::fcm_push`]): a content-free push naming no handle
+/// of A's goes from the local push relay through FCM to A, and A's core takes it. Without FCM
+/// in the stack (no `--fcm-service-account`) the step says so and passes, since FCM is opt-in.
+fn fcm_wakes_the_core(scene: &mut Scene) -> Result<String> {
+    let config = scene.gms_push_relay.clone().context("not a gms build")?;
+    if !crate::fcm_push::configured(&config)? {
+        return Ok(
+            "not run: the stack's push relay has no FCM (local-stack --fcm-service-account)"
+                .to_owned(),
+        );
+    }
+    let a = &scene.a;
+    let token = push_preference(a, scene.package, "fcm.token")
+        .context("A never got an FCM token (no Play services, or no google-services.json)")?;
+    a.shell("logcat -c")?;
+    let status = crate::fcm_push::send(&config, &token, [0; 8])?;
     let deadline = Deadline::after(NETWORK);
+    loop {
+        let log = a.shell("logcat -d -s PingersCore")?;
+        if let Some(line) = log.lines().find(|line| line.contains("onPush FCM")) {
+            if !line.contains("onPush FCM: ok") {
+                bail!("A's core did not take the FCM push: {}", line.trim());
+            }
+            return Ok(format!(
+                "relay answered {status}; A's logcat: {}",
+                line.trim()
+            ));
+        }
+        if deadline.passed() {
+            bail!(
+                "the relay took the push ({status}) but it never reached A's core (no onPush FCM in logcat)"
+            );
+        }
+        pause(Duration::from_secs(1));
+    }
+}
+
+/// The preference `name` of Pingers' push preferences on `device` (a debug build's, read
+/// with run-as), once it is set.
+fn push_preference(device: &Device, package: &str, name: &str) -> Result<String> {
+    let deadline = Deadline::after(NETWORK);
+    let key = format!("name=\"{name}\"");
     loop {
         let prefs = device
             .shell(&format!(
                 "run-as {package} cat shared_prefs/pingers.push.xml"
             ))
             .unwrap_or_default();
-        if let Some(endpoint) = prefs
+        if let Some(value) = prefs
             .lines()
-            .find(|line| line.contains("name=\"unifiedpush.endpoint\""))
+            .find(|line| line.contains(&key))
             .and_then(|line| line.split('>').nth(1))
             .and_then(|rest| rest.split('<').next())
         {
-            return Ok(endpoint.replace("&amp;", "&"));
+            return Ok(value.replace("&amp;", "&"));
         }
         if deadline.passed() {
-            bail!(
-                "A never registered with a UnifiedPush distributor (no endpoint in its preferences)"
-            );
+            bail!("no {name} in Pingers' push preferences");
         }
         pause(Duration::from_secs(1));
     }
+}
+
+/// The UnifiedPush endpoint the app on `device` registered (a debug build's preferences,
+/// read with run-as).
+fn unifiedpush_endpoint(device: &Device, package: &str) -> Result<String> {
+    push_preference(device, package, "unifiedpush.endpoint").context(
+        "A never registered with a UnifiedPush distributor (no endpoint in its preferences)",
+    )
 }
 
 /// Waits until one of Pingers' notifications on `device` contains `text` (title or body, as
