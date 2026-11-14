@@ -2,6 +2,7 @@
 //! The delivery service: the rules on top of a [`DeliveryStore`] and the live registry.
 
 use core::time::Duration;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use pingers_crypto::{PushBind, push_bind_for_subscription};
@@ -13,7 +14,7 @@ use pingers_proto::{
 use pingers_time::{Clock, UnixSeconds};
 use rand_core::CryptoRng;
 
-use crate::live::{ChannelId, LiveRegistry};
+use crate::live::{Admitted, ChannelId, LiveRegistry, StoredAllowance};
 use crate::store::{
     CommitWrite, DeliveryStore, NewCommit, NewEntry, NewGroup, PastAuthKey, StoredSubscription,
 };
@@ -22,6 +23,20 @@ use crate::{DeliveryError, GroupLifetime, GroupStart};
 /// The longest a subscription may live: Party subscriptions are renewed every 30 days
 /// (design B.4.9).
 pub const MAX_SUBSCRIPTION_LIFETIME: Duration = Duration::from_hours(30 * 24);
+
+/// The most subscriptions a group holds. Each wake fans out to every one, so this bounds what
+/// one commit or message can make the server send to the push relay. Far above a Party's
+/// members.
+pub const MAX_SUBSCRIPTIONS_PER_GROUP: usize = 1024;
+
+/// The most live channels a group has open at once (a Meetup's members, with room for
+/// reconnects that overlap the channel they replace).
+pub const MAX_LIVE_CHANNELS_PER_GROUP: usize = 256;
+
+/// The most stored frames (chat) one live channel may add to the log per 15-minute bucket.
+/// The live channel needs no Anon credential, so this is what bounds the log growth one member
+/// can cause through it; ephemeral frames are not stored and not counted.
+pub const STORED_LIVE_FRAMES_PER_BUCKET: u32 = 240;
 
 /// `Quiet` wakes are each delayed by a random 0 to 30 seconds to blur Party fan-out at the push
 /// relay (design B.4.9); alerts are not delayed.
@@ -171,12 +186,39 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         })
     }
 
+    /// Refuses a change that would leave `group` with more than
+    /// [`MAX_SUBSCRIPTIONS_PER_GROUP`] unexpired subscriptions. Concurrent changes are
+    /// checked one by one, so a burst can pass the limit by at most the burst's size.
+    fn check_room(
+        &self,
+        group: &GroupId,
+        added: &[StoredSubscription],
+        removed: &[SubscriptionId],
+    ) -> Result<(), DeliveryError> {
+        let now = self.clock.now();
+        let mut ids: HashSet<SubscriptionId> = self
+            .store
+            .live_subscriptions(group, now)?
+            .into_iter()
+            .map(|stored| stored.subscription.id)
+            .collect();
+        for id in removed {
+            ids.remove(id);
+        }
+        ids.extend(added.iter().map(|stored| stored.subscription.id));
+        if ids.len() > MAX_SUBSCRIPTIONS_PER_GROUP {
+            return Err(DeliveryError::TooManySubscriptions);
+        }
+        Ok(())
+    }
+
     /// `POST /v1/groups`: a new group at `start.epoch`, of lifetime class `start.lifetime`.
     /// Wakes nobody: the creator delivers Welcomes through mailboxes.
     ///
     /// # Errors
     ///
-    /// [`DeliveryError::GroupExists`]; [`DeliveryError::SubscriptionTooLong`]; storage errors.
+    /// [`DeliveryError::GroupExists`]; [`DeliveryError::SubscriptionTooLong`];
+    /// [`DeliveryError::TooManySubscriptions`]; storage errors.
     pub fn create_group(
         &self,
         request: CreateGroup,
@@ -189,6 +231,13 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
             .into_iter()
             .map(|subscription| Self::stored(now, subscription))
             .collect::<Result<Vec<_>, _>>()?;
+        let distinct: HashSet<SubscriptionId> = subscriptions
+            .iter()
+            .map(|stored| stored.subscription.id)
+            .collect();
+        if distinct.len() > MAX_SUBSCRIPTIONS_PER_GROUP {
+            return Err(DeliveryError::TooManySubscriptions);
+        }
         self.store.create_group(NewGroup {
             id: request.group_id,
             auth_key: request.auth_key,
@@ -209,7 +258,8 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
     /// # Errors
     ///
     /// [`DeliveryError::UnknownGroup`]; [`DeliveryError::SubscriptionTooLong`];
-    /// [`DeliveryError::CounterOverflow`]; storage errors.
+    /// [`DeliveryError::TooManySubscriptions`]; [`DeliveryError::CounterOverflow`]; storage
+    /// errors.
     pub fn commit(
         &self,
         group: &GroupId,
@@ -229,6 +279,9 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         // The class never changes, so reading it before the atomic append is race-free.
         let lifetime = self.store.head(group)?.lifetime;
         let removed = request.subscriptions_removed;
+        if !subscriptions_added.is_empty() {
+            self.check_room(group, &subscriptions_added, &removed)?;
+        }
         let write = self.store.append_commit(
             group,
             NewCommit {
@@ -460,7 +513,8 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
     ///
     /// # Errors
     ///
-    /// [`DeliveryError::UnknownGroup`]; [`DeliveryError::SubscriptionTooLong`]; storage errors.
+    /// [`DeliveryError::UnknownGroup`]; [`DeliveryError::SubscriptionTooLong`];
+    /// [`DeliveryError::TooManySubscriptions`]; storage errors.
     pub fn put_subscription(
         &self,
         group: &GroupId,
@@ -469,6 +523,7 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         let now = self.clock.now();
         let stored = Self::stored(now, subscription)?;
         let lifetime = self.store.head(group)?.lifetime;
+        self.check_room(group, core::slice::from_ref(&stored), &[])?;
         self.store
             .put_subscription(group, stored, Self::idle_expiry(now, lifetime)?)
     }
@@ -536,7 +591,8 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
     ///
     /// # Errors
     ///
-    /// [`DeliveryError::UnknownGroup`]; storage errors.
+    /// [`DeliveryError::UnknownGroup`]; [`DeliveryError::TooManyChannels`] if the group has
+    /// [`MAX_LIVE_CHANNELS_PER_GROUP`] open; storage errors.
     pub fn open_live(
         &self,
         group: &GroupId,
@@ -573,6 +629,8 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
     /// # Errors
     ///
     /// [`DeliveryError::UnknownChannel`] if `from` is not attached to the group;
+    /// [`DeliveryError::LiveRateLimited`] for a stored frame over the channel's
+    /// [`STORED_LIVE_FRAMES_PER_BUCKET`] (it is neither stored nor forwarded);
     /// [`DeliveryError::UnknownGroup`]; [`DeliveryError::FutureEpoch`]; storage errors.
     pub fn live_frame(
         &self,
@@ -580,10 +638,19 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         from: ChannelId,
         frame: LiveFrame,
     ) -> Result<Forwarded<T>, DeliveryError> {
-        if !self.live.contains(group, from)? {
-            return Err(DeliveryError::UnknownChannel);
-        }
         let now = self.clock.now();
+        let allowance = match frame.delivery {
+            DeliveryMode::Stored => Some(StoredAllowance {
+                bucket: now.bucket().index(),
+                limit: STORED_LIVE_FRAMES_PER_BUCKET,
+            }),
+            DeliveryMode::Ephemeral => None,
+        };
+        match self.live.admit_frame(group, from, allowance)? {
+            Admitted::Yes => {}
+            Admitted::UnknownChannel => return Err(DeliveryError::UnknownChannel),
+            Admitted::OverAllowance => return Err(DeliveryError::LiveRateLimited),
+        }
         let sequence = self.record(
             group,
             Incoming {

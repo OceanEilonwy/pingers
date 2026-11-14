@@ -9,8 +9,9 @@ use std::sync::{Arc, Barrier};
 use pingers_crypto::push_bind_for_subscription;
 use pingers_delivery::{
     CommitOutcome, Delivery, DeliveryError, DeliveryStore, GroupLifetime, GroupStart,
-    MAX_QUIET_DELAY, MAX_SUBSCRIPTION_LIFETIME, MEETUP_IDLE_LIFETIME, MemoryDeliveryStore,
-    PAGE_ENTRIES, PARTY_IDLE_LIFETIME, PastAuthKey, Reader, Wake,
+    MAX_LIVE_CHANNELS_PER_GROUP, MAX_QUIET_DELAY, MAX_SUBSCRIPTION_LIFETIME,
+    MAX_SUBSCRIPTIONS_PER_GROUP, MEETUP_IDLE_LIFETIME, MemoryDeliveryStore, PAGE_ENTRIES,
+    PARTY_IDLE_LIFETIME, PastAuthKey, Reader, STORED_LIVE_FRAMES_PER_BUCKET, Wake,
 };
 use pingers_proto::{
     AppMessage, CommitRequest, CommitResponse, ContentType, CreateGroup, Delivery as Mode, Epoch,
@@ -654,6 +655,130 @@ fn a_removal_closes_the_removed_members_live_channel(
     Ok(())
 }
 
+// --- limits ---
+
+/// A subscription whose id is `index` big-endian, for groups with more than 256.
+fn numbered(index: u16) -> Result<Subscription, TestError> {
+    let mut id = [0_u8; 16];
+    for (target, source) in id.iter_mut().zip(index.to_be_bytes()) {
+        *target = source;
+    }
+    Ok(Subscription {
+        id: SubscriptionId::from_bytes(id),
+        ..subscription(1, SUBSCRIPTION_LIFETIME)?
+    })
+}
+
+fn numbered_range(range: core::ops::Range<u16>) -> Result<Vec<Subscription>, TestError> {
+    range.map(numbered).collect()
+}
+
+fn a_group_holds_a_bounded_number_of_subscriptions(
+    store: impl DeliveryStore,
+) -> Result<(), TestError> {
+    let max = u16::try_from(MAX_SUBSCRIPTIONS_PER_GROUP).map_err(|_| TestError::Thread)?;
+    let clock = test_clock();
+    let delivery: Delivery<_, Live> = Delivery::new(store, Arc::new(clock));
+    let create = |id: u8, subscriptions| {
+        delivery.create_group(
+            CreateGroup {
+                group_id: GroupId::from_bytes([id; 32]),
+                auth_key: auth_key(0),
+                subscriptions,
+                state: None,
+            },
+            at_zero(GroupLifetime::Party),
+        )
+    };
+    assert!(matches!(
+        create(1, numbered_range(0..max.saturating_add(1))?),
+        Err(DeliveryError::TooManySubscriptions)
+    ));
+    create(2, numbered_range(0..max)?)?;
+    let group = GroupId::from_bytes([2; 32]);
+    assert!(matches!(
+        delivery.put_subscription(&group, numbered(max)?),
+        Err(DeliveryError::TooManySubscriptions)
+    ));
+    // Renewing one already there is not a new one.
+    delivery.put_subscription(&group, numbered(0)?)?;
+    // A commit that adds one more is refused whole; one that also removes one is not.
+    let adding = CommitRequest {
+        subscriptions_added: vec![numbered(max)?],
+        ..commit_request(0, Urgency::Quiet)
+    };
+    assert!(matches!(
+        delivery.commit(&group, adding.clone(), &mut seeded_rng(1)),
+        Err(DeliveryError::TooManySubscriptions)
+    ));
+    assert_eq!(delivery.head_epoch(&group, Reader::Current)?, Epoch::new(0));
+    let swapping = CommitRequest {
+        subscriptions_removed: vec![numbered(0)?.id],
+        ..adding
+    };
+    let outcome = delivery.commit(&group, swapping, &mut seeded_rng(1))?;
+    assert!(matches!(outcome, CommitOutcome::Accepted { .. }));
+    Ok(())
+}
+
+fn a_group_has_a_bounded_number_of_live_channels(
+    store: impl DeliveryStore,
+) -> Result<(), TestError> {
+    let world = World::new(store, &[])?;
+    let mut channels = Vec::new();
+    for handle in 0..MAX_LIVE_CHANNELS_PER_GROUP {
+        let handle = u32::try_from(handle).map_err(|_| TestError::Thread)?;
+        channels.push(world.delivery.open_live(&world.group, None, handle)?);
+    }
+    assert!(matches!(
+        world.delivery.open_live(&world.group, None, 9_999),
+        Err(DeliveryError::TooManyChannels)
+    ));
+    let closed = channels.pop().ok_or(TestError::Thread)?;
+    world.delivery.close_live(&world.group, closed)?;
+    world.delivery.open_live(&world.group, None, 9_999)?;
+    Ok(())
+}
+
+fn a_live_channel_stores_a_bounded_number_of_frames_per_bucket(
+    store: impl DeliveryStore,
+) -> Result<(), TestError> {
+    let world = World::new(store, &[])?;
+    let channel = world.delivery.open_live(&world.group, None, 1)?;
+    let frame = |delivery| LiveFrame {
+        epoch: Epoch::new(0),
+        body: body(1),
+        delivery,
+    };
+    // Start at a bucket boundary, so the whole allowance falls in one bucket.
+    let next = world_now(&world).bucket().next().ok_or(TestError::Thread)?;
+    world
+        .clock
+        .advance(next.start().saturating_duration_since(world_now(&world)));
+    for _ in 0..STORED_LIVE_FRAMES_PER_BUCKET {
+        let _ = world
+            .delivery
+            .live_frame(&world.group, channel, frame(Mode::Stored))?;
+    }
+    let before = world.log()?.len();
+    assert!(matches!(
+        world
+            .delivery
+            .live_frame(&world.group, channel, frame(Mode::Stored)),
+        Err(DeliveryError::LiveRateLimited)
+    ));
+    assert_eq!(world.log()?.len(), before);
+    // Ephemeral frames are not counted; the next bucket starts afresh.
+    let _ = world
+        .delivery
+        .live_frame(&world.group, channel, frame(Mode::Ephemeral))?;
+    world.clock.advance(pingers_time::Bucket::LENGTH);
+    let _ = world
+        .delivery
+        .live_frame(&world.group, channel, frame(Mode::Stored))?;
+    Ok(())
+}
+
 fn live_channel_needs_an_existing_group(store: impl DeliveryStore) -> Result<(), TestError> {
     let world = World::new(store, &[])?;
     let other = GroupId::from_bytes([9; 32]);
@@ -1193,6 +1318,9 @@ for_each_store!(
     live_frame_goes_to_the_other_channels,
     closed_channel_gets_nothing_and_cannot_send,
     a_removal_closes_the_removed_members_live_channel,
+    a_group_holds_a_bounded_number_of_subscriptions,
+    a_group_has_a_bounded_number_of_live_channels,
+    a_live_channel_stores_a_bounded_number_of_frames_per_bucket,
     live_channel_needs_an_existing_group,
     idle_group_expires_after_two_hours,
     writes_postpone_expiry,

@@ -43,8 +43,9 @@ pub use lifetime::{GroupLifetime, GroupStart, MEETUP_IDLE_LIFETIME, PARTY_IDLE_L
 pub use live::ChannelId;
 pub use memory::MemoryDeliveryStore;
 pub use service::{
-    CommitOutcome, Delivery, Forwarded, MAX_QUIET_DELAY, MAX_SUBSCRIPTION_LIFETIME, Posted, Reader,
-    Wake,
+    CommitOutcome, Delivery, Forwarded, MAX_LIVE_CHANNELS_PER_GROUP, MAX_QUIET_DELAY,
+    MAX_SUBSCRIPTION_LIFETIME, MAX_SUBSCRIPTIONS_PER_GROUP, Posted, Reader,
+    STORED_LIVE_FRAMES_PER_BUCKET, Wake,
 };
 #[cfg(feature = "sqlite")]
 pub use sqlite::SqliteDeliveryStore;

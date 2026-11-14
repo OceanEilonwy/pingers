@@ -43,8 +43,11 @@ pub(crate) fn status_of(error: &DeliveryError) -> StatusCode {
         DeliveryError::UnknownGroup | DeliveryError::UnknownChannel => StatusCode::NOT_FOUND,
         DeliveryError::GroupExists => StatusCode::CONFLICT,
         DeliveryError::LaterEpoch => StatusCode::FORBIDDEN,
-        DeliveryError::FutureEpoch { .. } | DeliveryError::SubscriptionTooLong => {
-            StatusCode::UNPROCESSABLE_ENTITY
+        DeliveryError::FutureEpoch { .. }
+        | DeliveryError::SubscriptionTooLong
+        | DeliveryError::TooManySubscriptions => StatusCode::UNPROCESSABLE_ENTITY,
+        DeliveryError::TooManyChannels | DeliveryError::LiveRateLimited => {
+            StatusCode::TOO_MANY_REQUESTS
         }
         DeliveryError::CounterOverflow
         | DeliveryError::TimeOutOfRange
