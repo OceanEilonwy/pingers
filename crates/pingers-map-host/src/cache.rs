@@ -218,8 +218,10 @@ impl Cache {
             let _removed =
                 tokio::task::spawn_blocking(move || directory.remove_region(&failed)).await;
         }
-        self.lock().preparing.remove(&id);
+        // Saved before the region counts as ready, so whoever is served it next finds its
+        // provenance on disk.
         self.save().await;
+        self.lock().preparing.remove(&id);
     }
 
     async fn evict(&self, just_cut: &RegionId) {

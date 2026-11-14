@@ -17,12 +17,11 @@ pingers-map-packs = { workspace = true }
 # The production Timer (TokioTimer) for the counts report.
 pingers-transport = { workspace = true }
 axum = { workspace = true }
-hex = { workspace = true }
 serde = { workspace = true }
 # The generated catalog, manifests read from disk, and cache-state.json.
 serde_json = { workspace = true }
-# Content checksums of public files for strong ETags; see files.rs.
-sha2 = { workspace = true }
+# Content checksums of public files for strong ETags (files.rs).
+pingers-crypto = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "net", "signal"] }
 tokio-util = { workspace = true }

@@ -150,7 +150,7 @@ Licence (decided 2026-11-13): every crate, binary and the Android app is `AGPL-3
 - Region lists with hierarchical ids (`continent/country/state`), so large countries split into sub-regions; a host's allow-list and per-region zoom caps.
 - A PMTiles v3 and vector-tile reader, enough to build the place-name search index from the pack's own labels; the manifest and catalog formats the app reads.
 - `pmtiles extract` (and `--dry-run` size estimates) as a child process; the disk budget check.
-- Sync file I/O only; no network of its own (the `pmtiles` tool fetches from the build). Deps: `flate2`, `sha2`, `serde_json`, `toml`.
+- Sync file I/O only; no network of its own (the `pmtiles` tool fetches from the build). Content checksums come from pingers-crypto. Deps: pingers-crypto, `flate2`, `serde_json`, `toml`.
 
 ### L3: stateful logic
 
