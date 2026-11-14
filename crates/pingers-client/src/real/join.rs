@@ -78,7 +78,7 @@ pub(crate) async fn open_invite(net: &Net, link: InviteUrl, name: Name) -> Resul
         other => other?,
     };
     net.push(&server.server, [prepared]);
-    net.flush().await.map(drop)
+    net.flush().await
 }
 
 /// pingers-parties' join request, and the join recorded with its subscription.

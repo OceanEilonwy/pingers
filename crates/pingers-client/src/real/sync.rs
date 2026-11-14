@@ -159,22 +159,20 @@ impl Net {
     }
 
     /// Sends every waiting request, server by server. One that could not be sent now stays for
-    /// the next flush; one the server refused is dropped. Returns whether a Party changed (a
-    /// merged commit).
+    /// the next flush; one the server refused is dropped.
     ///
     /// # Errors
     ///
     /// A storage failure; network failures only keep the request.
-    pub(crate) async fn flush(&self) -> Result<bool, ClientError> {
-        let mut changed = false;
+    pub(crate) async fn flush(&self) -> Result<(), ClientError> {
         for link in self.servers.all().await? {
-            changed |= self.flush_server(&link).await?;
+            self.flush_server(&link).await?;
         }
-        Ok(changed)
+        Ok(())
     }
 
     /// [`Net::flush`] for one server.
-    async fn flush_server(&self, link: &Link) -> Result<bool, ClientError> {
+    async fn flush_server(&self, link: &Link) -> Result<(), ClientError> {
         let waiting: Vec<Outbound> = {
             let mut outbox = self.outbox();
             let (mine, others): (Vec<Waiting>, Vec<Waiting>) = core::mem::take(&mut *outbox)
@@ -184,25 +182,23 @@ impl Net {
             mine.into_iter().map(|waiting| waiting.outbound).collect()
         };
         if waiting.is_empty() {
-            return Ok(false);
+            return Ok(());
         }
         link.prepare_credentials().await?;
-        let mut changed = false;
         let mut kept = Vec::new();
         for outbound in waiting {
             match self.send(link, outbound).await {
-                Ok(Sent::Done { changed: party }) => changed |= party,
                 Ok(Sent::Later(outbound)) => kept.push(*outbound),
                 Err(error @ (ClientError::Store(_) | ClientError::Records(_))) => {
                     self.push(&link.server, kept);
                     return Err(error);
                 }
-                // Refused, or not ours to retry (a commit pingers-parties dropped).
-                Err(_) => {}
+                // Sent; or refused, or not ours to retry (a commit pingers-parties dropped).
+                Ok(Sent::Done) | Err(_) => {}
             }
         }
         self.push(&link.server, kept);
-        Ok(changed)
+        Ok(())
     }
 
     fn keep_until(&self) -> Sending {
@@ -245,11 +241,11 @@ impl Net {
                 .await
                 .map(|()| true),
             Outbound::Leave(leave) => self.leave(link, leave).await,
-            _ => return Ok(Sent::Done { changed: false }),
+            _ => return Ok(Sent::Done),
         };
         link.observe(&result);
         match result {
-            Ok(true) => Ok(Sent::Done { changed: false }),
+            Ok(true) => Ok(Sent::Done),
             Ok(false)
             | Err(
                 SyncError::NoRelay { .. }
@@ -306,7 +302,7 @@ impl Net {
                     link.observe(&posted);
                     let _: Delivered<SequenceNumber> = posted?;
                 }
-                Ok(Sent::Done { changed: true })
+                Ok(Sent::Done)
             }
             Err(GroupError::Owner(error)) => Err(error),
             Err(GroupError::Sync(error)) => {
@@ -323,11 +319,11 @@ impl Net {
                     Some(commit) if transient => {
                         Ok(Sent::Later(Box::new(Outbound::Commit(commit))))
                     }
-                    _ => Ok(Sent::Done { changed: false }),
+                    _ => Ok(Sent::Done),
                 }
             }
             // Nothing left to commit, or the conflicts ran out: pingers-parties dropped it.
-            Ok(Committed::NothingToCommit) | Err(_) => Ok(Sent::Done { changed: true }),
+            Ok(Committed::NothingToCommit) | Err(_) => Ok(Sent::Done),
         }
     }
 
@@ -513,7 +509,7 @@ impl Net {
 
 /// What sending one request came to.
 enum Sent {
-    Done { changed: bool },
+    Done,
     Later(Box<Outbound>),
 }
 

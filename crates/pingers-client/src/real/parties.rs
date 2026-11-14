@@ -66,7 +66,7 @@ impl Parties {
         outbound: impl IntoIterator<Item = Outbound>,
     ) -> Result<(), ClientError> {
         self.net.push(server, outbound);
-        self.net.flush().await.map(drop)
+        self.net.flush().await
     }
 
     async fn make_invite(
