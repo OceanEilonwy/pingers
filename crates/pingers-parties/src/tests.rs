@@ -1152,21 +1152,16 @@ fn creator_keeps_its_subscription_when_members_join() -> Result<(), TestError> {
 
 #[test]
 fn leaving_one_party_keeps_the_others_records() -> Result<(), TestError> {
-    use crate::records::{Key, read};
-
     let mut rng = rng(14);
     let alice = Device::new(1)?;
     let first = create_party(&alice, &mut rng)?.party;
     let second = create_party(&alice, &mut rng)?.party;
     assert_ne!(first, second);
     alice.parties().leave_party(&first, &mut rng)?;
-    for key in [
-        Key::Settings(&first),
-        Key::Epochs(&first),
-        Key::Subscriptions(&first),
-    ] {
-        assert!(read(&alice.session, &key)?.is_none());
-    }
+    let session = &alice.session;
+    assert!(session.party_configs().get(&first)?.is_none());
+    assert!(session.rosters().epochs(&first)?.is_empty());
+    assert!(session.member_subscriptions().list(&first)?.is_empty());
     assert_eq!(alice.parties().settings(&second)?.server.as_str(), SERVER);
     assert_eq!(
         alice.parties().roster_view(&second)?.current_epoch(),
@@ -1580,5 +1575,41 @@ fn a_classical_key_package_cannot_join_a_quantum_resistant_party() -> Result<(),
         InviteStatus::Open
     );
     alice.parties().self_update(&party, &mut rng)?;
+    Ok(())
+}
+
+#[test]
+fn a_deleted_spot_drops_its_presence_state_on_every_device() -> Result<(), TestError> {
+    let TwoMembers {
+        alice,
+        bob,
+        party,
+        group,
+        mut rng,
+        ..
+    } = two_members()?;
+    let created =
+        alice
+            .parties()
+            .create_spot(&party, new_spot("Pub", circle(150.0)?)?, &mut rng)?;
+    bob.parties()
+        .process_group_message(&group, &group_message(created.outbound)?)?;
+    let inside = pingers_geo::PresenceSnapshot {
+        state: pingers_geo::PresenceState::Inside,
+        since: NOW,
+        last_fix_at: None,
+        confirmed_at: None,
+    };
+    for device in [&alice, &bob] {
+        device.session.presence().save(&created.spot, &inside)?;
+    }
+    let deleted = alice
+        .parties()
+        .delete_spot(&party, &created.spot, &mut rng)?;
+    assert_eq!(alice.session.presence().load(&created.spot)?, None);
+    assert!(bob.session.presence().load(&created.spot)?.is_some());
+    bob.parties()
+        .process_group_message(&group, &group_message(deleted.outbound)?)?;
+    assert_eq!(bob.session.presence().load(&created.spot)?, None);
     Ok(())
 }

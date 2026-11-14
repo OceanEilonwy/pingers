@@ -48,6 +48,8 @@ impl Writer {
         Ok(())
     }
 
+    /// Only tests write keys now (old-format records for `legacy`).
+    #[cfg(test)]
     pub(crate) fn key(&mut self, key: &AccountPublicKey) {
         self.fixed(key.as_bytes());
     }

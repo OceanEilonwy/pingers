@@ -11,7 +11,6 @@ use rand_core::CryptoRng;
 
 use crate::lifecycle::{identity, party_row, seal_operation, set_subscription, subscription_of};
 use crate::ops::PartyOperation;
-use crate::records::{self, Key};
 use crate::{Outbound, PartiesError, PartyLifecycle};
 
 /// What changed in this device's profile.
@@ -67,7 +66,7 @@ impl PartyLifecycle<'_> {
                     set_subscription(session, party, own_key, subscription)?;
                 }
             }
-            records::write(session, &Key::ProfileWaiting(party), &[1])?;
+            session.profiles_waiting().mark(party)?;
             Ok(match publish(session, party, rng)? {
                 Some(outbound) => ProfilePublication::Send(Box::new(outbound)),
                 None => ProfilePublication::Waiting,
@@ -90,7 +89,7 @@ impl PartyLifecycle<'_> {
     ) -> Result<Option<Outbound>, PartiesError> {
         self.session.transaction(|session| {
             party_row(session, party)?;
-            if records::read(session, &Key::ProfileWaiting(party))?.is_none() {
+            if !session.profiles_waiting().is_waiting(party)? {
                 return Ok(None);
             }
             publish(session, party, rng)
@@ -101,10 +100,10 @@ impl PartyLifecycle<'_> {
     ///
     /// # Errors
     ///
-    /// [`PartiesError::UnknownParty`]; [`PartiesError::Records`].
+    /// [`PartiesError::UnknownParty`]; [`PartiesError::Store`].
     pub fn profile_waiting(&self, party: &PartyId) -> Result<bool, PartiesError> {
         party_row(self.session, party)?;
-        Ok(records::read(self.session, &Key::ProfileWaiting(party))?.is_some())
+        Ok(self.session.profiles_waiting().is_waiting(party)?)
     }
 }
 
@@ -115,7 +114,7 @@ fn publish(
     party: &PartyId,
     rng: &mut impl CryptoRng,
 ) -> Result<Option<Outbound>, PartiesError> {
-    if records::read(session, &Key::PendingCommit(party))?.is_some() {
+    if session.pending_commits().get(party)?.is_some() {
         return Ok(None);
     }
     let row = party_row(session, party)?;
@@ -133,7 +132,7 @@ fn publish(
     let mut group = context.party_group(&row.group)?;
     match seal_operation(&mut group, &operation, rng) {
         Ok(outbound) => {
-            records::delete(session, &Key::ProfileWaiting(party))?;
+            session.profiles_waiting().clear(party)?;
             Ok(Some(outbound))
         }
         // A leaver's proposal waits for a commit (this device's or another member's).

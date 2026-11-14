@@ -2,11 +2,13 @@
 //! Per-Party settings: server, relays, post-quantum, location-visibility override.
 
 use pingers_mls::CipherSuitePolicy;
-use pingers_proto::{RelayUrl, ServerId};
-use pingers_store::LocationVisibility;
+use pingers_proto::{PartyId, RelayUrl, ServerId};
+use pingers_store::{LocationVisibility, PartyConfig, PartySuite, RelayList, Session};
 
 use crate::PartiesError;
-use crate::codec::{Reader, Writer};
+use crate::codec::Reader;
+#[cfg(test)]
+use crate::codec::Writer;
 
 /// Whether the Party's MLS group uses the post-quantum ciphersuite (design B.8). Fixed when
 /// the Party is created: changing it means a new group.
@@ -62,17 +64,52 @@ pub struct PartySettings {
     pub location_visibility: Option<LocationVisibility>,
 }
 
-/// The parts of [`PartySettings`] kept in this crate's records (the location-visibility
-/// override lives in the store's `party` row).
+/// The parts of [`PartySettings`] kept in pingers-store's `party_config` (the
+/// location-visibility override lives in the store's `party` row).
 pub(crate) struct StoredSettings {
     pub(crate) server: ServerId,
     pub(crate) relays: RelayChoice,
     pub(crate) post_quantum: PostQuantum,
 }
 
+/// The version byte of the record these settings were kept in before `party_config`.
 const VERSION: u8 = 1;
 
 impl StoredSettings {
+    /// Stores the Party's settings.
+    pub(crate) fn write(&self, session: &Session, party: &PartyId) -> Result<(), PartiesError> {
+        let config = PartyConfig {
+            server: self.server.clone(),
+            suite: match self.post_quantum {
+                PostQuantum::Classical => PartySuite::Classical,
+                PostQuantum::QuantumResistant => PartySuite::QuantumResistant,
+            },
+            relays: match &self.relays {
+                RelayChoice::ServerDefault => RelayList::ServerDefault,
+                RelayChoice::Custom(relays) => RelayList::Custom(relays.clone()),
+            },
+        };
+        Ok(session.party_configs().put(party, &config)?)
+    }
+
+    /// The Party's settings, `None` for a Party with none stored.
+    pub(crate) fn read(session: &Session, party: &PartyId) -> Result<Option<Self>, PartiesError> {
+        Ok(session.party_configs().get(party)?.map(|config| Self {
+            server: config.server,
+            post_quantum: match config.suite {
+                PartySuite::Classical => PostQuantum::Classical,
+                PartySuite::QuantumResistant => PostQuantum::QuantumResistant,
+            },
+            relays: match config.relays {
+                RelayList::ServerDefault => RelayChoice::ServerDefault,
+                RelayList::Custom(relays) => RelayChoice::Custom(relays),
+            },
+        }))
+    }
+
+    /// The old record form, which `PartyLifecycle::upgrade_records` reads; written only by
+    /// tests that make such records.
+    #[cfg(test)]
     pub(crate) fn encode(&self) -> Result<Vec<u8>, PartiesError> {
         let mut writer = Writer::new();
         writer.byte(VERSION);

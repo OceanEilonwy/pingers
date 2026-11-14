@@ -74,6 +74,13 @@ pooled `Reply` one; with none, `NoPooledMailbox`.
 - **Settings**: server and suite are fixed at creation; a joiner takes the server from the
   link and assumes the classical suite.
 - **Clock injected**; `now` is read once per operation.
+- **Per-Party state in store tables** (2026-11-14): settings, roster history, members' subscription
+  ids, the in-flight commit and a waiting profile live in pingers-store's schema-v5 tables
+  (`party_configs`, `rosters`, `member_subscriptions`, `pending_commits`, `profiles_waiting`),
+  which cascade with the Party; invites, waiting join requests and joins in progress stay records
+  while join flow A settles. `upgrade_records` moves the old records of those five kinds into the
+  tables (one transaction per Party, idempotent); pingers-client runs it when it opens the
+  database. A Spot tombstone, own or received, clears the Spot's presence row.
 
 ## Interim parts and requests to lower crates
 

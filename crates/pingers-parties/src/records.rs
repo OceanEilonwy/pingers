@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! This crate's own records, kept in the store's encrypted key-value table.
+//! This crate's invite and join records, kept in the store's encrypted key-value table, and
+//! the roster history over pingers-store's `roster_epoch` and `roster_entry` tables.
 //!
-//! Interim: pingers-store has no tables for invites, per-Party server/relay/suite settings,
-//! roster history or in-flight commits. Until it does (the crate's CONTRACT.md asks), they are
-//! written through the store's `MlsStorage` implementation on `Session`, under the prefix
-//! `pingers-parties/v1/`, which is disjoint from pingers-mls's `openmls/v1/`. They join the
-//! session's transaction exactly as MLS state does, so a commit and its rows land together.
-//! The trait cannot list keys, so each collection keeps its own index record.
+//! Interim: pingers-store has no tables for invites, waiting join requests and joins in
+//! progress yet (join flow A is still changing them). Until it does, they are written through
+//! the store's `MlsStorage` implementation on `Session`, under the prefix `pingers-parties/v1/`,
+//! which is disjoint from pingers-mls's `openmls/v1/`. They join the session's transaction
+//! exactly as MLS state does, so a commit and its rows land together. The trait cannot list
+//! keys, so each collection keeps its own index record. The other per-Party state (settings,
+//! rosters, subscriptions, the in-flight commit, a waiting profile) is in store tables; older
+//! records of those kinds are moved there by `PartyLifecycle::upgrade_records`.
 
-use pingers_mls::{MlsStorage as _, Roster, RosterEntry};
-use pingers_proto::{Epoch, LeafIndex, MailboxId, PartyId};
+use pingers_mls::{MlsStorage as _, Roster};
+use pingers_proto::{Epoch, MailboxId, PartyId};
 use pingers_store::Session;
 use zeroize::Zeroizing;
 
@@ -20,14 +23,6 @@ const PREFIX: &[u8] = b"pingers-parties/v1/";
 
 /// A record's key.
 pub(crate) enum Key<'id> {
-    /// Server, relays and suite of a Party.
-    Settings(&'id PartyId),
-    /// The epochs whose rosters are kept, newest first.
-    Epochs(&'id PartyId),
-    /// The roster at one epoch.
-    Roster(&'id PartyId, Epoch),
-    /// What this device's in-flight commit does.
-    PendingCommit(&'id PartyId),
     /// The Party's invites (index of mailbox ids).
     Invites(&'id PartyId),
     /// One invite, by its mailbox.
@@ -36,10 +31,6 @@ pub(crate) enum Key<'id> {
     Approvals(&'id PartyId),
     /// One waiting join request, by its reply mailbox.
     Approval(&'id PartyId, &'id MailboxId),
-    /// Members' group subscriptions (so a removal can drop the removed member's).
-    Subscriptions(&'id PartyId),
-    /// Present while this device's changed profile waits for a commit to settle.
-    ProfileWaiting(&'id PartyId),
     /// Which Party an invite mailbox belongs to.
     InviteIndex(&'id MailboxId),
     /// A join this device started, by its reply mailbox.
@@ -50,13 +41,6 @@ impl Key<'_> {
     fn bytes(&self) -> Vec<u8> {
         let mut key = PREFIX.to_vec();
         match self {
-            Self::Settings(party) => party_key(&mut key, party, b"settings"),
-            Self::Epochs(party) => party_key(&mut key, party, b"epochs"),
-            Self::Roster(party, epoch) => {
-                party_key(&mut key, party, b"roster/");
-                key.extend_from_slice(&epoch.get().to_be_bytes());
-            }
-            Self::PendingCommit(party) => party_key(&mut key, party, b"pending-commit"),
             Self::Invites(party) => party_key(&mut key, party, b"invites"),
             Self::Invite(party, mailbox) => {
                 party_key(&mut key, party, b"invite/");
@@ -67,8 +51,6 @@ impl Key<'_> {
                 party_key(&mut key, party, b"approval/");
                 key.extend_from_slice(mailbox.as_bytes());
             }
-            Self::Subscriptions(party) => party_key(&mut key, party, b"subscriptions"),
-            Self::ProfileWaiting(party) => party_key(&mut key, party, b"profile-waiting"),
             Self::InviteIndex(mailbox) => {
                 key.extend_from_slice(b"invite-index/");
                 key.extend_from_slice(mailbox.as_bytes());
@@ -87,6 +69,13 @@ fn party_key(key: &mut Vec<u8>, party: &PartyId, suffix: &[u8]) {
     key.extend_from_slice(party.as_bytes());
     key.push(b'/');
     key.extend_from_slice(suffix);
+}
+
+/// The full key of a Party record under `suffix`, for the records `legacy` moves into tables.
+pub(crate) fn party_record_key(party: &PartyId, suffix: &[u8]) -> Vec<u8> {
+    let mut key = PREFIX.to_vec();
+    party_key(&mut key, party, suffix);
+    key
 }
 
 fn party_prefix(party: &PartyId) -> Vec<u8> {
@@ -184,17 +173,7 @@ const EPOCHS_KEPT: usize = 2;
 
 /// The epochs whose rosters are kept, newest first.
 pub(crate) fn epochs(session: &Session, party: &PartyId) -> Result<Vec<Epoch>, PartiesError> {
-    let Some(bytes) = read(session, &Key::Epochs(party))? else {
-        return Ok(Vec::new());
-    };
-    let mut reader = Reader::new(&bytes, "epoch list");
-    let count = reader.count()?;
-    let mut epochs = Vec::new();
-    for _ in 0..count {
-        epochs.push(Epoch::new(reader.u64()?));
-    }
-    reader.end()?;
-    Ok(epochs)
+    Ok(session.rosters().epochs(party)?)
 }
 
 /// Records the roster at a new epoch and forgets rosters older than the previous epoch.
@@ -204,26 +183,9 @@ pub(crate) fn record_roster(
     epoch: Epoch,
     roster: &Roster,
 ) -> Result<(), PartiesError> {
-    let mut writer = Writer::new();
-    writer.count(roster.entries().len())?;
-    for entry in roster.entries() {
-        writer.u32(entry.leaf.get());
-        writer.key(&entry.signature_key);
-    }
-    write(session, &Key::Roster(party, epoch), &writer.finish())?;
-
-    let mut kept = epochs(session, party)?;
-    kept.retain(|known| *known != epoch);
-    kept.insert(0, epoch);
-    for dropped in kept.split_off(EPOCHS_KEPT.min(kept.len())) {
-        delete(session, &Key::Roster(party, dropped))?;
-    }
-    let mut writer = Writer::new();
-    writer.count(kept.len())?;
-    for known in &kept {
-        writer.u64(known.get());
-    }
-    write(session, &Key::Epochs(party), &writer.finish())
+    let rosters = session.rosters();
+    rosters.record(party, epoch, roster)?;
+    Ok(rosters.retain_newest(party, EPOCHS_KEPT)?)
 }
 
 pub(crate) fn roster_at(
@@ -231,18 +193,5 @@ pub(crate) fn roster_at(
     party: &PartyId,
     epoch: Epoch,
 ) -> Result<Option<Roster>, PartiesError> {
-    let Some(bytes) = read(session, &Key::Roster(party, epoch))? else {
-        return Ok(None);
-    };
-    let mut reader = Reader::new(&bytes, "roster");
-    let count = reader.count()?;
-    let mut entries = Vec::new();
-    for _ in 0..count {
-        entries.push(RosterEntry {
-            leaf: LeafIndex::new(reader.u32()?),
-            signature_key: reader.key()?,
-        });
-    }
-    reader.end()?;
-    Ok(Some(Roster::new(entries)))
+    Ok(session.rosters().at(party, epoch)?)
 }

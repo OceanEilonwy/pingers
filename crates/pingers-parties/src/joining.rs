@@ -525,7 +525,7 @@ impl PartyLifecycle<'_> {
                 relays: RelayChoice::ServerDefault,
                 post_quantum: PostQuantum::of_suite(group.suite()?)?,
             };
-            records::write(session, &Key::Settings(&party), &settings.encode()?)?;
+            settings.write(session, &party)?;
             records::record_roster(session, &party, group.epoch(), &roster)?;
             set_subscription(session, &party, own_key, Some(joining.subscription))?;
             records::delete(session, &Key::Joining(&reply))?;

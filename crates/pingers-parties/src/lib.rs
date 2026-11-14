@@ -30,6 +30,7 @@ mod codec;
 mod error;
 mod invite;
 mod joining;
+mod legacy;
 mod lifecycle;
 mod link;
 mod ops;

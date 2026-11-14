@@ -209,7 +209,7 @@ impl<'session> PartyLifecycle<'session> {
                 relays: new.settings.relays,
                 post_quantum: new.settings.post_quantum,
             };
-            records::write(session, &Key::Settings(&party_id), &stored.encode()?)?;
+            stored.write(session, &party_id)?;
             records::record_roster(session, &party_id, group.epoch(), &group.roster())?;
             if let Some(subscription) = &new.subscription {
                 set_subscription(session, &party_id, own_key, Some(subscription.id))?;
@@ -253,7 +253,7 @@ impl<'session> PartyLifecycle<'session> {
         self.session.transaction(|session| {
             let mut stored = stored_settings(session, party)?;
             stored.relays = relays;
-            records::write(session, &Key::Settings(party), &stored.encode()?)
+            stored.write(session, party)
         })
     }
 
@@ -704,8 +704,7 @@ pub(crate) fn stored_settings(
     session: &Session,
     party: &PartyId,
 ) -> Result<StoredSettings, PartiesError> {
-    let bytes = records::read(session, &Key::Settings(party))?.ok_or(PartiesError::UnknownParty)?;
-    StoredSettings::decode(&bytes)
+    StoredSettings::read(session, party)?.ok_or(PartiesError::UnknownParty)
 }
 
 pub(crate) fn current_roster(session: &Session, party: &PartyId) -> Result<Roster, PartiesError> {
@@ -723,7 +722,7 @@ pub(crate) fn snapshot(
     excluded: &[AccountPublicKey],
 ) -> Result<Snapshot, PartiesError> {
     let row = party_row(session, party)?;
-    let subscriptions = subscriptions(session, party)?;
+    let subscriptions = session.member_subscriptions().list(party)?;
     let profiles = session
         .members()
         .list(party)?
@@ -733,8 +732,8 @@ pub(crate) fn snapshot(
             key: member.signature_key,
             subscription: subscriptions
                 .iter()
-                .find(|(key, _)| *key == member.signature_key)
-                .map(|(_, subscription)| *subscription),
+                .find(|entry| entry.key == member.signature_key)
+                .map(|entry| entry.subscription),
             name: member.name,
         })
         .collect();
@@ -771,17 +770,19 @@ pub(crate) fn start_commit(
     party: &PartyId,
 ) -> Result<(Party, Identity), PartiesError> {
     let row = party_row(session, party)?;
-    if records::read(session, &Key::PendingCommit(party))?.is_some() {
+    if session.pending_commits().get(party)?.is_some() {
         return Err(PartiesError::CommitInFlight);
     }
     Ok((row, identity(session)?))
 }
 
 fn take_pending(session: &Session, party: &PartyId) -> Result<PendingCommit, PartiesError> {
-    let bytes =
-        records::read(session, &Key::PendingCommit(party))?.ok_or(PartiesError::NoPendingCommit)?;
+    let bytes = session
+        .pending_commits()
+        .get(party)?
+        .ok_or(PartiesError::NoPendingCommit)?;
     let pending = PendingCommit::decode(&bytes)?;
-    records::delete(session, &Key::PendingCommit(party))?;
+    session.pending_commits().delete(party)?;
     Ok(pending)
 }
 
@@ -806,11 +807,9 @@ pub(crate) fn finish_commit(
     rng: &mut impl CryptoRng,
 ) -> Result<OutgoingCommit, PartiesError> {
     let row = parts.row;
-    records::write(
-        session,
-        &Key::PendingCommit(&row.id),
-        &parts.pending.encode()?,
-    )?;
+    session
+        .pending_commits()
+        .put(&row.id, &parts.pending.encode()?)?;
     let snapshot = snapshot(session, &row.id, parts.excluded)?;
     let state = seal_state_snapshot(&group.pending_state_key()?, &snapshot.encode()?, rng)?;
     let (subscriptions_added, welcome) = match (parts.added, parts.commit.welcome) {
@@ -961,7 +960,7 @@ pub(crate) fn apply_operation(
             if !wins {
                 return Ok(Incoming::Superseded { party: row.id });
             }
-            session.spots().put(&spot)?;
+            put_spot(session, &spot)?;
             Ok(Incoming::SpotChanged {
                 party: row.id,
                 spot: spot.id,
@@ -989,31 +988,12 @@ fn delete_party(
 
 // --- members' subscriptions ---
 
-fn subscriptions(
-    session: &Session,
-    party: &PartyId,
-) -> Result<Vec<(AccountPublicKey, SubscriptionId)>, PartiesError> {
-    let Some(bytes) = records::read(session, &Key::Subscriptions(party))? else {
-        return Ok(Vec::new());
-    };
-    let mut reader = Reader::new(&bytes, "subscriptions");
-    let mut entries = Vec::new();
-    for _ in 0..reader.count()? {
-        entries.push((reader.key()?, SubscriptionId::from_bytes(reader.fixed()?)));
-    }
-    reader.end()?;
-    Ok(entries)
-}
-
 pub(crate) fn subscription_of(
     session: &Session,
     party: &PartyId,
     key: &AccountPublicKey,
 ) -> Result<Option<SubscriptionId>, PartiesError> {
-    Ok(subscriptions(session, party)?
-        .into_iter()
-        .find(|(member, _)| member == key)
-        .map(|(_, subscription)| subscription))
+    Ok(session.member_subscriptions().get(party, key)?)
 }
 
 /// Sets (or with `None`, forgets) a member's subscription.
@@ -1023,16 +1003,17 @@ pub(crate) fn set_subscription(
     key: AccountPublicKey,
     subscription: Option<SubscriptionId>,
 ) -> Result<(), PartiesError> {
-    let mut entries = subscriptions(session, party)?;
-    entries.retain(|(member, _)| *member != key);
-    if let Some(subscription) = subscription {
-        entries.push((key, subscription));
+    Ok(session
+        .member_subscriptions()
+        .set(party, &key, subscription)?)
+}
+
+/// Stores a Spot; a tombstone also drops the Spot's presence state, so a deleted Spot leaves
+/// nothing about this device's whereabouts behind.
+pub(crate) fn put_spot(session: &Session, spot: &pingers_store::Spot) -> Result<(), PartiesError> {
+    session.spots().put(spot)?;
+    if spot.status == pingers_store::SpotStatus::Deleted {
+        session.presence().clear(&spot.id)?;
     }
-    let mut writer = Writer::new();
-    writer.count(entries.len())?;
-    for (member, subscription) in &entries {
-        writer.key(member);
-        writer.fixed(subscription.as_bytes());
-    }
-    records::write(session, &Key::Subscriptions(party), &writer.finish())
+    Ok(())
 }
