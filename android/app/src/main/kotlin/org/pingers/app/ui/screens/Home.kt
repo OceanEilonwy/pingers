@@ -45,6 +45,8 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.testTag
+import org.pingers.app.ui.E2eTags
 import org.pingers.app.R
 import org.pingers.app.Navigator
 import org.pingers.app.Route
@@ -100,7 +102,7 @@ fun HomeScreen(state: HomeState, repo: PingersRepository, nav: Navigator, simula
                     PartyListRow(p) { repo.openParty(p.id); nav.go(Route.Party) }
                 }
             }
-            PillButton(stringResource(R.string.home_new_party), onClick = { nav.go(Route.NewParty) }, icon = PIcons.Plus)
+            PillButton(stringResource(R.string.home_new_party), onClick = { nav.go(Route.NewParty) }, Modifier.testTag(E2eTags.HOME_NEW_PARTY), icon = PIcons.Plus)
         }
         MainTabs(Route.Home, nav)
     }
@@ -229,7 +231,7 @@ fun AlertBanner(
         }
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AlertButton(stringResource(R.string.alert_open), Pc.Blue, Color.White, onOpen, Modifier.weight(1f))
+            AlertButton(stringResource(R.string.alert_open), Pc.Blue, Color.White, onOpen, Modifier.weight(1f).testTag(E2eTags.ALERT_OPEN))
             AlertButton(stringResource(R.string.alert_hide), Pc.ChipDark, Pc.Ink, onHide, Modifier.weight(1f))
         }
     }
@@ -249,7 +251,7 @@ private fun AlertButton(text: String, bg: Color, fg: Color, onClick: () -> Unit,
 
 @Composable
 private fun PartyListRow(p: PartyRow, onClick: () -> Unit) {
-    ListRow(onClick) {
+    ListRow(onClick, Modifier.testTag(E2eTags.PARTY_ROW)) {
         Box(
             Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(p.colour.color()),
             contentAlignment = Alignment.Center,
