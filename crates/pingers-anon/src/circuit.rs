@@ -4,8 +4,9 @@
 //! The proving key is the one compiled into `rln` 3.1.0 (`resources/tree_depth_20/rln_single`):
 //! `RLN(20, 16)` from circom-rln, 5,820 constraints, five public inputs. Its verifying key is
 //! identical, point for point, to the output of PSE's RLN Trusted Setup Ceremony (rln-20,
-//! 60 contributions and a beacon, finalised 2023-09-04); the test below pins it. The bytes
-//! are embedded in the binary, so nothing is read from the file system.
+//! 60 contributions and a beacon, finalised 2023-09-04); [`ceremony::matches_ceremony`] checks
+//! it, at run time in the prover self-test and in the test below. The bytes are embedded in the
+//! binary, so nothing is read from the file system.
 
 use std::sync::LazyLock;
 
@@ -21,8 +22,14 @@ pub(crate) static BACKEND: LazyLock<ArkGroth16Backend<PoseidonHash>> = LazyLock:
     )
 });
 
-#[cfg(test)]
-mod tests {
+/// Names the parameters the prover uses: a self-test result recorded under another name is
+/// void, so a release that changes them tests the prover again.
+#[cfg(all(feature = "prover", feature = "verifier"))]
+pub const PARAMETERS_ID: &str = "rln-3.1.0/rln-20/pse-ceremony-2023-09-04";
+
+/// The check that the embedded key is the ceremony's, for the self-test and the tests.
+#[cfg(any(all(feature = "prover", feature = "verifier"), test))]
+pub(crate) mod ceremony {
     use rln::circuit::default_zkey_single;
 
     /// `vk_delta_2` of PSE's RLN ceremony output (`rln-20_vkey.json`, sha256
@@ -36,8 +43,16 @@ mod tests {
         "1838524899938769516485895655063198583192139511330418290063560641219523306282",
     ];
 
-    #[test]
-    fn embedded_key_is_the_pse_ceremony_key() {
+    /// Five public inputs plus the constant term.
+    const PUBLIC_INPUT_TERMS: usize = 6;
+
+    /// The circuit's size.
+    const CONSTRAINTS: usize = 5_820;
+
+    /// Whether the embedded key is the PSE ceremony's key for this circuit (design B.4.8, H.1
+    /// blocker 4): delta matches the ceremony's final contribution, with five public inputs and
+    /// the circuit's constraint count.
+    pub(crate) fn matches_ceremony() -> bool {
         let zkey = default_zkey_single();
         let delta = zkey.0.vk.delta_g2;
         let actual = [
@@ -46,8 +61,16 @@ mod tests {
             delta.y.c0.to_string(),
             delta.y.c1.to_string(),
         ];
-        assert_eq!(actual, CEREMONY_DELTA);
-        assert_eq!(zkey.0.vk.gamma_abc_g1.len(), 6, "five public inputs");
-        assert_eq!(zkey.1.num_constraints, 5820);
+        actual == CEREMONY_DELTA
+            && zkey.0.vk.gamma_abc_g1.len() == PUBLIC_INPUT_TERMS
+            && zkey.1.num_constraints == CONSTRAINTS
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn embedded_key_is_the_pse_ceremony_key() {
+        assert!(super::ceremony::matches_ceremony());
     }
 }

@@ -23,6 +23,8 @@ mod issuer;
 mod pp;
 #[cfg(feature = "prover")]
 mod prove;
+#[cfg(all(feature = "prover", feature = "verifier"))]
+mod self_test;
 #[cfg(feature = "prover")]
 mod token;
 #[cfg(any(feature = "prover", feature = "verifier"))]
@@ -30,6 +32,8 @@ mod tree;
 #[cfg(feature = "verifier")]
 mod verify;
 
+#[cfg(all(feature = "prover", feature = "verifier"))]
+pub use circuit::PARAMETERS_ID;
 pub use error::AnonError;
 pub use identity::{
     ExternalNullifier, IdCommitment, LeafValue, MESSAGE_LIMIT, MembershipRoot, MessageId,
@@ -41,6 +45,8 @@ pub use issuer::{IssuerKey, batch_token_count, check_redemption, issue_tokens};
 pub use pp::{TokenCount, token_key_id};
 #[cfg(feature = "prover")]
 pub use prove::{ProofRequest, prove};
+#[cfg(all(feature = "prover", feature = "verifier"))]
+pub use self_test::{SelfTestPlan, SelfTestReport, SelfTestVerdict, prover_self_test};
 #[cfg(feature = "prover")]
 pub use token::{PendingIssuance, PrivacyPassToken, begin_token_issuance};
 #[cfg(any(feature = "prover", feature = "verifier"))]
