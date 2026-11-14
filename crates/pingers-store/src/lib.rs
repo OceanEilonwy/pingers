@@ -83,6 +83,13 @@
 //!   passes them. Queued requests and own positions carry their group, and triggers delete
 //!   them when that Meetup ends or that Party is deleted (a cascade included), so no group
 //!   request outlives its group (style guide §8). None of these tables is in design C.2.
+//! - **pingers-parties' per-Party state** (schema version 5), which it kept as key-value rows
+//!   before: `party_config` and `party_relay` (server, suite, relays in order),
+//!   `roster_epoch` and `roster_entry` (rosters of recent epochs, pruned by the caller with
+//!   [`Rosters::retain_newest`]), `member_subscription` (members' Party group subscription
+//!   ids, for `subscriptions_removed`), `pending_commit` (the in-flight commit as opaque bytes
+//!   pingers-parties encodes) and `profile_waiting`. Every row cascades with its Party. Spot
+//!   tombstones drop their presence row with [`Presence::clear`].
 //! - **Unsigned values past `i64::MAX`** are refused ([`StoreError::OutOfRange`]), never
 //!   wrapped.
 //!
@@ -131,6 +138,10 @@ pub use repo::meetup::{
 pub use repo::party::{
     AlwaysAllow, Identities, Identity, LocationVisibility, Member, Members, Parties, Party,
     Verification,
+};
+pub use repo::party_state::{
+    MemberSubscription, MemberSubscriptions, PartyConfig, PartyConfigs, PartySuite, PendingCommits,
+    ProfilesWaiting, RelayList, Rosters,
 };
 pub use repo::relay::{
     ActiveFallback, FallbackKind, Fallbacks, PushRelay, PushRelays, RelaySource, Settings,
