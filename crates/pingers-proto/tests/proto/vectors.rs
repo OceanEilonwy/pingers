@@ -537,8 +537,11 @@ fn join_request(vector: &Vector) -> Result<JoinRequest, TestError> {
         }),
         None => None,
     };
+    let x_wing = vector.input_bytes("x_wing_key_package")?;
     Ok(JoinRequest {
         key_package: KeyPackageBytes::from_bytes(vector.input_bytes("key_package")?),
+        quantum_resistant_key_package: (!x_wing.is_empty())
+            .then(|| KeyPackageBytes::from_bytes(x_wing)),
         display_name: DisplayName::new(text(vector, "display_name")?)?,
         reply_mailbox: MailboxId::from_bytes(bytes(vector, "reply_mailbox")?),
         party_subscription,

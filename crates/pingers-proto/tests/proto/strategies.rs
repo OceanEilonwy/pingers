@@ -219,14 +219,16 @@ pub(crate) fn invite_payload() -> impl Strategy<Value = InvitePayload> {
 pub(crate) fn join_request() -> impl Strategy<Value = JoinRequest> {
     (
         opaque(),
+        option::of(opaque()),
         text(DisplayName::MAX_BYTES)
             .prop_filter_map("1 to 200 bytes", |name| DisplayName::new(name).ok()),
         bytes16(),
         option::of(subscription()),
     )
         .prop_map(
-            |(key_package, display_name, reply_mailbox, party_subscription)| JoinRequest {
+            |(key_package, x_wing, display_name, reply_mailbox, party_subscription)| JoinRequest {
                 key_package: KeyPackageBytes::from_bytes(key_package),
+                quantum_resistant_key_package: x_wing.map(KeyPackageBytes::from_bytes),
                 display_name,
                 reply_mailbox: MailboxId::from_bytes(reply_mailbox),
                 party_subscription,

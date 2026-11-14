@@ -105,9 +105,11 @@ pooled `Reply` one; with none, `NoPooledMailbox`.
    presence row.
 3. **pingers-crypto**: a labelled safety-number derivation (`safety_number(pk_a, pk_b)`) and
    an `inviter_fingerprint(pk)`.
-4. **A joiner's suite for a quantum-resistant Party.** Flow A keeps the suite out of the link
-   (it says something about the Party), so the joiner cannot know it before the Welcome. Open:
-   send both a classical and an X-Wing key package, or let the inviter ask for an X-Wing one.
+4. **A joiner's suite** (owner decision 2026-11-14): the link keeps the suite out, so a join
+   request carries a classical key package and, where the build can make one, an X-Wing one;
+   the inviter adds the one its Party's suite needs, and a quantum-resistant Party refuses a
+   request without one (`Refusal::NoQuantumResistantKeyPackage`). Until pingers-mls makes
+   X-Wing key packages (v1-parties) the slot is sent empty.
 5. **pingers-mls**: the KeyPackage's signature key (to name an added member before merge),
    and `QuantumResistant` once X-Wing is wired.
 

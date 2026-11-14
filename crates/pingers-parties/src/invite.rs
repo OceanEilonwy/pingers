@@ -106,6 +106,9 @@ pub enum Refusal {
     AlreadyUsed,
     /// The inviter cancelled the invite.
     Revoked,
+    /// The Party is quantum-resistant and the request carries no X-Wing key package (the
+    /// joiner's build cannot make one).
+    NoQuantumResistantKeyPackage,
 }
 
 /// Why a post to an invite mailbox changed nothing.

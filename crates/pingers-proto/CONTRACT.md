@@ -168,7 +168,9 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
   a redacted `Debug`. The `v1.` prefix and base64url are left to pingers-parties, so this crate
   needs no base64 dependency; the CBOR carries its own version.
 - **`JoinRequest`**, the plaintext pingers-crypto's `seal_join_request` seals:
-  `[key package, display name, reply mailbox (16), party subscription or null]`. The
+  `[key package, X-Wing key package or null, display name, reply mailbox (16), party
+  subscription or null]`. The X-Wing slot (owner decision 2026-11-14) lets a joiner serve a
+  quantum-resistant Party without the link naming the suite. The
   subscription is optional since join flow A: a joiner with wake-up pushes off still joins. The AEAD under
   `HKDF(invite_secret, "join")` is what authenticates the joiner's `KeyPackage` under the
   secret; this crate only encodes it. `DisplayName` is 1 to 200 bytes of UTF-8 (the design
@@ -176,9 +178,8 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
 - **`InvitePost`** (join flow A), what is sealed and posted to the invite mailbox: `[0, join
   request]` or `[1, reply mailbox]` (`Withdraw`, the joiner's "Withdraw request").
 - Vectors `invite-payload-encoding`, `join-request-encoding` and `invite-post-encoding`; fuzz
-  targets `invite_payload`, `join_request` and `invite_post`. The proto vectors were edited by
-  hand for this change (the CBOR deltas are a dropped field, `null` and a two-element
-  wrapper); `vectors/proto/generate.py` was not updated (no Python in this repo's tooling).
+  targets `invite_payload`, `join_request` and `invite_post`. The files come from `cargo xtask vectors`
+  (`xtask/src/vectors/proto/invite.rs`).
 
 ### Privacy Pass keys (added 2026-11-13, wave 3 server)
 
