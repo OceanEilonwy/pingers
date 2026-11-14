@@ -47,7 +47,10 @@ pub use geo::{Coordinate, Fence, Fix};
 pub use ids::{
     InviteId, LocationRequestId, MeetupId, MemberId, MessageId, PartyId, SpotId, ZoneId,
 };
-pub use maps::{MapHostSource, MapsWords, maps_words};
+pub use maps::{
+    DownloadedMapsWords, MapHostSource, MapsWords, downloaded_maps_words, downloading_words,
+    maps_words, size_words,
+};
 pub use party_views::{CodeAnswer, PartySettingsView, SafetyCodesView};
 pub use snapshot::{AreaEditor, LocalClock, Snapshot};
 pub use views::*;
