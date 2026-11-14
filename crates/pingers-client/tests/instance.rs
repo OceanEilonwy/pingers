@@ -637,3 +637,52 @@ async fn ask_compare_codes_let_in_then_turn_the_next_one_away() -> Result<(), Te
     assert_eq!(cat.client.snapshot().joining, None);
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_name_reaches_the_other_members_screen() -> Result<(), TestError> {
+    use pingers_client::ports::{Foreground, JoinDecision};
+    use pingers_client::snapshot::Name;
+
+    let config = HarnessConfig::default();
+    let harness = InProcessHarness::start(&config)?;
+    let ana = person(&harness, &config, 6).await?;
+    let ben = person(&harness, &config, 7).await?;
+    let party = climbing_crew(&ana).await?;
+    let link = ana.client.create_invite(party).await?;
+    ben.client.open_invite(link.url, Name::new("Ben")?).await?;
+    ana.client.on_foreground(Foreground::Visible).await?;
+    let request = ana
+        .client
+        .snapshot()
+        .party(party)?
+        .join_requests
+        .first()
+        .ok_or(TestError::Setup("Ben's request"))?
+        .id;
+    ana.client
+        .decide_join(party, request, JoinDecision::Admit)
+        .await?;
+    ben.client.on_wake().await?;
+    let names = |rig: &Rig| -> Result<Vec<String>, TestError> {
+        Ok(rig
+            .client
+            .snapshot()
+            .party(party)?
+            .members
+            .iter()
+            .map(|member| member.name.as_str().to_owned())
+            .collect())
+    };
+    assert_eq!(names(&ben)?, ["Ana", "Ben"]);
+
+    // Ana renames herself: her screen shows it at once, Ben's after his next wake.
+    ana.client.set_display_name(Name::new("Anna")?).await?;
+    assert_eq!(names(&ana)?, ["Anna", "Ben"]);
+    ben.client.on_wake().await?;
+    assert_eq!(names(&ben)?, ["Anna", "Ben"]);
+    // And the other way round.
+    ben.client.set_display_name(Name::new("Benjamin")?).await?;
+    ana.client.on_wake().await?;
+    assert_eq!(names(&ana)?, ["Anna", "Benjamin"]);
+    Ok(())
+}
