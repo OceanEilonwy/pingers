@@ -491,6 +491,32 @@ async fn person(
     Ok(rig)
 }
 
+/// Ana's Party.
+async fn climbing_crew(ana: &Rig) -> Result<pingers_proto::PartyId, TestError> {
+    use pingers_client::ports::PartyDraft;
+    use pingers_client::snapshot::{Name, PartyColour, PostQuantum};
+
+    Ok(ana
+        .client
+        .create_party(PartyDraft {
+            name: Name::new("Climbing crew")?,
+            my_name: Name::new("Ana")?,
+            colour: PartyColour::Teal,
+            post_quantum: PostQuantum::Off,
+        })
+        .await?)
+}
+
+/// Invite mailboxes pooled on `rig`'s device, ready for its next link.
+fn pooled_invites(rig: &Rig, config: &HarnessConfig) -> Result<u32, TestError> {
+    let database = Database::open(&rig.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+    let now = pingers_time::Clock::now(&config.clock);
+    Ok(database
+        .session()?
+        .mailboxes()
+        .pooled_count(pingers_store::MailboxPurpose::Invite, now)?)
+}
+
 fn asked_code(rig: &Rig) -> Option<pingers_client::snapshot::SafetyCode> {
     match rig.client.snapshot().joining.clone() {
         Some(pingers_client::snapshot::Joining::Asked { code, .. }) => Some(code),
@@ -500,24 +526,25 @@ fn asked_code(rig: &Rig) -> Option<pingers_client::snapshot::SafetyCode> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ask_compare_codes_let_in_then_turn_the_next_one_away() -> Result<(), TestError> {
-    use pingers_client::ports::{JoinDecision, PartyDraft};
-    use pingers_client::snapshot::{Joining, Name, PartyColour, PostQuantum};
+    use pingers_client::ports::{Foreground, JoinDecision};
+    use pingers_client::snapshot::{Joining, Name};
     use pingers_testkit::{EventKind, RecordedEvent};
 
     let config = HarnessConfig::default();
     let harness = InProcessHarness::start(&config)?;
+    // Ana has wake-up pushes on: her invites are read when a push names them or when she opens
+    // the app, not on every wake.
     let ana = person(&harness, &config, 3).await?;
+    up_token(&ana);
+    ana.client.set_wake_pushes(WakePushes::On).await?;
     let ben = person(&harness, &config, 4).await?;
-    let party = ana
-        .client
-        .create_party(PartyDraft {
-            name: Name::new("Climbing crew")?,
-            my_name: Name::new("Ana")?,
-            colour: PartyColour::Teal,
-            post_quantum: PostQuantum::Off,
-        })
-        .await?;
+    let party = climbing_crew(&ana).await?;
     let link = ana.client.create_invite(party).await?;
+    let shared_at = link
+        .expires_at
+        .checked_sub(pingers_parties::INVITE_LIFETIME)
+        .ok_or(TestError::Setup("link expiry"))?;
+    config.clock.advance(std::time::Duration::from_secs(600));
 
     // Ben asks to join; his phone shows the code at once, and nothing about the Party.
     ben.client.open_invite(link.url, Name::new("Ben")?).await?;
@@ -525,14 +552,20 @@ async fn ask_compare_codes_let_in_then_turn_the_next_one_away() -> Result<(), Te
     assert_eq!(ben_code.as_str().len(), 14);
     assert!(ben.client.snapshot().parties.is_empty());
 
-    // Ana's next wake reads the request: same code, before anyone is let in.
+    // A scheduled wake does not read Ana's invites (pushes on); opening the app does: same
+    // code, before anyone is let in.
     ana.client.on_wake().await?;
+    assert!(ana.client.snapshot().party(party)?.join_requests.is_empty());
+    ana.client.on_foreground(Foreground::Visible).await?;
     let snapshot = ana.client.snapshot();
     let requests = &snapshot.party(party)?.join_requests;
     assert_eq!(requests.len(), 1);
     let request = requests.first().ok_or(TestError::Setup("Ben's request"))?;
     assert_eq!(request.name.as_str(), "Ben");
     assert_eq!(request.code, ben_code);
+    assert_eq!(request.shared_at, shared_at);
+    // Being in a Party, Ana keeps an invite mailbox pooled for the next link.
+    assert_eq!(pooled_invites(&ana, &config)?, 1);
     assert!(
         ana.events
             .events()
@@ -579,7 +612,7 @@ async fn ask_compare_codes_let_in_then_turn_the_next_one_away() -> Result<(), Te
         .await?;
     let cat_code = asked_code(&cat).ok_or(TestError::Setup("Cat has no code"))?;
     assert_ne!(cat_code, ben_code);
-    ana.client.on_wake().await?;
+    ana.client.on_foreground(Foreground::Visible).await?;
     let snapshot = ana.client.snapshot();
     let request = snapshot
         .party(party)?

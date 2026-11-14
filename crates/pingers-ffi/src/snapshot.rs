@@ -447,6 +447,36 @@ mod tests {
     }
 
     #[test]
+    fn join_screens_carry_their_codes_and_words() -> Result<(), CoreError> {
+        let asked = snapshot()?
+            .asked_to_join()
+            .ok_or_else(|| CoreError::invalid("not asked"))?;
+        assert_eq!(asked.code, "4821 0937 5512");
+        assert_eq!(asked.withdraw, "Withdraw request");
+        assert_eq!(snapshot()?.open_invite().name, "Sam");
+        let request = snapshot()?.join_request(
+            &fixtures::climbing_crew().into(),
+            &fixtures::ben_request().into(),
+            super::LocalClock {
+                now: fixtures::at(19, 30).get(),
+                utc_offset_seconds: 0,
+            },
+        )?;
+        assert_eq!(request.id, fixtures::ben_request().into());
+        assert_eq!(request.let_in, "Codes match · Let Ben in");
+        let let_in_snapshot = fixtures::let_in_snapshot().map_err(|error| CoreError::Invalid {
+            reason: format!("{error:?}"),
+        })?;
+        let let_in = Snapshot::new(std::sync::Arc::new(let_in_snapshot))
+            .let_in()
+            .ok_or_else(|| CoreError::invalid("not let in"))?;
+        assert_eq!(let_in.party, fixtures::climbing_crew().into());
+        assert_eq!(let_in.notification_title, "Ana let you in");
+        assert_eq!(let_in.preview.len(), 3);
+        Ok(())
+    }
+
+    #[test]
     fn home_converts_the_canvas_example() -> Result<(), CoreError> {
         let home = snapshot()?.home();
         assert_eq!(home.sharing.party_count, 3);

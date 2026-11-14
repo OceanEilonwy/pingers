@@ -810,6 +810,48 @@ mod tests {
         }
     }
 
+    /// Records the join events that reach the app.
+    #[derive(Default)]
+    struct JoinEvents(Mutex<Vec<&'static str>>);
+
+    impl Events for JoinEvents {
+        fn parties_changed(&self) {}
+        fn join_requested(&self, _: PartyId) {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push("join_requested");
+        }
+        fn let_in(&self, _: PartyId) {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push("let_in");
+        }
+        fn meetup_started(&self, _: MeetupId) {}
+        fn meetup_updated(&self, _: MeetupId) {}
+        fn meetup_message(&self, _: MeetupId) {}
+        fn peer_location(&self, _: MeetupId, _: MemberId) {}
+        fn location_request(&self, _: MeetupId, _: MemberId, _: LocationRequestId) {}
+        fn location_access_changed(&self, _: MeetupId, _: MemberId) {}
+        fn meetup_ended(&self, _: MeetupId) {}
+        fn notice(&self, _: Notice) {}
+        fn privacy_status_changed(&self) {}
+    }
+
+    #[test]
+    fn join_events_reach_the_app() {
+        let events = Arc::new(JoinEvents::default());
+        let adapter = crate::callbacks::EventsAdapter(events.clone());
+        let party = pingers_proto::PartyId::from_bytes([1; 16]);
+        pingers_client::Events::join_requested(&adapter, party);
+        pingers_client::Events::let_in(&adapter, party);
+        assert_eq!(
+            *events.0.lock().unwrap_or_else(PoisonError::into_inner),
+            ["join_requested", "let_in"]
+        );
+    }
+
     impl Events for App {
         fn parties_changed(&self) {}
         fn join_requested(&self, _: PartyId) {}
@@ -979,6 +1021,13 @@ mod tests {
         assert_eq!(fakes.calls().last(), Some(&CrateCall::WithdrawJoin));
         core.dismiss_join().await?;
         assert_eq!(fakes.calls().last(), Some(&CrateCall::DismissJoin));
+        core.open_invite("https://pingers.test/j#k".into(), "Ben".into())
+            .await?;
+        assert!(matches!(
+            fakes.calls().last(),
+            Some(CrateCall::OpenInvite(link, name))
+                if link.as_str() == "https://pingers.test/j#k" && name.as_str() == "Ben"
+        ));
         core.cancel_invite(party.clone(), invite).await?;
         assert_eq!(
             fakes.calls().last(),
