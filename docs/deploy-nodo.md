@@ -367,6 +367,23 @@ tests, `crates/pingers-e2e`, and the push relay's ntfy script.
    `adb -s emulator-5554 emu geo fix <lon> <lat>`, and expect the knock, the Meetup with a live
    channel both ways, and chat.
 
+`cargo xtask local-stack` does steps 1 to 3 in one command with fresh keys outside the
+repository, and writes step 4's variables to `<dir>/app.env` (see `xtask/src/stack.rs`).
+
+**Parties on two servers.** `cargo xtask local-stack --second-server` also runs a second
+pingers-server ("server B", operator "Second server (local)") with its own keys, databases and
+its own pingers-ohttp-relay, behind the same TLS front and dev CA: the emulator reaches B at
+`https://10.0.2.2:9447` and its relay at `https://10.0.2.2:9448/ohttp` (B listens on
+127.0.0.1:9475, its gateway on :9476, its relay on :9477). B's `/v1/params` lists its own relay,
+and the same push relay and map host as server A; the push relay allows B with a credential of
+its own. B requires a registration code of its own, so "code required" and "code refused" can be
+tried against it; A is unchanged. B's origin, relay, gateway and push relay pins, CA and code are
+in `<dir>/second-server.env`, under `app.env`'s variable names. `--fresh` regenerates B too. To
+check B by hand: `curl --cacert <dir>/ca/ca.pem https://127.0.0.1:9447/v1/params` answers, and
+`curl -s --cacert <dir>/ca/ca.pem https://127.0.0.1:9448/v1/ohttp/config | openssl dgst -sha256
+-binary | basenc --base64url | tr -d =` prints B's served gateway pin, the first of
+`PINGERS_GATEWAY_KEY_PINS` in `second-server.env`.
+
 **Tier 2: the real packages in nodo's x86-kvm VM** (`scripts/dev-vm.sh up` in a nodo checkout
 with N1 and N2): build x86_64 packages, sign a test feed with a throwaway key, copy it into the
 VM as a directory feed, `AddFeed`, then install in dependency order (push relay, server, relay,
