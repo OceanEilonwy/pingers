@@ -3793,12 +3793,12 @@ dependencies = [
 name = "pingers-ohttp-relay"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "hyper",
  "hyper-util",
  "pingers-ohttp",
  "pingers-testkit",
  "serde",
+ "thiserror",
  "tokio",
  "toml 1.2.1+spec-1.1.0",
 ]
@@ -3992,6 +3992,7 @@ dependencies = [
  "pingers-meetup",
  "pingers-meetup-session",
  "pingers-ohttp",
+ "pingers-ohttp-relay",
  "pingers-parties",
  "pingers-presence",
  "pingers-proto",
@@ -4040,17 +4041,16 @@ dependencies = [
  "hyper",
  "hyper-util",
  "pingers-ohttp",
+ "pingers-ohttp-relay",
  "pingers-proto",
  "pingers-testkit",
  "pingers-time",
  "rand_core 0.10.1",
  "rcgen",
  "rustls",
- "serde",
  "thiserror",
  "tokio",
  "tokio-rustls",
- "toml 1.2.1+spec-1.1.0",
  "webpki-roots",
 ]
 
