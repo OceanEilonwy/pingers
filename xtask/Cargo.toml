@@ -19,6 +19,9 @@ pingers-proto = { workspace = true }
 hex = { workspace = true }
 toml = { workspace = true }
 zeroize = { workspace = true }
+# `pins --relay --push`: the key configs from the running services, over HTTPS (already in the
+# tree through pingers-server and pingers-push-relay).
+reqwest = { workspace = true }
 # nodo-dist: the tarball's gzip (deterministic header) and its SHA-256.
 flate2 = { workspace = true }
 sha2 = { workspace = true }

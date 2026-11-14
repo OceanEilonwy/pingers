@@ -16,7 +16,8 @@
 
 use axum::http::StatusCode;
 use pingers_delivery::{
-    CommitOutcome, Delivery, DeliveryError, GroupLifetime, GroupStart, SqliteDeliveryStore, Wake,
+    CommitOutcome, Delivery, DeliveryError, GroupLifetime, GroupStart, Reader, SqliteDeliveryStore,
+    Wake,
 };
 use pingers_ohttp::BinaryRequest;
 use pingers_proto::{
@@ -41,8 +42,12 @@ pub(crate) fn status_of(error: &DeliveryError) -> StatusCode {
     match error {
         DeliveryError::UnknownGroup | DeliveryError::UnknownChannel => StatusCode::NOT_FOUND,
         DeliveryError::GroupExists => StatusCode::CONFLICT,
-        DeliveryError::FutureEpoch { .. } | DeliveryError::SubscriptionTooLong => {
-            StatusCode::UNPROCESSABLE_ENTITY
+        DeliveryError::LaterEpoch => StatusCode::FORBIDDEN,
+        DeliveryError::FutureEpoch { .. }
+        | DeliveryError::SubscriptionTooLong
+        | DeliveryError::TooManySubscriptions => StatusCode::UNPROCESSABLE_ENTITY,
+        DeliveryError::TooManyChannels | DeliveryError::LiveRateLimited => {
+            StatusCode::TOO_MANY_REQUESTS
         }
         DeliveryError::CounterOverflow
         | DeliveryError::TimeOutOfRange
@@ -119,41 +124,36 @@ pub(crate) fn authorise(
     Ok((group, anon))
 }
 
-/// Which epoch's key signed a request that may come from a member behind the head.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Signer {
-    /// The current epoch's key.
-    Current,
-    /// An earlier epoch's: the member has not applied the later commits yet.
-    Behind,
-}
-
 /// As [`authorise`] without the Anon half, accepting earlier epochs' keys too: for log reads
-/// (a member that missed a commit can read it only with the key it still has) and for
+/// (a member that missed a commit can read it only with the key it still has, and reads only
+/// up to the commit that ended that key's epoch: pingers-delivery's [`Reader`]) and for
 /// commits (one made in an epoch that has moved on is answered with the conflict).
 fn authorise_behind(
     shared: &Shared,
     request: &BinaryRequest,
     body: &[u8],
-) -> Result<(GroupId, Signer), Reply> {
+) -> Result<(GroupId, Reader), Reply> {
     let group = group_id(&request.path).ok_or_else(bad_request)?;
-    let mut keys = vec![
-        shared
-            .groups
-            .auth_key(&group)
-            .map_err(|error| refused(&error))?,
-    ];
-    keys.extend(
-        shared
-            .groups
-            .past_auth_keys(&group)
-            .map_err(|error| refused(&error))?,
-    );
-    let signer = match check_signature(shared, request, &keys, body)? {
-        0 => Signer::Current,
-        _ => Signer::Behind,
+    let current = shared
+        .groups
+        .auth_key(&group)
+        .map_err(|error| refused(&error))?;
+    let past = shared
+        .groups
+        .past_auth_keys(&group)
+        .map_err(|error| refused(&error))?;
+    let keys: Vec<_> = core::iter::once(current)
+        .chain(past.iter().map(|past| past.key))
+        .collect();
+    let position = check_signature(shared, request, &keys, body)?;
+    let reader = match position.checked_sub(1) {
+        None => Reader::Current,
+        Some(index) => past
+            .get(index)
+            .map(|past| Reader::Behind(past.epoch))
+            .ok_or_else(|| Reply::status(StatusCode::INTERNAL_SERVER_ERROR))?,
     };
-    Ok((group, signer))
+    Ok((group, reader))
 }
 
 /// Adds the new session, if one was started, to `reply`.
@@ -202,13 +202,13 @@ pub(crate) fn create(shared: &Shared, request: &BinaryRequest) -> Result<Reply, 
 
 /// `POST /v1/groups/{id}/commit`: 200 with the sequence, or 409 with the head epoch.
 pub(crate) fn commit(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
-    let (group, signer) = authorise_behind(shared, request, &request.body)?;
-    if signer == Signer::Behind {
+    let (group, reader) = authorise_behind(shared, request, &request.body)?;
+    if let Reader::Behind(_) = reader {
         // Signed with an earlier epoch's key, so made in an epoch another commit took:
         // nothing is appended and no credential is spent.
         let head_epoch = shared
             .groups
-            .head_epoch(&group)
+            .head_epoch(&group, reader)
             .map_err(|error| refused(&error))?;
         return Ok(encoded(
             StatusCode::CONFLICT,
@@ -222,8 +222,10 @@ pub(crate) fn commit(shared: &Shared, request: &BinaryRequest) -> Result<Reply, 
         body: commit.commit.clone(),
         delivery: Mode::Stored,
     };
+    // Through the pusher, which first waits for any push to a removed subscription.
     let outcome = shared
-        .groups
+        .tasks
+        .pusher()
         .commit(&group, commit, &mut shared.forked_rng())
         .map_err(|error| refused(&error))?;
     let response = outcome.response();
@@ -302,7 +304,7 @@ pub(crate) fn post(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Re
 
 /// `GET /v1/groups/{id}/msgs?after=seq`.
 pub(crate) fn read(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
-    let (group, _signer) = authorise_behind(shared, request, &request.body)?;
+    let (group, reader) = authorise_behind(shared, request, &request.body)?;
     let anon = GroupAnon::Session;
     let after = match query(&request.path, "after") {
         None => SequenceNumber::new(0),
@@ -310,18 +312,18 @@ pub(crate) fn read(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Re
     };
     let messages = shared
         .groups
-        .messages(&group, after)
+        .messages(&group, after, reader)
         .map_err(|error| refused(&error))?;
     Ok(with_session(encoded(StatusCode::OK, &messages), anon))
 }
 
 /// `GET /v1/groups/{id}/state`: 204 when no snapshot was uploaded.
 pub(crate) fn state(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
-    let (group, _signer) = authorise_behind(shared, request, &request.body)?;
+    let (group, reader) = authorise_behind(shared, request, &request.body)?;
     let anon = GroupAnon::Session;
     let reply = match shared
         .groups
-        .state(&group)
+        .state(&group, reader)
         .map_err(|error| refused(&error))?
     {
         Some(state) => encoded(StatusCode::OK, &state),
@@ -333,8 +335,10 @@ pub(crate) fn state(shared: &Shared, request: &BinaryRequest) -> Result<Reply, R
 /// `DELETE /v1/groups/{id}`.
 pub(crate) fn delete(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
     let (group, anon) = authorise(shared, request, &request.body, Anon::NotRequired)?;
+    // Through the pusher, which first waits for every push to the group in flight.
     shared
-        .groups
+        .tasks
+        .pusher()
         .delete_group(&group)
         .map_err(|error| refused(&error))?;
     Ok(with_session(Reply::status(StatusCode::NO_CONTENT), anon))
