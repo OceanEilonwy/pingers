@@ -43,6 +43,16 @@ val extraCaPem: String = providers.gradleProperty("pingersExtraCa")
     }
     .getOrElse("")
 
+// The first owner's registration code for a server that requires one
+// (PINGERS_DEV_REGISTRATION_CODE, or -PpingersDevRegistrationCode): the code nodo generated for
+// the server (docs/deploy-nodo.md).
+// Debug builds only, like the test CA: release builds never read it (see buildTypes). Other
+// devices get the code from the invite link they open.
+val devRegistrationCode: String = providers.gradleProperty("pingersDevRegistrationCode")
+    .orElse(providers.environmentVariable("PINGERS_DEV_REGISTRATION_CODE"))
+    .getOrElse("")
+    .trim()
+
 /** A Kotlin string literal for BuildConfig. */
 fun literal(text: String): String =
     "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "\\n") + "\""
@@ -282,10 +292,13 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             buildConfigField("String", "EXTRA_CA", literal(extraCaPem))
+            buildConfigField("String", "DEV_REGISTRATION_CODE", literal(devRegistrationCode))
         }
         release {
             // Never a test CA in a release, whatever the environment says.
             buildConfigField("String", "EXTRA_CA", "\"\"")
+            // Nor a registration code: a release registers with the code from an invite link.
+            buildConfigField("String", "DEV_REGISTRATION_CODE", "\"\"")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

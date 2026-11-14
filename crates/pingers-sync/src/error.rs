@@ -62,6 +62,18 @@ pub enum SyncError {
     /// or the Privacy Pass stock is empty and proofs are not possible here.
     #[error("no anonymous credential available")]
     NoCredential,
+    /// The server refused this account's registration (403), now or earlier with the code on
+    /// offer. Nothing is retried until another registration code is offered.
+    #[error("the server refused the account registration")]
+    RegistrationRefused,
+    /// The account cannot be made yet: no gateway key config has been verified through the
+    /// relay to record as its server pin.
+    #[error("no verified gateway key to record with the account")]
+    NoGatewayKey,
+    /// The issuer's key list names a key by something other than its own hash, or has no key
+    /// that issues now: no tokens are fetched.
+    #[error("the Privacy Pass issuer key list is not usable")]
+    IssuerKeys,
     /// Making an RLN proof or a Privacy Pass request failed.
     #[error("anonymous credential failed")]
     Anon(#[from] pingers_anon::AnonError),

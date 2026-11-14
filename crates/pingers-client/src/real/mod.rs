@@ -114,7 +114,11 @@ impl Crates {
             }),
             Some(Arc::clone(&platform)),
         );
-        let net = Arc::new(sync::Net::new(Arc::clone(&backend), engine, learned));
+        let online = engine.map(|engine| sync::Online {
+            engine,
+            registration_code: instance.and_then(|instance| instance.registration_code.clone()),
+        });
+        let net = Arc::new(sync::Net::new(Arc::clone(&backend), online, learned));
         let meetups = Arc::new(meetups::Meetups::new(
             Arc::clone(&backend),
             Arc::clone(&net),

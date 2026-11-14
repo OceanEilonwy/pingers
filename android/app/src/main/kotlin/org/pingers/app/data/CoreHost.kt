@@ -119,7 +119,8 @@ object CoreHost {
     /**
      * The instance from the build configuration (see app/build.gradle.kts). Blank pins mean a
      * build without them (the core pins on first use). The test CA is passed in debug builds
-     * only; a release build's EXTRA_CA is always empty as well.
+     * only; a release build's EXTRA_CA is always empty as well. So is the first owner's
+     * registration code (DEV_REGISTRATION_CODE).
      */
     private fun instance() = InstanceConfig(
         server = BuildConfig.SERVER_HOST.trimEnd('/'),
@@ -128,6 +129,8 @@ object CoreHost {
         gatewayKeyPins = BuildConfig.GATEWAY_KEY_PINS.ifBlank { null },
         pushRelayKeyPins = BuildConfig.PUSH_RELAY_KEY_PINS.ifBlank { null },
         extraCaPem = BuildConfig.EXTRA_CA.takeIf { BuildConfig.DEBUG && it.isNotBlank() },
+        registrationCode =
+            BuildConfig.DEV_REGISTRATION_CODE.takeIf { BuildConfig.DEBUG && it.isNotBlank() },
     )
 
     /**

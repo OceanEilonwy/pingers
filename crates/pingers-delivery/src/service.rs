@@ -416,6 +416,25 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         self.store.remove_subscription(group, subscription)
     }
 
+    /// Whether `wake` may still be sent now: its group exists and still holds an unexpired
+    /// subscription with the wake's id and the same sealed push. A wake can wait out its delay
+    /// (and any push to the same subscription still in flight) after it was made, and the
+    /// subscription may since have been deleted, expired, replaced or answered `410 Gone`; the
+    /// server asks this right before sending, so none of those is pushed again.
+    ///
+    /// # Errors
+    ///
+    /// Storage errors. A deleted group is not an error: its wakes are simply no longer due.
+    pub fn still_subscribed(&self, group: &GroupId, wake: &Wake) -> Result<bool, DeliveryError> {
+        match self.store.live_subscriptions(group, self.clock.now()) {
+            Ok(live) => Ok(live.iter().any(|stored| {
+                stored.subscription.id == wake.subscription && stored.subscription.push == wake.push
+            })),
+            Err(DeliveryError::UnknownGroup) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     /// `DELETE /v1/groups/{id}`: deletes the log, snapshot and subscriptions, and closes the
     /// group's live channels.
     ///

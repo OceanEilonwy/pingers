@@ -193,6 +193,27 @@ impl Snapshot {
         self.0.map_host.as_ref().map(|url| url.as_str().to_owned())
     }
 
+    /// Who the user's Pingers server declares to run it (`server_operator` in `/v1/params`),
+    /// once a reachability check has read the parameters: New party's server check.
+    #[must_use]
+    pub fn server_operator(&self) -> Option<String> {
+        self.0
+            .operators
+            .as_ref()
+            .map(|operators| operators.server.as_str().to_owned())
+    }
+
+    /// Who the server says runs the instance's push relay, once read: New party's push relay
+    /// operator.
+    #[must_use]
+    pub fn push_relay_operator(&self) -> Option<String> {
+        self.0
+            .operators
+            .as_ref()
+            .and_then(|operators| operators.push_relay.as_ref())
+            .map(|operator| operator.as_str().to_owned())
+    }
+
     /// The live Meetups, newest last.
     #[must_use]
     pub fn meetups(&self) -> Vec<MeetupId> {

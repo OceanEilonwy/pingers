@@ -50,7 +50,7 @@ pub use invite::{
 };
 pub use joining::{
     Admission, ArrivedWelcome, AskedJoin, CreatedInvite, JoinDetails, JoinRequestOutcome, Joined,
-    JoinedVia, PreparedJoin, WelcomeAccess,
+    JoinedVia, NewInvite, PreparedJoin, WelcomeAccess,
 };
 pub use lifecycle::{CommitApplied, CreatedParty, Incoming, NewParty, PartyLifecycle};
 pub use link::InviteLink;

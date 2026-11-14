@@ -176,6 +176,28 @@ fn keys_and_databases_are_never_on_the_disk_in_clear() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn the_registration_code_generates_itself_and_passes_its_own_check() -> TestResult {
+    let server = settings("pingers-server")?;
+    let setting = server
+        .schema()
+        .settings
+        .iter()
+        .find(|setting| setting.name == "registration_code")
+        .ok_or("no registration_code setting")?;
+    assert!(matches!(setting.ty, nodo_settings::SettingType::Secret));
+    let generate = setting
+        .generate
+        .ok_or("the registration code is not generated on install")?;
+    let code = generate.encode(&vec![0xa5; generate.byte_len()])?;
+    assert!(
+        server
+            .validate_value("registration_code", &Value::Secret(code))
+            .is_ok()
+    );
+    Ok(())
+}
+
 fn text(value: &str) -> SettingValue {
     SettingValue::Literal(Value::String(value.to_owned()))
 }
@@ -221,6 +243,10 @@ fn example_values() -> TestResult<BTreeMap<&'static str, BTreeMap<String, Settin
         ),
         ("ohttp_key_a".to_owned(), secret(&hex('1'))),
         ("ohttp_key_b".to_owned(), secret(&hex('2'))),
+        (
+            "registration_code".to_owned(),
+            secret("0123456789abcdef0123456789abcdef"),
+        ),
     ]);
     let push = BTreeMap::from([
         ("operator".to_owned(), text("Example operator")),
@@ -411,6 +437,18 @@ fn validators_accept_the_examples_and_refuse_near_misses() -> TestResult {
             .is_err(),
         "uppercase hex"
     );
+    for bad in [
+        "0123456789abcde",
+        "0123456789abcdef 0123",
+        "code/with/slashes0123",
+    ] {
+        assert!(
+            server
+                .validate_value("registration_code", &Value::Secret(SecretString::new(bad)))
+                .is_err(),
+            "{bad}"
+        );
+    }
     let maps = settings("pingers-map-host")?;
     for (setting, bad) in [
         ("hosted", "oceania/australia,europe"),
@@ -463,6 +501,8 @@ fn the_services_accept_the_rendered_and_dev_configs() -> TestResult {
             "{what}"
         );
         assert_eq!(config.ohttp_keys.configs().len(), 2, "{what}");
+        // Signups need the operator's code: the packaged server is never open to anyone.
+        assert_eq!(config.registration_codes.len(), 1, "{what}");
         assert!(
             config
                 .advertised_push_relays

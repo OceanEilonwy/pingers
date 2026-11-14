@@ -184,6 +184,7 @@ mod tests {
             invite_secret: SecretBytes::new([4; 32]),
             inviter_fingerprint: InviterFingerprint::from_bytes([5; 8]),
             expires: UnixSeconds::new(1_000_000),
+            registration_code: None,
         })
     }
 

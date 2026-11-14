@@ -21,6 +21,7 @@ use pingers_crypto::{
     PushTokenToSeal, RevokeKey, mailbox_id, push_bind_for_subscription, revoke_commitment,
     seal_push_token, sign_auth_challenge, sign_group_request, sign_registration,
 };
+use pingers_delivery::MAX_QUIET_DELAY;
 use pingers_ohttp::{BinaryRequest, BinaryResponse, Header, KeyConfig, encapsulate_request};
 use pingers_proto::{
     AppMessage, AuthRequest, AuthResponse, BoardSyncRequest, BoardSyncResponse, CommitRequest,
@@ -333,7 +334,8 @@ fn subscription(
     })
 }
 
-/// Waits (in real time, briefly) until `ready` holds for the harness's captured pushes.
+/// Waits until `ready` holds for the harness's captured pushes, which arrive on the harness's
+/// own thread; `patience` only bounds a hang, nothing waits for time to pass.
 async fn until(
     harness: &InProcessHarness,
     patience: Duration,
@@ -518,35 +520,26 @@ async fn a_device_registers_proves_commits_and_is_woken() -> TestResult {
         }
     );
 
-    // The winning commit wakes both subscriptions quietly, each after a delay of at most
-    // 30 s: nothing reaches the relay until the clock moves.
+    // The winning commit wakes both subscriptions quietly, each after its own delay of at most
+    // 30 s on the injected timer: once the clock has moved 30 s, both reach the relay.
     let woken_by = |token: &PushToken| -> Option<CapturedPush> {
         harness
             .pushes()
             .into_iter()
             .find(|push| push.token == *token)
     };
-    for _ in 0..=30 {
-        if woken_by(&first_token).is_some() && woken_by(&second_token).is_some() {
-            break;
-        }
-        clock.advance(Duration::from_secs(1));
-        // Let any push that is now due go out before looking again.
-        let _ = until(&harness, Duration::from_millis(300), |harness| {
-            harness.pushes().len() >= 2
-        })
-        .await;
-    }
+    clock.advance(MAX_QUIET_DELAY);
+    until(&harness, STEP, |harness| harness.pushes().len() == 2).await?;
     for token in [&first_token, &second_token] {
         let push = woken_by(token).ok_or("a member was not woken")?;
         assert_eq!(push.class, PushClass::Standard);
         let delay = push.sent_at.saturating_duration_since(committed_at);
-        assert!(delay <= Duration::from_secs(30), "{delay:?}");
+        assert!(delay <= MAX_QUIET_DELAY, "{delay:?}");
     }
 
     // The first member's token is now gone at the push service. An alert wakes both again:
     // the relay answers 410 for the first, and the server deletes that subscription, so the
-    // next alert reaches only the second member and the relay never sees the first again.
+    // next alerts reach only the second member and the relay never sees the first again.
     harness.mark_token_gone(first_token.clone());
     let next_key = LogAuthKeyPair::from_bytes(Zeroizing::new([winner; 32]));
     let alert = |fill: u8| -> Result<BinaryRequest, TestError> {
@@ -572,25 +565,22 @@ async fn a_device_registers_proves_commits_and_is_woken() -> TestResult {
         harness.gone_pushes().len() == 1 && harness.pushes().len() == before.saturating_add(1)
     })
     .await?;
-    // The deletion follows the relay's answer; one more alert may still race it, so two
-    // more are sent and the relay must hear nothing for the first member on the last.
-    let mut gone_counts = Vec::new();
+    // The next alert goes out as soon as the relay has answered 410, so the server may not
+    // have deleted the subscription yet when it makes the alert's wakes. A wake for the first
+    // member then waits for that subscription's turn, which the 410'd push holds until the
+    // delete is done, and finds it gone: the relay hears from the first member exactly once.
     for (round, fill) in [(2_usize, 2_u8), (3, 3)] {
         assert_eq!(device.oblivious(&alert(fill)?).await?.status.get(), 200);
         until(&harness, STEP, |harness| {
             harness.pushes().len() == before.saturating_add(round)
         })
         .await?;
-        gone_counts.push(harness.gone_pushes().len());
+        assert_eq!(
+            harness.gone_pushes().len(),
+            1,
+            "the deleted subscription was pushed again"
+        );
     }
-    let [after_second, after_third] = gone_counts.as_slice() else {
-        return Err("two rounds".into());
-    };
-    assert!(*after_second <= 2);
-    assert_eq!(
-        after_second, after_third,
-        "the deleted subscription was pushed again"
-    );
     assert!(
         harness
             .gone_pushes()

@@ -142,6 +142,7 @@ fn structs_holding_secrets_compare_every_field() -> Result<(), ProtoError> {
         invite_secret: SecretBytes::new([2; 32]),
         inviter_fingerprint: InviterFingerprint::from_bytes([3; 8]),
         expires: UnixSeconds::new(4),
+        registration_code: Some(SecretText::new(String::from("code"))),
     };
     assert_eq!(invite, invite.clone());
     let variants = [
@@ -163,6 +164,14 @@ fn structs_holding_secrets_compare_every_field() -> Result<(), ProtoError> {
         },
         InvitePayload {
             expires: UnixSeconds::new(9),
+            ..invite.clone()
+        },
+        InvitePayload {
+            registration_code: Some(SecretText::new(String::from("codf"))),
+            ..invite.clone()
+        },
+        InvitePayload {
+            registration_code: None,
             ..invite.clone()
         },
     ];

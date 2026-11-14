@@ -15,8 +15,8 @@ use pingers_crypto::{
 use pingers_mls::{CipherSuitePolicy, KeyPackagePurpose, MlsContext};
 use pingers_proto::{
     DisplayName, GroupId, InvitePayload, InvitePost, JoinRequest, KeyPackageBytes, LeafIndex,
-    MailboxId, Padded, PartyId, SealedSnapshot, SecretBytes, SequenceNumber, Subscription,
-    SubscriptionId, WelcomeBytes, WireDecode as _, WireEncode as _,
+    MailboxId, Padded, PartyId, SealedSnapshot, SecretBytes, SecretText, SequenceNumber,
+    Subscription, SubscriptionId, WelcomeBytes, WireDecode as _, WireEncode as _,
 };
 use pingers_store::{MailboxPurpose, Member, MemberName, Party, Session, Verification};
 use pingers_time::UnixSeconds;
@@ -37,6 +37,13 @@ use crate::{
     OutgoingCommit, PartiesError, PartyLifecycle, PendingJoin, PostQuantum, Refusal, RelayChoice,
     inviter_fingerprint,
 };
+
+/// What an invite is made with.
+pub struct NewInvite {
+    /// The operator's registration code this device registered with, passed on in the link
+    /// (pingers-sync's `shared_registration_code`); `None` for a server without codes.
+    pub registration_code: Option<SecretText>,
+}
 
 /// A new invite.
 pub struct CreatedInvite {
@@ -147,6 +154,9 @@ impl PartyLifecycle<'_> {
     /// accepts join requests for 24 hours, or until the mailbox expires if that is sooner,
     /// and stops once someone is let in.
     ///
+    /// A registration code in `invite` goes into the link (design B.1), so the joiner's first
+    /// registration on this server works without typing one.
+    ///
     /// # Errors
     ///
     /// [`PartiesError::NoPooledMailbox`] if pingers-sync has to register an invite mailbox
@@ -155,8 +165,10 @@ impl PartyLifecycle<'_> {
     pub fn create_invite(
         &self,
         party: &PartyId,
+        invite: NewInvite,
         rng: &mut impl CryptoRng,
     ) -> Result<CreatedInvite, PartiesError> {
+        let NewInvite { registration_code } = invite;
         let now = self.clock.now();
         self.session.transaction(|session| {
             party_row(session, party)?;
@@ -188,6 +200,7 @@ impl PartyLifecycle<'_> {
                 invite_secret: SecretBytes::new(*secret.expose_bytes()),
                 inviter_fingerprint: inviter_fingerprint(&identity.signing_key.public_key()),
                 expires,
+                registration_code,
             })?;
             Ok(CreatedInvite {
                 invite: InviteId::for_mailbox(id),

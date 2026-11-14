@@ -180,6 +180,16 @@ impl PartialEq for Operator {
 
 impl Eq for Operator {}
 
+/// Who the server and the instance's push relay declare to run them (`server_operator`, and the
+/// listed push relay's `operator` in `/v1/params`), for New party's operator checks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerOperators {
+    /// The server's operator.
+    pub server: Operator,
+    /// The push relay's operator, if the server lists the instance's push relay.
+    pub push_relay: Option<Operator>,
+}
+
 /// Everything the screens read, at one moment.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClientSnapshot {
@@ -214,6 +224,8 @@ pub struct ClientSnapshot {
     /// The map host the server advertises (`map_host` in `/v1/params`), for the app's map
     /// host chain: after the user's override, before the publisher's default.
     pub map_host: Option<pingers_proto::MapHostUrl>,
+    /// Who runs the server and its push relay, once `/v1/params` has been read this process.
+    pub operators: Option<ServerOperators>,
 }
 
 /// Device-wide settings (design C.2 `settings`).
@@ -958,6 +970,7 @@ mod tests {
             fallbacks: Vec::new(),
             relay: RelayStatus::Reachable,
             map_host: None,
+            operators: None,
         })
     }
 

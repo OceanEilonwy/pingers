@@ -104,3 +104,38 @@ pub(super) async fn serve(
     }
     connections.shutdown().await;
 }
+
+/// Terminates TLS on `listener` and forwards each connection's bytes to `target` (a plain
+/// HTTP/2 listener) until `shutdown` completes: the server's TLS front.
+pub(super) async fn forward(
+    listener: TcpListener,
+    acceptor: TlsAcceptor,
+    target: std::net::SocketAddr,
+    shutdown: impl Future<Output = ()>,
+) {
+    let mut connections = JoinSet::new();
+    let mut shutdown = std::pin::pin!(shutdown);
+    loop {
+        tokio::select! {
+            () = &mut shutdown => break,
+            accepted = listener.accept() => {
+                let Ok((stream, _peer)) = accepted else {
+                    continue;
+                };
+                let acceptor = acceptor.clone();
+                connections.spawn(async move {
+                    // A failed handshake or connection affects only that connection.
+                    let Ok(mut client) = acceptor.accept(stream).await else {
+                        return;
+                    };
+                    let Ok(mut upstream) = tokio::net::TcpStream::connect(target).await else {
+                        return;
+                    };
+                    let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+                });
+            }
+            Some(_) = connections.join_next(), if !connections.is_empty() => {}
+        }
+    }
+    connections.shutdown().await;
+}

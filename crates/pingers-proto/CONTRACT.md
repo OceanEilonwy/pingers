@@ -160,9 +160,11 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
 
 - **`InvitePayload`**, the link fragment (`https://<host>/j#v1.<base64url(encoding)>`):
   `[server (ServerId text), invite mailbox (16), invite secret (32, SecretBytes), inviter
-  fingerprint (8), expires (UnixSeconds)]`. Join flow A (2026-11-14) removed the design's
-  `single_use` (and `InviteUses`): every invite waits for the inviter and stops working once
-  one joiner is let in, and nothing about the Party is in the link. `InviterFingerprint` is an 8-byte newtype with
+  fingerprint (8), expires (UnixSeconds)]`, plus a sixth element, the operator's registration
+  code (`Option<SecretText>`, never empty), only when present (r-accounts). Join flow A
+  (2026-11-14) removed the design's `single_use` (and `InviteUses`): every invite waits for
+  the inviter and stops working once one joiner is let in, and nothing about the Party is in
+  the link. `InviterFingerprint` is an 8-byte newtype with
   a redacted `Debug`. The `v1.` prefix and base64url are left to pingers-parties, so this crate
   needs no base64 dependency; the CBOR carries its own version.
 - **`JoinRequest`**, the plaintext pingers-crypto's `seal_join_request` seals:

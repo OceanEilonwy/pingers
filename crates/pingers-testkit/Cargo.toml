@@ -69,7 +69,7 @@ hyper-util = { workspace = true, optional = true, features = ["server", "service
 rcgen = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 tokio-rustls = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["net"], optional = true }
+tokio = { workspace = true, features = ["net", "io-util"], optional = true }
 async-trait = { workspace = true, optional = true }
 hex = { workspace = true }
 rand_chacha = { workspace = true }

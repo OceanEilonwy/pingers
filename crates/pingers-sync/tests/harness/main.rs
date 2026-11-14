@@ -2,6 +2,7 @@
 //! pingers-sync against the in-process harness: the real server, OHTTP relay and push relay.
 #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
+mod account;
 mod board;
 mod budget;
 mod group;

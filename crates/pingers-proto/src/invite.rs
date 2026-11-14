@@ -14,7 +14,10 @@ use pingers_time::UnixSeconds;
 use crate::cbor::{self, CborBody, Writer, versioned_cbor};
 use subtle::ConstantTimeEq as _;
 
-use crate::{KeyPackageBytes, MailboxId, ProtoError, SecretBytes, ServerId, Subscription};
+use crate::secret::option_ct_eq;
+use crate::{
+    KeyPackageBytes, MailboxId, ProtoError, SecretBytes, SecretText, ServerId, Subscription,
+};
 
 /// The first 8 bytes of the inviter's MLS leaf signature key hash: the joiner checks that the
 /// group in the Welcome contains a leaf that matches (design D). `Debug` does not print it.
@@ -64,6 +67,10 @@ pub struct InvitePayload {
     pub inviter_fingerprint: InviterFingerprint,
     /// After this the link is refused.
     pub expires: UnixSeconds,
+    /// The operator's registration code (design B.1), passed on by an inviter who registered
+    /// with one, so the joiner's first `POST /v1/accounts` on that server needs no typing.
+    /// Like the link itself it is a bearer capability. Never empty.
+    pub registration_code: Option<SecretText>,
 }
 
 impl PartialEq for InvitePayload {
@@ -73,33 +80,62 @@ impl PartialEq for InvitePayload {
             && bool::from(self.invite_secret.ct_eq(&other.invite_secret))
             && self.inviter_fingerprint == other.inviter_fingerprint
             && self.expires == other.expires
+            && option_ct_eq(
+                self.registration_code.as_ref(),
+                other.registration_code.as_ref(),
+            )
     }
 }
 
 impl Eq for InvitePayload {}
 
 /// Layout: `[server (text), invite mailbox (16 bytes), invite secret (32 bytes), inviter
-/// fingerprint (8 bytes), expires (seconds)]`.
+/// fingerprint (8 bytes), expires (seconds), registration code (text, only when present)]`.
+/// Without a code the array has five elements.
 impl CborBody for InvitePayload {
     fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
-        writer.array(5)?;
+        let code = registration_code(self.registration_code.as_ref())?;
+        writer.array(if code.is_some() { 6 } else { 5 })?;
         writer.text(self.server.as_str())?;
         writer.bytes(self.invite_mailbox.as_bytes())?;
         writer.bytes(self.invite_secret.expose())?;
         writer.bytes(self.inviter_fingerprint.as_bytes())?;
         writer.unsigned(self.expires.get());
+        if let Some(code) = code {
+            writer.text(code)?;
+        }
         Ok(())
     }
 
     fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
-        cbor::array_of(decoder, 5)?;
+        let elements = cbor::array(decoder)?;
+        if elements != 6 {
+            cbor::expect_length(elements, 5)?;
+        }
         Ok(Self {
             server: ServerId::new(decoder.str()?.to_owned())?,
             invite_mailbox: MailboxId::from_bytes(cbor::fixed_bytes(decoder)?),
             invite_secret: SecretBytes::new(cbor::fixed_bytes(decoder)?),
             inviter_fingerprint: InviterFingerprint::from_bytes(cbor::fixed_bytes(decoder)?),
             expires: UnixSeconds::new(decoder.u64()?),
+            registration_code: if elements == 6 {
+                let code = SecretText::new(decoder.str()?.to_owned());
+                registration_code(Some(&code))?;
+                Some(code)
+            } else {
+                None
+            },
         })
+    }
+}
+
+/// The code's text if there is one; an empty code is refused (it would mean "no code").
+fn registration_code(code: Option<&SecretText>) -> Result<Option<&str>, ProtoError> {
+    match code.map(SecretText::expose) {
+        Some("") => Err(ProtoError::OutOfRange {
+            field: "registration code",
+        }),
+        other => Ok(other),
     }
 }
 

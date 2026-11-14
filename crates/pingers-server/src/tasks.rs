@@ -3,17 +3,18 @@
 //! §10): push jobs from mailbox and group wakes, live channel readers, and the periodic
 //! sweeps (expiry, the hourly membership root, the daily issuer key rotation).
 
+use std::collections::HashMap;
 use std::future::Future;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
-use pingers_delivery::Wake;
+use pingers_delivery::{DeliveryError, Wake};
 use pingers_mailbox::{
     ListedRelays, PUSH_CONTENT_TYPE, PUSH_PATH, PushJob, PushRelay, PushRequest, RelayAnswer,
     RelayDirectory as _, RelayTarget, RelayUnreachable, forward,
 };
 use pingers_proto::{
-    GroupId, PushRelayConfig, RelayId, RelayRef, WireDecode as _, WireEncode as _,
+    GroupId, PushRelayConfig, RelayId, RelayRef, SubscriptionId, WireDecode as _, WireEncode as _,
 };
 use pingers_time::Timer;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -148,12 +149,162 @@ pub(crate) struct TaskParts {
     pub(crate) directory: ListedRelays,
 }
 
+/// A subscription's turn, held until dropped.
+type Turn = tokio::sync::OwnedMutexGuard<()>;
+
+/// One subscription, as the key of its turn.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct SubscriptionKey {
+    group: GroupId,
+    subscription: SubscriptionId,
+}
+
+/// A turn per subscription, taken to send a push to it or to delete it. Pushes to different
+/// subscriptions run side by side; for one subscription, a delete waits for the push in
+/// flight, and a push that waited sees the delete (or the `410 Gone` the push before it got).
+#[derive(Default)]
+struct SubscriptionTurns {
+    /// Only subscriptions with a push or a delete under way are listed: the entry lives as
+    /// long as someone holds or waits for the turn.
+    turns: Mutex<HashMap<SubscriptionKey, Weak<tokio::sync::Mutex<()>>>>,
+}
+
+impl SubscriptionTurns {
+    /// Waits for and takes the turn of `subscription` in `group`; it is given up on drop.
+    async fn take(&self, group: GroupId, subscription: SubscriptionId) -> Turn {
+        self.of(group, subscription).lock_owned().await
+    }
+
+    /// As [`Self::take`], blocking the thread: only for the blocking pool.
+    fn take_blocking(&self, group: GroupId, subscription: SubscriptionId) -> Turn {
+        self.of(group, subscription).blocking_lock_owned()
+    }
+
+    /// The turn of `subscription` in `group`, shared with whoever holds or awaits it now.
+    fn of(&self, group: GroupId, subscription: SubscriptionId) -> Arc<tokio::sync::Mutex<()>> {
+        let mut turns = self.turns.lock().unwrap_or_else(PoisonError::into_inner);
+        turns.retain(|_, turn| turn.strong_count() > 0);
+        let key = SubscriptionKey {
+            group,
+            subscription,
+        };
+        if let Some(turn) = turns.get(&key).and_then(Weak::upgrade) {
+            return turn;
+        }
+        let turn = Arc::new(tokio::sync::Mutex::new(()));
+        turns.insert(key, Arc::downgrade(&turn));
+        turn
+    }
+
+    /// How many hold or await the turn of `subscription` in `group` now.
+    #[cfg(test)]
+    fn waiting(&self, group: GroupId, subscription: SubscriptionId) -> usize {
+        self.turns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&SubscriptionKey {
+                group,
+                subscription,
+            })
+            .map_or(0, Weak::strong_count)
+    }
+}
+
+/// What became of one group wake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WakeOutcome {
+    /// The relay was asked; this is its answer. On `Gone` the subscription has been deleted.
+    Sent(Result<RelayAnswer, RelayUnreachable>),
+    /// The subscription was deleted, replaced or expired, or its group deleted, after the wake
+    /// was made: nothing was sent.
+    NotSubscribed,
+    /// Whether the subscription still stands could not be read: nothing was sent.
+    Unchecked,
+}
+
+/// Sends group wakes and deletes subscriptions, one turn at a time per subscription, so that
+/// a subscription is never pushed after its delete is acknowledged or after the relay
+/// answered `410 Gone` for it.
+#[derive(Clone)]
+pub(crate) struct GroupPusher {
+    relay: Arc<HttpPushRelay>,
+    groups: Arc<GroupService>,
+    turns: Arc<SubscriptionTurns>,
+}
+
+impl GroupPusher {
+    pub(crate) fn new(relay: Arc<HttpPushRelay>, groups: Arc<GroupService>) -> Self {
+        Self {
+            relay,
+            groups,
+            turns: Arc::new(SubscriptionTurns::default()),
+        }
+    }
+
+    /// Sends `wake` to `target` now, if its subscription still stands when its turn comes;
+    /// on `410 Gone` deletes the subscription before giving up the turn.
+    pub(crate) async fn send(
+        &self,
+        group: GroupId,
+        wake: Wake,
+        target: &RelayTarget,
+    ) -> WakeOutcome {
+        let subscription = wake.subscription;
+        let request = PushRequest {
+            key_id: wake.push.key_id,
+            blob: wake.push.blob,
+            bind: wake.bind,
+            urgency: wake.urgency,
+            handle: wake.push.handle,
+        };
+        let _turn = self.turns.take(group, subscription).await;
+        let groups = Arc::clone(&self.groups);
+        match tokio::task::spawn_blocking(move || groups.still_subscribed(&group, &wake)).await {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => return WakeOutcome::NotSubscribed,
+            Ok(Err(_)) | Err(_) => return WakeOutcome::Unchecked,
+        }
+        let answer = self.relay.push(target, &request).await;
+        if let Ok(RelayAnswer::Gone) = answer {
+            // A failure here leaves the subscription for the next 410 or its expiry.
+            let groups = Arc::clone(&self.groups);
+            let _ = tokio::task::spawn_blocking(move || {
+                groups.remove_subscription(&group, &subscription)
+            })
+            .await;
+        }
+        WakeOutcome::Sent(answer)
+    }
+
+    /// `DELETE /v1/groups/{id}/subs/{sub_id}`: deletes the subscription once no push to it is
+    /// in flight, so none reaches the relay after this returns. Blocks (on that push and on
+    /// SQLite): call it from the blocking pool, never from async code.
+    ///
+    /// # Errors
+    ///
+    /// As [`pingers_delivery::Delivery::remove_subscription`].
+    pub(crate) fn remove_subscription(
+        &self,
+        group: &GroupId,
+        subscription: &SubscriptionId,
+    ) -> Result<(), DeliveryError> {
+        let _turn = self.turns.take_blocking(*group, *subscription);
+        self.groups.remove_subscription(group, subscription)
+    }
+
+    /// How many sends and deletes hold or await the turn of `subscription` in `group`.
+    #[cfg(test)]
+    pub(crate) fn waiting(&self, group: GroupId, subscription: SubscriptionId) -> usize {
+        self.turns.waiting(group, subscription)
+    }
+}
+
 /// Owns the background tasks.
 pub(crate) struct Tasks {
     relay: Arc<HttpPushRelay>,
     timer: Arc<dyn Timer>,
     mailboxes: Arc<Mutex<MailboxService>>,
-    groups: Arc<GroupService>,
+    pusher: GroupPusher,
     directory: ListedRelays,
     running: Mutex<JoinSet<()>>,
 }
@@ -167,14 +318,20 @@ impl Tasks {
             groups,
             directory,
         } = parts;
+        let relay = Arc::new(relay);
         Self {
-            relay: Arc::new(relay),
+            pusher: GroupPusher::new(Arc::clone(&relay), groups),
+            relay,
             timer,
             mailboxes,
-            groups,
             directory,
             running: Mutex::new(JoinSet::new()),
         }
+    }
+
+    /// Group wakes and subscription deletes, in turn per subscription.
+    pub(crate) const fn pusher(&self) -> &GroupPusher {
+        &self.pusher
     }
 
     /// Runs `task` until it ends or the server shuts down.
@@ -196,36 +353,21 @@ impl Tasks {
         });
     }
 
-    /// Sends a group wake to its relay after its delay (pingers-delivery's wake rule); a 410
-    /// deletes the subscription. A relay this server has no entry for is skipped, and nothing
-    /// is retried (design B.4.9).
+    /// Sends a group wake to its relay after its delay (pingers-delivery's wake rule), unless
+    /// its subscription has gone in the meantime; a 410 deletes the subscription. A relay this
+    /// server has no entry for is skipped, and nothing is retried (design B.4.9).
     pub(crate) fn wake(&self, group: GroupId, wake: &Wake) {
         let Some(target) = self.directory.resolve(&wake.push.relay) else {
             return;
         };
-        let request = PushRequest {
-            key_id: wake.push.key_id,
-            blob: wake.push.blob,
-            bind: wake.bind,
-            urgency: wake.urgency,
-            handle: wake.push.handle,
-        };
-        let relay = Arc::clone(&self.relay);
+        let pusher = self.pusher.clone();
         let timer = Arc::clone(&self.timer);
-        let groups = Arc::clone(&self.groups);
-        let subscription = wake.subscription;
-        let delay = wake.delay;
+        let wake = wake.clone();
         self.spawn(async move {
-            if !delay.is_zero() {
-                timer.sleep(delay).await;
+            if !wake.delay.is_zero() {
+                timer.sleep(wake.delay).await;
             }
-            if let Ok(RelayAnswer::Gone) = relay.push(&target, &request).await {
-                // A failure here leaves the blob for the next 410 or its expiry.
-                let _ = tokio::task::spawn_blocking(move || {
-                    groups.remove_subscription(&group, &subscription)
-                })
-                .await;
-            }
+            let _ = pusher.send(group, wake, &target).await;
         });
     }
 

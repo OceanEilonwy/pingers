@@ -35,8 +35,9 @@ use pingers_sync::{
 use pingers_testkit::{HarnessConfig, InProcessHarness, TestRng, seeded_rng, send_direct};
 use pingers_time::{Clock as _, ManualClock};
 use pingers_transport::{
-    DuplexStream, KeyPin, OhttpConfig, OhttpTransport, PrivacyClass, Relay, Router, Routes,
-    TlsRoots, Transport, TransportError, TransportKind,
+    DirectConfig, DirectTransport, DuplexStream, KeyPin, OhttpConfig, OhttpTransport, PrivacyClass,
+    Relay, Router, Routes, TlsRoots, Transport, TransportError, TransportKind,
+    certificates_from_pem,
 };
 use zeroize::Zeroizing;
 
@@ -369,8 +370,61 @@ impl Transport for Link {
         self.relay.check_gateway_key().await
     }
 
+    fn gateway_key_hash(&self) -> Option<pingers_proto::KeyConfigHash> {
+        self.relay.key_config_hash()
+    }
+
     fn kind(&self) -> TransportKind {
         TransportKind::Ohttp
+    }
+}
+
+/// A device's own identified route: the real direct transport over HTTPS to the harness
+/// server's TLS front, trusting only the test CA. Records each path it carried.
+pub(crate) struct Direct {
+    direct: DirectTransport,
+    seen: Mutex<Vec<String>>,
+}
+
+impl Direct {
+    fn new(world: &World) -> Result<Self, TestError> {
+        let endpoints = world.harness.endpoints();
+        let roots = TlsRoots::from_der(&certificates_from_pem(&endpoints.push_relay_ca)?)?;
+        Ok(Self {
+            direct: DirectTransport::new(
+                &DirectConfig::new(endpoints.server_id.clone(), roots),
+                Arc::new(world.clock.clone()),
+            )?,
+            seen: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// The paths sent so far, oldest first, and forgets them.
+    pub(crate) fn take_seen(&self) -> Vec<String> {
+        std::mem::take(&mut *lock(&self.seen))
+    }
+}
+
+#[async_trait::async_trait]
+impl Transport for Direct {
+    async fn request(
+        &self,
+        class: PrivacyClass,
+        request: BinaryRequest,
+    ) -> Result<BinaryResponse, TransportError> {
+        lock(&self.seen).push(request.path.clone());
+        self.direct.request(class, request).await
+    }
+
+    async fn stream(
+        &self,
+        request: BinaryRequest,
+    ) -> Result<Box<dyn DuplexStream>, TransportError> {
+        self.direct.stream(request).await
+    }
+
+    fn kind(&self) -> TransportKind {
+        TransportKind::Direct
     }
 }
 
@@ -553,6 +607,9 @@ pub(crate) struct Device {
     pub(crate) database: Arc<Database>,
     pub(crate) link: Arc<Link>,
     pub(crate) issuer: Arc<Issuer>,
+    /// The device's own identified route, if it has one: then identified requests go to the
+    /// server as this device's account instead of through `issuer`.
+    pub(crate) direct: Option<Arc<Direct>>,
     /// Names the database file and key, so a restart reopens the same store.
     number: u64,
     role: ProcessRole,
@@ -614,9 +671,13 @@ impl World {
     }
 
     pub(crate) fn start() -> Result<Self, TestError> {
-        let config = HarnessConfig::default();
+        Self::start_with(&HarnessConfig::default())
+    }
+
+    /// A world whose harness starts with `config`.
+    pub(crate) fn start_with(config: &HarnessConfig) -> Result<Self, TestError> {
         let clock = config.clock.clone();
-        let harness = InProcessHarness::start(&config)?;
+        let harness = InProcessHarness::start(config)?;
         let server_id = ServerId::new(harness.endpoints().server_id.clone())?;
         let account = Account {
             server: harness.endpoints().server,
@@ -670,11 +731,31 @@ impl World {
         self.device_with(&address, ProcessRole::MainApp)
     }
 
+    /// A main-app device with an account of its own: identified requests go over HTTPS to
+    /// the harness server's TLS front, as the client's direct transport sends them.
+    pub(crate) fn account_device(&self) -> Result<Device, TestError> {
+        let address = self.harness.endpoints().ohttp_relay.to_string();
+        self.device_on(
+            &address,
+            ProcessRole::MainApp,
+            Some(Arc::new(Direct::new(self)?)),
+        )
+    }
+
     /// A device whose relay is at `address` (which may be unreachable) in `role`.
     pub(crate) fn device_with(
         &self,
         address: &str,
         role: ProcessRole,
+    ) -> Result<Device, TestError> {
+        self.device_on(address, role, None)
+    }
+
+    fn device_on(
+        &self,
+        address: &str,
+        role: ProcessRole,
+        direct: Option<Arc<Direct>>,
     ) -> Result<Device, TestError> {
         let number = self.next_device.fetch_add(1, Ordering::SeqCst);
         let link = Arc::new(Link {
@@ -692,6 +773,7 @@ impl World {
             role,
             link,
             issuer,
+            direct,
             seed: number.saturating_add(1000),
         })
     }
@@ -704,6 +786,7 @@ impl World {
             database,
             link,
             issuer,
+            direct,
             number,
             role,
         } = device;
@@ -715,6 +798,7 @@ impl World {
             role,
             link,
             issuer,
+            direct,
             seed: number.saturating_add(2000),
         })
     }
@@ -725,6 +809,7 @@ impl World {
             role,
             link,
             issuer,
+            direct,
             seed,
         } = boot;
         let database = Database::open(
@@ -736,7 +821,10 @@ impl World {
         let database = Arc::new(database);
         let router = Router::new(Routes {
             anonymous: link.clone(),
-            identified: issuer.clone(),
+            identified: match &direct {
+                Some(direct) => direct.clone(),
+                None => issuer.clone(),
+            },
             stream: link.clone(),
         })?;
         let engine = SyncEngine::new(
@@ -761,6 +849,7 @@ impl World {
             database,
             link,
             issuer,
+            direct,
             number,
             role,
         })
@@ -773,6 +862,7 @@ struct Boot {
     role: ProcessRole,
     link: Arc<Link>,
     issuer: Arc<Issuer>,
+    direct: Option<Arc<Direct>>,
     seed: u64,
 }
 

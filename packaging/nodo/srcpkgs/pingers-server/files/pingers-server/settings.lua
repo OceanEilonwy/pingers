@@ -72,6 +72,22 @@ return {
       default = "off",
     },
     {
+      name = "registration_code",
+      type = "secret",
+      label = "Registration code",
+      help = "The code a device must present to make an account here (registration_codes). "
+        .. "Created on install, so the server is not open to anyone who finds it. The first "
+        .. "phone needs it once (for now a debug build, docs/deploy-nodo.md); every invite sent "
+        .. "from a phone registered with it carries it, so friends join without typing it. "
+        .. "Reset it to stop new accounts from old invite links.",
+      required = true,
+      generate = { hex = 16 },
+      validate = function(code)
+        return nodo.matches(code, "^[A-Za-z0-9_-]{16,128}$"),
+          "must be 16 to 128 letters, digits, - or _"
+      end,
+    },
+    {
       name = "ohttp_key_a",
       type = "secret",
       label = "Gateway key A",

@@ -114,6 +114,41 @@ impl PrivacyPassTokens<'_> {
         })
     }
 
+    /// Deletes every token whose issuer key is not in `keys` (the keys the issuer still lists);
+    /// returns how many.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Database`] if the delete fails.
+    pub fn retain_keys(&self, keys: &[TokenKeyId]) -> Result<usize, StoreError> {
+        self.session.transaction(|session| {
+            session.with(|connection| {
+                let mut doomed = Vec::new();
+                {
+                    let mut statement =
+                        connection.prepare("SELECT DISTINCT key_id FROM pp_token")?;
+                    let mut rows = statement.query([])?;
+                    while let Some(row) = rows.next()? {
+                        let held: Vec<u8> = row.get(0)?;
+                        if !keys
+                            .iter()
+                            .any(|key| key.as_bytes().as_slice() == held.as_slice())
+                        {
+                            doomed.push(held);
+                        }
+                    }
+                }
+                let mut deleted = 0_usize;
+                for key in doomed {
+                    deleted = deleted.saturating_add(
+                        connection.execute("DELETE FROM pp_token WHERE key_id = ?1", [key])?,
+                    );
+                }
+                Ok(deleted)
+            })
+        })
+    }
+
     /// Deletes every token of a retired issuer key; returns how many.
     ///
     /// # Errors
@@ -421,6 +456,25 @@ mod tests {
         assert_eq!(tokens.count()?, 2);
         assert_eq!(tokens.delete_for_key(&old_key)?, 1);
         assert_eq!(tokens.take()?.map(|held| held.key_id), Some(new_key));
+        assert_eq!(tokens.count()?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn only_tokens_of_listed_keys_are_kept() -> Result<(), TestError> {
+        let fixture = Fixture::new()?;
+        let tokens = fixture.session.privacy_pass_tokens();
+        let retired = TokenKeyId::from_bytes([1; 32]);
+        let current = TokenKeyId::from_bytes([2; 32]);
+        let next = TokenKeyId::from_bytes([3; 32]);
+        tokens.add(&[token(1), token(2)], &retired)?;
+        tokens.add(&[token(3)], &current)?;
+        tokens.add(&[token(4)], &next)?;
+        assert_eq!(tokens.retain_keys(&[current, next])?, 2);
+        assert_eq!(tokens.count()?, 2);
+        assert_eq!(tokens.retain_keys(&[current, next])?, 0);
+        assert_eq!(tokens.take()?.map(|held| held.key_id), Some(current));
+        assert_eq!(tokens.retain_keys(&[])?, 1);
         assert_eq!(tokens.count()?, 0);
         Ok(())
     }

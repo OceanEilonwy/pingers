@@ -253,6 +253,12 @@ impl SyncEngine {
         }
     }
 
+    /// The server this engine talks to.
+    #[must_use]
+    pub fn server(&self) -> ServerId {
+        lock(&self.settings).server.clone()
+    }
+
     /// Replaces the credential policy, after fetching `Params` again or a prover self-test.
     pub fn set_credential_policy(&self, policy: CredentialPolicy) {
         lock(&self.settings).credentials = policy;

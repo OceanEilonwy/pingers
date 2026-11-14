@@ -11,11 +11,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 use async_trait::async_trait;
 use pingers_geo::Fence;
 use pingers_parties::{
-    InviteId, InviteStatus as PartiesInviteStatus, JoinCode, Myself, NewParty, NewSpot, Outbound,
-    PartiesError, PartyLifecycle, PartySettings, PostQuantum as PartiesPostQuantum, RelayChoice,
-    SpotEdit, SpotShape,
+    InviteId, InviteStatus as PartiesInviteStatus, JoinCode, Myself, NewInvite, NewParty, NewSpot,
+    Outbound, PartiesError, PartyLifecycle, PartySettings, PostQuantum as PartiesPostQuantum,
+    RelayChoice, SpotEdit, SpotShape,
 };
-use pingers_proto::{LeafIndex, MailboxId, PartyId, ServerId, SpotId};
+use pingers_proto::{LeafIndex, MailboxId, PartyId, SecretText, ServerId, SpotId};
 use pingers_store::{MemberName, Party as StoredParty, PartyName, Session, SpotName};
 use pingers_time::Clock;
 
@@ -71,6 +71,8 @@ impl Parties {
 #[async_trait]
 impl PartiesPort for Parties {
     async fn create_party(&self, draft: PartyDraft) -> Result<PartyId, ClientError> {
+        // The first Party makes the account (design B.1).
+        self.net.ready().await?;
         let created = self
             .backend
             .store(move |session, clock, rng| {
@@ -101,20 +103,23 @@ impl PartiesPort for Parties {
     }
 
     async fn create_invite(&self, party: PartyId) -> Result<InviteLink, ClientError> {
-        let created = self
-            .backend
-            .store(move |session, clock, rng| {
-                Ok(PartyLifecycle::new(session, clock).create_invite(&party, rng)?)
+        // The code this device registered with travels in the link (design B.1).
+        let registration_code = self.net.shared_registration_code().await?;
+        let make = |code: Option<SecretText>| {
+            self.backend.store(move |session, clock, rng| {
+                let invite = NewInvite {
+                    registration_code: code,
+                };
+                Ok(PartyLifecycle::new(session, clock).create_invite(&party, invite, rng)?)
             })
-            .await;
-        let created = match created {
+        };
+        let created = match make(registration_code.clone()).await {
+            // A fresh device has no invite mailbox pooled yet: register one (with the account
+            // and credentials it needs) and try again.
             Err(ClientError::Parties(PartiesError::NoPooledMailbox)) => {
+                self.net.ready().await?;
                 super::join::refill_invite_pool(&self.net).await?;
-                self.backend
-                    .store(move |session, clock, rng| {
-                        Ok(PartyLifecycle::new(session, clock).create_invite(&party, rng)?)
-                    })
-                    .await?
+                make(registration_code).await?
             }
             other => other?,
         };

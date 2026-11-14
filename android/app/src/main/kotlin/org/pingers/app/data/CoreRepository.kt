@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.pingers.app.BuildConfig
 import org.pingers.app.R
 import uniffi.pingers.AreaEditor
 import uniffi.pingers.Core
@@ -99,8 +100,9 @@ class CoreRepository(
     private var partyDraft = uniffi.pingers.PartyDraft(
         name = "",
         colour = uniffi.pingers.PartyColour.BLUE,
-        server = uniffi.pingers.ServiceDraft("", uniffi.pingers.Reachability.Checking),
-        relay = uniffi.pingers.ServiceDraft("", uniffi.pingers.Reachability.Checking),
+        // The instance from the build (CoreHost.instance); checked when New party opens.
+        server = uniffi.pingers.ServiceDraft(host(BuildConfig.SERVER_HOST), uniffi.pingers.Reachability.Checking),
+        relay = uniffi.pingers.ServiceDraft(host(BuildConfig.OHTTP_RELAY), uniffi.pingers.Reachability.Checking),
         pushRelay = uniffi.pingers.PushRelayChoice.Official,
         pushRelayOperator = null,
         postQuantum = false,
@@ -362,9 +364,40 @@ class CoreRepository(
         }
     }
 
-    // WAITING(pingers-client): it has no call that asks a server or relay who runs it, so the
-    // checks stay at Checking and pingers-screens keeps New party's Create disabled.
-    override fun openAdvanced() = publishNewParty()
+    override fun openNewParty() = checkServices()
+
+    override fun openAdvanced() = checkServices()
+
+    /**
+     * The core's reachability check (the gateway key fetched through the relay and checked
+     * against its pin), then who the server's parameters say runs it and the push relay. The
+     * relay declares no operator of its own, so it is counted as the server's: the cautious
+     * reading, which the privacy summary then flags as one operator running both.
+     */
+    private fun checkServices() {
+        publishNewParty()
+        call("reachability", onError = { markServices(null) }) { core ->
+            val check = core.checkReachability()
+            refresh()
+            val operator = snapshot?.serverOperator()
+            markServices(operator.takeIf { check.status == uniffi.pingers.RelayStatus.REACHABLE })
+        }
+    }
+
+    /** A build URL as New party shows it: the host, without the scheme or a trailing slash. */
+    private fun host(url: String) = url.removePrefix("https://").trimEnd('/')
+
+    /** Server and relay reachable under [operator], or both unreachable when it is null. */
+    private fun markServices(operator: String?) {
+        val check = operator?.let { uniffi.pingers.Reachability.Reachable(it) }
+            ?: uniffi.pingers.Reachability.Unreachable
+        partyDraft = partyDraft.copy(
+            server = partyDraft.server.copy(check = check),
+            relay = partyDraft.relay.copy(check = check),
+            pushRelayOperator = snapshot?.pushRelayOperator() ?: partyDraft.pushRelayOperator,
+        )
+        publishNewParty()
+    }
 
     override fun setServer(url: String) {
         partyDraft = partyDraft.copy(server = partyDraft.server.copy(host = url))

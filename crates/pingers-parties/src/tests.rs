@@ -9,8 +9,8 @@ use pingers_presence::{EpochTransition, RosterLookup as _};
 use pingers_proto::{
     DisplayName, Epoch, GroupId, InviterFingerprint, LeafIndex, MailboxId, MlsMessageBytes, Padded,
     PartyId, PushHandle, PushRelayKeyId, RelayId, RelayRef, RelayUrl, SealedPush, SealedPushBlob,
-    SealedSnapshot, SequenceNumber, ServerId, SpotId, Subscription, SubscriptionId, TimeToLive,
-    Urgency,
+    SealedSnapshot, SecretText, SequenceNumber, ServerId, SpotId, Subscription, SubscriptionId,
+    TimeToLive, Urgency,
 };
 use pingers_store::{
     LocationVisibility, MailboxPurpose, MemberName, PartyName, SpotName, Verification,
@@ -21,13 +21,20 @@ use rand_chacha::ChaCha20Rng;
 use crate::test_support::{Device, NOW, SERVER, TestError, rng};
 use crate::{
     ArrivedWelcome, CreatedInvite, INVITE_LIFETIME, Ignored, Incoming, InviteId, InviteLink,
-    InviteStatus, JoinCode, JoinDetails, JoinId, JoinRequestOutcome, Myself, NewParty, NewSpot,
-    Outbound, OutgoingCommit, PartiesError, PartyLifecycle, PartySettings, PendingJoin,
+    InviteStatus, JoinCode, JoinDetails, JoinId, JoinRequestOutcome, Myself, NewInvite, NewParty,
+    NewSpot, Outbound, OutgoingCommit, PartiesError, PartyLifecycle, PartySettings, PendingJoin,
     PostQuantum, Refusal, RelayChoice, SafetyCode, SpotEdit, SpotShape,
 };
 
 const LEAF_ALICE: LeafIndex = LeafIndex::new(0);
 const LEAF_BOB: LeafIndex = LeafIndex::new(1);
+
+/// An invite without a registration code.
+const fn no_code() -> NewInvite {
+    NewInvite {
+        registration_code: None,
+    }
+}
 
 fn later(seconds: u64) -> Result<UnixSeconds, TestError> {
     NOW.checked_add(Duration::from_secs(seconds))
@@ -101,7 +108,7 @@ fn invite(
     rng: &mut ChaCha20Rng,
 ) -> Result<CreatedInvite, TestError> {
     device.pool_mailbox(MailboxPurpose::Invite, month()?)?;
-    Ok(device.parties().create_invite(party, rng)?)
+    Ok(device.parties().create_invite(party, no_code(), rng)?)
 }
 
 /// A join request posted by a joiner.
@@ -634,13 +641,35 @@ fn invite_expires_with_a_shorter_lived_mailbox() -> Result<(), TestError> {
     let party = create_party(&alice, &mut rng)?.party;
     let mailbox_end = later(3_600)?;
     alice.pool_mailbox(MailboxPurpose::Invite, mailbox_end)?;
-    let created = alice.parties().create_invite(&party, &mut rng)?;
+    let created = alice.parties().create_invite(&party, no_code(), &mut rng)?;
     assert_eq!(created.expires, mailbox_end);
+    assert!(created.link.payload()?.registration_code.is_none());
     // No pooled mailbox left: pingers-sync must register one.
     assert!(matches!(
-        alice.parties().create_invite(&party, &mut rng),
+        alice.parties().create_invite(&party, no_code(), &mut rng),
         Err(PartiesError::NoPooledMailbox)
     ));
+    Ok(())
+}
+
+#[test]
+fn an_invite_passes_on_the_registration_code() -> Result<(), TestError> {
+    let mut rng = rng(4);
+    let alice = Device::new(1)?;
+    let party = create_party(&alice, &mut rng)?.party;
+    alice.pool_mailbox(MailboxPurpose::Invite, later(3_600)?)?;
+    let created = alice.parties().create_invite(
+        &party,
+        NewInvite {
+            registration_code: Some(SecretText::new("friends".to_owned())),
+        },
+        &mut rng,
+    )?;
+    let payload = created.link.payload()?;
+    assert_eq!(
+        payload.registration_code.as_ref().map(SecretText::expose),
+        Some("friends")
+    );
     Ok(())
 }
 

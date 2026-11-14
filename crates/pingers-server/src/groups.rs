@@ -267,8 +267,11 @@ pub(crate) fn delete_subscription(
 ) -> Result<Reply, Reply> {
     let (group, anon) = authorise(shared, request, &request.body, Anon::NotRequired)?;
     let id = subscription_id(&request.path).ok_or_else(bad_request)?;
+    // Through the pusher, which first waits for a push to this subscription already in
+    // flight: once the 204 is sent, the relay hears nothing more for it.
     shared
-        .groups
+        .tasks
+        .pusher()
         .remove_subscription(&group, &id)
         .map_err(|error| refused(&error))?;
     Ok(with_session(Reply::status(StatusCode::NO_CONTENT), anon))

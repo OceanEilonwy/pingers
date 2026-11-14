@@ -103,7 +103,7 @@ struct State {
 }
 
 impl FakeCrates {
-    /// The id every `create_party` and `accept_invite` returns.
+    /// The id every `create_party` returns.
     pub const PARTY: PartyId = PartyId::from_bytes([0xa1; 16]);
     /// The id every `save_spot` returns.
     pub const SPOT: SpotId = SpotId::from_bytes([0xb2; 16]);
@@ -148,6 +148,7 @@ impl FakeCrates {
                 fallbacks: Vec::new(),
                 relay: RelayStatus::Reachable,
                 map_host: None,
+                operators: None,
             },
             meetups: MeetupsSection::default(),
             section_reads: 0,

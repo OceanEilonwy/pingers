@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use pingers_ohttp::KeyPins;
-use pingers_proto::ServerId;
+use pingers_proto::{SecretText, ServerId};
 use pingers_time::Timer;
 use pingers_transport::{
     DirectConfig, DirectTransport, KeyPin, OhttpConfig, OhttpTransport, Relay, Router, Routes,
@@ -29,7 +29,7 @@ use crate::ClientError;
 /// Official builds carry pin sets for the gateway and the push relay (the key served now and
 /// the next one, design B.12 and proposal §2.1); with a set, first-use pinning is off. The
 /// Privacy Pass issuer key is not pinned at build time: it rotates weekly.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Instance {
     /// The server origin (`https://...`), also the OHTTP gateway.
     pub server: ServerId,
@@ -45,6 +45,11 @@ pub struct Instance {
     pub push_relay_pins: Option<KeyPins>,
     /// Which certificate authorities HTTPS trusts.
     pub trust: Trust,
+    /// The operator's registration code for this device's first registration (design B.1),
+    /// for the first owner of a server that requires one: a debug build's
+    /// `PINGERS_DEV_REGISTRATION_CODE`. Release builds pass `None`; other devices get their
+    /// code from the invite link.
+    pub registration_code: Option<SecretText>,
 }
 
 /// Which certificate authorities HTTPS connections trust.
@@ -74,6 +79,14 @@ impl Trust {
     }
 }
 
+/// The relay's origin from the instance's setting, which may name the origin or, as servers
+/// advertise it (`ohttp_relay_urls`) and deployments configure it, the relay URL ending in
+/// `/ohttp`: both mean the same relay, never `.../ohttp/ohttp`.
+fn relay_origin(setting: &str) -> &str {
+    let trimmed = setting.trim_end_matches('/');
+    trimmed.strip_suffix("/ohttp").unwrap_or(trimmed)
+}
+
 /// The router over the instance: anonymous and stream requests through the OHTTP relay,
 /// identified requests direct to the server.
 pub(crate) fn router(
@@ -81,7 +94,7 @@ pub(crate) fn router(
     timer: Arc<dyn Timer>,
     outside: &Outside,
 ) -> Result<Arc<dyn Transport>, ClientError> {
-    let origin = instance.relay.trim_end_matches('/');
+    let origin = relay_origin(&instance.relay);
     let relay = Relay::new(
         &format!("{origin}/ohttp"),
         &format!("{origin}/v1/ohttp/config"),
@@ -137,4 +150,25 @@ pub(crate) fn engine(
             queue_capacity: QueueCapacity::default(),
         },
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::relay_origin;
+
+    #[test]
+    fn a_relay_is_named_by_its_origin_or_its_ohttp_url() {
+        for setting in [
+            "https://relay.example",
+            "https://relay.example/",
+            "https://relay.example/ohttp",
+            "https://relay.example/ohttp/",
+        ] {
+            assert_eq!(relay_origin(setting), "https://relay.example", "{setting}");
+        }
+        assert_eq!(
+            relay_origin("https://relay.example/ohttp-relay"),
+            "https://relay.example/ohttp-relay"
+        );
+    }
 }

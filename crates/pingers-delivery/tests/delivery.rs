@@ -28,6 +28,8 @@ enum TestError {
     Proto(#[from] ProtoError),
     #[error("the commit unexpectedly conflicted")]
     Conflict,
+    #[error("the commit made no wake for that subscription")]
+    NoWake,
     #[error("a committing thread panicked")]
     Thread,
 }
@@ -521,6 +523,41 @@ fn removed_subscription_is_not_woken_and_removal_is_idempotent(
     Ok(())
 }
 
+/// A wake made earlier is sent only if, when its turn comes, the very subscription it was
+/// made for still stands: not one since removed, replaced with a new sealed push, expired, or
+/// in a deleted group.
+fn a_wake_is_due_only_while_its_subscription_stands(
+    store: impl DeliveryStore,
+) -> Result<(), TestError> {
+    let world = World::new(store, &[1, 2, 3])?;
+    world
+        .delivery
+        .put_subscription(&world.group, subscription(4, Duration::from_secs(60))?)?;
+    let (_, wakes, _) = accepted(world.commit(0, Urgency::Quiet)?).ok_or(TestError::Conflict)?;
+    let due = |tag: u8| -> Result<bool, TestError> {
+        let wake = wakes
+            .iter()
+            .find(|wake| wake.subscription == sub_id(tag))
+            .ok_or(TestError::NoWake)?;
+        Ok(world.delivery.still_subscribed(&world.group, wake)?)
+    };
+    assert!(due(1)? && due(2)? && due(3)? && due(4)?);
+    world
+        .delivery
+        .remove_subscription(&world.group, &sub_id(1))?;
+    let mut renewed = subscription(2, SUBSCRIPTION_LIFETIME)?;
+    renewed.push.handle = PushHandle::from_bytes([0xBB; 8]);
+    world.delivery.put_subscription(&world.group, renewed)?;
+    world.clock.advance(Duration::from_secs(60));
+    assert!(!due(1)?, "removed");
+    assert!(!due(2)?, "replaced by a new sealed push");
+    assert!(!due(4)?, "expired");
+    assert!(due(3)?, "untouched");
+    world.delivery.delete_group(&world.group)?;
+    assert!(!due(3)?, "its group was deleted");
+    Ok(())
+}
+
 // --- live fan-out ---
 
 fn live_frame_goes_to_the_other_channels(store: impl DeliveryStore) -> Result<(), TestError> {
@@ -978,6 +1015,7 @@ for_each_store!(
     subscription_over_thirty_days_is_refused,
     renewed_subscription_replaces_the_old_one,
     removed_subscription_is_not_woken_and_removal_is_idempotent,
+    a_wake_is_due_only_while_its_subscription_stands,
     live_frame_goes_to_the_other_channels,
     closed_channel_gets_nothing_and_cannot_send,
     live_channel_needs_an_existing_group,
