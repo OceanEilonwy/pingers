@@ -23,6 +23,7 @@ mod error;
 mod geo;
 mod ids;
 mod maps;
+mod servers;
 mod snapshot;
 mod views;
 #[cfg(feature = "wipe-freed")]
@@ -42,6 +43,7 @@ pub use ids::{
     InviteId, LocationRequestId, MeetupId, MemberId, MessageId, PartyId, SpotId, ZoneId,
 };
 pub use maps::{MapHostSource, MapsWords, maps_words};
+pub use servers::{ServerIssue, ServerLook};
 pub use snapshot::{AreaEditor, LocalClock, Snapshot};
 pub use views::*;
 

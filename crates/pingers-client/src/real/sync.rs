@@ -3,15 +3,18 @@
 //! pingers-meetup-session's `GroupNetwork`, and the outbox that sends what pingers-parties
 //! returns.
 //!
-//! One [`Net`] per process holds the engine (built when the client is given an instance) and
-//! the outbox. Without an instance every network call answers [`Unavailable::Sync`] (or
-//! `PortError::Unavailable` to a wake, which then ends its network part cleanly).
+//! One [`Net`] per process holds the server registry ([`Servers`]: one engine per server, see
+//! `servers.rs`) and the outbox. Every request goes to the server of the Party or group it is
+//! for. A server this device does not know, or a client without one, answers
+//! [`Unavailable::Sync`] (or `PortError::Unavailable` to a wake, which then ends that server's
+//! round cleanly).
 //!
 //! The outbox is in memory: a request that could not be sent stays for the next flush (each
 //! party command and each wake), and is lost at exit. pingers-sync queues what it can itself.
+//! Each server's requests are flushed on their own: one server that cannot be reached keeps
+//! only its own requests waiting.
 
 use core::time::Duration;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
@@ -22,13 +25,13 @@ use pingers_parties::{LeaveRequest, Outbound, OutgoingCommit, PartiesError, Part
 use pingers_presence::{MailboxPurpose, OutgoingKnock};
 use pingers_proto::{
     AppMessage, BoardCursor, BoardPage, CommitRequest, CommitResponse, CreateGroup, Epoch, GroupId,
-    GroupLogEntry, MailboxId, Padded, SecretText, SequenceNumber, ServerId, SizeClass,
-    SubscriptionId, TimeToLive, WelcomeBytes,
+    GroupLogEntry, MailboxId, MapHostUrl, Padded, PartyId, SecretText, SequenceNumber, ServerId,
+    SizeClass, SubscriptionId, TimeToLive, WelcomeBytes,
 };
 use pingers_store::{MailboxPurpose as StoredPurpose, WakePushes as StoredPushes};
 use pingers_sync::{
-    ApiRequest, CodeSource, Committed, Delivered, GroupCall, GroupError, GroupLifetime,
-    GroupSigner, GroupStart, NewLease, PoolTarget, Sending, SyncEngine, SyncError, WakeBudget,
+    ApiRequest, Committed, Delivered, GroupCall, GroupError, GroupLifetime, GroupSigner,
+    GroupStart, NewLease, PoolTarget, Sending, SyncError, WakeBudget,
 };
 use pingers_time::{Bucket, UnixSeconds};
 use pingers_wake::PortError;
@@ -36,7 +39,9 @@ use pingers_wake::ports::{LeaseUpload, ServerPort};
 
 use super::Backend;
 use super::party_log::{self, PartyLog};
-use crate::ports::{ServerSection, SyncPort};
+use super::records::{self, Key, corrupt};
+use super::servers::{Link, Servers};
+use crate::ports::{ServerProbe, ServerSection, SyncPort};
 use crate::snapshot::{RelayStatus, WakePushes};
 use crate::{ClientError, Notice, PushTokens, Unavailable};
 
@@ -54,96 +59,150 @@ const KEEP_FOR: Duration = Duration::from_hours(1);
 const KNOCK_POOL: u32 = 4;
 const MAILBOX_LIFETIME: Duration = Duration::from_hours(24);
 
-/// What a client with an instance talks through: the engine, and the build's registration
-/// code for the first registration.
-pub(crate) struct Online {
-    pub(crate) engine: Arc<SyncEngine>,
-    pub(crate) registration_code: Option<SecretText>,
+/// A request waiting for its server.
+struct Waiting {
+    server: ServerId,
+    outbound: Outbound,
 }
 
-/// The engine and the outbox.
+/// The servers and the outbox.
 pub(crate) struct Net {
     pub(super) backend: Arc<Backend>,
-    pub(super) engine: Option<Arc<SyncEngine>>,
-    outbox: Mutex<Vec<Outbound>>,
-    relay: Mutex<RelayStatus>,
-    clock_skew: AtomicBool,
-    pub(super) key_mismatch: AtomicBool,
-    /// The server's parameters and the push relay's key, once fetched (`push.rs`).
-    pub(super) learned: super::push::Learned,
-    /// The build's registration code for this device's first registration, if any.
-    registration_code: Option<SecretText>,
+    pub(crate) servers: Servers,
+    pub(super) probes: super::probe::Probes,
+    outbox: Mutex<Vec<Waiting>>,
 }
 
 impl Net {
-    pub(crate) fn new(
-        backend: Arc<Backend>,
-        online: Option<Online>,
-        learned: super::push::Learned,
-    ) -> Self {
-        let (engine, registration_code) = match online {
-            Some(online) => (Some(online.engine), online.registration_code),
-            None => (None, None),
-        };
+    pub(crate) fn new(backend: Arc<Backend>, servers: Servers) -> Self {
         Self {
             backend,
-            engine,
+            servers,
+            probes: super::probe::Probes::default(),
             outbox: Mutex::new(Vec::new()),
-            relay: Mutex::new(RelayStatus::Unreachable),
-            clock_skew: AtomicBool::new(false),
-            key_mismatch: AtomicBool::new(false),
-            learned,
-            registration_code,
         }
     }
 
-    pub(super) fn engine(&self) -> Result<&SyncEngine, ClientError> {
-        self.engine.as_deref().ok_or(Unavailable::Sync.into())
-    }
-
-    fn outbox(&self) -> std::sync::MutexGuard<'_, Vec<Outbound>> {
+    fn outbox(&self) -> std::sync::MutexGuard<'_, Vec<Waiting>> {
         self.outbox.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Keeps `outbound` for the next flush.
-    pub(crate) fn push(&self, outbound: impl IntoIterator<Item = Outbound>) {
-        self.outbox().extend(outbound);
-    }
-
-    /// What a network result says about the relay and the clock.
-    pub(super) fn observe<T>(&self, result: &Result<T, SyncError>) {
-        let status = match result {
-            Ok(_) => RelayStatus::Reachable,
-            Err(SyncError::NoRelay { .. }) => RelayStatus::Unreachable,
-            Err(SyncError::RelayKeyMismatch) => {
-                self.key_mismatch.store(true, Ordering::Relaxed);
-                RelayStatus::KeyMismatch
-            }
-            // The OHTTP relay answered; only the push relay's key is wrong. No push token is
-            // sealed to it until the user resolves the notice.
-            Err(SyncError::PushRelayKeyMismatch) => {
-                self.key_mismatch.store(true, Ordering::Relaxed);
-                RelayStatus::Reachable
-            }
-            Err(SyncError::ClockSkew { .. }) => {
-                self.clock_skew.store(true, Ordering::Relaxed);
-                return;
-            }
-            Err(_) => return,
-        };
-        *self.relay.lock().unwrap_or_else(PoisonError::into_inner) = status;
+    /// Keeps `outbound` for `server`'s next flush.
+    pub(crate) fn push(&self, server: &ServerId, outbound: impl IntoIterator<Item = Outbound>) {
+        self.outbox()
+            .extend(outbound.into_iter().map(|outbound| Waiting {
+                server: server.clone(),
+                outbound,
+            }));
     }
 
     /// Notices raised since the last call (`Notice::ClockSkew`, `Notice::RelayKeyMismatch`).
     pub(crate) fn take_notices(&self) -> Vec<Notice> {
-        let mut notices = Vec::new();
-        if self.clock_skew.swap(false, Ordering::Relaxed) {
-            notices.push(Notice::ClockSkew);
+        self.servers.take_notices()
+    }
+
+    /// The server a Party lives on.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Parties`] (`UnknownParty`); a store failure.
+    pub(crate) async fn party_server(&self, party: PartyId) -> Result<ServerId, ClientError> {
+        self.backend
+            .store(move |session, _clock, _rng| {
+                Ok(session
+                    .parties()
+                    .get(&party)?
+                    .ok_or(PartiesError::UnknownParty)?
+                    .server)
+            })
+            .await
+    }
+
+    /// The link to `server`, or [`Unavailable::Sync`].
+    pub(crate) async fn link(&self, server: &ServerId) -> Result<Arc<Link>, ClientError> {
+        self.servers
+            .link(server)
+            .await
+            .map_err(|error| {
+                if matches!(error, ClientError::Unavailable(Unavailable::UnknownServer)) {
+                    Unavailable::Sync.into()
+                } else {
+                    error
+                }
+            })
+    }
+
+    /// The account on `server`, made now if it is not yet (a new Party or a join).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::RegistrationCodeRequired`]; [`ClientError::RegistrationCodeRefused`];
+    /// [`Unavailable::Sync`] for an unknown server; a store failure.
+    pub(crate) async fn account(&self, server: &ServerId) -> Result<(), ClientError> {
+        self.link(server).await?.account().await
+    }
+
+    /// The registration code this device registered with on `server`, for its invite links.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Sync`] with a store failure. An unknown server has none.
+    pub(crate) async fn shared_registration_code(
+        &self,
+        server: &ServerId,
+    ) -> Result<Option<SecretText>, ClientError> {
+        match self.servers.link(server).await {
+            Ok(link) => Ok(link.engine.shared_registration_code().await?),
+            Err(ClientError::Unavailable(Unavailable::UnknownServer)) => Ok(None),
+            Err(error) => Err(error),
         }
-        if self.key_mismatch.swap(false, Ordering::Relaxed) {
-            notices.push(Notice::RelayKeyMismatch);
+    }
+
+    /// Sends every waiting request, server by server. One that could not be sent now stays for
+    /// the next flush; one the server refused is dropped. Returns whether a Party changed (a
+    /// merged commit).
+    ///
+    /// # Errors
+    ///
+    /// A storage failure; network failures only keep the request.
+    pub(crate) async fn flush(&self) -> Result<bool, ClientError> {
+        let mut changed = false;
+        for link in self.servers.all().await? {
+            changed |= self.flush_server(&link).await?;
         }
-        notices
+        Ok(changed)
+    }
+
+    /// [`Net::flush`] for one server.
+    async fn flush_server(&self, link: &Link) -> Result<bool, ClientError> {
+        let waiting: Vec<Outbound> = {
+            let mut outbox = self.outbox();
+            let (mine, others): (Vec<Waiting>, Vec<Waiting>) = core::mem::take(&mut *outbox)
+                .into_iter()
+                .partition(|waiting| waiting.server == link.server);
+            *outbox = others;
+            mine.into_iter().map(|waiting| waiting.outbound).collect()
+        };
+        if waiting.is_empty() {
+            return Ok(false);
+        }
+        link.prepare_credentials().await?;
+        let mut changed = false;
+        let mut kept = Vec::new();
+        for outbound in waiting {
+            match self.send(link, outbound).await {
+                Ok(Sent::Done { changed: party }) => changed |= party,
+                Ok(Sent::Later(outbound)) => kept.push(*outbound),
+                Err(error @ (ClientError::Store(_) | ClientError::Records(_))) => {
+                    self.push(&link.server, kept);
+                    return Err(error);
+                }
+                // Refused, or not ours to retry (a commit pingers-parties dropped).
+                Err(_) => {}
+            }
+        }
+        self.push(&link.server, kept);
+        Ok(changed)
     }
 
     fn keep_until(&self) -> Sending {
@@ -152,105 +211,14 @@ impl Net {
         Sending::or_keep_until(until, WakeBudget::UNLIMITED)
     }
 
-    /// pingers-sync's `prepare_credentials`, with the build's registration code on offer: the
-    /// account registered, its leaf, and the token stock. Once done it costs a few store reads.
-    /// Only a store failure is an error; a network failure or a refusal leaves credentialed
-    /// requests waiting for a later call (each command's flush and each wake).
-    ///
-    /// # Errors
-    ///
-    /// [`ClientError::Sync`] with a store failure; [`Unavailable::Sync`] without an instance.
-    pub(crate) async fn prepare_credentials(&self) -> Result<(), ClientError> {
-        let engine = self.engine()?;
-        if let Some(code) = &self.registration_code {
-            engine
-                .offer_registration_code(code.clone(), CodeSource::Build)
-                .await?;
-        }
-        let result = engine.prepare_credentials(WakeBudget::UNLIMITED).await;
-        self.observe(&result);
-        match result {
-            Err(SyncError::Store(error)) => Err(SyncError::Store(error).into()),
-            Ok(_) | Err(_) => Ok(()),
-        }
-    }
-
-    /// [`Net::prepare_credentials`] when there is an instance; offline, nothing to do. Commands
-    /// that need the account (a new Party, a join) call it first: the first one makes it.
-    ///
-    /// # Errors
-    ///
-    /// As [`Net::prepare_credentials`].
-    pub(crate) async fn ready(&self) -> Result<(), ClientError> {
-        if self.engine.is_none() {
-            return Ok(());
-        }
-        self.prepare_credentials().await
-    }
-
-    /// Offers the registration code an invite link carries for the first registration, and
-    /// prepares the credentials with it.
-    ///
-    /// # Errors
-    ///
-    /// As [`Net::prepare_credentials`].
-    pub(crate) async fn offer_invite_code(&self, code: SecretText) -> Result<(), ClientError> {
-        self.engine()?
-            .offer_registration_code(code, CodeSource::Invite)
-            .await?;
-        self.prepare_credentials().await
-    }
-
-    /// The registration code this device registered with, for its invite links.
-    ///
-    /// # Errors
-    ///
-    /// [`ClientError::Sync`] with a store failure. Without an instance there is none.
-    pub(crate) async fn shared_registration_code(&self) -> Result<Option<SecretText>, ClientError> {
-        match &self.engine {
-            Some(engine) => Ok(engine.shared_registration_code().await?),
-            None => Ok(None),
-        }
-    }
-
-    /// Sends every waiting request. One that could not be sent now stays for the next flush;
-    /// one the server refused is dropped. Returns whether a Party changed (a merged commit).
-    ///
-    /// # Errors
-    ///
-    /// A storage failure; network failures only keep the request.
-    pub(crate) async fn flush(&self) -> Result<bool, ClientError> {
-        if self.engine.is_none() {
-            return Ok(false);
-        }
-        self.ready().await?;
-        let waiting = std::mem::take(&mut *self.outbox());
-        let mut changed = false;
-        let mut kept = Vec::new();
-        for outbound in waiting {
-            match self.send(outbound).await {
-                Ok(Sent::Done { changed: party }) => changed |= party,
-                Ok(Sent::Later(outbound)) => kept.push(*outbound),
-                Err(error @ (ClientError::Store(_) | ClientError::Records(_))) => {
-                    self.push(kept);
-                    return Err(error);
-                }
-                // Refused, or not ours to retry (a commit pingers-parties dropped).
-                Err(_) => {}
-            }
-        }
-        self.push(kept);
-        Ok(changed)
-    }
-
     #[expect(
         clippy::wildcard_enum_match_arm,
         reason = "Outbound is non-exhaustive; a new kind is passed over until it is mapped"
     )]
-    async fn send(&self, outbound: Outbound) -> Result<Sent, ClientError> {
-        let engine = self.engine()?;
+    async fn send(&self, link: &Link, outbound: Outbound) -> Result<Sent, ClientError> {
+        let engine = &link.engine;
         let outbound = match outbound {
-            Outbound::Commit(commit) => return self.commit(commit).await,
+            Outbound::Commit(commit) => return self.commit(link, commit).await,
             other => other,
         };
         let result = match &outbound {
@@ -276,10 +244,10 @@ impl Net {
                 .delete_mailbox(mailbox, WakeBudget::UNLIMITED)
                 .await
                 .map(|()| true),
-            Outbound::Leave(leave) => self.leave(engine, leave).await,
+            Outbound::Leave(leave) => self.leave(link, leave).await,
             _ => return Ok(Sent::Done { changed: false }),
         };
-        self.observe(&result);
+        link.observe(&result);
         match result {
             Ok(true) => Ok(Sent::Done { changed: false }),
             Ok(false)
@@ -294,20 +262,20 @@ impl Net {
         }
     }
 
-    async fn leave(&self, engine: &SyncEngine, leave: &LeaveRequest) -> Result<bool, SyncError> {
+    async fn leave(&self, link: &Link, leave: &LeaveRequest) -> Result<bool, SyncError> {
         let call = GroupCall {
             group: &leave.group,
             key: &leave.auth,
         };
         if !delivered(
-            engine
+            link.engine
                 .post_group_message(call, &leave.proposal, self.keep_until())
                 .await,
         )? {
             return Ok(false);
         }
         if let Some(subscription) = &leave.subscription {
-            engine
+            link.engine
                 .delete_subscription(call, subscription, WakeBudget::UNLIMITED)
                 .await?;
         }
@@ -316,8 +284,8 @@ impl Net {
 
     /// Commits this device's commit, then posts its Welcome. A commit that could not be sent
     /// stays pending in pingers-parties and in the outbox.
-    async fn commit(&self, commit: OutgoingCommit) -> Result<Sent, ClientError> {
-        let engine = self.engine()?;
+    async fn commit(&self, link: &Link, commit: OutgoingCommit) -> Result<Sent, ClientError> {
+        let engine = &link.engine;
         let party = commit.party;
         let mut log = PartyLog::load(
             &self.backend.database,
@@ -328,14 +296,14 @@ impl Net {
         let result = engine
             .commit(&log.group(), &mut log, WakeBudget::UNLIMITED)
             .await;
-        self.push(std::mem::take(&mut log.outbound));
+        self.push(&link.server, core::mem::take(&mut log.outbound));
         match result {
             Ok(Committed::Accepted(_)) => {
                 if let Some(welcome) = log.accepted.take().and_then(|commit| commit.welcome) {
                     let posted = engine
                         .post_to_mailbox(&welcome.mailbox, &welcome.body, self.keep_until())
                         .await;
-                    self.observe(&posted);
+                    link.observe(&posted);
                     let _: Delivered<SequenceNumber> = posted?;
                 }
                 Ok(Sent::Done { changed: true })
@@ -350,7 +318,7 @@ impl Net {
                         | SyncError::NoCredential
                         | SyncError::Transport(_)
                 );
-                self.observe::<()>(&Err(error));
+                link.observe::<()>(&Err(error));
                 match log.pending.take() {
                     Some(commit) if transient => {
                         Ok(Sent::Later(Box::new(Outbound::Commit(commit))))
@@ -376,27 +344,28 @@ impl Net {
             .await
     }
 
-    /// Pulls every Party's log (design B.4.7: before every board sync).
-    async fn pull_all(&self) -> Result<bool, ClientError> {
-        let engine = self.engine()?;
+    /// Pulls the log of every Party on `link`'s server (design B.4.7: before every board sync).
+    async fn pull_server(&self, link: &Link) -> Result<bool, ClientError> {
+        let server = link.server.clone();
         let parties = self
             .backend
-            .store(|session, _clock, _rng| party_log::parties(session))
+            .store(move |session, _clock, _rng| party_log::parties_on(session, &server))
             .await?;
         let mut changed = false;
         for party in parties {
             let mut log =
                 PartyLog::load(&self.backend.database, &self.backend.outside, party, None)?;
-            let result = engine
+            let result = link
+                .engine
                 .pull_group(&log.group(), &mut log, WakeBudget::UNLIMITED)
                 .await;
-            self.push(std::mem::take(&mut log.outbound));
+            self.push(&link.server, core::mem::take(&mut log.outbound));
             changed |= log.changed;
             match result {
                 Ok(_) => {}
                 Err(GroupError::Sync(error)) => {
                     let result = Err(error);
-                    self.observe::<()>(&result);
+                    link.observe::<()>(&result);
                     result?;
                 }
                 Err(GroupError::Owner(error)) => return Err(error),
@@ -405,6 +374,122 @@ impl Net {
             }
         }
         Ok(changed)
+    }
+
+    /// The built-in server's parameters, once per process, with its map host kept in a record
+    /// for the next start (the app's map host chain reads it before the first wake).
+    ///
+    /// # Errors
+    ///
+    /// [`Unavailable::Sync`] without a built-in server; [`ClientError::Sync`]; a store failure.
+    pub(crate) async fn built_in_params(&self) -> Result<(), ClientError> {
+        let link = self.servers.built_in_link().await?;
+        if link.known_params().is_some() {
+            return Ok(());
+        }
+        let map_host = link.server_params().await?.map_host;
+        self.backend
+            .store(move |session, _clock, _rng| match &map_host {
+                Some(url) => records::write(session, &Key::ServerMapHost, |writer| {
+                    writer.text(url.as_str());
+                }),
+                None => records::delete(session, &Key::ServerMapHost),
+            })
+            .await
+    }
+
+    /// The parameters of `link`'s server, once per process (for the built-in server with its
+    /// map host recorded). Only a store failure is an error: anything else is the next call's
+    /// to retry.
+    async fn params_of(&self, link: &Link) -> Result<(), ClientError> {
+        let result = if self.servers.built_in() == Some(&link.server) {
+            self.built_in_params().await
+        } else {
+            link.server_params().await.map(drop)
+        };
+        match result {
+            Err(error @ (ClientError::Store(_) | ClientError::Records(_))) => Err(error),
+            Ok(()) | Err(_) => Ok(()),
+        }
+    }
+
+    /// The map host the built-in server advertises: from this process's `/v1/params`, or as
+    /// last recorded.
+    ///
+    /// # Errors
+    ///
+    /// A storage failure, or a corrupt record.
+    pub(crate) async fn map_host(&self) -> Result<Option<MapHostUrl>, ClientError> {
+        if let Ok(link) = self.servers.built_in_link().await
+            && let Some(params) = link.known_params()
+        {
+            return Ok(params.map_host);
+        }
+        self.backend
+            .store(|session, _clock, _rng| {
+                records::read(session, &Key::ServerMapHost, |reader| {
+                    MapHostUrl::new(reader.text()?).map_err(|_invalid| corrupt())
+                })
+            })
+            .await
+    }
+
+    /// Whether "No wake-up pushes" is set.
+    async fn wake_pushes(&self) -> Result<StoredPushes, ClientError> {
+        self.backend
+            .store(|session, _clock, _rng| Ok(session.settings().wake_pushes()?))
+            .await
+    }
+
+    /// Makes sure `server`'s engine holds seals (a join request carries a sealed
+    /// subscription when wake-up pushes are on).
+    ///
+    /// # Errors
+    ///
+    /// [`Unavailable::WakePushesOff`] with "No wake-up pushes" set;
+    /// [`Unavailable::NoPushToken`]; as `Link::seal_wake_push`.
+    pub(crate) async fn ensure_wake_push(&self, server: &ServerId) -> Result<(), ClientError> {
+        if self.wake_pushes().await? == StoredPushes::Disabled {
+            return Err(Unavailable::WakePushesOff.into());
+        }
+        self.link(server).await?.ensure_wake_push().await
+    }
+
+    /// Seals the platform's tokens for every server. A server whose push relay cannot be
+    /// reached or has no pins is passed over (its mailboxes wake nobody until a later seal),
+    /// unless no server could be sealed for at all.
+    ///
+    /// # Errors
+    ///
+    /// A store failure; [`Unavailable::Sync`] without any server; the first server's error
+    /// when no server was sealed for.
+    async fn seal_everywhere(&self, tokens: &PushTokens) -> Result<(), ClientError> {
+        let links = self.servers.all().await?;
+        let mut first_error = None;
+        let mut sealed = false;
+        for link in &links {
+            match link.seal_wake_push(tokens).await {
+                Ok(()) => sealed = true,
+                Err(error @ (ClientError::Store(_) | ClientError::Records(_))) => {
+                    return Err(error);
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        match first_error {
+            Some(error) if !sealed => Err(error),
+            None if links.is_empty() => Err(Unavailable::Sync.into()),
+            _ => Ok(()),
+        }
+    }
+
+    async fn clear_everywhere(&self) -> Result<(), ClientError> {
+        for link in self.servers.all().await? {
+            link.clear_wake_push();
+        }
+        Ok(())
     }
 }
 
@@ -446,32 +531,45 @@ const fn stored_purpose(purpose: MailboxPurpose) -> StoredPurpose {
     }
 }
 
-impl Net {
-    async fn server<T>(
-        &self,
-        call: impl core::future::Future<Output = Result<T, SyncError>>,
-    ) -> Result<T, PortError> {
-        let result = call.await;
-        self.observe(&result);
-        result.map_err(|error| port_error(&error.into()))
-    }
+/// A server call for a wake: its result observed on the link, mapped to a port error.
+async fn on<T>(
+    link: &Link,
+    call: impl core::future::Future<Output = Result<T, SyncError>>,
+) -> Result<T, PortError> {
+    let result = call.await;
+    link.observe(&result);
+    result.map_err(|error| port_error(&error.into()))
 }
 
 impl Net {
-    /// Posts a Meetup Welcome to the knocker's reply mailbox, padded to a mailbox class. If it
-    /// never arrives, a Meetup this device just created ends by itself after 30 minutes alone
-    /// (design B.5).
+    async fn port_link(&self, server: &ServerId) -> Result<Arc<Link>, PortError> {
+        self.link(server)
+            .await
+            .map_err(|_unknown| PortError::Unavailable)
+    }
+
+    /// Posts a Meetup Welcome to the knocker's reply mailbox on the Party's server, padded to a
+    /// mailbox class. If it never arrives, a Meetup this device just created ends by itself
+    /// after 30 minutes alone (design B.5).
     pub(crate) async fn post_welcome(
         &self,
+        party: PartyId,
         mailbox: MailboxId,
         welcome: WelcomeBytes,
     ) -> Result<(), PortError> {
-        let engine = self.engine().map_err(|_none| PortError::Unavailable)?;
+        let server = self
+            .party_server(party)
+            .await
+            .map_err(|_unknown| PortError::Unavailable)?;
+        let link = self.port_link(&server).await?;
         let body = Padded::pad_smallest(welcome.as_bytes(), &SizeClass::MAILBOX_POST)
             .map_err(|_too_big| PortError::Unavailable)?;
-        match self
-            .server(engine.post_to_mailbox(&mailbox, &body, self.keep_until()))
-            .await?
+        match on(
+            &link,
+            link.engine
+                .post_to_mailbox(&mailbox, &body, self.keep_until()),
+        )
+        .await?
         {
             Delivered::Done(_) | Delivered::Queued(_) => Ok(()),
             Delivered::Dropped(_) => Err(PortError::Unreachable),
@@ -479,19 +577,19 @@ impl Net {
     }
 }
 
-// One engine serves every server for now: the server each call names is not used yet.
 impl ServerPort for Net {
-    async fn pull_group_logs(&self, _server: &ServerId) -> Result<(), PortError> {
+    async fn pull_group_logs(&self, server: &ServerId) -> Result<(), PortError> {
+        let link = self.port_link(server).await?;
         // A Party may have changed: the wake's next Party view reads it again.
-        self.flush().await.map_err(|error| port_error(&error))?;
+        self.flush_server(&link)
+            .await
+            .map_err(|error| port_error(&error))?;
         // The server's parameters once per process (the map host, the push relays); a failure
         // here is the next wake's to retry and does not stop the pull.
-        if let Err(error @ (ClientError::Store(_) | ClientError::Records(_))) =
-            self.server_params().await
-        {
-            return Err(port_error(&error));
-        }
-        self.pull_all()
+        self.params_of(&link)
+            .await
+            .map_err(|error| port_error(&error))?;
+        self.pull_server(&link)
             .await
             .map(drop)
             .map_err(|error| port_error(&error))
@@ -499,18 +597,20 @@ impl ServerPort for Net {
 
     async fn upload_lease(
         &self,
-        _server: &ServerId,
+        server: &ServerId,
         upload: LeaseUpload,
     ) -> Result<Option<BoardPage>, PortError> {
-        let engine = self.engine().map_err(|_none| PortError::Unavailable)?;
+        let link = self.port_link(server).await?;
         let lease = NewLease {
             lease: upload.lease,
             revoke_key: upload.revoke_key,
             read: upload.read,
         };
-        match self
-            .server(engine.upload_lease(lease, WakeBudget::UNLIMITED))
-            .await?
+        match on(
+            &link,
+            link.engine.upload_lease(lease, WakeBudget::UNLIMITED),
+        )
+        .await?
         {
             Delivered::Done(response) => Ok(response.page),
             Delivered::Queued(_) | Delivered::Dropped(_) => Err(PortError::Unreachable),
@@ -519,21 +619,26 @@ impl ServerPort for Net {
 
     async fn board_page(
         &self,
-        _server: &ServerId,
+        server: &ServerId,
         cursor: BoardCursor,
     ) -> Result<BoardPage, PortError> {
-        let engine = self.engine().map_err(|_none| PortError::Unavailable)?;
-        self.server(engine.board_page(&cursor, WakeBudget::UNLIMITED))
-            .await
+        let link = self.port_link(server).await?;
+        on(
+            &link,
+            link.engine.board_page(&cursor, WakeBudget::UNLIMITED),
+        )
+        .await
     }
 
-    async fn post_knock(&self, _server: &ServerId, knock: OutgoingKnock) -> Result<(), PortError> {
-        let engine = self.engine().map_err(|_none| PortError::Unavailable)?;
+    async fn post_knock(&self, server: &ServerId, knock: OutgoingKnock) -> Result<(), PortError> {
+        let link = self.port_link(server).await?;
         let body = Padded::from_wire(knock.post).map_err(|_bad| PortError::Unavailable)?;
         let sending = Sending::or_drop(WakeBudget::UNLIMITED);
-        match self
-            .server(engine.post_to_mailbox(&knock.mailbox, &body, sending))
-            .await?
+        match on(
+            &link,
+            link.engine.post_to_mailbox(&knock.mailbox, &body, sending),
+        )
+        .await?
         {
             Delivered::Done(_) | Delivered::Queued(_) => Ok(()),
             Delivered::Dropped(_) => Err(PortError::Unreachable),
@@ -542,13 +647,16 @@ impl ServerPort for Net {
 
     async fn read_mailbox(
         &self,
-        _server: &ServerId,
+        server: &ServerId,
         mailbox: MailboxId,
     ) -> Result<Vec<Vec<u8>>, PortError> {
-        let engine = self.engine().map_err(|_none| PortError::Unavailable)?;
-        let messages = self
-            .server(engine.read_mailbox(&mailbox, None, WakeBudget::UNLIMITED))
-            .await?;
+        let link = self.port_link(server).await?;
+        let messages = on(
+            &link,
+            link.engine
+                .read_mailbox(&mailbox, None, WakeBudget::UNLIMITED),
+        )
+        .await?;
         Ok(messages
             .messages
             .into_iter()
@@ -558,27 +666,32 @@ impl ServerPort for Net {
 
     fn take_mailbox(
         &self,
-        _server: &ServerId,
+        server: &ServerId,
         purpose: MailboxPurpose,
         lease_start: Bucket,
     ) -> Option<MailboxId> {
-        self.engine
-            .as_deref()?
+        self.servers
+            .loaded(server)?
+            .engine
             .take_mailbox_for_lease(stored_purpose(purpose), lease_start)
             .ok()
             .flatten()
     }
 
-    async fn refill_mailbox_pool(&self, _server: &ServerId) -> Result<(), PortError> {
-        let engine = self.engine().map_err(|_none| PortError::Unavailable)?;
+    async fn refill_mailbox_pool(&self, server: &ServerId) -> Result<(), PortError> {
+        let link = self.port_link(server).await?;
         let target = PoolTarget {
             purpose: StoredPurpose::Knock,
             size: KNOCK_POOL,
             lifetime: TimeToLive::new(MAILBOX_LIFETIME).map_err(|_never| PortError::Unavailable)?,
         };
-        self.server(engine.refill_mailbox_pool(&target, WakeBudget::UNLIMITED))
-            .await
-            .map(drop)
+        on(
+            &link,
+            link.engine
+                .refill_mailbox_pool(&target, WakeBudget::UNLIMITED),
+        )
+        .await
+        .map(drop)
     }
 }
 
@@ -587,28 +700,19 @@ pub(crate) struct Sync(pub(crate) Arc<Net>);
 
 #[async_trait]
 impl SyncPort for Sync {
-    /// New mailboxes and subscriptions are sealed with the new tokens from now on; with pushes
-    /// off nothing is sealed. Mailboxes and subscriptions already registered keep their old
-    /// seal until they expire or are renewed.
+    /// New mailboxes and subscriptions on every server are sealed with the new tokens from now
+    /// on; with pushes off nothing is sealed. Mailboxes and subscriptions already registered
+    /// keep their old seal until they expire or are renewed.
     async fn push_tokens_changed(&self, tokens: Option<PushTokens>) -> Result<(), ClientError> {
-        let setting = self
-            .0
-            .backend
-            .store(|session, _clock, _rng| Ok(session.settings().wake_pushes()?))
-            .await?;
-        match (setting, tokens) {
+        match (self.0.wake_pushes().await?, tokens) {
             (StoredPushes::Disabled, _) => Ok(()),
-            (StoredPushes::Enabled, None) => {
-                self.0.engine()?;
-                self.0.clear_wake_push();
-                Ok(())
-            }
-            (StoredPushes::Enabled, Some(tokens)) => self.0.seal_wake_push(&tokens).await,
+            (StoredPushes::Enabled, None) => self.0.clear_everywhere().await,
+            (StoredPushes::Enabled, Some(tokens)) => self.0.seal_everywhere(&tokens).await,
         }
     }
 
-    /// "No wake-up pushes" seals no token anywhere; turning them on fetches the push relay's
-    /// key (checked against its pins) and seals the platform's token to it.
+    /// "No wake-up pushes" seals no token anywhere; turning them on fetches each server's push
+    /// relay key (checked against its pins) and seals the platform's token to it.
     async fn set_wake_pushes(
         &self,
         setting: WakePushes,
@@ -617,7 +721,7 @@ impl SyncPort for Sync {
         match setting {
             WakePushes::On => {
                 let tokens = tokens.ok_or(Unavailable::NoPushToken)?;
-                self.0.seal_wake_push(&tokens).await?;
+                self.0.seal_everywhere(&tokens).await?;
                 self.0
                     .backend
                     .store(|session, _clock, _rng| {
@@ -626,7 +730,7 @@ impl SyncPort for Sync {
                     .await
             }
             WakePushes::NoWakePushes => {
-                self.0.clear_wake_push();
+                self.0.clear_everywhere().await?;
                 self.0
                     .backend
                     .store(|session, _clock, _rng| {
@@ -637,50 +741,85 @@ impl SyncPort for Sync {
         }
     }
 
-    /// The gateway's key config fetched afresh through the relay and checked against its pin
-    /// (pingers-sync's `check_relay`): nothing reaches the gateway, nothing about the device
-    /// goes with it. Without an instance nothing is sent and the answer is `Unreachable`.
+    /// Each server's gateway key config fetched afresh through its relay and checked against
+    /// its pins (pingers-sync's `check_relay`): nothing reaches a gateway, nothing about the
+    /// device goes with it. Each server's status shows in its Parties' settings; the answer is
+    /// the built-in server's (or, without one, the first server's). Without any server nothing
+    /// is sent and the answer is `Unreachable`.
     async fn check_reachability(&self) -> Result<RelayStatus, ClientError> {
-        let Some(engine) = &self.0.engine else {
-            *self.0.relay.lock().unwrap_or_else(PoisonError::into_inner) = RelayStatus::Unreachable;
-            return Ok(RelayStatus::Unreachable);
-        };
-        let result = engine.check_relay(WakeBudget::UNLIMITED).await;
-        self.0.observe(&result);
-        match result {
-            Ok(()) => {
-                // Who runs the server, for New party: the parameters, read once per process. A
-                // failure here leaves the operators unknown; only a store failure is an error.
-                if let Err(error @ (ClientError::Store(_) | ClientError::Records(_))) =
-                    self.0.server_params().await
-                {
-                    return Err(error);
+        let links = self.0.servers.all().await?;
+        let mut answer = None;
+        for link in &links {
+            let result = link.engine.check_relay(WakeBudget::UNLIMITED).await;
+            link.observe(&result);
+            let status = match result {
+                Ok(()) => {
+                    // Who runs the server, for New party and the Party settings: the
+                    // parameters, read once per process.
+                    self.0.params_of(link).await?;
+                    RelayStatus::Reachable
                 }
-                Ok(RelayStatus::Reachable)
+                Err(SyncError::NoRelay { .. } | SyncError::Transport(_)) => {
+                    link.set_relay_status(RelayStatus::Unreachable);
+                    RelayStatus::Unreachable
+                }
+                Err(SyncError::RelayKeyMismatch) => RelayStatus::KeyMismatch,
+                Err(error) => return Err(error.into()),
+            };
+            if self.0.servers.built_in() == Some(&link.server) || answer.is_none() {
+                answer = Some(status);
             }
-            Err(SyncError::NoRelay { .. }) => Ok(RelayStatus::Unreachable),
-            Err(SyncError::RelayKeyMismatch) => Ok(RelayStatus::KeyMismatch),
-            Err(error) => Err(error.into()),
         }
+        Ok(answer.unwrap_or(RelayStatus::Unreachable))
+    }
+
+    async fn probe_server(&self, address: String) -> Result<ServerProbe, ClientError> {
+        self.0.probe_server(&address).await
+    }
+
+    async fn trust_server(&self, server: ServerId) -> Result<(), ClientError> {
+        self.0.trust_server(&server).await
+    }
+
+    /// The code goes to the server's engine as the user's; a refusal is
+    /// [`ClientError::RegistrationCodeRefused`], distinct from a server that is not reached.
+    async fn submit_registration_code(
+        &self,
+        server: ServerId,
+        code: SecretText,
+    ) -> Result<(), ClientError> {
+        self.0
+            .link(&server)
+            .await?
+            .offer_code(code, pingers_sync::CodeSource::User)
+            .await
     }
 
     async fn section(&self) -> Result<ServerSection, ClientError> {
         let map_host = self.0.map_host().await?;
+        let built_in = self.0.servers.built_in_link().await.ok();
         Ok(ServerSection {
             fallbacks: Vec::new(),
-            relay: *self.0.relay.lock().unwrap_or_else(PoisonError::into_inner),
+            relay: built_in
+                .as_ref()
+                .map_or(RelayStatus::Unreachable, |link| link.relay_status()),
             map_host,
-            operators: self.0.operators(),
+            operators: built_in.and_then(|link| link.operators()),
         })
     }
 }
 
-/// pingers-meetup-session's `GroupNetwork`.
+/// pingers-meetup-session's `GroupNetwork`: every call goes to the server of the Meetup's
+/// Party.
 ///
 /// WAITING(pingers-meetup-session): `live_head` hands back a raw `BinaryRequest` for its own
 /// transport, while pingers-sync builds and sends the live request itself (`open_live`); until
 /// the two meet, the live channel is not opened from here.
-pub(crate) struct GroupLogs(pub(crate) Arc<Net>);
+pub(crate) struct GroupLogs {
+    pub(crate) net: Arc<Net>,
+    /// The server of the Meetup's Party.
+    pub(crate) server: ServerId,
+}
 
 #[expect(
     clippy::wildcard_enum_match_arm,
@@ -693,18 +832,28 @@ fn network_error(error: &SyncError) -> NetworkError {
     }
 }
 
+impl GroupLogs {
+    async fn link(&self, _group: &GroupId) -> Result<Arc<Link>, NetworkError> {
+        self.net
+            .link(&self.server)
+            .await
+            .map_err(|_unknown| NetworkError::Unavailable)
+    }
+}
+
 #[async_trait]
 impl GroupNetwork for GroupLogs {
     async fn create_group(&self, request: CreateGroup) -> Result<(), NetworkError> {
-        let engine = self.0.engine().map_err(|_none| NetworkError::Unavailable)?;
+        let link = self.link(&request.group_id).await?;
         let start = GroupStart {
             lifetime: GroupLifetime::Meetup,
             epoch: Epoch::new(1),
         };
-        let result = engine
+        let result = link
+            .engine
             .create_group(&request, start, WakeBudget::UNLIMITED)
             .await;
-        self.0.observe(&result);
+        link.observe(&result);
         result.map_err(|error| network_error(&error))
     }
 
@@ -714,7 +863,8 @@ impl GroupNetwork for GroupLogs {
         auth: &LogAuthKeyPair,
         request: CommitRequest,
     ) -> Result<CommitResponse, NetworkError> {
-        let engine = self.0.engine().map_err(|_none| NetworkError::Unavailable)?;
+        let link = self.link(group).await?;
+        let engine = &link.engine;
         let signer = GroupSigner {
             key: auth,
             now: engine.corrected_now(),
@@ -730,7 +880,7 @@ impl GroupNetwork for GroupLogs {
                 .decode::<CommitResponse>()
         }
         .await;
-        self.0.observe(&result);
+        link.observe(&result);
         result.map_err(|error| network_error(&error))
     }
 
@@ -740,14 +890,14 @@ impl GroupNetwork for GroupLogs {
         auth: &LogAuthKeyPair,
         message: AppMessage,
     ) -> Result<(), NetworkError> {
-        let engine = self.0.engine().map_err(|_none| NetworkError::Unavailable)?;
+        let link = self.link(group).await?;
         let call = GroupCall { group, key: auth };
         let result = delivered(
-            engine
-                .post_group_message(call, &message, self.0.keep_until())
+            link.engine
+                .post_group_message(call, &message, self.net.keep_until())
                 .await,
         );
-        self.0.observe(&result);
+        link.observe(&result);
         match result {
             Ok(true) => Ok(()),
             Ok(false) => Err(NetworkError::Unavailable),
@@ -761,15 +911,16 @@ impl GroupNetwork for GroupLogs {
         auth: &LogAuthKeyPair,
         after: Option<SequenceNumber>,
     ) -> Result<Vec<GroupLogEntry>, NetworkError> {
-        let engine = self.0.engine().map_err(|_none| NetworkError::Unavailable)?;
+        let link = self.link(group).await?;
         let mut entries: Vec<GroupLogEntry> = Vec::new();
         let mut cursor = after;
         loop {
             let call = GroupCall { group, key: auth };
-            let result = engine
+            let result = link
+                .engine
                 .read_group_messages(call, cursor, WakeBudget::UNLIMITED)
                 .await;
-            self.0.observe(&result);
+            link.observe(&result);
             let page = result.map_err(|error| network_error(&error))?;
             // Pages follow each other until one comes back empty.
             let Some(last) = page.messages.last().map(|entry| entry.sequence) else {
@@ -785,11 +936,12 @@ impl GroupNetwork for GroupLogs {
         group: &GroupId,
         auth: &LogAuthKeyPair,
     ) -> Result<(), NetworkError> {
-        let engine = self.0.engine().map_err(|_none| NetworkError::Unavailable)?;
-        let result = engine
+        let link = self.link(group).await?;
+        let result = link
+            .engine
             .delete_group(GroupCall { group, key: auth }, WakeBudget::UNLIMITED)
             .await;
-        self.0.observe(&result);
+        link.observe(&result);
         result.map_err(|error| network_error(&error))
     }
 

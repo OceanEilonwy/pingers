@@ -39,6 +39,15 @@ pub enum CoreError {
         /// Why.
         reason: String,
     },
+    /// A server could not be used, or asks for a registration code: `issue` says which screen
+    /// to show.
+    #[error("{reason}")]
+    Server {
+        /// Which.
+        issue: crate::servers::ServerIssue,
+        /// What to tell the user, in words.
+        reason: String,
+    },
     /// The encrypted database or the secure store failed.
     #[error("{reason}")]
     Storage {

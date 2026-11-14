@@ -18,8 +18,10 @@ use pingers_meetup::LocationVisibility;
 use pingers_meetup_session::MeetupScreen;
 use pingers_presence::DataMode;
 use pingers_proto::{CoverReadRatio, PartyId, PushHandle};
-use pingers_store::{LocationVisibility as StoredVisibility, Session, WakePushes as StoredPushes};
-use pingers_sync::SyncEngine;
+use pingers_store::{
+    HandleKind, HandleOwner, LocationVisibility as StoredVisibility, Session,
+    WakePushes as StoredPushes,
+};
 use pingers_time::{Clock, UnixSeconds};
 use pingers_wake::{
     GeofenceEvent, GeofenceTransition as WakeTransition, MailboxReads, PushReason, WakeEnv,
@@ -87,7 +89,9 @@ impl Wake {
     ) -> Result<(WakeReport, WakeOutcome), ClientError> {
         let mut state = self.state.lock().await;
         // A snapshot from before boards were kept per server belongs to the instance's server.
-        let legacy_server = self.net.engine.as_deref().map(SyncEngine::server);
+        // The links are loaded before the wake: its synchronous mailbox port reads them.
+        self.net.servers.all().await?;
+        let legacy_server = self.net.servers.built_in().cloned();
         let (stored, lens, snapshot) = self
             .backend
             .store(move |session, clock, rng| {
@@ -149,13 +153,17 @@ impl Wake {
     async fn push_reason(&self, handle: PushHandle) -> Result<PushReason, ClientError> {
         self.backend
             .store(move |session, _clock, _rng| {
-                if session.mailboxes().by_handle(&handle)?.is_some() {
-                    Ok(PushReason::Mailbox)
-                } else if session.subscriptions().by_handle(&handle)?.is_some() {
-                    Ok(PushReason::GroupCommit)
-                } else {
-                    Ok(PushReason::Unknown)
-                }
+                Ok(match session.push_handle_owner(&handle)? {
+                    Some(HandleOwner {
+                        kind: HandleKind::Mailbox,
+                        ..
+                    }) => PushReason::Mailbox,
+                    Some(HandleOwner {
+                        kind: HandleKind::Subscription,
+                        ..
+                    }) => PushReason::GroupCommit,
+                    None => PushReason::Unknown,
+                })
             })
             .await
     }

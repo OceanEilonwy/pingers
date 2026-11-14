@@ -354,8 +354,14 @@ pub struct Spot {
 /// The services a Party uses and who declares to run them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartyConfig {
+    /// The Pingers server the Party lives on (its origin).
+    pub origin: pingers_proto::ServerId,
     /// The Pingers server.
     pub server: Service,
+    /// Whether this device reaches the Party's server through its privacy relay now.
+    pub relay_status: RelayStatus,
+    /// How this device came to trust the server's keys.
+    pub keys: KeyTrust,
     /// How the server is run.
     pub hosting: Hosting,
     /// The OHTTP privacy relay this device uses.
@@ -364,6 +370,17 @@ pub struct PartyConfig {
     pub push_relay: PushRelay,
     /// Whether the Party uses the X-Wing MLS suite.
     pub post_quantum: PostQuantum,
+}
+
+/// How this device came to trust a server's keys. Nothing is pinned on first use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum KeyTrust {
+    /// The app's built-in server: its keys are pinned in the app.
+    BuiltIn,
+    /// The invite link carried the keys, from an inviter who already trusted them.
+    FromInvite,
+    /// The user looked at the keys and trusted them when creating a Party.
+    Confirmed,
 }
 
 /// A server or relay and its declared operator.
@@ -913,7 +930,11 @@ mod tests {
                 })
                 .collect::<Result<_, SnapshotError>>()?,
             config: PartyConfig {
+                origin: pingers_proto::ServerId::new("https://hall.example".to_owned())
+                    .map_err(|_invalid| SnapshotError::InvalidHost)?,
                 server: service.clone(),
+                relay_status: RelayStatus::Reachable,
+                keys: KeyTrust::Confirmed,
                 hosting: Hosting::SelfHosted,
                 relay: service.clone(),
                 push_relay: PushRelay {

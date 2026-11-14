@@ -166,12 +166,16 @@ impl CommitOwner for PartyLog {
     }
 }
 
-/// The Parties on this device, for a pull of every log.
-pub(crate) fn parties(session: &Session) -> Result<Vec<PartyId>, ClientError> {
+/// The Parties that live on `server`.
+pub(crate) fn parties_on(
+    session: &Session,
+    server: &pingers_proto::ServerId,
+) -> Result<Vec<PartyId>, ClientError> {
     Ok(session
         .parties()
         .list()?
         .into_iter()
+        .filter(|row| row.server == *server)
         .map(|row| row.id)
         .collect())
 }

@@ -287,6 +287,7 @@ async fn party_commands_reach_parties_and_republish() -> Result<(), TestError> {
     let rig = rig().await?;
     let client = &rig.client;
     let draft = PartyDraft {
+        server: None,
         name: name("Climbing crew")?,
         my_name: name("Ana")?,
         colour: PartyColour::Teal,

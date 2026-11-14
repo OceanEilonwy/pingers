@@ -30,9 +30,9 @@ mod real;
 pub mod snapshot;
 
 pub use client::{Client, ClientConfig};
-pub use error::{ClientError, Unavailable};
+pub use error::{ClientError, ServerProblem, Unavailable};
 pub use pingers_ohttp::KeyPins;
-pub use ports::Crates;
+pub use ports::{Crates, ProbedPushRelay, ServerProbe};
 pub use real::{Instance, Outside, Trust};
 
 use std::time::Duration;

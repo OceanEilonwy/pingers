@@ -14,7 +14,9 @@
 //! - `sync`: [`SyncPort`](crate::ports::SyncPort), pingers-wake's `ServerPort` and
 //!   pingers-meetup-session's `GroupNetwork` over pingers-sync's engine, and the outbox that
 //!   sends pingers-parties' `Outbound` values; `party_log` is a Party's log for the engine.
-//! - `network`: the instance settings, and the router and engine built from them.
+//! - `network`: the built-in instance's settings, and the router and engine of one server.
+//! - `servers`: the registry of servers this device has Parties on, one engine each.
+//! - `probe`: looking at a new server and trusting it (New party), or one an invite names.
 //! - `records`: the client's own records in the store's key-value table.
 
 mod join;
@@ -22,8 +24,10 @@ mod meetups;
 mod network;
 mod parties;
 mod party_log;
+mod probe;
 mod push;
 mod records;
+mod servers;
 mod sync;
 mod wake;
 mod wake_codec;
@@ -85,40 +89,16 @@ impl Crates {
         outside: Outside,
         instance: Option<&Instance>,
     ) -> Result<Self, ClientError> {
-        let transport = instance
-            .map(|instance| network::router(instance, Arc::clone(&outside.timer), &outside))
-            .transpose()?;
         let backend = Arc::new(Backend {
             database: Arc::new(database),
             outside,
-            transport,
         });
-        let engine = match (instance, &backend.transport) {
-            (Some(instance), Some(transport)) => Some(network::engine(
-                instance,
-                Arc::clone(transport),
-                &backend.database,
-                &backend.outside,
-            )?),
-            _ => None,
-        };
-        let learned = push::Learned::new(
-            instance.and_then(|instance| {
-                instance
-                    .push_relay
-                    .clone()
-                    .map(|origin| push::PushRelaySetup {
-                        origin,
-                        pins: instance.push_relay_pins.clone(),
-                    })
-            }),
+        let servers = servers::Servers::new(
+            Arc::clone(&backend),
+            instance.cloned(),
             Some(Arc::clone(&platform)),
         );
-        let online = engine.map(|engine| sync::Online {
-            engine,
-            registration_code: instance.and_then(|instance| instance.registration_code.clone()),
-        });
-        let net = Arc::new(sync::Net::new(Arc::clone(&backend), online, learned));
+        let net = Arc::new(sync::Net::new(Arc::clone(&backend), servers));
         let meetups = Arc::new(meetups::Meetups::new(
             Arc::clone(&backend),
             Arc::clone(&net),
@@ -144,9 +124,6 @@ impl Crates {
 pub(crate) struct Backend {
     database: Arc<Database>,
     outside: Outside,
-    /// The router over the configured instance, for pingers-sync's engine and the live
-    /// channels of Meetups.
-    transport: Option<Arc<dyn pingers_transport::Transport>>,
 }
 
 impl Backend {

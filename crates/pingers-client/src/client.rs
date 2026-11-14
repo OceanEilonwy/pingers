@@ -10,6 +10,7 @@ mod consent;
 mod meetups;
 mod parties;
 mod pipeline;
+mod servers;
 mod settings;
 
 use std::path::PathBuf;

@@ -114,12 +114,18 @@ impl Meetups {
         Ok(())
     }
 
-    /// What every Meetup shares. `None` without a configured instance.
-    fn runtime(&self) -> Option<Runtime> {
+    /// What a Meetup of `party` uses: the transport and group calls of the Party's server.
+    /// `None` if this device cannot reach that server.
+    async fn runtime(&self, party: pingers_proto::PartyId) -> Option<Runtime> {
+        let server = self.net.party_server(party).await.ok()?;
+        let link = self.net.link(&server).await.ok()?;
         Some(Runtime {
             database: Arc::clone(&self.backend.database),
-            transport: Arc::clone(self.backend.transport.as_ref()?),
-            network: Arc::new(GroupLogs(Arc::clone(&self.net))),
+            transport: Arc::clone(&link.transport),
+            network: Arc::new(GroupLogs {
+                net: Arc::clone(&self.net),
+                server,
+            }),
             clock: Arc::clone(&self.backend.outside.clock),
             timer: Arc::clone(&self.backend.outside.timer),
         })
@@ -128,8 +134,11 @@ impl Meetups {
     /// Creates a Meetup at the key's Spot with the knocker and keeps it live; returns the
     /// Welcome for the knocker.
     async fn create(&self, key: MeetupKey, knocker: AddMember) -> Result<WelcomeBytes, PortError> {
-        let runtime = self.runtime().ok_or(PortError::Unavailable)?;
         let spot = key.id().spot;
+        let runtime = self
+            .runtime(spot.party)
+            .await
+            .ok_or(PortError::Unavailable)?;
         let (group, suite) = self
             .backend
             .store(move |session, clock, rng| {
@@ -422,6 +431,7 @@ impl MeetupPort for Meetups {
             knock,
         } = admission;
         let reply_mailbox = knock.knock.reply_mailbox;
+        let key_party = key.id().spot.party;
         let newcomer = AddMember {
             key_package: knock.knock.key_package,
             subscription: knock.knock.meetup_subscription,
@@ -435,7 +445,9 @@ impl MeetupPort for Meetups {
                 .await
                 .map_err(|_failed| PortError::Unavailable)?,
         };
-        self.net.post_welcome(reply_mailbox, welcome).await
+        self.net
+            .post_welcome(key_party, reply_mailbox, welcome)
+            .await
     }
 
     /// WAITING(contracts): joining needs the grant secret of the KeyPackage this device

@@ -22,13 +22,15 @@ use pingers_time::{Clock, UnixSeconds};
 
 use super::Backend;
 use super::records::{self, Key, corrupt};
+use super::servers::ServerView;
 use super::sync::Net;
 use crate::ports::{
     AllowListChange, JoinDecision, PartiesPort, PartiesSection, PartyDraft, SpotDraft,
 };
 use crate::snapshot::{
-    Host, Hosting, Invite, InviteLink, InviteStatus, InviteUrl, Me, Member, Name, Operator, Party,
-    PartyColour, PartyConfig, PostQuantum, PushRelay, PushRelayKind, Service, Spot,
+    Host, Hosting, Invite, InviteLink, InviteStatus, InviteUrl, KeyTrust, Me, Member, Name,
+    Operator, Party, PartyColour, PartyConfig, PostQuantum, PushRelay, PushRelayKind, RelayStatus,
+    Service, Spot,
 };
 use crate::{ClientError, Unavailable};
 
@@ -57,9 +59,13 @@ impl Parties {
         }
     }
 
-    /// Hands `outbound` to pingers-sync and sends what it can now.
-    async fn send(&self, outbound: impl IntoIterator<Item = Outbound>) -> Result<(), ClientError> {
-        self.net.push(outbound);
+    /// Hands `outbound` to pingers-sync for `server` and sends what it can now.
+    async fn send(
+        &self,
+        server: &ServerId,
+        outbound: impl IntoIterator<Item = Outbound>,
+    ) -> Result<(), ClientError> {
+        self.net.push(server, outbound);
         self.net.flush().await.map(drop)
     }
 
@@ -71,12 +77,19 @@ impl Parties {
 #[async_trait]
 impl PartiesPort for Parties {
     async fn create_party(&self, draft: PartyDraft) -> Result<PartyId, ClientError> {
-        // The first Party makes the account (design B.1).
-        self.net.ready().await?;
+        let server = draft
+            .server
+            .clone()
+            .or_else(|| self.net.servers.built_in().cloned())
+            .ok_or(Unavailable::Sync)?;
+        // The first Party on a server makes the account there (design B.1); a server that
+        // wants a registration code says so now.
+        self.net.account(&server).await?;
+        let party_server = server.clone();
         let created = self
             .backend
             .store(move |session, clock, rng| {
-                let server = account_server(session)?;
+                let server = party_server;
                 let new = NewParty {
                     name: PartyName::new(draft.name.as_str().to_owned())?,
                     own_name: MemberName::new(draft.my_name.as_str().to_owned())?,
@@ -98,13 +111,15 @@ impl PartiesPort for Parties {
                 Ok(created)
             })
             .await?;
-        self.send([created.outbound]).await?;
+        self.send(&server, [created.outbound]).await?;
         Ok(created.party)
     }
 
     async fn create_invite(&self, party: PartyId) -> Result<InviteLink, ClientError> {
-        // The code this device registered with travels in the link (design B.1).
-        let registration_code = self.net.shared_registration_code().await?;
+        // The code this device registered with on the Party's server travels in the link
+        // (design B.1).
+        let server = self.net.party_server(party).await?;
+        let registration_code = self.net.shared_registration_code(&server).await?;
         let created = self
             .backend
             .store(move |session, clock, rng| {
@@ -131,6 +146,7 @@ impl PartiesPort for Parties {
     }
 
     async fn cancel_invite(&self, party: PartyId, invite: MailboxId) -> Result<(), ClientError> {
+        let server = self.net.party_server(party).await?;
         let outbound = self
             .backend
             .store(move |session, clock, _rng| {
@@ -156,7 +172,7 @@ impl PartiesPort for Parties {
                 links.remove(&party);
             }
         }
-        self.send([outbound]).await
+        self.send(&server, [outbound]).await
     }
 
     async fn set_display_name(&self, name: Name) -> Result<(), ClientError> {
@@ -191,17 +207,19 @@ impl PartiesPort for Parties {
     }
 
     async fn remove_member(&self, party: PartyId, member: LeafIndex) -> Result<(), ClientError> {
+        let server = self.net.party_server(party).await?;
         let commit = self
             .backend
             .store(move |session, clock, rng| {
                 Ok(PartyLifecycle::new(session, clock).remove_member(&party, member, rng)?)
             })
             .await?;
-        self.send([Outbound::Commit(commit)]).await?;
+        self.send(&server, [Outbound::Commit(commit)]).await?;
         Ok(())
     }
 
     async fn leave_party(&self, party: PartyId) -> Result<(), ClientError> {
+        let server = self.net.party_server(party).await?;
         let outbound = self
             .backend
             .store(move |session, clock, rng| {
@@ -211,11 +229,12 @@ impl PartiesPort for Parties {
             })
             .await?;
         self.links().remove(&party);
-        self.send(outbound).await?;
+        self.send(&server, outbound).await?;
         Ok(())
     }
 
     async fn save_spot(&self, party: PartyId, spot: SpotDraft) -> Result<SpotId, ClientError> {
+        let server = self.net.party_server(party).await?;
         let change = self
             .backend
             .store(move |session, clock, rng| {
@@ -235,18 +254,19 @@ impl PartiesPort for Parties {
                 })
             })
             .await?;
-        self.send([change.outbound]).await?;
+        self.send(&server, [change.outbound]).await?;
         Ok(change.spot)
     }
 
     async fn delete_spot(&self, party: PartyId, spot: SpotId) -> Result<(), ClientError> {
+        let server = self.net.party_server(party).await?;
         let change = self
             .backend
             .store(move |session, clock, rng| {
                 Ok(PartyLifecycle::new(session, clock).delete_spot(&party, &spot, rng)?)
             })
             .await?;
-        self.send([change.outbound]).await?;
+        self.send(&server, [change.outbound]).await?;
         Ok(())
     }
 
@@ -280,6 +300,16 @@ impl PartiesPort for Parties {
             .iter()
             .map(|(party, shared)| (*party, shared.link.clone()))
             .collect();
+        let build_push = self.net.servers.build_push_relay();
+        let views: HashMap<ServerId, ServerView> = self
+            .net
+            .servers
+            .all()
+            .await?
+            .iter()
+            .map(|link| (link.server.clone(), link.view(build_push.as_ref())))
+            .collect();
+        let shown = Shown { links, views };
         let (parties, display_name) = self
             .backend
             .store(move |session, clock, _rng| {
@@ -287,7 +317,7 @@ impl PartiesPort for Parties {
                     .parties()
                     .list()?
                     .into_iter()
-                    .map(|row| party(session, clock, &row, &links))
+                    .map(|row| party(session, clock, &row, &shown))
                     .collect::<Result<Vec<_>, _>>()?;
                 let display_name = records::read(session, &Key::DisplayName, |reader| {
                     name_of(&reader.text()?)
@@ -303,13 +333,11 @@ impl PartiesPort for Parties {
     }
 }
 
-/// The server this device's account is registered with.
-fn account_server(session: &Session) -> Result<ServerId, ClientError> {
-    Ok(session
-        .identity()
-        .load()?
-        .ok_or(PartiesError::NoAccount)?
-        .server)
+/// What the snapshot adds to the stored Parties: this process's invite links and what each
+/// server's link knows.
+struct Shown {
+    links: HashMap<PartyId, InviteLink>,
+    views: HashMap<ServerId, ServerView>,
 }
 
 /// One Party as the snapshot shows it.
@@ -317,7 +345,7 @@ fn party(
     session: &Session,
     clock: &dyn Clock,
     row: &StoredParty,
-    links: &HashMap<PartyId, InviteLink>,
+    shown: &Shown,
 ) -> Result<Party, ClientError> {
     let id = row.id;
     let lifecycle = PartyLifecycle::new(session, clock);
@@ -378,35 +406,42 @@ fn party(
         colour,
         members,
         spots,
-        config: config(&settings)?,
+        config: config(&settings, shown.views.get(&settings.server))?,
         invites,
-        invite_link: links.get(&id).cloned(),
+        invite_link: shown.links.get(&id).cloned(),
     })
 }
 
-/// Who runs what for a Party.
-///
-/// WAITING(pingers-sync): operator declarations, the hosting kind and the relays come from the
-/// server's `/v1/config`, which pingers-sync reads. Until then the snapshot names the Party's
-/// server for every service and "undeclared" for every operator.
-fn config(settings: &PartySettings) -> Result<PartyConfig, ClientError> {
+/// Who runs what for a Party, from what its server's link knows: the server's declared
+/// operator (once its `/v1/params` were read in this process), the relay this device uses for
+/// it and whether it answered, the push relay, and how the server's keys were trusted.
+/// Relays declare no operator, so theirs reads "undeclared", as does any operator not known
+/// yet. Hosting is not declared by servers either: every server shows as public.
+fn config(settings: &PartySettings, view: Option<&ServerView>) -> Result<PartyConfig, ClientError> {
     let origin = settings.server.as_str();
     let host = Host::new(origin.strip_prefix("https://").unwrap_or(origin))
         .map_err(|_invalid| corrupt())?;
-    let operator = Operator::new("undeclared").map_err(|_invalid| corrupt())?;
+    let undeclared = Operator::new("undeclared").map_err(|_invalid| corrupt())?;
+    let known =
+        |operator: Option<&Operator>| operator.cloned().unwrap_or_else(|| undeclared.clone());
     Ok(PartyConfig {
+        origin: settings.server.clone(),
         server: Service {
             host: host.clone(),
-            operator: operator.clone(),
+            operator: known(view.and_then(|view| view.server_operator.as_ref())),
         },
+        relay_status: view.map_or(RelayStatus::Unreachable, |view| view.relay_status),
+        keys: view.map_or(KeyTrust::FromInvite, |view| view.keys),
         hosting: Hosting::Public,
         relay: Service {
-            host,
-            operator: operator.clone(),
+            host: view
+                .and_then(|view| view.relay_host.clone())
+                .unwrap_or(host),
+            operator: undeclared.clone(),
         },
         push_relay: PushRelay {
-            kind: PushRelayKind::Official,
-            operator,
+            kind: view.map_or(PushRelayKind::Official, |view| view.push_relay_kind.clone()),
+            operator: known(view.and_then(|view| view.push_relay_operator.as_ref())),
         },
         post_quantum: match settings.post_quantum {
             PartiesPostQuantum::QuantumResistant => PostQuantum::On,

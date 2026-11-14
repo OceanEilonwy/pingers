@@ -31,6 +31,9 @@ impl From<ClientError> for CoreError {
         reason = "ClientError is non-exhaustive; a new error is reported as unavailable"
     )]
     fn from(error: ClientError) -> Self {
+        if let Some(issue) = crate::servers::ServerIssue::of(&error) {
+            return issue.error();
+        }
         let reason = match &error {
             // Say what the call waits for, so the app's log names the missing piece.
             ClientError::Unavailable(waiting) => format!("{error}: {waiting}"),
@@ -54,6 +57,9 @@ impl From<ClientError> for CoreError {
 /// A new Party, as New party has it.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct NewPartyDraft {
+    /// The server it lives on: `None` for the built-in server, or the origin of one this
+    /// device trusts (`probe_server` then `trust_server`, or an invite).
+    pub server: Option<String>,
     /// The Party's name.
     pub name: String,
     /// The name this device's user goes by in it.
@@ -69,6 +75,7 @@ impl TryFrom<NewPartyDraft> for ports::PartyDraft {
 
     fn try_from(draft: NewPartyDraft) -> Result<Self, CoreError> {
         Ok(Self {
+            server: draft.server.map(crate::servers::server_id).transpose()?,
             name: pingers_client::snapshot::Name::new(&draft.name)?,
             my_name: pingers_client::snapshot::Name::new(&draft.my_name)?,
             colour: draft.colour.into(),
@@ -293,6 +300,13 @@ impl Core {
         )
         .await?;
         Ok(Arc::new(Self { client }))
+    }
+}
+
+impl Core {
+    /// The client, for the exports in other modules.
+    pub(crate) const fn client(&self) -> &Client {
+        &self.client
     }
 }
 
@@ -1089,6 +1103,7 @@ mod tests {
         let core = open("calls").await?;
         let party = core
             .create_party(NewPartyDraft {
+                server: None,
                 name: "Climbing crew".into(),
                 my_name: "Sam".into(),
                 colour: PartyColour::Blue,
@@ -1109,6 +1124,7 @@ mod tests {
     async fn bad_input_is_refused_before_the_client() -> Result<(), CoreError> {
         let core = open("refused").await?;
         let empty = NewPartyDraft {
+            server: None,
             name: " ".into(),
             my_name: "Sam".into(),
             colour: PartyColour::Blue,

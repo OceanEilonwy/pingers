@@ -81,8 +81,6 @@ fn store() -> Result<Store, Box<dyn std::error::Error>> {
     database.session()?.identity().save(&Identity {
         account: account_id(&signing_key.public_key()),
         signing_key,
-        server: ServerId::new("https://pingers.test".to_owned())?,
-        server_pin: KeyConfigHash::from_bytes([1; 32]),
     })?;
     let clock = ManualClock::new(UnixSeconds::new(1_800_000_000));
     let seeds = Arc::new(AtomicU64::new(0));
@@ -97,7 +95,6 @@ fn store() -> Result<Store, Box<dyn std::error::Error>> {
                 ))
             }),
         },
-        transport: None,
     });
     Ok(Store {
         path,
@@ -125,12 +122,28 @@ fn wake(store: &Store) -> Wake {
     )
 }
 
-/// pingers-sync with no instance: every network call is unavailable.
+/// The built-in server of these tests: pinned, behind a relay on a reserved name that never
+/// resolves, so every request waits as it would with no network.
+fn unreachable() -> Result<super::Instance, Box<dyn std::error::Error>> {
+    Ok(super::Instance {
+        server: ServerId::new("https://pingers.test".to_owned())?,
+        relay: "https://relay.invalid".to_owned(),
+        push_relay: None,
+        gateway_pins: Some(pingers_ohttp::KeyPins::from(KeyConfigHash::from_bytes(
+            [1; 32],
+        ))),
+        push_relay_pins: None,
+        trust: super::Trust::Mozilla,
+        registration_code: None,
+    })
+}
+
+/// pingers-sync with its built-in server out of reach: every request waits.
 fn offline(store: &Store) -> Arc<Net> {
+    let instance = unreachable().ok();
     Arc::new(Net::new(
         Arc::clone(&store.backend),
-        None,
-        super::push::Learned::new(None, None),
+        super::servers::Servers::new(Arc::clone(&store.backend), instance, None),
     ))
 }
 
@@ -458,6 +471,7 @@ async fn a_wake_confirmed_inside_a_spot_ends_at_the_sync_stub() -> TestResult {
     let parties = Parties::new(Arc::clone(&store.backend), offline(&store));
     let party = parties
         .create_party(PartyDraft {
+            server: None,
             name: Name::new("Crew")?,
             my_name: Name::new("Sam")?,
             colour: PartyColour::Plum,
@@ -501,7 +515,8 @@ async fn a_wake_confirmed_inside_a_spot_ends_at_the_sync_stub() -> TestResult {
         second.ending,
         WakeEnding::PortFailed {
             step: WakeStep::GroupLogs,
-            error: PortError::Unavailable,
+            // The built-in server's relay never resolves.
+            error: PortError::Unreachable,
         }
     );
     assert_eq!(outcome.location_mode, Some(LocationMode::Dwell));
@@ -547,12 +562,31 @@ async fn a_wake_confirmed_inside_a_spot_ends_at_the_sync_stub() -> TestResult {
 }
 
 #[tokio::test]
+async fn a_link_that_is_not_an_invite_starts_no_join() -> TestResult {
+    let store = store()?;
+    let parties = Parties::new(Arc::clone(&store.backend), offline(&store));
+    let link = crate::snapshot::InviteUrl::new("https://pingers.test/j#x")?;
+    assert!(matches!(
+        parties.open_invite(link, Name::new("Al")?).await,
+        Err(ClientError::Parties(_))
+    ));
+    assert!(matches!(
+        parties.accept_invite().await,
+        Err(ClientError::Parties(
+            pingers_parties::PartiesError::UnknownJoin
+        ))
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn party_commands_reach_pingers_parties_and_the_store() -> TestResult {
     let store = store()?;
     let parties = Parties::new(Arc::clone(&store.backend), offline(&store));
     let mut ids = Vec::new();
     for colour in PartyColour::ALL {
         let draft = PartyDraft {
+            server: None,
             name: Name::new("Crew")?,
             my_name: Name::new("Sam")?,
             colour,
@@ -608,20 +642,13 @@ async fn party_commands_reach_pingers_parties_and_the_store() -> TestResult {
             .is_err()
     );
 
-    let link = crate::snapshot::InviteUrl::new("https://pingers.test/j#x")?;
-    let unavailable = [
-        parties.open_invite(link, Name::new("Al")?).await,
+    // Admitting waits on reading invite mailboxes.
+    assert!(matches!(
         parties
             .decide_join(party, MailboxId::from_bytes([1; 16]), JoinDecision::Admit)
             .await,
-        parties.accept_invite().await.map(drop),
-    ];
-    for result in unavailable {
-        assert!(matches!(
-            result,
-            Err(ClientError::Unavailable(crate::Unavailable::Sync))
-        ));
-    }
+        Err(ClientError::Unavailable(crate::Unavailable::Sync))
+    ));
 
     // Without an instance nothing is sent: the relay is unreachable by definition.
     let sync = super::sync::Sync(offline(&store));
@@ -674,13 +701,19 @@ fn measure_a_session_open() -> TestResult {
 /// Pools an invite mailbox, as pingers-sync will.
 async fn pool_invite_mailbox(store: &Store, fill: u8) -> Result<(), ClientError> {
     session(store, move |session| {
-        session.mailboxes().insert(&pingers_store::Mailbox {
-            read_key: pingers_crypto::MailboxReadKey::from_bytes(Zeroizing::new([fill; 32])),
-            purpose: pingers_store::MailboxPurpose::Invite,
-            state: pingers_store::MailboxState::Pooled,
-            push: None,
-            expires_at: UnixSeconds::new(1_900_000_000),
-        })?;
+        session
+            .server(
+                &ServerId::new("https://pingers.test".to_owned())
+                    .map_err(|_bad| ClientError::Internal)?,
+            )?
+            .mailboxes()
+            .insert(&pingers_store::Mailbox {
+                read_key: pingers_crypto::MailboxReadKey::from_bytes(Zeroizing::new([fill; 32])),
+                purpose: pingers_store::MailboxPurpose::Invite,
+                state: pingers_store::MailboxState::Pooled,
+                push: None,
+                expires_at: UnixSeconds::new(1_900_000_000),
+            })?;
         Ok(())
     })
     .await
@@ -692,6 +725,7 @@ async fn cancelling_an_invite_revokes_it_and_withdraws_its_link() -> TestResult 
     let parties = Parties::new(Arc::clone(&store.backend), offline(&store));
     let draft = |name: &str| -> Result<PartyDraft, Box<dyn std::error::Error>> {
         Ok(PartyDraft {
+            server: None,
             name: Name::new(name)?,
             my_name: Name::new("Sam")?,
             colour: PartyColour::Blue,

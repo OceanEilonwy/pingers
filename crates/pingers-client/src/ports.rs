@@ -16,8 +16,8 @@ use pingers_gate::{FocusState, GateDecision, LocationSharing, PauseState};
 use pingers_geo::{Fence, Fix};
 use pingers_meetup::{LocationAnswer, LocationVisibility, MeetPointDraft};
 use pingers_proto::{
-    ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, PartyId, PushHandle,
-    SpotId,
+    ChatBody, ChatMessageId, GroupId, KeyConfigHash, LeafIndex, LocationRequestId, MailboxId,
+    PartyId, PushHandle, SecretText, ServerId, SpotId,
 };
 
 use crate::snapshot::{
@@ -43,6 +43,10 @@ pub struct Crates {
 /// A new Party (New party screen, Advanced).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartyDraft {
+    /// The server it lives on: `None` for the app's built-in server, or one this device
+    /// knows (from an invite, or looked at and trusted with `probe_server` and
+    /// `trust_server`).
+    pub server: Option<ServerId>,
     /// The Party's name.
     pub name: Name,
     /// The name this device's user goes by in it.
@@ -51,6 +55,35 @@ pub struct PartyDraft {
     pub colour: PartyColour,
     /// Whether it uses the X-Wing suite.
     pub post_quantum: PostQuantum,
+}
+
+/// What looking at a server found, for the user to decide whether to trust its keys (New
+/// party with another server).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerProbe {
+    /// The server.
+    pub server: ServerId,
+    /// Who it declares runs it, if it declares anyone.
+    pub operator: Option<crate::snapshot::Operator>,
+    /// The privacy relay it advertises, which answered.
+    pub relay: crate::snapshot::Host,
+    /// The push relay its wake-up pushes would go through, if any answered.
+    pub push_relay: Option<ProbedPushRelay>,
+    /// The hash of the gateway key it serves: what trusting it pins.
+    pub gateway_key: KeyConfigHash,
+    /// This device already knows (and trusts) the server; nothing needs confirming.
+    pub known: bool,
+}
+
+/// A server's push relay as looked at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProbedPushRelay {
+    /// Where it is.
+    pub host: crate::snapshot::Host,
+    /// Who it declares runs it.
+    pub operator: Option<crate::snapshot::Operator>,
+    /// The hash of its key: what trusting the server pins for it.
+    pub key: KeyConfigHash,
 }
 
 /// A Spot to create (no id) or replace (its id).
@@ -300,6 +333,18 @@ pub trait SyncPort: Send + Sync {
     /// configured it answers [`RelayStatus::Unreachable`] without sending anything. The answer
     /// is only the status, with no host, address, timing or server text in it.
     async fn check_reachability(&self) -> Result<RelayStatus, ClientError>;
+    /// Looks at the server at `address` (a host or an `https://` origin): its operator,
+    /// relays and keys. Nothing is recorded.
+    async fn probe_server(&self, address: String) -> Result<ServerProbe, ClientError>;
+    /// Trusts the keys of a server looked at with `probe_server`: the one place a server's
+    /// pins are first recorded.
+    async fn trust_server(&self, server: ServerId) -> Result<(), ClientError>;
+    /// Offers the registration code the user typed for `server` and registers with it.
+    async fn submit_registration_code(
+        &self,
+        server: ServerId,
+        code: SecretText,
+    ) -> Result<(), ClientError>;
     /// The server status.
     async fn section(&self) -> Result<ServerSection, ClientError>;
 }

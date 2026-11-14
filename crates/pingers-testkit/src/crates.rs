@@ -12,18 +12,19 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use async_trait::async_trait;
 use pingers_client::ports::{
     AllowListChange, JoinDecision, MeetupsPort, MeetupsSection, PartiesPort, PartiesSection,
-    PartyDraft, PipelineSection, ServerSection, SettingChange, SpotDraft, SyncPort, WakeInput,
-    WakeOutcome, WakePort,
+    PartyDraft, PipelineSection, ServerProbe, ServerSection, SettingChange, SpotDraft, SyncPort,
+    WakeInput, WakeOutcome, WakePort,
 };
 use pingers_client::snapshot::{
     DailyWindow, HideTrail, InviteLink, InviteUrl, Name, PauseInFocus, QuietHoursPreference,
     RelayStatus, Settings, SnapshotError, Toggle, WakePushes,
 };
-use pingers_client::{ClientError, Crates, PushTokens};
+use pingers_client::{ClientError, Crates, PushTokens, Unavailable};
 use pingers_gate::{FocusState, GateDecision, GateError, LocationSharing, MinuteOfDay};
 use pingers_meetup::{LocationAnswer, LocationVisibility, MeetPointDraft};
 use pingers_proto::{
-    ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, PartyId, SpotId,
+    ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, PartyId, SecretText,
+    ServerId, SpotId,
 };
 use pingers_time::UnixSeconds;
 
@@ -73,6 +74,10 @@ pub enum CrateCall {
     PushTokensChanged(Option<PushTokens>),
     SetWakePushes(WakePushes, Option<PushTokens>),
     CheckReachability,
+    ProbeServer(String),
+    TrustServer(ServerId),
+    /// The code itself is not recorded: it is a credential.
+    SubmitRegistrationCode(ServerId),
     Wake(WakeInput),
     ChangeSetting(SettingChange),
     SendChat(GroupId, ChatBody, Option<ChatMessageId>),
@@ -98,6 +103,7 @@ struct State {
     pipeline: PipelineSection,
     server: ServerSection,
     meetups: MeetupsSection,
+    probe: Option<ServerProbe>,
     section_reads: usize,
 }
 
@@ -150,6 +156,7 @@ impl FakeCrates {
                 operators: None,
             },
             meetups: MeetupsSection::default(),
+            probe: None,
             section_reads: 0,
         };
         Ok(Self {
@@ -203,6 +210,11 @@ impl FakeCrates {
     /// pingers-sync's section from now on.
     pub fn set_server(&self, section: ServerSection) {
         self.lock().server = section;
+    }
+
+    /// What `probe_server` answers from now on (`None`: an unknown server).
+    pub fn set_probe(&self, probe: Option<ServerProbe>) {
+        self.lock().probe = probe;
     }
 
     /// pingers-meetup-session's section from now on.
@@ -366,6 +378,29 @@ impl SyncPort for FakeCrates {
     async fn check_reachability(&self) -> Result<RelayStatus, ClientError> {
         let relay = self.lock().server.relay;
         self.answer(CrateName::Sync, CrateCall::CheckReachability, relay)
+    }
+
+    /// Answers the probe [`FakeCrates::set_probe`] last set.
+    async fn probe_server(&self, address: String) -> Result<ServerProbe, ClientError> {
+        let probe = self.lock().probe.clone();
+        self.answer(CrateName::Sync, CrateCall::ProbeServer(address), ())?;
+        probe.ok_or_else(|| Unavailable::UnknownServer.into())
+    }
+
+    async fn trust_server(&self, server: ServerId) -> Result<(), ClientError> {
+        self.answer(CrateName::Sync, CrateCall::TrustServer(server), ())
+    }
+
+    async fn submit_registration_code(
+        &self,
+        server: ServerId,
+        _code: SecretText,
+    ) -> Result<(), ClientError> {
+        self.answer(
+            CrateName::Sync,
+            CrateCall::SubmitRegistrationCode(server),
+            (),
+        )
     }
 
     async fn section(&self) -> Result<ServerSection, ClientError> {

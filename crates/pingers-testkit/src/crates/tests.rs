@@ -54,6 +54,7 @@ fn now<T>(future: impl Future<Output = T>) -> Result<T, TestError> {
 
 fn party_draft() -> Result<PartyDraft, TestError> {
     Ok(PartyDraft {
+        server: None,
         name: Name::new("Climbing crew")?,
         my_name: Name::new("Ana")?,
         colour: PartyColour::Teal,

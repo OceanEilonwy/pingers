@@ -53,7 +53,7 @@ async fn a_join_needs_a_sealed_subscription_and_a_real_link() -> Result<(), Test
     let config = HarnessConfig::default();
     let harness = InProcessHarness::start(&config)?;
     let rig = rig(&harness, &config, harness_pins(&harness)?).await?;
-    let link = pingers_client::snapshot::InviteUrl::new("https://pingers.invalid/j#x")?;
+    let link = harness_link(&harness, &config)?;
     let name = pingers_client::snapshot::Name::new("Bob")?;
     // No token from the platform: no subscription can be sealed for the join request.
     assert!(matches!(
@@ -64,18 +64,12 @@ async fn a_join_needs_a_sealed_subscription_and_a_real_link() -> Result<(), Test
         platform: PushPlatform::UnifiedPush,
         token: PushToken::from_bytes(b"https://push.harness.invalid/up/abc".to_vec()),
     }));
-    // With a token the subscription is sealed to the pinned push relay key; the link is read
-    // next, and this one holds no invite.
-    assert!(matches!(
-        rig.client.open_invite(link, name).await,
-        Err(ClientError::Parties(_))
-    ));
-    // Nothing was started, so there is nothing to accept.
+    // With a token the subscription is sealed to the pinned push relay key and the request
+    // goes out; nobody reads this invite mailbox, so no Welcome comes.
+    rig.client.open_invite(link, name).await?;
     assert!(matches!(
         rig.client.accept_invite().await,
-        Err(ClientError::Parties(
-            pingers_parties::PartiesError::UnknownJoin
-        ))
+        Err(ClientError::Unavailable(Unavailable::AwaitingWelcome))
     ));
     Ok(())
 }
@@ -116,8 +110,6 @@ struct Pins {
     gateway: KeyPins,
     /// `None`: a build without push relay pins, which pins on first use.
     push_relay: Option<KeyPins>,
-    /// A first-use pin already recorded by an earlier run.
-    recorded: Option<[u8; 32]>,
 }
 
 fn harness_pins(harness: &InProcessHarness) -> Result<Pins, TestError> {
@@ -138,7 +130,6 @@ fn harness_pins(harness: &InProcessHarness) -> Result<Pins, TestError> {
     Ok(Pins {
         gateway: KeyPins::new([key_config_hash(&endpoints.ohttp_key_config), next])?,
         push_relay: Some(KeyPins::new([next, push_hash])?),
-        recorded: None,
     })
 }
 
@@ -158,12 +149,7 @@ async fn rig(
         database.session()?.identity().save(&Identity {
             account: account_id(&signing_key.public_key()),
             signing_key,
-            server: server.clone(),
-            server_pin: KeyConfigHash::from_bytes([3; 32]),
         })?;
-        if let Some(pin) = pins.recorded {
-            pingers_mls::MlsStorage::write(&database.session()?, PIN_RECORD, &pin)?;
-        }
     }
     let instance = Instance {
         server,
@@ -171,7 +157,7 @@ async fn rig(
         push_relay: Some(format!("https://{}/", endpoints.push_relay)),
         gateway_pins: Some(pins.gateway),
         push_relay_pins: pins.push_relay,
-        trust: Trust::Mozilla,
+        trust: Trust::from_pem(&endpoints.push_relay_ca)?,
         registration_code: None,
     };
     let clock = config.clock.clone();
@@ -264,7 +250,6 @@ async fn unpinned_keys_are_refused_with_first_use_off() -> Result<(), TestError>
         Pins {
             gateway: pins.gateway,
             push_relay: Some(stranger.clone()),
-            recorded: None,
         },
     )
     .await?;
@@ -313,18 +298,41 @@ async fn rig_with_gateway(
         Pins {
             gateway,
             push_relay: pins.push_relay,
-            recorded: None,
         },
     )
     .await
 }
 
-/// Where the client keeps a first-use push relay pin.
+/// Where the client once kept a first-use push relay pin: it never writes one now.
 const PIN_RECORD: &[u8] = b"pingers-client/v1/push-relay-pin";
 
 fn recorded_pin(rig: &Rig) -> Result<Option<Vec<u8>>, TestError> {
     let database = Database::open(&rig.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
     Ok(pingers_mls::MlsStorage::read(&database.session()?, PIN_RECORD)?.map(|pin| pin.to_vec()))
+}
+
+/// An invite link to the harness server whose mailbox nobody reads.
+fn harness_link(
+    harness: &InProcessHarness,
+    config: &HarnessConfig,
+) -> Result<pingers_client::snapshot::InviteUrl, TestError> {
+    let link = pingers_parties::InviteLink::new(&pingers_proto::InvitePayload {
+        server: ServerId::new(harness.endpoints().server_id.clone())?,
+        invite_mailbox: pingers_proto::MailboxId::from_bytes([3; 16]),
+        invite_secret: pingers_proto::SecretBytes::new([4; 32]),
+        inviter_fingerprint: pingers_proto::InviterFingerprint::from_bytes([5; 8]),
+        expires: pingers_time::Clock::now(&config.clock)
+            .checked_add(std::time::Duration::from_hours(1))
+            .ok_or(TestError::Setup("time"))?,
+        uses: pingers_proto::InviteUses::Multiple,
+        gateway_pins: vec![pingers_crypto::key_config_hash(
+            &harness.endpoints().ohttp_key_config,
+        )],
+        push_relay_pins: Vec::new(),
+        registration_code: None,
+    })
+    .map_err(|_bad| TestError::Setup("invite link"))?;
+    Ok(pingers_client::snapshot::InviteUrl::new(link.as_str())?)
 }
 
 fn up_token(rig: &Rig) {
@@ -335,49 +343,27 @@ fn up_token(rig: &Rig) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn without_push_relay_pins_the_first_key_is_recorded_and_then_enforced()
--> Result<(), TestError> {
+async fn without_push_relay_pins_no_token_is_sealed_and_no_key_is_pinned() -> Result<(), TestError>
+{
     let config = HarnessConfig::default();
     let harness = InProcessHarness::start(&config)?;
     let pins = harness_pins(&harness)?;
-    let expected = pins
-        .push_relay
-        .as_ref()
-        .and_then(|pins| pins.hashes().get(1).copied())
-        .ok_or(TestError::Setup("harness pin"))?;
-    let first = rig(
-        &harness,
-        &config,
-        Pins {
-            gateway: pins.gateway.clone(),
-            push_relay: None,
-            recorded: None,
-        },
-    )
-    .await?;
-    up_token(&first);
-    first.client.set_wake_pushes(WakePushes::On).await?;
-    assert_eq!(recorded_pin(&first)?, Some(expected.as_bytes().to_vec()));
-
-    // A recorded pin the relay's key does not match: the key is refused, the pin kept.
-    let tampered = rig(
+    let rig = rig(
         &harness,
         &config,
         Pins {
             gateway: pins.gateway,
             push_relay: None,
-            recorded: Some([7; 32]),
         },
     )
     .await?;
-    up_token(&tampered);
+    up_token(&rig);
+    // Nothing is pinned on first use: with no pins for its key the push relay gets no token.
     assert!(matches!(
-        tampered.client.set_wake_pushes(WakePushes::On).await,
-        Err(ClientError::Sync(
-            pingers_sync::SyncError::PushRelayKeyMismatch
-        ))
+        rig.client.set_wake_pushes(WakePushes::On).await,
+        Err(ClientError::Unavailable(Unavailable::NoPushRelay))
     ));
-    assert_eq!(recorded_pin(&tampered)?, Some(vec![7; 32]));
+    assert_eq!(recorded_pin(&rig)?, None);
     Ok(())
 }
 
@@ -390,7 +376,7 @@ async fn turning_wake_pushes_off_drops_the_seals() -> Result<(), TestError> {
     rig.client.set_wake_pushes(WakePushes::On).await?;
     rig.client.set_wake_pushes(WakePushes::NoWakePushes).await?;
     // With the seals gone a join request has no subscription to carry.
-    let link = pingers_client::snapshot::InviteUrl::new("https://pingers.invalid/j#x")?;
+    let link = harness_link(&harness, &config)?;
     assert!(matches!(
         rig.client
             .open_invite(link, pingers_client::snapshot::Name::new("Bob")?)

@@ -12,10 +12,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use pingers_client::ports::PartyDraft;
 use pingers_client::snapshot::{Name, PartyColour, PostQuantum, RelayStatus};
-use pingers_client::{Client, ClientConfig, ClientError, Crates, Instance, Outside, Trust};
+use pingers_client::{
+    Client, ClientConfig, ClientError, Crates, Instance, KeyPins, Outside, Trust,
+};
 use pingers_ohttp::BinaryRequest;
 use pingers_parties::PartyLifecycle;
-use pingers_proto::{GroupMessages, InvitePayload, SecretText, ServerId, WireDecode as _};
+use pingers_proto::{
+    GroupMessages, InvitePayload, KeyConfigHash, SecretText, ServerId, WireDecode as _,
+};
 use pingers_store::{AccountRegistration, Database, DatabaseKey, MailboxPurpose, Session};
 use pingers_sync::{ApiRequest, GroupSigner};
 use pingers_testkit::{FakePlatform, HarnessConfig, InProcessHarness, RecordingEvents};
@@ -79,7 +83,7 @@ impl Drop for TestDir {
 }
 
 /// The instance a debug build pointed at the harness would carry: the server's HTTPS origin
-/// with the harness CA as its only trust root, the relay, the push relay, first-use pins and
+/// with the harness CA as its only trust root, the relay, the push relay, the build's pins and
 /// `PINGERS_DEV_REGISTRATION_CODE`.
 fn instance(harness: &InProcessHarness, code: Option<&str>) -> Result<Instance, TestError> {
     let endpoints = harness.endpoints();
@@ -88,11 +92,29 @@ fn instance(harness: &InProcessHarness, code: Option<&str>) -> Result<Instance, 
         // As deployments configure it (PINGERS_OHTTP_RELAY): the relay URL, not its origin.
         relay: format!("http://{}/ohttp", endpoints.ohttp_relay),
         push_relay: Some(format!("https://{}", endpoints.push_relay)),
-        gateway_pins: None,
-        push_relay_pins: None,
+        gateway_pins: Some(KeyPins::from(pingers_crypto::key_config_hash(
+            &endpoints.ohttp_key_config,
+        ))),
+        push_relay_pins: Some(KeyPins::from(push_relay_pin(endpoints)?)),
         trust: Trust::from_pem(&endpoints.push_relay_ca)?,
         registration_code: code.map(|code| SecretText::new(code.to_owned())),
     })
+}
+
+/// The hash of the harness push relay's key config.
+fn push_relay_pin(endpoints: &pingers_testkit::Endpoints) -> Result<KeyConfigHash, TestError> {
+    let public_key: [u8; 32] = endpoints
+        .push_relay_key
+        .as_slice()
+        .try_into()
+        .map_err(|_length| TestError::Setup("push relay key length"))?;
+    Ok(pingers_crypto::key_config_hash(
+        &pingers_proto::PushRelayKeyConfig {
+            key_id: pingers_proto::PushRelayKeyId::new(1),
+            public_key,
+        }
+        .to_bytes(),
+    ))
 }
 
 async fn open(
@@ -208,6 +230,7 @@ async fn a_fresh_client_registers_gets_tokens_creates_a_party_and_a_mailbox()
     let party = tokio::time::timeout(
         STEP,
         client.create_party(PartyDraft {
+            server: None,
             name: Name::new("Climbing")?,
             my_name: Name::new("Ana")?,
             colour: PartyColour::Blue,
@@ -219,26 +242,32 @@ async fn a_fresh_client_registers_gets_tokens_creates_a_party_and_a_mailbox()
 
     let database = Database::open(&path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
     let session = database.session()?;
+    let scoped = session.server(&ServerId::new(harness.endpoints().server_id.clone())?)?;
     // The account was made, and registered with the build's code.
-    let identity = session
-        .identity()
-        .load()?
-        .ok_or(TestError::Setup("no account"))?;
-    assert_eq!(identity.server.as_str(), harness.endpoints().server_id);
+    assert!(session.identity().load()?.is_some(), "the account");
+    assert_eq!(
+        session
+            .servers()
+            .server_pin(&ServerId::new(harness.endpoints().server_id.clone())?)?,
+        Some(pingers_crypto::key_config_hash(
+            &harness.endpoints().ohttp_key_config
+        ))
+    );
     assert!(matches!(
-        session.account().registration()?,
+        scoped.account().registration()?,
         AccountRegistration::Registered { code: Some(code) } if code.expose() == CODE
     ));
-    assert!(session.account().bearer()?.is_some());
-    assert!(session.rln_identity().load()?.is_some(), "membership leaf");
+    assert!(scoped.account().bearer()?.is_some());
+    assert!(scoped.rln_identity().load()?.is_some(), "membership leaf");
     // A full batch of tokens, less the one the group creation spent.
-    assert_eq!(session.privacy_pass_tokens().count()?, 299);
+    assert_eq!(scoped.privacy_pass_tokens().count()?, 299);
 
     // The server holds the Party's group.
     let (status, body) = group_log(&harness, &clock, &session, &party).await?;
     assert_eq!(status, 200, "the group exists on the server");
     let _log = GroupMessages::decode(&body)?;
     // A session holds the store's cross-process lock: the client needs it back.
+    drop(scoped);
     drop(session);
 
     // A wake registers a knock mailbox for the pool.
@@ -246,19 +275,20 @@ async fn a_fresh_client_registers_gets_tokens_creates_a_party_and_a_mailbox()
         .await
         .map_err(|_elapsed| TestError::Setup("the wake did not finish"))??;
     let session = database.session()?;
+    let scoped = session.server(&ServerId::new(harness.endpoints().server_id.clone())?)?;
     assert_eq!(
-        session
+        scoped
             .mailboxes()
             .pooled_count(MailboxPurpose::Knock, clock.now())?,
         1
     );
     // The wake also uploaded its lease: one token for the board sync, one for the mailbox.
-    assert!(session.board_upload().last()?.is_some());
-    assert_eq!(session.privacy_pass_tokens().count()?, 297);
+    assert!(scoped.board_upload().last()?.is_some());
+    assert_eq!(scoped.privacy_pass_tokens().count()?, 297);
 
     // An invite this device makes passes its registration code on. The invite mailbox is put
     // in the pool by hand: refilling it is the invite flow's part.
-    session.mailboxes().insert(&pingers_store::Mailbox {
+    scoped.mailboxes().insert(&pingers_store::Mailbox {
         read_key: pingers_crypto::MailboxReadKey::from_bytes(Zeroizing::new([9; 32])),
         purpose: MailboxPurpose::Invite,
         state: pingers_store::MailboxState::Pooled,
@@ -268,6 +298,7 @@ async fn a_fresh_client_registers_gets_tokens_creates_a_party_and_a_mailbox()
             .checked_add(std::time::Duration::from_hours(48))
             .ok_or(TestError::Setup("time"))?,
     })?;
+    drop(scoped);
     drop(session);
     let link = client.create_invite(party).await?;
     let payload = pingers_parties::InviteLink::from_text(link.url.as_str().to_owned()).payload()?;
@@ -300,6 +331,10 @@ async fn an_invite_links_registration_code_registers_the_joiner() -> Result<(), 
             .checked_add(std::time::Duration::from_hours(1))
             .ok_or(TestError::Setup("time"))?,
         uses: pingers_proto::InviteUses::Multiple,
+        gateway_pins: vec![pingers_crypto::key_config_hash(
+            &harness.endpoints().ohttp_key_config,
+        )],
+        push_relay_pins: Vec::new(),
         registration_code: Some(SecretText::new(CODE.to_owned())),
     })?;
     // Opening the link registers the account with the link's code first; the join itself
@@ -321,10 +356,11 @@ async fn an_invite_links_registration_code_registers_the_joiner() -> Result<(), 
     ));
     let database = Database::open(&path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
     let session = database.session()?;
+    let scoped = session.server(&ServerId::new(harness.endpoints().server_id.clone())?)?;
     assert!(matches!(
-        session.account().registration()?,
+        scoped.account().registration()?,
         AccountRegistration::Registered { code: Some(code) } if code.expose() == CODE
     ));
-    assert_eq!(session.privacy_pass_tokens().count()?, 300);
+    assert_eq!(scoped.privacy_pass_tokens().count()?, 300);
     Ok(())
 }

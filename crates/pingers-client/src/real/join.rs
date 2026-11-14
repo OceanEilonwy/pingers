@@ -19,7 +19,7 @@ use pingers_proto::{
     DisplayName, MailboxId, PartyId, Subscription, TimeToLive, WireDecode as _, WireEncode as _,
 };
 use pingers_store::MailboxPurpose;
-use pingers_sync::{GroupCall, PoolTarget, WakeBudget};
+use pingers_sync::{CodeSource, GroupCall, PoolTarget, WakeBudget};
 
 use super::records::{self, Key, corrupt};
 use super::sync::Net;
@@ -40,24 +40,28 @@ const REPLY_LIFETIME: Duration = Duration::from_hours(24);
 /// [`Unavailable::WakePushesOff`] or [`Unavailable::NoPushToken`] if no subscription can be
 /// sealed; [`ClientError::Parties`] for a bad or expired link; [`ClientError::Sync`].
 pub(crate) async fn open_invite(net: &Net, link: InviteUrl, name: Name) -> Result<(), ClientError> {
-    let engine = net.engine()?;
+    let payload = InviteLink::from_text(link.as_str().to_owned()).payload()?;
+    let server = net.invite_link(&payload).await?;
+    let engine = &server.engine;
     // A registration code in the link is for the first registration on the link's own server
     // (design B.1): offered before the reply mailbox needs a credential.
-    if let Ok(payload) = InviteLink::from_text(link.as_str().to_owned()).payload()
-        && let Some(code) = payload.registration_code
-        && payload.server == engine.server()
-    {
-        net.offer_invite_code(code).await?;
-    } else {
-        net.ready().await?;
+    match payload.registration_code {
+        Some(code) => server.offer_code(code, CodeSource::Invite).await?,
+        None => server.account().await?,
     }
-    net.ensure_wake_push().await?;
+    net.ensure_wake_push(&server.server).await?;
     let subscription = engine
         .party_subscription(TimeToLive::new(PARTY_SUBSCRIPTION).map_err(|_never| corrupt())?)?
         .ok_or(Unavailable::WakePushesOff)?;
     let link = InviteLink::from_text(link.as_str().to_owned());
     let display_name = DisplayName::new(name.as_str().to_owned()).map_err(PartiesError::Proto)?;
-    let prepared = match prepare(net, &link, &display_name, &subscription).await {
+    let inputs = JoinInputs {
+        server: server.server.clone(),
+        link: link.as_str().to_owned(),
+        name: display_name,
+        subscription,
+    };
+    let prepared = match prepare(net, inputs.clone()).await {
         Err(ClientError::Parties(PartiesError::NoPooledMailbox)) => {
             let target = PoolTarget {
                 purpose: MailboxPurpose::Reply,
@@ -67,26 +71,34 @@ pub(crate) async fn open_invite(net: &Net, link: InviteUrl, name: Name) -> Resul
             let refilled = engine
                 .refill_mailbox_pool(&target, WakeBudget::UNLIMITED)
                 .await;
-            net.observe(&refilled);
+            server.observe(&refilled);
             let _registered: pingers_sync::PoolRefill = refilled?;
-            prepare(net, &link, &display_name, &subscription).await?
+            prepare(net, inputs).await?
         }
         other => other?,
     };
-    net.push([prepared]);
+    net.push(&server.server, [prepared]);
     net.flush().await.map(drop)
 }
 
 /// pingers-parties' join request, and the join recorded with its subscription.
-async fn prepare(
-    net: &Net,
-    link: &InviteLink,
-    name: &DisplayName,
-    subscription: &Subscription,
-) -> Result<pingers_parties::Outbound, ClientError> {
-    let link = InviteLink::from_text(link.as_str().to_owned());
-    let name = name.clone();
-    let subscription = subscription.clone();
+/// What a join request is made from.
+#[derive(Clone)]
+struct JoinInputs {
+    server: pingers_proto::ServerId,
+    link: String,
+    name: DisplayName,
+    subscription: Subscription,
+}
+
+async fn prepare(net: &Net, inputs: JoinInputs) -> Result<pingers_parties::Outbound, ClientError> {
+    let JoinInputs {
+        server,
+        link,
+        name,
+        subscription,
+    } = inputs;
+    let link = InviteLink::from_text(link);
     net.backend
         .store(move |session, clock, rng| {
             session.transaction(|session| {
@@ -101,6 +113,7 @@ async fn prepare(
                 )?;
                 records::write(session, &Key::PendingJoin, |writer| {
                     writer.fixed(prepared.join.reply_mailbox().as_bytes());
+                    writer.text(server.as_str());
                     writer.fixed(&encoded);
                 })?;
                 Ok(prepared.outbound)
@@ -117,23 +130,26 @@ async fn prepare(
 /// [`Unavailable::AwaitingWelcome`] while the inviter has not admitted this device;
 /// [`ClientError::Sync`]; [`ClientError::Parties`].
 pub(crate) async fn accept_invite(net: &Net) -> Result<PartyId, ClientError> {
-    let engine = net.engine()?;
-    let (join, subscription) = net
+    let (join, subscription, server) = net
         .backend
         .store(|session, _clock, _rng| {
             records::read(session, &Key::PendingJoin, |reader| {
                 let reply = MailboxId::from_bytes(reader.fixed()?);
+                let server =
+                    pingers_proto::ServerId::new(reader.text()?).map_err(|_bad| corrupt())?;
                 let subscription =
                     Subscription::decode(&reader.rest()).map_err(|_bad| corrupt())?;
-                Ok((JoinId::for_reply_mailbox(reply), subscription))
+                Ok((JoinId::for_reply_mailbox(reply), subscription, server))
             })
         })
         .await?
         .ok_or(PartiesError::UnknownJoin)?;
+    let link = net.link(&server).await?;
+    let engine = &link.engine;
     let read = engine
         .read_mailbox(&join.reply_mailbox(), None, WakeBudget::UNLIMITED)
         .await;
-    net.observe(&read);
+    link.observe(&read);
     let welcome = read?
         .messages
         .into_iter()
@@ -152,7 +168,7 @@ pub(crate) async fn accept_invite(net: &Net) -> Result<PartyId, ClientError> {
         key: &access.auth,
     };
     let state = engine.group_state(call, WakeBudget::UNLIMITED).await;
-    net.observe(&state);
+    link.observe(&state);
     let arrived = ArrivedWelcome {
         join,
         welcome,
@@ -171,7 +187,7 @@ pub(crate) async fn accept_invite(net: &Net) -> Result<PartyId, ClientError> {
     engine
         .remember_subscription(&access.group, &subscription)
         .await?;
-    net.push(joined.outbound);
+    net.push(&server, joined.outbound);
     net.flush().await?;
     Ok(joined.party)
 }
