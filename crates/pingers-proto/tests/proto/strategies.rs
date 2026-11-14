@@ -11,17 +11,17 @@ use pingers_proto::{
     GroupMessages, GroupState, HeadingDegrees, HourlyRoot, InvitePayload, InviteUses,
     InviterFingerprint, JoinRequest, KeyConfigHash, KeyPackageBytes, Knock, KnockSignature,
     Lamport, LeafIndex, Lease, LeaseId, LeaseReplacement, LiveFrame, LocationGeneration,
-    LocationPlaintext, MailboxId, MailboxMessage, MailboxMessages, MailboxSpec, MapHostUrl,
-    MeetPoint, MeetPointLabel, MeetupMessage, MembershipIndex, MembershipLeafRequest,
+    LocationPlaintext, MailboxId, MailboxMessage, MailboxMessages, MailboxPush, MailboxSpec,
+    MapHostUrl, MeetPoint, MeetPointLabel, MeetupMessage, MembershipIndex, MembershipLeafRequest,
     MembershipLeafResponse, MembershipLeaves, MessageAccepted, MlsMessageBytes, Padded, Params,
     PrivacyPassIssueRequest, PrivacyPassIssueResponse, PushBind, PushClass, PushHandle,
     PushPlatform, PushRelayConfig, PushRelayInfo, PushRelayKeyConfig, PushRelayKeyId, PushRequest,
     PushToken, PushTokenPlaintext, ReadBoard, Record, RecordRandomness, RecordTag, Redacted,
     RegisterRequest, RegisterResponse, RelayId, RelayRef, RelayUrl, RevokeCommitment, RlnAuth,
-    RlnScope, RootEpoch, SealedAsk, SealedBeacon, SealedGrant, SealedLocationFrame, SealedPush,
-    SealedPushBlob, SealedSnapshot, SecretBytes, SecretText, SeenSegment, SegmentHash, SegmentInfo,
-    SequenceNumber, ServerId, SizeClass, Slashing, SpeedCentimetresPerSecond, Subscription,
-    SubscriptionId, TimeToLive, Urgency,
+    RlnScope, RootEpoch, ScheduledPushRelayConfig, SealedAsk, SealedBeacon, SealedGrant,
+    SealedLocationFrame, SealedPush, SealedPushBlob, SealedSnapshot, SecretBytes, SecretText,
+    SeenSegment, SegmentHash, SegmentInfo, SequenceNumber, ServerId, SizeClass, Slashing,
+    SpeedCentimetresPerSecond, Subscription, SubscriptionId, TimeToLive, Urgency,
 };
 use pingers_time::{Bucket, UnixSeconds};
 use proptest::array::uniform;
@@ -181,6 +181,15 @@ pub(crate) fn push_relay_config() -> impl Strategy<Value = PushRelayConfig> {
         )
 }
 
+pub(crate) fn scheduled_push_relay_config() -> impl Strategy<Value = ScheduledPushRelayConfig> {
+    (push_relay_config(), any::<u64>()).prop_map(|(config, activates_at)| {
+        ScheduledPushRelayConfig {
+            config,
+            activates_at: UnixSeconds::new(activates_at),
+        }
+    })
+}
+
 pub(crate) fn privacy_pass_issue_request() -> impl Strategy<Value = PrivacyPassIssueRequest> {
     vec(any::<u8>(), 1..200).prop_filter_map("fits a batch", |bytes| {
         PrivacyPassIssueRequest::new(bytes).ok()
@@ -244,6 +253,10 @@ pub(crate) fn mailbox_spec() -> impl Strategy<Value = MailboxSpec> {
             push,
         },
     )
+}
+
+pub(crate) fn mailbox_push() -> impl Strategy<Value = MailboxPush> {
+    option::of(sealed_push()).prop_map(|push| MailboxPush { push })
 }
 
 pub(crate) fn subscription() -> impl Strategy<Value = Subscription> {

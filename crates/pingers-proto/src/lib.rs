@@ -70,9 +70,13 @@ pub use privacy_pass::{
     PrivacyPassKeys,
 };
 pub use push::{
-    KeyConfigHash, MailboxSpec, PushBind, PushClass, PushPlatform, PushToken, PushTokenPlaintext,
-    RelayRef, RelayUrl, SealedPush, SealedPushBlob, Subscription, TimeToLive, Urgency,
+    KeyConfigHash, MailboxPush, MailboxSpec, PushBind, PushClass, PushPlatform, PushToken,
+    PushTokenPlaintext, RelayRef, RelayUrl, SealedPush, SealedPushBlob, Subscription, TimeToLive,
+    Urgency,
 };
 pub use redacted::Redacted;
-pub use relay::{PushRelayConfig, PushRelayKeyConfig, PushRelayKeyId, PushRequest};
+pub use relay::{
+    PUSH_RELAY_KEY_OVERLAP, PushRelayConfig, PushRelayKeyConfig, PushRelayKeyId, PushRequest,
+    ScheduledPushRelayConfig,
+};
 pub use secret::{SecretBytes, SecretText};
