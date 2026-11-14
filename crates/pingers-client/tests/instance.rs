@@ -107,6 +107,7 @@ impl Drop for TestDir {
 struct Rig {
     client: Client,
     platform: FakePlatform,
+    events: RecordingEvents,
     database: PathBuf,
     _dir: TestDir,
 }
@@ -147,6 +148,16 @@ async fn rig(
     config: &HarnessConfig,
     pins: Pins,
 ) -> Result<Rig, TestError> {
+    rig_as(harness, config, pins, 3).await
+}
+
+/// A client whose account key comes from `seed`, so two rigs are two people.
+async fn rig_as(
+    harness: &InProcessHarness,
+    config: &HarnessConfig,
+    pins: Pins,
+    seed: u64,
+) -> Result<Rig, TestError> {
     let dir = TestDir::new()?;
     let endpoints = harness.endpoints();
     let server = ServerId::new(endpoints.server_id.clone())?;
@@ -154,7 +165,7 @@ async fn rig(
     {
         let database =
             Database::open(&database_path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
-        let signing_key = AccountSigningKey::generate(&mut ChaCha20Rng::seed_from_u64(3));
+        let signing_key = AccountSigningKey::generate(&mut ChaCha20Rng::seed_from_u64(seed));
         database.session()?.identity().save(&Identity {
             account: account_id(&signing_key.public_key()),
             signing_key,
@@ -178,7 +189,10 @@ async fn rig(
     platform
         .secure_store_put("pingers.database-key", &KEY)
         .map_err(|_locked| TestError::Setup("secure store"))?;
-    let seeds = Arc::new(AtomicU64::new(500));
+    // Each person draws from their own stream, or two would make the same mailbox ids.
+    let seeds = Arc::new(AtomicU64::new(
+        500_u64.saturating_add(seed.saturating_mul(100_000)),
+    ));
     let outside = Outside {
         clock: Arc::new(clock.clone()),
         timer: Arc::new(clock),
@@ -188,6 +202,7 @@ async fn rig(
             ))
         }),
     };
+    let events = RecordingEvents::new();
     let crates_platform: Arc<dyn pingers_client::Platform> = Arc::new(platform.clone());
     let opened = instance.clone();
     let client = Client::open_with(
@@ -196,13 +211,14 @@ async fn rig(
             instance: Some(instance),
         },
         Arc::new(platform.clone()),
-        Arc::new(RecordingEvents::new()),
+        Arc::new(events.clone()),
         move |database| Crates::real(database, crates_platform, outside, Some(&opened)),
     )
     .await?;
     Ok(Rig {
         client,
         platform,
+        events,
         database: database_path,
         _dir: dir,
     })
@@ -388,7 +404,9 @@ async fn turning_wake_pushes_off_drops_the_seals() -> Result<(), TestError> {
         rig.client
             .open_invite(link, pingers_client::snapshot::Name::new("Bob")?)
             .await,
-        Err(ClientError::Parties(pingers_parties::PartiesError::InvalidLink))
+        Err(ClientError::Parties(
+            pingers_parties::PartiesError::InvalidLink
+        ))
     ));
     Ok(())
 }
@@ -403,5 +421,227 @@ async fn wake_pushes_need_the_platform_s_push_token() -> Result<(), TestError> {
         rig.client.set_wake_pushes(WakePushes::On).await,
         Err(ClientError::Unavailable(Unavailable::NoPushToken))
     ));
+    Ok(())
+}
+
+/// Tokens fetched for each test client.
+const TOKENS: u16 = 120;
+
+/// The credential bypass until the client registers its own account (agent r-accounts): an
+/// account for the rig's key is registered over the identified API, a batch of Privacy Pass
+/// tokens is issued to it, and the tokens are put straight into the client's store, where
+/// pingers-sync takes one per credentialed request.
+async fn stock_tokens(
+    harness: &InProcessHarness,
+    config: &HarnessConfig,
+    rig: &Rig,
+    seed: u64,
+) -> Result<(), TestError> {
+    use pingers_proto::{
+        AuthRequest, AuthResponse, PrivacyPassIssueRequest, PrivacyPassIssueResponse,
+        PrivacyPassKeys, RegisterRequest, RegisterResponse, WireDecode as _, WireEncode as _,
+    };
+
+    let endpoints = harness.endpoints();
+    let server = ServerId::new(endpoints.server_id.clone())?;
+    let key = AccountSigningKey::generate(&mut ChaCha20Rng::seed_from_u64(seed));
+    let call = |method: &str, path: &str, authorization: Option<String>, body: Vec<u8>| {
+        let mut headers = vec![pingers_ohttp::Header {
+            name: "content-type".to_owned(),
+            value: b"application/cbor".to_vec(),
+        }];
+        if let Some(value) = authorization {
+            headers.push(pingers_ohttp::Header {
+                name: "authorization".to_owned(),
+                value: value.into_bytes(),
+            });
+        }
+        let request = pingers_ohttp::BinaryRequest {
+            method: method.to_owned(),
+            path: path.to_owned(),
+            headers,
+            body,
+        };
+        async move {
+            let response = pingers_testkit::send_direct(endpoints.server, &request).await?;
+            if response.status.get() == 200 {
+                Ok(response.body)
+            } else {
+                Err(TestError::Setup("an identified request was refused"))
+            }
+        }
+    };
+    let registration = RegisterRequest {
+        signature_key: *key.public_key().as_bytes(),
+        proof: *pingers_crypto::sign_registration(&key, &server)
+            .map_err(|_| TestError::Setup("registration proof"))?
+            .as_bytes(),
+        registration_code: None,
+    };
+    let registered = call("POST", "/v1/accounts", None, registration.encode()?).await?;
+    let challenge = pingers_crypto::sign_auth_challenge(
+        &key,
+        &server,
+        pingers_time::Clock::now(&config.clock).bucket(),
+    )
+    .map_err(|_| TestError::Setup("auth challenge"))?;
+    let auth = AuthRequest {
+        account_id: RegisterResponse::decode(&registered)?.account_id,
+        nonce_signature: *challenge.as_bytes(),
+    };
+    let authed = call("POST", "/v1/auth", None, auth.encode()?).await?;
+    let bearer = format!("Bearer {}", AuthResponse::decode(&authed)?.bearer.expose());
+    let keys = PrivacyPassKeys::decode(&call("GET", "/v1/pp/keys", None, Vec::new()).await?)?;
+    let issuer = keys
+        .keys
+        .last()
+        .ok_or(TestError::Setup("the server has no issuer key"))?;
+    let mut rng = ChaCha20Rng::seed_from_u64(seed.wrapping_add(1_000));
+    let pending = pingers_anon::begin_token_issuance(
+        &issuer.public_key,
+        pingers_anon::TokenCount::new(TOKENS).map_err(|_| TestError::Setup("token count"))?,
+        &mut rng,
+    )
+    .map_err(|_| TestError::Setup("token request"))?;
+    let request = PrivacyPassIssueRequest::new(pending.request().to_vec())?;
+    let batch = call("POST", "/v1/pp/issue", Some(bearer), request.encode()?).await?;
+    let tokens: Vec<pingers_store::UnspentToken> = pending
+        .finish(PrivacyPassIssueResponse::decode(&batch)?.token_response())
+        .map_err(|_| TestError::Setup("token response"))?
+        .iter()
+        .map(|token| pingers_store::UnspentToken::from_bytes(token.as_bytes().to_vec()))
+        .collect();
+    let database = Database::open(&rig.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+    database.session()?.privacy_pass_tokens().add(
+        &tokens,
+        &pingers_store::TokenKeyId::from_bytes(issuer.key_id),
+    )?;
+    Ok(())
+}
+
+/// A client with its own account and a stock of tokens, with wake-up pushes off: joining no
+/// longer needs them, and every wake then reads the mailboxes joins wait on.
+async fn person(
+    harness: &InProcessHarness,
+    config: &HarnessConfig,
+    seed: u64,
+) -> Result<Rig, TestError> {
+    let rig = rig_as(harness, config, harness_pins(harness)?, seed).await?;
+    stock_tokens(harness, config, &rig, seed).await?;
+    rig.client.set_wake_pushes(WakePushes::NoWakePushes).await?;
+    Ok(rig)
+}
+
+fn asked_code(rig: &Rig) -> Option<pingers_client::snapshot::SafetyCode> {
+    match rig.client.snapshot().joining.clone() {
+        Some(pingers_client::snapshot::Joining::Asked { code, .. }) => Some(code),
+        _ => None,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ask_compare_codes_let_in_then_turn_the_next_one_away() -> Result<(), TestError> {
+    use pingers_client::ports::{JoinDecision, PartyDraft};
+    use pingers_client::snapshot::{Joining, Name, PartyColour, PostQuantum};
+    use pingers_testkit::{EventKind, RecordedEvent};
+
+    let config = HarnessConfig::default();
+    let harness = InProcessHarness::start(&config)?;
+    let ana = person(&harness, &config, 3).await?;
+    let ben = person(&harness, &config, 4).await?;
+    let party = ana
+        .client
+        .create_party(PartyDraft {
+            name: Name::new("Climbing crew")?,
+            my_name: Name::new("Ana")?,
+            colour: PartyColour::Teal,
+            post_quantum: PostQuantum::Off,
+        })
+        .await?;
+    let link = ana.client.create_invite(party).await?;
+
+    // Ben asks to join; his phone shows the code at once, and nothing about the Party.
+    ben.client.open_invite(link.url, Name::new("Ben")?).await?;
+    let ben_code = asked_code(&ben).ok_or(TestError::Setup("Ben has no code"))?;
+    assert_eq!(ben_code.as_str().len(), 14);
+    assert!(ben.client.snapshot().parties.is_empty());
+
+    // Ana's next wake reads the request: same code, before anyone is let in.
+    ana.client.on_wake().await?;
+    let snapshot = ana.client.snapshot();
+    let requests = &snapshot.party(party)?.join_requests;
+    assert_eq!(requests.len(), 1);
+    let request = requests.first().ok_or(TestError::Setup("Ben's request"))?;
+    assert_eq!(request.name.as_str(), "Ben");
+    assert_eq!(request.code, ben_code);
+    assert!(
+        ana.events
+            .events()
+            .contains(&RecordedEvent::JoinRequested { party })
+    );
+
+    // Codes match: Ana lets Ben in. The link stops working.
+    ana.client
+        .decide_join(party, request.id, JoinDecision::Admit)
+        .await?;
+    let snapshot = ana.client.snapshot();
+    let after = snapshot.party(party)?;
+    assert!(after.join_requests.is_empty());
+    assert!(after.invites.is_empty());
+
+    // Ben's next wake finds the Welcome: the Party, its members and who let him in appear.
+    ben.client.on_wake().await?;
+    let snapshot = ben.client.snapshot();
+    assert_eq!(
+        snapshot.joining,
+        Some(Joining::LetIn {
+            party,
+            inviter: Name::new("Ana")?,
+            code: ben_code.clone(),
+        })
+    );
+    let joined = snapshot.party(party)?;
+    assert_eq!(joined.name.as_str(), "Climbing crew");
+    let names: Vec<&str> = joined
+        .members
+        .iter()
+        .map(|member| member.name.as_str())
+        .collect();
+    assert_eq!(names, ["Ana", "Ben"]);
+    assert_eq!(ben.events.count(EventKind::LetIn), 1);
+    ben.client.dismiss_join().await?;
+    assert_eq!(ben.client.snapshot().joining, None);
+
+    // A second invite: Cat asks, Ana turns her away, and Cat is never let in.
+    let cat = person(&harness, &config, 5).await?;
+    let second = ana.client.create_invite(party).await?;
+    cat.client
+        .open_invite(second.url, Name::new("Cat")?)
+        .await?;
+    let cat_code = asked_code(&cat).ok_or(TestError::Setup("Cat has no code"))?;
+    assert_ne!(cat_code, ben_code);
+    ana.client.on_wake().await?;
+    let snapshot = ana.client.snapshot();
+    let request = snapshot
+        .party(party)?
+        .join_requests
+        .first()
+        .ok_or(TestError::Setup("Cat's request"))?;
+    assert_eq!(request.code, cat_code);
+    ana.client
+        .decide_join(party, request.id, JoinDecision::Refuse)
+        .await?;
+    let snapshot = ana.client.snapshot();
+    let after = snapshot.party(party)?;
+    assert!(after.join_requests.is_empty());
+    // Turning someone away leaves the link open.
+    assert_eq!(after.invites.len(), 1);
+    cat.client.on_wake().await?;
+    assert_eq!(asked_code(&cat), Some(cat_code));
+    assert!(cat.client.snapshot().parties.is_empty());
+    assert_eq!(cat.events.count(EventKind::LetIn), 0);
+    // Cat gives up: her request is withdrawn and her phone forgets it.
+    cat.client.withdraw_join().await?;
+    assert_eq!(cat.client.snapshot().joining, None);
     Ok(())
 }

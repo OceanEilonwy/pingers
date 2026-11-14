@@ -25,8 +25,7 @@ use pingers_parties::{
 };
 use pingers_proto::{
     DisplayName, MailboxId, MailboxMessage, PartyId, SequenceNumber, Subscription, TimeToLive,
-    WireEncode,
-    WireDecode as _,
+    WireDecode as _, WireEncode,
 };
 use pingers_store::MailboxPurpose;
 use pingers_sync::{GroupCall, PoolTarget, SyncError, WakeBudget};
@@ -401,8 +400,9 @@ pub(crate) fn let_in(session: &pingers_store::Session) -> Result<Option<PartyId>
 /// A storage failure.
 pub(crate) fn asked(session: &pingers_store::Session) -> Result<Option<JoinId>, ClientError> {
     records::read(session, &Key::PendingJoin, |reader| {
-        Ok(JoinId::for_reply_mailbox(MailboxId::from_bytes(
-            reader.fixed()?,
-        )))
+        let reply = MailboxId::from_bytes(reader.fixed()?);
+        // The subscription is not needed here.
+        drop(reader.rest());
+        Ok(JoinId::for_reply_mailbox(reply))
     })
 }

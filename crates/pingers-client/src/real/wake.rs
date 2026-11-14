@@ -205,10 +205,15 @@ impl WakePort for Wake {
                 trigger,
                 WakeTrigger::Push(PushReason::Mailbox | PushReason::Unknown)
             );
-        let mut outcome = Box::pin(self.pipeline(trigger)).await?.1;
-        if joins_due || self.wake_pushes().await? == WakePushes::NoWakePushes {
-            outcome.events.extend(super::join::poll(&self.net).await?);
-        }
+        let pipeline = Box::pin(self.pipeline(trigger)).await;
+        // Joins are read even when the pipeline failed (no fix, a board that would not sync).
+        let joins = if joins_due || self.wake_pushes().await? == WakePushes::NoWakePushes {
+            super::join::poll(&self.net).await?
+        } else {
+            Vec::new()
+        };
+        let mut outcome = pipeline?.1;
+        outcome.events.extend(joins);
         Ok(outcome)
     }
 

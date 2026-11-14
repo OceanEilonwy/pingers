@@ -35,6 +35,7 @@ tokio = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+pingers-anon = { workspace = true, features = ["prover"] }
 pingers-time = { workspace = true, features = ["test-util"] }
 rand_chacha = { workspace = true }
 pingers-testkit = { workspace = true, features = ["client", "harness"] }

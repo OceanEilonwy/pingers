@@ -11,9 +11,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use async_trait::async_trait;
 use pingers_geo::Fence;
 use pingers_parties::{
-    InviteId, InviteStatus as PartiesInviteStatus, JoinCode, Myself, NewParty, NewSpot,
-    Outbound, PartiesError, PartyLifecycle, PartySettings, PostQuantum as PartiesPostQuantum,
-    RelayChoice, SpotEdit, SpotShape,
+    InviteId, InviteStatus as PartiesInviteStatus, JoinCode, Myself, NewParty, NewSpot, Outbound,
+    PartiesError, PartyLifecycle, PartySettings, PostQuantum as PartiesPostQuantum, RelayChoice,
+    SpotEdit, SpotShape,
 };
 use pingers_proto::{LeafIndex, MailboxId, PartyId, ServerId, SpotId};
 use pingers_store::{MemberName, Party as StoredParty, PartyName, Session, SpotName};
@@ -22,15 +22,15 @@ use pingers_time::Clock;
 use super::Backend;
 use super::records::{self, Key, corrupt};
 use super::sync::Net;
+use crate::ClientError;
 use crate::ports::{
     AllowListChange, JoinDecision, PartiesPort, PartiesSection, PartyDraft, SpotDraft,
 };
 use crate::snapshot::{
     Host, Hosting, Invite, InviteLink, InviteStatus, InviteUrl, JoinRequest, Joining, Me, Member,
-    Name, Operator, Party, SafetyCode,
-    PartyColour, PartyConfig, PostQuantum, PushRelay, PushRelayKind, Service, Spot,
+    Name, Operator, Party, PartyColour, PartyConfig, PostQuantum, PushRelay, PushRelayKind,
+    SafetyCode, Service, Spot,
 };
-use crate::ClientError;
 
 /// The client's [`PartiesPort`].
 pub(crate) struct Parties {
