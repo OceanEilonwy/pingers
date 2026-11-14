@@ -353,6 +353,21 @@ async fn one_device_holds_parties_on_two_servers_with_their_own_pins() -> TestRe
     );
     // B's own push relay (not the build's): its key, as Ana trusted it, goes in B's invites.
     assert_eq!(invite_b.push_relay_pins, [push_relay_hash(world.b()?)?]);
+
+    // Cancelling B's invite deletes its mailbox on B, which then forgets it here too.
+    ana.client
+        .cancel_invite(on_b, invite_b.invite_mailbox)
+        .await?;
+    let database = Database::open(&ana.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+    let session = database.session()?;
+    assert!(
+        session
+            .server(&b)?
+            .mailboxes()
+            .get(&invite_b.invite_mailbox)?
+            .is_none(),
+        "the invite mailbox was deleted on B"
+    );
     Ok(())
 }
 
