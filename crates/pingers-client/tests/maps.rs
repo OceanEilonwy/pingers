@@ -174,8 +174,8 @@ async fn a_region_comes_through_the_relay_into_the_maps_directory() -> TestResul
     let harness = InProcessHarness::start(&config)?;
     let phone = TestDir::new("phone")?;
     let client = open(&harness, &clock, phone.0.join("pingers.db")).await?;
-    // The reachability check reads the server's parameters, and with them its map host.
-    client.check_reachability().await?;
+    // Nothing has read the server's parameters yet: the catalog reads them, and with them its
+    // map host.
     let elsewhere = MapHostUrl::new("https://maps.elsewhere.invalid".to_owned())?;
     let catalog = client
         .map_catalog(

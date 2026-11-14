@@ -70,7 +70,13 @@ impl Maps {
 #[async_trait]
 impl MapsPort for Maps {
     async fn catalog(&self, hosts: MapHosts, route: MapRoute) -> Result<Catalog, ClientError> {
-        let server = self.net.map_host().await?;
+        // The server's parameters, read through the relay once per process (anonymous and
+        // public: they say nothing about the device), so a fresh install knows its server's
+        // map host; offline or unreachable, the host last recorded.
+        let server = match self.net.server_params().await {
+            Ok(params) => params.map_host,
+            Err(_unreachable) => self.net.map_host().await?,
+        };
         let chain = HostChain::new(
             hosts.user_override.as_ref(),
             server.as_ref(),
