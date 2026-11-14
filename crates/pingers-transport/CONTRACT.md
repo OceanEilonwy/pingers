@@ -69,8 +69,8 @@ Client network I/O (architecture §3, design B.12 and B.4.9). L2: tokio, hyper, 
   to `send` while reconnecting are kept (at most 16, oldest dropped) and sent first on the
   new exchange; a frame sent just as an exchange broke may be lost. A chunk that fails to open
   is fatal (`Ohttp`), never retried.
-- **Integration tests** compile the reference relay's own `config.rs` and `relay.rs` with
-  `#[path]`, because pingers-ohttp-relay is a binary without a library target.
+- **Integration tests** run the reference relay through its library (`pingers_ohttp_relay::serve`),
+  the code its binary runs.
 - **Surviving mutants (cargo mutants), both unobservable:** `Io::poll_flush` and
   `Io::poll_shutdown` replaced with `Ok(())`. Over plain TCP both are no-ops; over TLS,
   tokio-rustls writes each record as it is produced, so nothing waits on a flush, and the
