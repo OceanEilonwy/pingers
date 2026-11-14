@@ -59,7 +59,10 @@ pub fn overlaps(operators: Operators<'_>, wake_pushes: WakePushes) -> Vec<Overla
     if pushes && same(operators.server, operators.push_relay) {
         found.push(Overlap::ServerRunsPushRelay);
     }
-    if pushes && same(operators.relay, operators.push_relay) {
+    // When the server's operator runs both relays, the two overlaps above already say it; the
+    // relays sharing an operator adds nothing.
+    let server_runs_both = found.len() == 2;
+    if pushes && !server_runs_both && same(operators.relay, operators.push_relay) {
         found.push(Overlap::RelayRunsPushRelay);
     }
     found
@@ -485,11 +488,7 @@ mod tests {
         );
         assert_eq!(
             check(&flat, &flat, &flat, WakePushes::On),
-            [
-                Overlap::ServerRunsRelay,
-                Overlap::ServerRunsPushRelay,
-                Overlap::RelayRunsPushRelay
-            ]
+            [Overlap::ServerRunsRelay, Overlap::ServerRunsPushRelay]
         );
         // Without wake-up pushes the push relay never hears of this device.
         assert_eq!(check(&flat, &quiet, &flat, WakePushes::NoWakePushes), []);

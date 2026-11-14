@@ -462,7 +462,8 @@ mod tests {
                 NeverSees::Pauses
             ]
         );
-        assert_eq!(facts.notes, [Note::RelaysShareOperator]);
+        // The server's operator runs both relays: the can-see lines already say so.
+        assert_eq!(facts.notes, []);
         let text = server_sees(EN, &view);
         assert_eq!(text.hosting, None);
         assert_eq!(text.can_see.len(), 5);
