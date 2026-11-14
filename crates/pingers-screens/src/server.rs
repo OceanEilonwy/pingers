@@ -8,7 +8,7 @@ use pingers_proto::PartyId;
 
 use crate::ScreenError;
 use crate::common::{Host, PrivacyLevel};
-use crate::party::{Operators, Overlap, overlaps, privacy_level};
+use crate::party::{Overlap, party_overlaps, privacy_level};
 use crate::snapshot::{
     ClientSnapshot, Hosting, PostQuantum, PushRelayKind, RelayStatus, WakePushes,
 };
@@ -70,7 +70,7 @@ pub struct ServerSees {
 pub fn server_sees(snapshot: &ClientSnapshot, party: PartyId) -> Result<ServerSees, ScreenError> {
     let party = snapshot.party(party)?;
     let wake_pushes = snapshot.settings.wake_pushes;
-    let mut found = overlaps(Operators::of(&party.config), wake_pushes);
+    let mut found = party_overlaps(&party.config, wake_pushes);
     let same_operator = snapshot.fallbacks.contains(&Fallback::SameOperator);
     if same_operator
         && matches!(wake_pushes, WakePushes::On)
@@ -138,7 +138,7 @@ mod tests {
         assert_eq!(view.configuration.overlaps, [Overlap::ServerRunsPushRelay]);
         assert_eq!(view.privacy, PrivacyLevel::Reduced);
         for party in &mut snapshot.parties {
-            party.config.push_relay.operator = Operator::new("Flat 7")?;
+            party.config.push_relay.operator = Some(Operator::new("Flat 7")?);
         }
         let view = server_sees(&snapshot, fixtures::climbing_crew())?;
         assert_eq!(view.configuration.overlaps, [Overlap::ServerRunsPushRelay]);

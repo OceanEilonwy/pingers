@@ -93,21 +93,53 @@ one Kotlin caller today.
 | `ui/screens/MapRegions.kt` | The region picker and the Maps rows for Advanced and What your server sees. |
 | `ui/screens/` | One composable per screen. Each gets its state, the repository and the navigator, and holds no logic. |
 
-All copy is in `res/values/strings.xml`, except the join flow's, which the core supplies
-(pingers-words through the FFI views). Fonts are in `res/font` (both SIL OFL).
+All copy is in `res/values/strings.xml`, except the join flow's, New party's and Advanced's,
+and every screen of the canvas's section 4 (first run, Settings, Your name, Quiet hours,
+Zone times, Downloaded maps, Wake-ups, Home's notice and wake-ups lines, Privacy, Party
+settings, Safety codes, Leave party, "This server needs a code"), which the core supplies
+(pingers-words through the FFI views). Those section-4 screens take the FFI records as they
+are (`uniffi.pingers.*View`) rather than a `UiState` copy. Fonts are in `res/font` (both SIL OFL).
 
 **Reaching every screen.** Most screens link as the canvas does. Some screens only open
 from outside the app: an invite link (`pingers://join#...`), a push, or a request from
-another member. For those, the gear on Home has a "Preview events" menu: open an invite
-link (Open invite), co-presence alert (posts the real notification too), location request,
-and meetup ended. Asked to join follows "Ask to join"; You're in opens when the core
-raises `Events.let_in` (with a notification that opens it) and "Ben asked to join" from an
-opened invite on Invite people. Debug builds also take `--es screen <Route>` on the launch
-intent (`OpenInvite`, `AskedToJoin`, `LetIn`, `JoinRequest` with `--ez fake true`):
+another member. For those, debug builds keep a "Preview events" menu behind a long press
+on Home's cog (a tap opens Settings): open an invite link (Open invite), co-presence alert
+(posts the real notification too), location request, and meetup ended. Asked to join
+follows "Ask to join"; You're in opens when the core raises `Events.let_in` (with a
+notification that opens it) and "Ben asked to join" from an opened invite on Invite people.
+Debug builds also take `--es screen <Route>` on the launch intent (`OpenInvite`,
+`AskedToJoin`, `LetIn`, `JoinRequest` with `--ez fake true`):
 
 ```sh
 adb shell am start -n org.pingers.app.debug/org.pingers.app.MainActivity --es screen Compass
 ```
+
+The section-4 routes are `Setup`, `Settings`, `YourName`, `QuietHours`, `ZoneTimes`,
+`MapRegions` (Downloaded maps), `Wakeups`, `PartySettings`, `SafetyCodes`, `LeaveParty`
+(the sheet over Party settings) and `PartyCode`, plus `Home` and `Privacy`. With
+`--ez fake true` they show the canvas's example (Ben's phone), and debug builds also take
+`--es variant <names>` (comma-separated) to pick a state:
+
+| Variant | Shows |
+|---|---|
+| `shared` | Party settings in reduced privacy (PartySettingsShared) |
+| `refused` | "This server needs a code" after a refused code (PartyCodeRefused) |
+| `error` | Quiet hours with equal times (QuietHoursError) |
+| `off` | Wake-ups off by choice (WakeupsOn, switch on); Home's grey line (WakeupsOffHome) |
+| `nothing` | Nothing can wake Pingers (Wakeups); Home's orange banner (WakeupsHome) |
+| `delayed` | Android holds back wake-ups (WakeupsDelayed); Home's banner for it |
+| `notice=clock`, `relay`, `hiding`, `dnd`, `knock`, `busy` | That notice at the top of Home (Notices) |
+| `pending` | Home's "Waiting to be let in" row (HomePendingJoin) |
+| `noname` | Open invite before a name is set, with the name field (JoinA1) |
+| `background`, `notifications` | First run's step 2 or 3 (`--es screen Setup`, real or fake) |
+
+```sh
+adb shell am start -n org.pingers.app.debug/org.pingers.app.MainActivity --ez fake true --es screen PartySettings --es variant shared
+adb shell am start -n org.pingers.app.debug/org.pingers.app.MainActivity --ez fake true --es screen Home --es variant nothing,notice=clock
+```
+
+Without `fake` the same routes open on the real core; `variant` then only picks first run's
+step. Downloaded maps always shows this phone's real maps and the map host's catalogue.
 
 Screenshots of every screen from a Pixel 9 Pro emulator are in `docs/screenshots/`.
 

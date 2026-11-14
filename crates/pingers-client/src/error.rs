@@ -50,6 +50,10 @@ pub enum ClientError {
     /// The call needs a crate or a value that is not wired yet.
     #[error("unavailable")]
     Unavailable(#[from] Unavailable),
+    /// The server refused to make this device's account: it needs a registration code, or
+    /// the one offered is not one it accepts. No Party was created.
+    #[error("registration refused")]
+    RegistrationRefused,
 }
 
 /// What an unwired call waits for. Each goes when its crate or value lands.

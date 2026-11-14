@@ -162,14 +162,32 @@ pub struct OpenInviteText {
     pub what_joining_means: String,
     /// The two points.
     pub points: [String; 2],
-    /// "Your name in this Party".
+    /// "You'll join as Ben", once a name is set: no field then.
+    pub join_as: Option<JoinAsText>,
+    /// "Your name", the field shown only before a name is set.
     pub name_label: String,
-    /// The name to prefill, or empty.
-    pub name: String,
+    /// "The same name in every Party", under the field.
+    pub name_help: String,
     /// "Ask to join".
     pub ask: String,
     /// "Not now".
     pub not_now: String,
+}
+
+/// "The same name in every Party".
+const SAME_NAME: &str = "The same name in every Party";
+
+/// The name a join goes by, once set (canvas `JoinA1`): "You'll join as Ben · Change".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JoinAsText {
+    /// "BE".
+    pub avatar: String,
+    /// "You'll join as Ben".
+    pub title: String,
+    /// "The same name in every Party".
+    pub subtitle: String,
+    /// "Change", which opens Your name.
+    pub change: String,
 }
 
 /// The Open invite screen, in words.
@@ -189,13 +207,53 @@ pub fn open_invite(language: Language, view: &OpenInvite) -> OpenInviteText {
              Spot you're in."
                 .into(),
         ],
-        name_label: "Your name in this Party".into(),
-        name: view
-            .name
-            .as_ref()
-            .map_or_else(String::new, |name| name.as_str().to_owned()),
+        join_as: view.name.as_ref().map(|name| JoinAsText {
+            avatar: Initials::of(name).as_str().to_owned(),
+            title: format!("You'll join as {}", name.as_str()),
+            subtitle: SAME_NAME.into(),
+            change: "Change".into(),
+        }),
+        name_label: "Your name".into(),
+        name_help: SAME_NAME.into(),
         ask: "Ask to join".into(),
         not_now: "Not now".into(),
+    }
+}
+
+/// The row at the top of Home while a join request waits (canvas `HomePendingJoin`). It names
+/// no Party or inviter: join flow A does not know them yet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingJoinText {
+    /// "Waiting to be let in".
+    pub title: String,
+    /// "Asked to join a Party · Code ".
+    pub detail: String,
+    /// "4821", the code's first group, set in the code's font.
+    pub code_start: String,
+    /// " …", for the rest of the code.
+    pub more: String,
+    /// The whole row for screen readers: "Waiting to be let in. Asked to join a Party. Code
+    /// starts 4821."
+    pub label: String,
+}
+
+/// The pending join row on Home, in words.
+#[must_use]
+pub fn pending_join(language: Language, view: &AskedToJoin) -> PendingJoinText {
+    let Language::English = language;
+    let code_start = view
+        .code
+        .as_str()
+        .split(' ')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    PendingJoinText {
+        title: "Waiting to be let in".into(),
+        detail: "Asked to join a Party · Code ".into(),
+        label: format!("Waiting to be let in. Asked to join a Party. Code starts {code_start}."),
+        code_start,
+        more: " …".into(),
     }
 }
 
@@ -437,15 +495,43 @@ mod tests {
             ]
         );
         assert_eq!(
-            (text.name_label.as_str(), text.name.as_str()),
-            ("Your name in this Party", "Sam")
+            text.join_as,
+            Some(JoinAsText {
+                avatar: "SA".into(),
+                title: "You'll join as Sam".into(),
+                subtitle: "The same name in every Party".into(),
+                change: "Change".into(),
+            })
         );
         assert_eq!(
             (text.ask.as_str(), text.not_now.as_str()),
             ("Ask to join", "Not now")
         );
         snapshot.display_name = None;
-        assert_eq!(open_invite(EN, &open_screen(&snapshot)).name, "");
+        let unnamed = open_invite(EN, &open_screen(&snapshot));
+        assert_eq!(unnamed.join_as, None);
+        assert_eq!(
+            (unnamed.name_label.as_str(), unnamed.name_help.as_str()),
+            ("Your name", "The same name in every Party")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_pending_join_row_shows_only_the_codes_first_group() -> Result<(), FixtureError> {
+        let mut snapshot = fixtures::snapshot()?;
+        let text = pending_join(EN, &asked_screen(&snapshot).ok_or(FixtureError::Missing)?);
+        assert_eq!(text.title, "Waiting to be let in");
+        assert_eq!(text.detail, "Asked to join a Party · Code ");
+        assert_eq!(text.code_start, "4821");
+        assert_eq!(text.more, " …");
+        assert_eq!(
+            text.label,
+            "Waiting to be let in. Asked to join a Party. Code starts 4821."
+        );
+        // Once let in or withdrawn, nothing waits and Home shows no row.
+        snapshot.joining = None;
+        assert_eq!(asked_screen(&snapshot), None);
         Ok(())
     }
 
