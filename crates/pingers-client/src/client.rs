@@ -144,7 +144,8 @@ impl Client {
             .await
     }
 
-    /// Opens an invite link; the snapshot's join preview then shows the code to compare.
+    /// Asks to join through an invite link (Open invite, "Ask to join"); the snapshot's
+    /// `joining` then shows the code to read to the inviter (Asked to join).
     ///
     /// # Errors
     ///
@@ -154,17 +155,27 @@ impl Client {
             .await
     }
 
-    /// Joins the opened invite's Party once the codes matched (Accept invite).
+    /// Withdraws the join this device asked for (Asked to join, "Withdraw request").
     ///
     /// # Errors
     ///
-    /// [`ClientError::Parties`].
-    pub async fn accept_invite(&self) -> Result<PartyId, ClientError> {
-        self.published(self.crates.parties.accept_invite().await)
+    /// [`ClientError::Parties`] with no join under way.
+    pub async fn withdraw_join(&self) -> Result<(), ClientError> {
+        self.published(self.crates.parties.withdraw_join().await)
             .await
     }
 
-    /// Admits or refuses someone who opened this device's invite.
+    /// Forgets the "You're in" state once the user opened the Party (You're in, "Open").
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Records`] or [`ClientError::Store`].
+    pub async fn dismiss_join(&self) -> Result<(), ClientError> {
+        self.published(self.crates.parties.dismiss_join().await)
+            .await
+    }
+
+    /// Lets in or turns away someone who asked to join, by their request (Ben asked to join).
     ///
     /// # Errors
     ///
@@ -172,10 +183,10 @@ impl Client {
     pub async fn decide_join(
         &self,
         party: PartyId,
-        invite: MailboxId,
+        request: MailboxId,
         decision: JoinDecision,
     ) -> Result<(), ClientError> {
-        let result = self.crates.parties.decide_join(party, invite, decision);
+        let result = self.crates.parties.decide_join(party, request, decision);
         self.published(result.await).await
     }
 
@@ -487,6 +498,7 @@ impl Client {
         match event {
             ClientEvent::PartiesChanged => events.parties_changed(),
             ClientEvent::JoinRequested(party) => events.join_requested(party),
+            ClientEvent::LetIn(party) => events.let_in(party),
             ClientEvent::MeetupStarted(meetup) => events.meetup_started(meetup),
             ClientEvent::MeetupUpdated(meetup) => events.meetup_updated(meetup),
             ClientEvent::MeetupEnded(meetup) => events.meetup_ended(meetup),
@@ -524,7 +536,7 @@ async fn assemble(crates: &Crates) -> Result<ClientSnapshot, ClientError> {
         alert: meetups.alert,
         location_requests: meetups.location_requests,
         ended_meetup: meetups.ended_meetup,
-        join_preview: parties.join_preview,
+        joining: parties.joining,
         display_name: parties.display_name,
         own_position: pipeline.own_position,
         fallbacks: server.fallbacks,

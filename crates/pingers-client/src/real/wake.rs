@@ -142,6 +142,13 @@ impl Wake {
         Ok((report, outcome))
     }
 
+    /// The wake-up pushes setting.
+    async fn wake_pushes(&self) -> Result<WakePushes, ClientError> {
+        self.backend
+            .store(|session, _clock, _rng| Ok(Stored::load(session)?.wake_pushes))
+            .await
+    }
+
     /// What a push handle names: one of this device's mailboxes, a group's log, or neither.
     async fn push_reason(&self, handle: PushHandle) -> Result<PushReason, ClientError> {
         self.backend
@@ -160,7 +167,11 @@ impl Wake {
 
 #[async_trait]
 impl WakePort for Wake {
+    /// Joins are read like knock and reply mailboxes (design B.4.9): on a push that names a
+    /// mailbox or does not say, on every wake with wake-up pushes off, and when the app comes
+    /// to the foreground.
     async fn run(&self, input: WakeInput) -> Result<WakeOutcome, ClientError> {
+        let mut opened = false;
         let trigger = match input {
             WakeInput::Fix(fix) => {
                 self.last().1 = Some(fix);
@@ -181,6 +192,7 @@ impl WakePort for Wake {
             WakeInput::FocusChanged(_focus) => WakeTrigger::FocusChanged,
             WakeInput::Foreground(Foreground::Visible) => {
                 self.meetups.screen(MeetupScreen::Open).await?;
+                opened = true;
                 WakeTrigger::Scheduled
             }
             WakeInput::Foreground(Foreground::Hidden) => {
@@ -188,7 +200,16 @@ impl WakePort for Wake {
                 return Ok(WakeOutcome::default());
             }
         };
-        Ok(Box::pin(self.pipeline(trigger)).await?.1)
+        let joins_due = opened
+            || matches!(
+                trigger,
+                WakeTrigger::Push(PushReason::Mailbox | PushReason::Unknown)
+            );
+        let mut outcome = Box::pin(self.pipeline(trigger)).await?.1;
+        if joins_due || self.wake_pushes().await? == WakePushes::NoWakePushes {
+            outcome.events.extend(super::join::poll(&self.net).await?);
+        }
+        Ok(outcome)
     }
 
     async fn change_setting(&self, change: SettingChange) -> Result<(), ClientError> {

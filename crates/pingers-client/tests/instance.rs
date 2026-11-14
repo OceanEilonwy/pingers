@@ -49,7 +49,7 @@ enum TestError {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_join_needs_a_sealed_subscription_and_a_real_link() -> Result<(), TestError> {
+async fn a_join_with_pushes_on_needs_a_token_and_every_join_a_real_link() -> Result<(), TestError> {
     let config = HarnessConfig::default();
     let harness = InProcessHarness::start(&config)?;
     let rig = rig(&harness, &config, harness_pins(&harness)?).await?;
@@ -70,9 +70,9 @@ async fn a_join_needs_a_sealed_subscription_and_a_real_link() -> Result<(), Test
         rig.client.open_invite(link, name).await,
         Err(ClientError::Parties(_))
     ));
-    // Nothing was started, so there is nothing to accept.
+    // Nothing was started, so there is nothing to withdraw.
     assert!(matches!(
-        rig.client.accept_invite().await,
+        rig.client.withdraw_join().await,
         Err(ClientError::Parties(
             pingers_parties::PartiesError::UnknownJoin
         ))
@@ -381,13 +381,14 @@ async fn turning_wake_pushes_off_drops_the_seals() -> Result<(), TestError> {
     up_token(&rig);
     rig.client.set_wake_pushes(WakePushes::On).await?;
     rig.client.set_wake_pushes(WakePushes::NoWakePushes).await?;
-    // With the seals gone a join request has no subscription to carry.
+    // With the seals gone a join request carries no subscription, so it gets as far as
+    // reading the link, which holds no invite.
     let link = pingers_client::snapshot::InviteUrl::new("https://pingers.invalid/j#x")?;
     assert!(matches!(
         rig.client
             .open_invite(link, pingers_client::snapshot::Name::new("Bob")?)
             .await,
-        Err(ClientError::Unavailable(Unavailable::WakePushesOff))
+        Err(ClientError::Parties(pingers_parties::PartiesError::InvalidLink))
     ));
     Ok(())
 }

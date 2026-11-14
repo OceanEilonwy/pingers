@@ -98,6 +98,10 @@ impl Events for RecordingEvents {
         self.record(RecordedEvent::JoinRequested { party });
     }
 
+    fn let_in(&self, party: PartyId) {
+        self.record(RecordedEvent::LetIn { party });
+    }
+
     fn meetup_started(&self, meetup: GroupId) {
         self.record(RecordedEvent::MeetupStarted { meetup });
     }
@@ -271,6 +275,7 @@ mod tests {
         let peer = LeafIndex::new(4);
         core.parties_changed();
         core.join_requested(PartyId::from_bytes([1; 16]));
+        core.let_in(PartyId::from_bytes([1; 16]));
         core.meetup_started(meetup);
         core.meetup_updated(meetup);
         core.meetup_message(meetup);
@@ -286,6 +291,7 @@ mod tests {
             [
                 EventKind::PartiesChanged,
                 EventKind::JoinRequested,
+                EventKind::LetIn,
                 EventKind::MeetupStarted,
                 EventKind::MeetupUpdated,
                 EventKind::MeetupMessage,
@@ -298,7 +304,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            events.events().get(7),
+            events.events().get(8),
             Some(&RecordedEvent::LocationAccessChanged {
                 meetup,
                 peer,

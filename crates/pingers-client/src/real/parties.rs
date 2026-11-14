@@ -2,9 +2,8 @@
 //! [`PartiesPort`] over pingers-parties' `PartyLifecycle`, one store session per call.
 //!
 //! Every `Outbound` value goes to pingers-sync through the [`Net`] outbox, flushed at once.
-//! Joining (`open_invite`, `accept_invite`) is in `join.rs`. Admitting (`decide_join`) needs the
-//! invite mailboxes read and their join requests handed to pingers-parties, which nothing does
-//! yet, so it answers [`Unavailable::Sync`].
+//! Joining, both the joiner's half (`open_invite`, `withdraw_join`, `dismiss_join`) and the
+//! inviter's (`decide_join`; the invite mailboxes are read on wakes), is in `join.rs`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -12,13 +11,13 @@ use std::sync::{Arc, Mutex, PoisonError};
 use async_trait::async_trait;
 use pingers_geo::Fence;
 use pingers_parties::{
-    INVITE_LIFETIME, InviteId, InviteStatus as PartiesInviteStatus, Myself, NewParty, NewSpot,
+    InviteId, InviteStatus as PartiesInviteStatus, JoinCode, Myself, NewParty, NewSpot,
     Outbound, PartiesError, PartyLifecycle, PartySettings, PostQuantum as PartiesPostQuantum,
     RelayChoice, SpotEdit, SpotShape,
 };
-use pingers_proto::{InviteUses, LeafIndex, MailboxId, PartyId, ServerId, SpotId};
+use pingers_proto::{LeafIndex, MailboxId, PartyId, ServerId, SpotId};
 use pingers_store::{MemberName, Party as StoredParty, PartyName, Session, SpotName};
-use pingers_time::{Clock, UnixSeconds};
+use pingers_time::Clock;
 
 use super::Backend;
 use super::records::{self, Key, corrupt};
@@ -27,10 +26,11 @@ use crate::ports::{
     AllowListChange, JoinDecision, PartiesPort, PartiesSection, PartyDraft, SpotDraft,
 };
 use crate::snapshot::{
-    Host, Hosting, Invite, InviteLink, InviteStatus, InviteUrl, Me, Member, Name, Operator, Party,
+    Host, Hosting, Invite, InviteLink, InviteStatus, InviteUrl, JoinRequest, Joining, Me, Member,
+    Name, Operator, Party, SafetyCode,
     PartyColour, PartyConfig, PostQuantum, PushRelay, PushRelayKind, Service, Spot,
 };
-use crate::{ClientError, Unavailable};
+use crate::ClientError;
 
 /// The client's [`PartiesPort`].
 pub(crate) struct Parties {
@@ -104,13 +104,20 @@ impl PartiesPort for Parties {
         let created = self
             .backend
             .store(move |session, clock, rng| {
-                Ok(PartyLifecycle::new(session, clock).create_invite(
-                    &party,
-                    InviteUses::Multiple,
-                    rng,
-                )?)
+                Ok(PartyLifecycle::new(session, clock).create_invite(&party, rng)?)
             })
-            .await?;
+            .await;
+        let created = match created {
+            Err(ClientError::Parties(PartiesError::NoPooledMailbox)) => {
+                super::join::refill_invite_pool(&self.net).await?;
+                self.backend
+                    .store(move |session, clock, rng| {
+                        Ok(PartyLifecycle::new(session, clock).create_invite(&party, rng)?)
+                    })
+                    .await?
+            }
+            other => other?,
+        };
         let link = InviteLink {
             url: InviteUrl::new(created.link.as_str()).map_err(|_invalid| corrupt())?,
             expires_at: created.expires,
@@ -164,23 +171,26 @@ impl PartiesPort for Parties {
             .await
     }
 
-    /// Posts the join request (`join.rs`). The preview stays empty: the Party's name, members
-    /// and the safety code are only known from the Welcome's snapshot.
+    /// Posts the join request (`join.rs`). Nothing about the Party is known until the Welcome.
     async fn open_invite(&self, link: InviteUrl, my_name: Name) -> Result<(), ClientError> {
         super::join::open_invite(&self.net, link, my_name).await
     }
 
-    async fn accept_invite(&self) -> Result<PartyId, ClientError> {
-        super::join::accept_invite(&self.net).await
+    async fn withdraw_join(&self) -> Result<(), ClientError> {
+        super::join::withdraw(&self.net).await
+    }
+
+    async fn dismiss_join(&self) -> Result<(), ClientError> {
+        super::join::dismiss(&self.net).await
     }
 
     async fn decide_join(
         &self,
-        _party: PartyId,
-        _invite: MailboxId,
-        _decision: JoinDecision,
+        party: PartyId,
+        request: MailboxId,
+        decision: JoinDecision,
     ) -> Result<(), ClientError> {
-        Err(Unavailable::Sync.into())
+        super::join::decide(&self.net, party, request, decision).await
     }
 
     async fn remove_member(&self, party: PartyId, member: LeafIndex) -> Result<(), ClientError> {
@@ -273,8 +283,7 @@ impl PartiesPort for Parties {
             .iter()
             .map(|(party, shared)| (*party, shared.link.clone()))
             .collect();
-        let (parties, display_name) = self
-            .backend
+        self.backend
             .store(move |session, clock, _rng| {
                 let parties = session
                     .parties()
@@ -285,14 +294,14 @@ impl PartiesPort for Parties {
                 let display_name = records::read(session, &Key::DisplayName, |reader| {
                     name_of(&reader.text()?)
                 })?;
-                Ok((parties, display_name))
+                let joining = joining(session, clock, &parties)?;
+                Ok(PartiesSection {
+                    parties,
+                    joining,
+                    display_name,
+                })
             })
-            .await?;
-        Ok(PartiesSection {
-            parties,
-            join_preview: None,
-            display_name,
-        })
+            .await
     }
 }
 
@@ -341,26 +350,36 @@ fn party(
             })
         })
         .collect::<Result<Vec<_>, ClientError>>()?;
-    let invites = lifecycle
-        .invites(&id)?
-        .into_iter()
+    let summaries = lifecycle.invites(&id)?;
+    let invites = summaries
+        .iter()
         .rev()
         .filter(|invite| invite.status == PartiesInviteStatus::Open)
         .map(|invite| Invite {
             id: invite.invite.mailbox(),
             status: InviteStatus::Pending {
-                // pingers-parties keeps the expiry, not the creation time; the creation time is
-                // the expiry less the 24 h lifetime unless the mailbox expired sooner.
-                shared_at: UnixSeconds::new(
-                    invite
-                        .expires
-                        .get()
-                        .saturating_sub(INVITE_LIFETIME.as_secs()),
-                ),
+                shared_at: invite.shared_at,
                 expires_at: invite.expires,
             },
         })
         .collect();
+    let join_requests = lifecycle
+        .pending_joins(&id)?
+        .into_iter()
+        .map(|pending| {
+            let shared_at = summaries
+                .iter()
+                .find(|summary| summary.invite == pending.invite)
+                .map_or(pending.asked_at, |summary| summary.shared_at);
+            Ok(JoinRequest {
+                id: pending.join.reply_mailbox(),
+                name: name_of(pending.name.as_str())?,
+                code: code_of(pending.code)?,
+                asked_at: pending.asked_at,
+                shared_at,
+            })
+        })
+        .collect::<Result<Vec<_>, ClientError>>()?;
     let colour = records::read(session, &Key::Colour(&id), |reader| {
         colour_from_code(reader.byte()?)
     })?
@@ -374,7 +393,44 @@ fn party(
         config: config(&settings)?,
         invites,
         invite_link: links.get(&id).cloned(),
+        join_requests,
     })
+}
+
+/// The join this device started: just let in (until the user opens the Party), or asked.
+fn joining(
+    session: &Session,
+    clock: &dyn Clock,
+    parties: &[Party],
+) -> Result<Option<Joining>, ClientError> {
+    let lifecycle = PartyLifecycle::new(session, clock);
+    // A Party left since, or an inviter removed since, leaves nothing to show.
+    if let Some(party) = super::join::let_in(session)?
+        && let Some(via) = lifecycle.joined_via(&party)?
+        && let Some(inviter) = parties
+            .iter()
+            .find(|row| row.id == party)
+            .and_then(|row| row.members.iter().find(|member| member.leaf == via.inviter))
+    {
+        return Ok(Some(Joining::LetIn {
+            party,
+            inviter: inviter.name.clone(),
+            code: code_of(via.code)?,
+        }));
+    }
+    let Some(join) = super::join::asked(session)? else {
+        return Ok(None);
+    };
+    let asked = lifecycle.asked_join(join)?;
+    Ok(Some(Joining::Asked {
+        code: code_of(asked.code)?,
+        asked_at: asked.asked_at,
+    }))
+}
+
+/// A join code as both screens show it ("4821 0937 5512").
+fn code_of(code: JoinCode) -> Result<SafetyCode, ClientError> {
+    SafetyCode::new(&code.to_string()).map_err(|_never| corrupt())
 }
 
 /// Who runs what for a Party.
