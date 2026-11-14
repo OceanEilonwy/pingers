@@ -28,11 +28,10 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  # monokulo-nodo's builder and feed scripts, at a commit with h2c upstreams (N1) and third-party
-  # feeds (N2): branch pingers-feed-support, PR OceanEilonwy/monokulo-nodo#12. Move this to the
-  # merge commit on main once that PR is merged.
+  # monokulo-nodo's builder and feed scripts, at a main commit with h2c upstreams (N1) and
+  # third-party feeds (N2): the merge of OceanEilonwy/monokulo-nodo#12.
   NODO_REPOSITORY: OceanEilonwy/monokulo-nodo
-  NODO_REV: 86d41ad71b93d17d8f7c94bd5a0af4a06bf4121d
+  NODO_REV: 4ad566128b7ce69a83a512ce435084428487b39f
   # The feed key's fingerprint as xbps and nodo show it (MD5 of the key in SSH form). Its public
   # half is packaging/nodo/feed-signing-key.pub.pem.
   FEED_FINGERPRINT: "9d:c4:00:6e:53:d8:99:c4:f9:5d:9c:96:b0:e9:1a:07"
