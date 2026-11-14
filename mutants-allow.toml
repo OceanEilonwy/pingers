@@ -26,3 +26,11 @@ reason = "equivalent in the client tests: they run without an instance, so there
 name = "crates/pingers-client/src/real/meetups.rs: replace <impl MeetupPort for Meetups>::leave -> Result<(), PortError> with Ok(())"
 reason = "equivalent in the client tests: without a harness server no Meetup goes live, so leave always finds none and answers Ok(()). Remove when a client test runs a Meetup against the harness server."
 
+
+[[mutant]]
+name = "crates/pingers-server/src/http.rs: replace <impl HttpBody for TrackedBody>::is_end_stream -> bool with false"
+reason = "equivalent: is_end_stream is only a hint; with false, hyper polls the inner body once more, gets its end, and the client receives the same response"
+
+[[mutant]]
+name = "crates/pingers-server/src/http.rs: replace >= with < in IdleWatch::serve"
+reason = "caught as a timeout, not missed: every connection is then closed as soon as it opens, and tests that wait on the manual clock for an answer hang until cargo-mutants gives up"

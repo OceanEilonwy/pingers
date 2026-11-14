@@ -12,7 +12,7 @@ use pingers_time::UnixSeconds;
 
 use crate::store::{
     CommitWrite, DeliveryStore, GroupHead, NewCommit, NewEntry, NewGroup, PAGE_ENTRIES,
-    StoredSubscription,
+    PastAuthKey, StoredSubscription,
 };
 use crate::{DeliveryError, GroupLifetime};
 
@@ -26,7 +26,7 @@ pub struct MemoryDeliveryStore {
 struct Group {
     head_epoch: Epoch,
     auth_key: GroupAuthKey,
-    past_keys: Vec<GroupAuthKey>,
+    past_keys: Vec<PastAuthKey>,
     lifetime: GroupLifetime,
     idle_expires_at: UnixSeconds,
     log: Vec<GroupLogEntry>,
@@ -117,7 +117,7 @@ impl DeliveryStore for MemoryDeliveryStore {
         })
     }
 
-    fn past_auth_keys(&self, group: &GroupId) -> Result<Vec<GroupAuthKey>, DeliveryError> {
+    fn past_auth_keys(&self, group: &GroupId) -> Result<Vec<PastAuthKey>, DeliveryError> {
         self.with_group(group, |found| Ok(found.past_keys.clone()))
     }
 
@@ -154,8 +154,14 @@ impl DeliveryStore for MemoryDeliveryStore {
                 });
             }
             let sequence = found.push(commit.epoch, ContentType::Commit, commit.commit)?;
+            found.past_keys.insert(
+                0,
+                PastAuthKey {
+                    epoch: commit.epoch,
+                    key: found.auth_key,
+                },
+            );
             found.head_epoch = commit.next_epoch;
-            found.past_keys.insert(0, found.auth_key);
             found.auth_key = commit.next_auth_key;
             found.idle_expires_at = idle_expires_at;
             if let Some(state) = commit.state {
@@ -171,6 +177,20 @@ impl DeliveryStore for MemoryDeliveryStore {
                 found.subscriptions.insert(added.subscription.id, added);
             }
             Ok(CommitWrite::Appended { sequence })
+        })
+    }
+
+    fn commit_position(
+        &self,
+        group: &GroupId,
+        epoch: Epoch,
+    ) -> Result<Option<SequenceNumber>, DeliveryError> {
+        self.with_group(group, |found| {
+            Ok(found
+                .log
+                .iter()
+                .find(|entry| entry.epoch == epoch && entry.content_type == ContentType::Commit)
+                .map(|entry| entry.sequence))
         })
     }
 

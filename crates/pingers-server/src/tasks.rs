@@ -8,19 +8,20 @@ use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
-use pingers_delivery::{DeliveryError, Wake};
+use pingers_delivery::{CommitOutcome, DeliveryError, Wake};
 use pingers_mailbox::{
     ListedRelays, PUSH_CONTENT_TYPE, PUSH_PATH, PushJob, PushRelay, PushRequest, RelayAnswer,
     RelayDirectory as _, RelayTarget, RelayUnreachable, forward,
 };
 use pingers_proto::{
-    GroupId, PushRelayConfig, RelayId, RelayRef, SubscriptionId, WireDecode as _, WireEncode as _,
+    CommitRequest, GroupId, PushRelayConfig, RelayId, RelayRef, SubscriptionId, WireDecode as _,
+    WireEncode as _,
 };
-use pingers_time::Timer;
+use pingers_time::{MonotonicTime, Timer};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use tokio::task::JoinSet;
 
-use crate::groups::GroupService;
+use crate::groups::{GroupService, LiveSender};
 use crate::mailbox_routes::MailboxService;
 
 /// The push relay over HTTP: `POST {url}/v1/push` with the server's bearer credential, the
@@ -210,6 +211,48 @@ impl SubscriptionTurns {
     }
 }
 
+/// A group's turn: shared by every push to the group, exclusive for deleting it.
+type GroupLock = tokio::sync::RwLock<()>;
+
+/// A lock per group with pushes or a delete under way. Pushes to a group share it, so they run
+/// side by side; a group delete takes it alone, so it waits for every push in flight to the
+/// group, and a push that waited finds the group gone.
+#[derive(Default)]
+struct GroupTurns {
+    /// As in [`SubscriptionTurns`], an entry lives as long as someone holds or awaits it.
+    turns: Mutex<HashMap<GroupId, Weak<GroupLock>>>,
+}
+
+impl GroupTurns {
+    /// A share of `group`'s turn, for one push.
+    async fn share(&self, group: GroupId) -> tokio::sync::OwnedRwLockReadGuard<()> {
+        self.of(group).read_owned().await
+    }
+
+    /// `group`'s turn, shared with whoever holds or awaits it now. A group delete holds it
+    /// with `blocking_write` (tokio has no owned blocking form).
+    fn of(&self, group: GroupId) -> Arc<GroupLock> {
+        let mut turns = self.turns.lock().unwrap_or_else(PoisonError::into_inner);
+        turns.retain(|_, turn| turn.strong_count() > 0);
+        if let Some(turn) = turns.get(&group).and_then(Weak::upgrade) {
+            return turn;
+        }
+        let turn = Arc::new(GroupLock::new(()));
+        turns.insert(group, Arc::downgrade(&turn));
+        turn
+    }
+
+    /// How many hold or await `group`'s turn now.
+    #[cfg(test)]
+    fn waiting(&self, group: GroupId) -> usize {
+        self.turns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&group)
+            .map_or(0, Weak::strong_count)
+    }
+}
+
 /// What became of one group wake.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WakeOutcome {
@@ -222,14 +265,20 @@ pub(crate) enum WakeOutcome {
     Unchecked,
 }
 
-/// Sends group wakes and deletes subscriptions, one turn at a time per subscription, so that
-/// a subscription is never pushed after its delete is acknowledged or after the relay
-/// answered `410 Gone` for it.
+/// Sends group wakes and removes subscriptions, one turn at a time per subscription, so that
+/// a subscription is never pushed after its removal is acknowledged (a `DELETE` of it, a
+/// commit's `subscriptions_removed`, or its group's `DELETE`) or after the relay answered
+/// `410 Gone` for it.
+///
+/// Lock order, so nothing can wait in a circle: a push takes a share of its group's turn and
+/// then its subscription's; a commit takes its removed subscriptions' turns (in id order); a
+/// subscription delete takes that one turn; a group delete takes only the group's whole turn.
 #[derive(Clone)]
 pub(crate) struct GroupPusher {
     relay: Arc<HttpPushRelay>,
     groups: Arc<GroupService>,
     turns: Arc<SubscriptionTurns>,
+    group_turns: Arc<GroupTurns>,
 }
 
 impl GroupPusher {
@@ -238,6 +287,7 @@ impl GroupPusher {
             relay,
             groups,
             turns: Arc::new(SubscriptionTurns::default()),
+            group_turns: Arc::new(GroupTurns::default()),
         }
     }
 
@@ -257,6 +307,7 @@ impl GroupPusher {
             urgency: wake.urgency,
             handle: wake.push.handle,
         };
+        let _group_turn = self.group_turns.share(group).await;
         let _turn = self.turns.take(group, subscription).await;
         let groups = Arc::clone(&self.groups);
         match tokio::task::spawn_blocking(move || groups.still_subscribed(&group, &wake)).await {
@@ -292,11 +343,70 @@ impl GroupPusher {
         self.groups.remove_subscription(group, subscription)
     }
 
+    /// `POST /v1/groups/{id}/commit`: appends the commit once no push to any subscription it
+    /// removes is in flight, so none of them reaches the relay after the commit is answered
+    /// (design G.6: a removed member is not woken again). Blocks: call it from the blocking
+    /// pool, never from async code.
+    ///
+    /// # Errors
+    ///
+    /// As [`pingers_delivery::Delivery::commit`].
+    pub(crate) fn commit(
+        &self,
+        group: &GroupId,
+        request: CommitRequest,
+        rng: &mut impl rand_core::CryptoRng,
+    ) -> Result<CommitOutcome<LiveSender>, DeliveryError> {
+        let mut removed = request.subscriptions_removed.clone();
+        // One order for every multi-turn taker; a repeated id would wait on its own turn.
+        removed.sort_unstable_by_key(|subscription| *subscription.as_bytes());
+        removed.dedup();
+        let _turns: Vec<Turn> = removed
+            .into_iter()
+            .map(|subscription| self.turns.take_blocking(*group, subscription))
+            .collect();
+        self.groups.commit(group, request, rng)
+    }
+
+    /// `DELETE /v1/groups/{id}`: deletes the group once no push to it is in flight, so none
+    /// reaches the relay after this returns. Blocks: call it from the blocking pool, never
+    /// from async code.
+    ///
+    /// # Errors
+    ///
+    /// As [`pingers_delivery::Delivery::delete_group`].
+    pub(crate) fn delete_group(&self, group: &GroupId) -> Result<(), DeliveryError> {
+        let turn = self.group_turns.of(*group);
+        let _whole = turn.blocking_write();
+        self.groups.delete_group(group)
+    }
+
     /// How many sends and deletes hold or await the turn of `subscription` in `group`.
     #[cfg(test)]
     pub(crate) fn waiting(&self, group: GroupId, subscription: SubscriptionId) -> usize {
         self.turns.waiting(group, subscription)
     }
+
+    /// How many sends and group deletes hold or await `group`'s turn.
+    #[cfg(test)]
+    pub(crate) fn group_waiting(&self, group: GroupId) -> usize {
+        self.group_turns.waiting(group)
+    }
+}
+
+/// How long a push relay's key config, once fetched, is served without asking the relay
+/// again. `GET /v1/push-relays/{id}/config` is public: without the cache, every request to it
+/// would make the server send one to the relay.
+pub(crate) const RELAY_CONFIG_TTL: Duration = Duration::from_mins(5);
+
+/// How long a failed fetch is remembered, so a relay that is down is not asked once per
+/// request either.
+pub(crate) const RELAY_CONFIG_RETRY: Duration = Duration::from_secs(30);
+
+/// A push relay's key config as last fetched.
+struct CachedConfig {
+    fetched: Result<Vec<u8>, RelayUnreachable>,
+    until: MonotonicTime,
 }
 
 /// Owns the background tasks.
@@ -307,6 +417,9 @@ pub(crate) struct Tasks {
     pusher: GroupPusher,
     directory: ListedRelays,
     running: Mutex<JoinSet<()>>,
+    /// Held across a fetch, so concurrent requests wait for one fetch instead of each
+    /// making their own.
+    relay_configs: Arc<tokio::sync::Mutex<HashMap<RelayId, CachedConfig>>>,
 }
 
 impl Tasks {
@@ -326,6 +439,7 @@ impl Tasks {
             mailboxes,
             directory,
             running: Mutex::new(JoinSet::new()),
+            relay_configs: Arc::default(),
         }
     }
 
@@ -371,14 +485,39 @@ impl Tasks {
         });
     }
 
-    /// The key config of the listed push relay `relay`, fetched from it now: `None` if this
-    /// server lists no such relay, `Some(Err)` if it did not answer with a config.
+    /// The key config of the listed push relay `relay`: `None` if this server lists no such
+    /// relay, `Some(Err)` if it did not answer with a config. Fetched from the relay at most
+    /// once per [`RELAY_CONFIG_TTL`] (once per [`RELAY_CONFIG_RETRY`] while it fails), however
+    /// many ask.
     pub(crate) fn push_relay_config(
         &self,
         relay: RelayId,
     ) -> Option<impl Future<Output = Result<Vec<u8>, RelayUnreachable>> + Send + use<>> {
         let target = self.directory.resolve(&RelayRef::Listed(relay))?;
-        Some(self.relay.fetch_config(target.url.as_str()))
+        let fetch = self.relay.fetch_config(target.url.as_str());
+        let cache = Arc::clone(&self.relay_configs);
+        let timer = Arc::clone(&self.timer);
+        Some(async move {
+            let mut cache = cache.lock().await;
+            if let Some(cached) = cache.get(&relay)
+                && timer.now() < cached.until
+            {
+                return cached.fetched.clone();
+            }
+            let fetched = fetch.await;
+            let lasts = match fetched {
+                Ok(_) => RELAY_CONFIG_TTL,
+                Err(_) => RELAY_CONFIG_RETRY,
+            };
+            cache.insert(
+                relay,
+                CachedConfig {
+                    fetched: fetched.clone(),
+                    until: timer.now().saturating_add(lasts),
+                },
+            );
+            fetched
+        })
     }
 
     /// Runs `sweep` every `interval`.
@@ -402,5 +541,25 @@ impl Tasks {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .abort_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_group_turn_nobody_holds_is_forgotten() {
+        let turns = GroupTurns::default();
+        drop(turns.of(GroupId::from_bytes([1; 32])));
+        let held = turns.of(GroupId::from_bytes([2; 32]));
+        // Taking any turn clears the ones nobody holds or awaits, so the map stays small.
+        let listed = turns
+            .turns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len();
+        assert_eq!(listed, 1);
+        drop(held);
     }
 }

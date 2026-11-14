@@ -12,18 +12,22 @@ layer = 3
 
 [features]
 default = []
-# `SqliteQuotaStore`: the membership leaves and roots, issuer keys, the spent-token set and
+# `SqliteQuotaStore`: accounts and bearer digests, the membership leaves and roots, issuer keys, the spent-token set and
 # issuance counts in one SQLite file (architecture §3). The nullifier set stays in memory
 # (design C.1).
 sqlite = ["dep:rusqlite"]
 
 [dependencies]
 pingers-anon = { workspace = true, features = ["verifier", "issuer"] }
+# Account keys, registration and challenge checks, bearer digests.
+pingers-crypto = { workspace = true }
 pingers-proto = { workspace = true }
 pingers-time = { workspace = true }
 rand_core = { workspace = true }
 # `fallible_uint`: times and epochs are unsigned; values over i64::MAX are refused.
 rusqlite = { workspace = true, optional = true, features = ["fallible_uint"] }
+# Constant-time comparison of registration codes.
+subtle = { workspace = true }
 thiserror = { workspace = true }
 zeroize = { workspace = true }
 
