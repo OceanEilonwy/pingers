@@ -40,6 +40,14 @@ object Push {
     /** The UnifiedPush distributors installed (ntfy, a Nextcloud app, ...), by package name. */
     fun distributors(context: Context): List<String> = UnifiedPush.getDistributors(context)
 
+    /** A distributor's name as the launcher shows it ("ntfy"), or its package name. */
+    fun label(context: Context, pkg: String): String = try {
+        val pm = context.packageManager
+        pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+    } catch (_: android.content.pm.PackageManager.NameNotFoundException) {
+        pkg
+    }
+
     /** The distributor Pingers is registered with, if it is still installed. */
     fun distributor(context: Context): String? =
         UnifiedPush.getSavedDistributor(context)?.takeIf { it in distributors(context) }
@@ -126,6 +134,8 @@ class PingersPushService : PushService() {
 
     override fun onMessage(message: PushMessage, instance: String) {
         if (instance != Push.INSTANCE) return
+        // UnifiedPush has no priorities to lose: every push counts as on time.
+        PhoneLog.recordWake(this, onTime = true)
         Push.wake(PushPlatform.UNIFIED_PUSH, message.content, priority = null)
     }
 

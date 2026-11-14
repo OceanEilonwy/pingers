@@ -4,21 +4,9 @@
      strings.xml, which the UI layer owns. -->
 <resources>
     <!-- Permission onboarding -->
-    <string name="platform_perm_location_title">Your location stays on this phone</string>
-    <string name="platform_perm_location_body">Pingers checks your location against your Party\'s Spots on this phone. Your server never sees where you are: it only sees encrypted records it can\'t read.</string>
-    <string name="platform_perm_location_action">Allow location</string>
 
-    <string name="platform_perm_background_title">Notice friends while the app is closed</string>
-    <string name="platform_perm_background_body">Pingers uses your location in the background, even when the app is closed or not in use, to tell when you arrive at or leave one of your Party\'s Spots, and during a Meetup to share where you are with the people in it. Location is only checked on this phone and is never sent to your server.</string>
-    <string name="platform_perm_background_how">On the next screen, choose \"Allow all the time\". You can change this later in Settings.</string>
-    <string name="platform_perm_background_action">Continue</string>
-    <string name="platform_perm_open_settings">Open app settings</string>
 
-    <string name="platform_perm_notifications_title">Know when friends are at a Spot</string>
-    <string name="platform_perm_notifications_body">Pingers tells you when someone from your Party is at the same Spot, and when a Meetup starts. Notifications carry nothing your server can read.</string>
-    <string name="platform_perm_notifications_action">Allow notifications</string>
 
-    <string name="platform_perm_not_now">Not now</string>
 
     <!-- Notification channels -->
     <string name="platform_channel_running">Running in the background</string>

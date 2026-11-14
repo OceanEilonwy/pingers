@@ -5,8 +5,8 @@ use pingers_gate::{GateDecision, LocationSharing, SuppressReason};
 use pingers_meetup::LocationVisibility;
 
 use crate::ScreenError;
-use crate::clock::LocalTime;
-use crate::common::Name;
+use crate::clock::{LocalTime, Minutes};
+use crate::common::{Initials, Name, PartyColour};
 use crate::snapshot::{
     ClientSnapshot, PauseInFocus, PushDelivery, QuietHoursPreference, Toggle, WakePushes,
     daily_window,
@@ -84,11 +84,26 @@ pub fn quiet_hours(
     Ok(QuietHoursPreference { state, window })
 }
 
-/// The name this device's user goes by in Parties they create or join.
+/// A Party the name changes in ("Changes in every Party you're in").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PartyChip {
+    /// Its name.
+    pub name: Name,
+    /// Its initials.
+    pub initials: Initials,
+    /// Its colour.
+    pub colour: PartyColour,
+}
+
+/// The name this device's user goes by, the same in every Party (canvas `YourName`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct YourName {
     /// The name, once set.
     pub name: Option<Name>,
+    /// Its initials, once set.
+    pub initials: Option<Initials>,
+    /// The Parties it changes in.
+    pub parties: Vec<PartyChip>,
 }
 
 /// The name this device's user goes by.
@@ -96,6 +111,113 @@ pub struct YourName {
 pub fn your_name(snapshot: &ClientSnapshot) -> YourName {
     YourName {
         name: snapshot.display_name.clone(),
+        initials: snapshot.display_name.as_ref().map(Initials::of),
+        parties: snapshot
+            .parties
+            .iter()
+            .map(|party| PartyChip {
+                name: party.name.clone(),
+                initials: Initials::of(&party.name),
+                colour: party.colour,
+            })
+            .collect(),
+    }
+}
+
+/// Where quiet hours end, relative to where they start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EndDay {
+    /// Later the same day.
+    SameDay,
+    /// After midnight ("next day").
+    NextDay,
+}
+
+/// A stretch of the 24-hour bar, in minutes since midnight: `start` up to `end`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BarSpan {
+    /// Where it starts.
+    pub start: LocalTime,
+    /// Minutes from `start` to its end.
+    pub length: Minutes,
+}
+
+/// The quiet window the editor shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum QuietWindow {
+    /// A window: how long, where it ends, and the bar's stretches (two when it crosses
+    /// midnight).
+    Quiet {
+        /// How long.
+        length: Minutes,
+        /// Same day or next.
+        ends: EndDay,
+        /// The bar.
+        bar: Vec<BarSpan>,
+    },
+    /// The start and end are equal: the core refuses it (`ScreenError::EmptyWindow`).
+    Empty,
+}
+
+/// The Quiet hours editor (canvas `QuietHours`, `QuietHoursError`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuietHoursEditor {
+    /// The switch.
+    pub state: Toggle,
+    /// "Starts".
+    pub from: LocalTime,
+    /// "Ends".
+    pub to: LocalTime,
+    /// The window.
+    pub window: QuietWindow,
+    /// Whether "Save" is enabled: only once the times differ.
+    pub can_save: bool,
+}
+
+const MINUTES_PER_DAY: u32 = 24 * 60;
+
+/// The Quiet hours editor for the times picked so far.
+#[must_use]
+pub fn quiet_hours_editor(state: Toggle, from: LocalTime, to: LocalTime) -> QuietHoursEditor {
+    let start = from.minutes_since_midnight();
+    let end = to.minutes_since_midnight();
+    let window = match start.cmp(&end) {
+        core::cmp::Ordering::Equal => QuietWindow::Empty,
+        core::cmp::Ordering::Less => QuietWindow::Quiet {
+            length: Minutes::new(end.saturating_sub(start)),
+            ends: EndDay::SameDay,
+            bar: vec![BarSpan {
+                start: from,
+                length: Minutes::new(end.saturating_sub(start)),
+            }],
+        },
+        core::cmp::Ordering::Greater => {
+            let mut bar = vec![BarSpan {
+                start: from,
+                length: Minutes::new(MINUTES_PER_DAY.saturating_sub(start)),
+            }];
+            if end > 0 {
+                bar.insert(
+                    0,
+                    BarSpan {
+                        start: LocalTime::MIDNIGHT,
+                        length: Minutes::new(end),
+                    },
+                );
+            }
+            QuietWindow::Quiet {
+                length: Minutes::new(MINUTES_PER_DAY.saturating_sub(start).saturating_add(end)),
+                ends: EndDay::NextDay,
+                bar,
+            }
+        }
+    };
+    QuietHoursEditor {
+        state,
+        from,
+        to,
+        can_save: window != QuietWindow::Empty,
+        window,
     }
 }
 
@@ -167,8 +289,77 @@ mod tests {
             your_name(&snapshot).name.as_ref().map(Name::as_str),
             Some("Sam")
         );
+        let parties: Vec<_> = your_name(&snapshot)
+            .parties
+            .iter()
+            .map(|chip| {
+                (
+                    chip.name.as_str().to_owned(),
+                    chip.initials.as_str().to_owned(),
+                    chip.colour,
+                )
+            })
+            .collect();
+        assert_eq!(
+            parties.first(),
+            Some(&(
+                "Climbing crew".to_owned(),
+                "CC".to_owned(),
+                PartyColour::Blue
+            ))
+        );
+        assert_eq!(parties.len(), snapshot.parties.len());
         snapshot.display_name = None;
-        assert_eq!(your_name(&snapshot), YourName { name: None });
+        let unnamed = your_name(&snapshot);
+        assert_eq!((unnamed.name, unnamed.initials), (None, None));
+        Ok(())
+    }
+
+    #[test]
+    fn quiet_hours_past_midnight_end_the_next_day() -> Result<(), ScreenError> {
+        let editor = quiet_hours_editor(Toggle::On, LocalTime::new(23, 0)?, LocalTime::new(7, 0)?);
+        assert!(editor.can_save);
+        let QuietWindow::Quiet { length, ends, bar } = editor.window else {
+            return Err(ScreenError::EmptyWindow);
+        };
+        assert_eq!((length.get(), ends), (480, EndDay::NextDay));
+        let spans: Vec<_> = bar
+            .iter()
+            .map(|span| (span.start.minutes_since_midnight(), span.length.get()))
+            .collect();
+        assert_eq!(spans, [(0, 420), (1_380, 60)]);
+        Ok(())
+    }
+
+    #[test]
+    fn quiet_hours_within_a_day_and_up_to_midnight_are_one_span() -> Result<(), ScreenError> {
+        let day = quiet_hours_editor(Toggle::Off, LocalTime::new(13, 0)?, LocalTime::new(14, 30)?);
+        assert_eq!(
+            day.window,
+            QuietWindow::Quiet {
+                length: Minutes::new(90),
+                ends: EndDay::SameDay,
+                bar: vec![BarSpan {
+                    start: LocalTime::new(13, 0)?,
+                    length: Minutes::new(90)
+                }],
+            }
+        );
+        let to_midnight =
+            quiet_hours_editor(Toggle::On, LocalTime::new(22, 0)?, LocalTime::MIDNIGHT);
+        let QuietWindow::Quiet { bar, ends, .. } = to_midnight.window else {
+            return Err(ScreenError::EmptyWindow);
+        };
+        assert_eq!((bar.len(), ends), (1, EndDay::NextDay));
+        Ok(())
+    }
+
+    #[test]
+    fn equal_quiet_hours_cannot_be_saved() -> Result<(), ScreenError> {
+        let ten = LocalTime::new(22, 0)?;
+        let editor = quiet_hours_editor(Toggle::On, ten, ten);
+        assert_eq!(editor.window, QuietWindow::Empty);
+        assert!(!editor.can_save);
         Ok(())
     }
 }

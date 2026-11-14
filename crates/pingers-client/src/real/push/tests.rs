@@ -213,3 +213,18 @@ fn seals_are_made_again_for_a_new_token_a_new_key_or_near_their_end() {
     assert!(sealed.still_good(&tokens(), &key, UnixSeconds::new(NOW + 27 * DAY - 1)));
     assert!(!sealed.still_good(&tokens(), &key, UnixSeconds::new(NOW + 27 * DAY)));
 }
+
+#[test]
+fn hosts_are_read_from_relay_urls() {
+    let host = |url| host_of(url).map(|host| host.as_str().to_owned());
+    assert_eq!(
+        host("https://relay.quietpath.net/"),
+        Some("relay.quietpath.net".into())
+    );
+    assert_eq!(
+        host("http://10.0.2.2:8443/relay"),
+        Some("10.0.2.2:8443".into())
+    );
+    assert_eq!(host("push.pingers.org"), Some("push.pingers.org".into()));
+    assert_eq!(host("https://"), None);
+}

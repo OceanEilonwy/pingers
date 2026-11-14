@@ -31,7 +31,7 @@ use pingers_time::UnixSeconds;
 
 use super::records::{self, Key, corrupt};
 use super::sync::Net;
-use crate::snapshot::{Operator, PushDowngrade, ServerOperators};
+use crate::snapshot::{Host, Operator, PushDowngrade, ServerOperators};
 use crate::{ClientError, Platform, PushTokens, Unavailable};
 
 /// The longest a sealed token is good for: a Party subscription lives 30 days (design B.4.9),
@@ -209,6 +209,15 @@ fn downgrade_of(error: &ClientError) -> Option<PushDowngrade> {
     }
 }
 
+/// A URL's host (and port), as screens name a server: "relay.quietpath.net".
+fn host_of(url: &str) -> Option<Host> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    Host::new(rest.split('/').next().unwrap_or(rest)).ok()
+}
+
 impl Net {
     /// The server's parameters, fetched through the relay once per process. The map host is
     /// kept in a record for the next start.
@@ -236,21 +245,26 @@ impl Net {
         Ok(params)
     }
 
-    /// Who runs the server and the instance's push relay, from the parameters this process
-    /// read; `None` before they were read or if the server declares no operator.
+    /// Who runs the server and the instance's push relay, and where the default privacy relay
+    /// and the push relay are, from the parameters this process read; `None` before they were
+    /// read or if the server declares no operator.
     pub(crate) fn operators(&self) -> Option<ServerOperators> {
         let params = lock(&self.learned.params);
         let params = params.as_ref()?;
-        let push_relay = self.learned.push_relay.as_ref().and_then(|setup| {
+        let listed = self.learned.push_relay.as_ref().and_then(|setup| {
             params
                 .push_relays
                 .iter()
                 .find(|relay| same_origin(relay.url.as_str(), &setup.origin))
-                .and_then(|relay| Operator::new(&relay.operator).ok())
         });
         Some(ServerOperators {
             server: Operator::new(&params.server_operator).ok()?,
-            push_relay,
+            push_relay: listed.and_then(|relay| Operator::new(&relay.operator).ok()),
+            relay_host: params
+                .ohttp_relays
+                .first()
+                .and_then(|relay| host_of(relay.as_str())),
+            push_relay_host: listed.and_then(|relay| host_of(relay.url.as_str())),
         })
     }
 

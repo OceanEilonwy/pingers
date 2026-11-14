@@ -19,6 +19,7 @@ pub mod chat;
 pub mod clock;
 pub mod common;
 pub mod compass;
+pub mod device;
 pub mod draw;
 #[cfg(any(test, feature = "fixtures"))]
 pub mod fixtures;
@@ -27,13 +28,17 @@ pub mod invite;
 pub mod location_request;
 pub mod meet_point;
 pub mod meetup;
+pub mod notices;
 pub mod notifications;
 pub mod party;
+pub mod party_settings;
 pub mod security;
 pub mod server;
 pub mod settings;
+pub mod setup;
 pub mod snapshot;
 pub mod spot;
+pub mod wakeups;
 pub mod zones;
 
 pub use error::ScreenError;

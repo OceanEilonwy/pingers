@@ -17,13 +17,13 @@ use pingers_geo::{Fence, Fix};
 use pingers_meetup::{LocationAnswer, LocationVisibility, MeetPointDraft};
 use pingers_proto::{
     ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, PartyId, PushHandle,
-    SpotId,
+    SecretText, SpotId,
 };
 
 use crate::snapshot::{
     EndedMeetup, ExclusionZone, HideTrail, InviteLink, InviteUrl, Joining, LocationRequest, Meetup,
     Name, OwnPosition, Party, PartyColour, PauseInFocus, PostQuantum, QuietHoursPreference,
-    RelayStatus, Settings, WakePushes,
+    RelayStatus, SafetyCode, Settings, WakePushes,
 };
 use crate::{ClientError, Fallback, FixQuality, LocationMode, Notice, OsRegion, PushTokens};
 
@@ -282,6 +282,14 @@ pub trait PartiesPort: Send + Sync {
         member: LeafIndex,
         choice: AllowListChange,
     ) -> Result<(), ClientError>;
+    /// The safety code between this device and a member (design B.1), to compare in person.
+    async fn safety_code(
+        &self,
+        party: PartyId,
+        member: LeafIndex,
+    ) -> Result<SafetyCode, ClientError>;
+    /// Marks a member checked, once the user saw the same safety code on both phones.
+    async fn mark_checked(&self, party: PartyId, member: LeafIndex) -> Result<(), ClientError>;
     /// The current Parties.
     async fn section(&self) -> Result<PartiesSection, ClientError>;
 }
@@ -313,6 +321,11 @@ pub trait SyncPort: Send + Sync {
     /// configured it answers [`RelayStatus::Unreachable`] without sending anything. The answer
     /// is only the status, with no host, address, timing or server text in it.
     async fn check_reachability(&self) -> Result<RelayStatus, ClientError>;
+    /// Offers a registration code the user typed (New party, "This server needs a code"), and
+    /// registers this device's account with it if it has none yet.
+    ///
+    /// Errors with `ClientError::RegistrationRefused` if the server refused the account.
+    async fn register_with_code(&self, code: SecretText) -> Result<(), ClientError>;
     /// The server status.
     async fn section(&self) -> Result<ServerSection, ClientError>;
 }

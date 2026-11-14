@@ -6,6 +6,7 @@ use super::Client;
 use crate::ClientError;
 use crate::ports::SettingChange;
 use crate::snapshot::{RelayStatus, WakePushes};
+use pingers_proto::SecretText;
 
 impl Client {
     /// Changes a device-wide privacy setting.
@@ -48,6 +49,18 @@ impl Client {
     /// [`ClientError::Unavailable`] until pingers-sync merges.
     pub async fn check_reachability(&self) -> Result<RelayStatus, ClientError> {
         self.published(self.crates.sync.check_reachability().await)
+            .await
+    }
+
+    /// Registers this device's account with a code the user typed ("This server needs a
+    /// code"), before a new Party is created on the server.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::RegistrationRefused`] if the server did not accept it;
+    /// [`ClientError::Unavailable`] without an instance.
+    pub async fn register_with_code(&self, code: SecretText) -> Result<(), ClientError> {
+        self.published(self.crates.sync.register_with_code(code).await)
             .await
     }
 }

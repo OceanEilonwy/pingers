@@ -4084,6 +4084,7 @@ dependencies = [
  "pingers-meetup",
  "pingers-proto",
  "pingers-screens",
+ "pingers-time",
 ]
 
 [[package]]

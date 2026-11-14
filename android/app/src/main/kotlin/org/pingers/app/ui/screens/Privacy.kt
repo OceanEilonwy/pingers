@@ -49,6 +49,7 @@ import org.pingers.app.Navigator
 import org.pingers.app.R
 import org.pingers.app.Route
 import org.pingers.app.data.PingersRepository
+import org.pingers.app.data.PrivacyLevel
 import org.pingers.app.data.PrivacyState
 import org.pingers.app.data.ServerViewState
 import org.pingers.app.data.Visibility
@@ -68,12 +69,21 @@ import org.pingers.app.ui.components.TwoLines
 import org.pingers.app.ui.theme.Pc
 import org.pingers.app.ui.theme.body
 import org.pingers.app.ui.theme.heading
+import androidx.compose.ui.platform.testTag
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.pingers.app.ui.E2eTags
+import uniffi.pingers.PrivacyText
 
 // ---------------------------------------------------------------- Sharing + Focus
 
+/**
+ * The Privacy tab (canvas PrivacySettings): sharing and Focus, who sees the exact spot, and
+ * Delivery as a link to Wake-ups. Quiet hours and exclusion zones are in Settings only. The
+ * words are the core's (PrivacyText); the switches' states come from [state].
+ */
 @Composable
 fun PrivacyScreen(state: PrivacyState, repo: PingersRepository, nav: Navigator) {
-    val context = LocalContext.current
+    val text = repo.privacyText.collectAsStateWithLifecycle().value
     Column(Modifier.fillMaxSize().background(Pc.Paper)) {
         Column(
             Modifier
@@ -83,81 +93,61 @@ fun PrivacyScreen(state: PrivacyState, repo: PingersRepository, nav: Navigator) 
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 24.dp),
         ) {
-            Row(Modifier.padding(top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (nav.stack.size > 1 && nav.stack[nav.stack.size - 2] != Route.Home) {
-                    IconAction(PIcons.Back, stringResource(R.string.cd_back), { nav.back() }, Modifier.padding(end = 4.dp))
-                }
-                Text(stringResource(R.string.privacy_title), style = heading(30.sp, 700), modifier = Modifier.semantics { heading() })
-            }
-            state.pausedBecause?.let { reason ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(Pc.Ink)
-                        .padding(horizontal = 18.dp, vertical = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                ) {
-                    IconBadge(PIcons.Moon, Pc.Lavender, Pc.InkCircle, size = 42.dp)
-                    TwoLines(
-                        stringResource(R.string.privacy_paused, reason), stringResource(R.string.privacy_paused_detail),
-                        titleStyle = body(15.sp, 600, Color.White), subtitleStyle = body(13.sp, color = Pc.InkSubtle, lineHeight = 1.4f),
-                    )
-                }
-            }
-            Section(stringResource(R.string.privacy_when))
-            Card {
-                SwitchRow(stringResource(R.string.privacy_sharing), null, state.sharing, repo::setSharing)
-                RowDivider()
-                SwitchRow(stringResource(R.string.privacy_pause_focus), stringResource(R.string.privacy_pause_focus_help), state.pauseInFocus, repo::setPauseInFocus)
-                RowDivider()
-                SwitchRow(stringResource(R.string.privacy_quiet), state.quietHoursRange, state.quietHours, repo::setQuietHours)
-                RowDivider()
-                ListRow({ nav.go(Route.ExclusionZones) }) {
-                    Text(stringResource(R.string.zones_title), style = body(16.sp, 500), modifier = Modifier.weight(1f))
-                    Text(state.exclusionZones.toString(), style = body(15.sp, color = Pc.Muted))
-                    ChevronIcon()
-                }
-            }
-            Section(stringResource(R.string.privacy_who))
-            Card(Modifier.selectableGroup(), padding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
-                VisibilityRow(stringResource(R.string.vis_ask), stringResource(R.string.vis_ask_help), state.visibility == Visibility.AskEachTime) {
-                    repo.setVisibility(Visibility.AskEachTime)
-                }
-                RowDivider()
-                VisibilityRow(stringResource(R.string.vis_everyone), null, state.visibility == Visibility.Everyone) {
-                    repo.setVisibility(Visibility.Everyone)
-                }
-                RowDivider()
-                VisibilityRow(stringResource(R.string.vis_nobody), null, state.visibility == Visibility.Nobody) {
-                    repo.setVisibility(Visibility.Nobody)
-                }
-            }
-            Section(stringResource(R.string.privacy_delivery))
-            Card {
-                SwitchRow(stringResource(R.string.privacy_no_wake), stringResource(R.string.privacy_no_wake_help), state.noWakePushes, { setNoWakePushes(context, repo, it) })
-                RowDivider()
-                DeviceSettingsRows(state.noWakePushes, state.pushDelivery)
-            }
-            Row(
-                Modifier
-                    .padding(top = 20.dp)
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(Pc.BlueTint)
-                    .clickable { nav.go(Route.Security) }
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Icon(PIcons.Shield, null, tint = Pc.BlueDark, modifier = Modifier.size(20.dp))
-                Text(stringResource(R.string.security_title), style = body(15.sp, 600, Pc.BlueDark), modifier = Modifier.weight(1f))
-                ChevronIcon(Pc.BlueDark)
-            }
+            if (text != null) PrivacyBody(state, text, repo, nav)
         }
         MainTabs(Route.Privacy, nav)
     }
+}
+
+@Composable
+private fun PrivacyBody(state: PrivacyState, text: PrivacyText, repo: PingersRepository, nav: Navigator) {
+    Row(Modifier.padding(top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (nav.stack.size > 1 && nav.stack[nav.stack.size - 2] != Route.Home) {
+            IconAction(PIcons.Back, stringResource(R.string.cd_back), { nav.back() }, Modifier.padding(end = 4.dp))
+        }
+        Text(text.title, style = heading(30.sp, 700), modifier = Modifier.semantics { heading() })
+    }
+    text.paused?.let { paused ->
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(Pc.Ink)
+                .padding(horizontal = 18.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            IconBadge(PIcons.Moon, Pc.Lavender, Pc.InkCircle, size = 42.dp)
+            TwoLines(
+                paused, text.pausedDetail,
+                titleStyle = body(15.sp, 600, Color.White), subtitleStyle = body(13.sp, color = Pc.InkSubtle, lineHeight = 1.4f),
+            )
+        }
+    }
+    Section(text.whenHeading)
+    Card {
+        SwitchRow(text.sharing, null, state.sharing, repo::setSharing)
+        RowDivider()
+        SwitchRow(text.pauseInFocus, text.pauseInFocusHelp, state.pauseInFocus, repo::setPauseInFocus)
+    }
+    Section(text.whoHeading)
+    Card(Modifier.selectableGroup(), padding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
+        text.visibility.forEachIndexed { i, choice ->
+            if (i > 0) RowDivider()
+            val value = when (choice.value) {
+                uniffi.pingers.Visibility.ASK_EACH_TIME -> Visibility.AskEachTime
+                uniffi.pingers.Visibility.EVERYONE -> Visibility.Everyone
+                uniffi.pingers.Visibility.NOBODY -> Visibility.Nobody
+            }
+            VisibilityRow(choice.label, choice.help, state.visibility == value) { repo.setVisibility(value) }
+        }
+    }
+    Section(text.deliveryHeading)
+    Card {
+        // The core's reason wake-ups are downgraded, when it has one, says more than the summary.
+        LinkRow(text.wakeups, text.pushDelivery ?: text.wakeupsSummary, { nav.go(Route.Wakeups) }, Modifier.testTag(E2eTags.PRIVACY_WAKEUPS))
+    }
+    SecurityLink(text.securityLink) { nav.go(Route.Security) }
 }
 
 @Composable
@@ -200,7 +190,11 @@ fun ServerViewScreen(state: ServerViewState, nav: Navigator) {
                     Text(state.server, style = body(15.sp, 600))
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         if (state.selfHosted) Tag(stringResource(R.string.server_self_hosted), Pc.Body, Pc.Chip)
-                        Tag(privacyLabel(state.privacy), Pc.BlueDark, Pc.BlueTint, icon = PIcons.ShieldCheck)
+                        if (state.privacy == PrivacyLevel.Reduced) {
+                            Tag(privacyLabel(state.privacy), Pc.OrangeText, Pc.OrangeTint, icon = PIcons.ShieldAlert)
+                        } else {
+                            Tag(privacyLabel(state.privacy), Pc.BlueDark, Pc.BlueTint, icon = PIcons.ShieldCheck)
+                        }
                     }
                 }
             }

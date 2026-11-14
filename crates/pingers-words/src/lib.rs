@@ -16,6 +16,7 @@
 pub mod chat;
 pub mod common;
 pub mod compass;
+pub mod device;
 pub mod errors;
 pub mod home;
 pub mod invite;
@@ -23,12 +24,16 @@ pub mod location_request;
 pub mod maps;
 pub mod meet_point;
 pub mod meetup;
+pub mod notices;
 pub mod notifications;
 pub mod party;
+pub mod party_settings;
 pub mod security;
 pub mod server;
 pub mod settings;
+pub mod setup;
 pub mod spot;
+pub mod wakeups;
 pub mod zones;
 
 /// A language Pingers speaks.

@@ -16,7 +16,7 @@ use pingers_parties::{
     RelayChoice, SpotEdit, SpotShape,
 };
 use pingers_proto::{LeafIndex, MailboxId, PartyId, SecretText, ServerId, SpotId};
-use pingers_store::{MemberName, Party as StoredParty, PartyName, Session, SpotName};
+use pingers_store::{MemberName, Party as StoredParty, PartyName, Session, SpotName, Verification};
 use pingers_time::Clock;
 
 use super::Backend;
@@ -28,7 +28,7 @@ use crate::ports::{
 };
 use crate::snapshot::{
     Host, Hosting, Invite, InviteLink, InviteStatus, InviteUrl, JoinRequest, Joining, Me, Member,
-    Name, Operator, Party, PartyColour, PartyConfig, PostQuantum, PushRelay, PushRelayKind,
+    Name, Party, PartyColour, PartyConfig, PostQuantum, PushRelay, PushRelayKind, SafetyCheck,
     SafetyCode, Service, Spot,
 };
 
@@ -71,7 +71,8 @@ impl Parties {
 #[async_trait]
 impl PartiesPort for Parties {
     async fn create_party(&self, draft: PartyDraft) -> Result<PartyId, ClientError> {
-        // The first Party makes the account (design B.1).
+        // The first Party makes the account (design B.1); a refusal means no Party.
+        self.net.require_account().await?;
         self.net.ready().await?;
         // This device's own subscription goes into the new group, so commits by members who
         // join later wake it (design B.4.9). Without wake-up pushes, maintenance adds one later.
@@ -293,6 +294,30 @@ impl PartiesPort for Parties {
             .await
     }
 
+    async fn safety_code(
+        &self,
+        party: PartyId,
+        member: LeafIndex,
+    ) -> Result<SafetyCode, ClientError> {
+        self.backend
+            .store(move |session, clock, _rng| {
+                let code = PartyLifecycle::new(session, clock).safety_code(&party, member)?;
+                SafetyCode::new(&code.to_string()).map_err(|_invalid| corrupt())
+            })
+            .await
+    }
+
+    /// The code this device computes is the one the user compared, so it is entered as is.
+    async fn mark_checked(&self, party: PartyId, member: LeafIndex) -> Result<(), ClientError> {
+        self.backend
+            .store(move |session, clock, _rng| {
+                let lifecycle = PartyLifecycle::new(session, clock);
+                let code = lifecycle.safety_code(&party, member)?;
+                Ok(lifecycle.verify_member(&party, member, &code)?)
+            })
+            .await
+    }
+
     async fn section(&self) -> Result<PartiesSection, ClientError> {
         let links: HashMap<PartyId, InviteLink> = self
             .links()
@@ -351,6 +376,10 @@ fn party(
                 me: match entry.is_self {
                     Myself::Yes => Me::Me,
                     Myself::No => Me::Other,
+                },
+                checked: match entry.verification {
+                    Verification::Verified => SafetyCheck::Checked,
+                    Verification::Unverified => SafetyCheck::NotChecked,
                 },
             }))
         })
@@ -449,29 +478,27 @@ fn code_of(code: JoinCode) -> Result<SafetyCode, ClientError> {
     SafetyCode::new(&code.to_string()).map_err(|_never| corrupt())
 }
 
-/// Who runs what for a Party.
-///
-/// WAITING(pingers-sync): operator declarations, the hosting kind and the relays come from the
-/// server's `/v1/config`, which pingers-sync reads. Until then the snapshot names the Party's
-/// server for every service and "undeclared" for every operator.
+/// Who runs what for a Party, as far as its settings say: the server, its default relays and
+/// the official push relay. Who runs each, and where the relays are, come from the server's
+/// parameters once read ([`PartyConfig::declare`], in the snapshot's assembly).
 fn config(settings: &PartySettings) -> Result<PartyConfig, ClientError> {
     let origin = settings.server.as_str();
     let host = Host::new(origin.strip_prefix("https://").unwrap_or(origin))
         .map_err(|_invalid| corrupt())?;
-    let operator = Operator::new("undeclared").map_err(|_invalid| corrupt())?;
     Ok(PartyConfig {
         server: Service {
             host: host.clone(),
-            operator: operator.clone(),
+            operator: None,
         },
         hosting: Hosting::Public,
         relay: Service {
             host,
-            operator: operator.clone(),
+            operator: None,
         },
         push_relay: PushRelay {
             kind: PushRelayKind::Official,
-            operator,
+            operator: None,
+            host: None,
         },
         post_quantum: match settings.post_quantum {
             PartiesPostQuantum::QuantumResistant => PostQuantum::On,

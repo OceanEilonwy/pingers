@@ -28,6 +28,7 @@ internal fun MeetupId.toFfi() = uniffi.pingers.MeetupId(hex)
 internal fun MessageId.toFfi() = uniffi.pingers.MessageId(hex)
 internal fun RequestId.toFfi() = uniffi.pingers.LocationRequestId(hex)
 internal fun MemberId.toFfi() = uniffi.pingers.MemberId(leaf.toUInt())
+internal fun ZoneId.toFfi() = uniffi.pingers.ZoneId(row.toUInt())
 
 internal fun uniffi.pingers.Coordinate.toUi() = Coordinate(latitude, longitude)
 internal fun Coordinate.toFfi() = uniffi.pingers.Coordinate(latitude, longitude)
@@ -155,7 +156,7 @@ internal fun uniffi.pingers.Reachability.toUi(): Reachability = when (this) {
 }
 
 internal fun uniffi.pingers.NewPartyView.toUi(error: String?) =
-    NewPartyState(name, colour.toUi(), server, privacy.level(), canCreate, error)
+    NewPartyState(name, colour.toUi(), server, privacy.level(), canCreate, error, serverChoice, text)
 
 internal fun uniffi.pingers.AdvancedView.toUi() = AdvancedState(
     privacy = privacy.level(),
@@ -168,6 +169,9 @@ internal fun uniffi.pingers.AdvancedView.toUi() = AdvancedState(
         is uniffi.pingers.PushRelayChoice.Custom -> PushRelayChoice.Custom
     },
     postQuantum = postQuantum,
+    serverChoice = serverChoice,
+    builtIn = builtIn,
+    text = text,
 )
 
 internal fun uniffi.pingers.PartyView.toUi(): PartyState {
@@ -190,6 +194,8 @@ internal fun uniffi.pingers.PartyView.toUi(): PartyState {
         server = server,
         privacy = privacy.toUi(),
         meetup = meetup?.toUi(),
+        settingsRow = settingsRow,
+        settingsDetail = settingsDetail,
     )
 }
 
@@ -212,7 +218,7 @@ internal fun uniffi.pingers.InviteView.toUi() = InviteState(
 )
 
 internal fun uniffi.pingers.OpenInviteView.toUi(error: String?) = OpenInviteState(
-    title, subtitle, whatJoiningMeans, points, nameLabel, name, ask, notNow, error,
+    title, subtitle, whatJoiningMeans, points, joinAs, nameLabel, nameHelp, ask, notNow, error,
 )
 
 internal fun uniffi.pingers.AskedToJoinView.toUi() = AskedToJoinState(

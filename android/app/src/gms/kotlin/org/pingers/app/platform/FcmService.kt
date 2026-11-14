@@ -27,6 +27,8 @@ class FcmService : FirebaseMessagingService() {
             sentHigh = message.originalPriority == RemoteMessage.PRIORITY_HIGH,
             deliveredHigh = message.priority == RemoteMessage.PRIORITY_HIGH,
         )
+        // For Wake-ups: when it came, and whether FCM held it back below its sent priority.
+        PhoneLog.recordWake(this, onTime = message.originalPriority == message.priority)
         // The relay sends the body's two fields, v and h, as the data message's map.
         val payload = PushBody.fromFcmData(message.data)
         Push.wake(PushPlatform.FCM, payload, priority)
