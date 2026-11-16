@@ -43,11 +43,7 @@ pub struct MapsWords {
 #[uniffi::export]
 #[must_use]
 pub fn maps_words(host: String, source: MapHostSource, through_relay: bool) -> MapsWords {
-    let source = match source {
-        MapHostSource::UserOverride => WordsSource::UserOverride,
-        MapHostSource::Server => WordsSource::Server,
-        MapHostSource::Publisher => WordsSource::Publisher,
-    };
+    let source = words_source(source);
     let text = maps(
         Language::English,
         &MapsConfiguration {
@@ -68,9 +64,118 @@ pub fn maps_words(host: String, source: MapHostSource, through_relay: bool) -> M
     }
 }
 
+/// Downloaded maps (canvas `DownloadedMaps`), in words.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct DownloadedMapsWords {
+    /// "Downloaded maps".
+    pub title: String,
+    /// "Back to Settings".
+    pub back: String,
+    /// How maps are downloaded and shown.
+    pub intro: String,
+    /// "On this phone".
+    pub installed: String,
+    /// "Available".
+    pub available: String,
+    /// "Update available".
+    pub update_available: String,
+    /// "Update".
+    pub update: String,
+    /// "Delete".
+    pub delete: String,
+    /// "Download".
+    pub download: String,
+    /// "This area".
+    pub this_area: String,
+    /// "From maps.pingers.org".
+    pub host_title: String,
+    /// Who the host is and what it sees.
+    pub host_detail: String,
+    /// "Map data from OpenStreetMap contributors".
+    pub attribution: String,
+}
+
+/// Downloaded maps' words, for the map host in use.
+#[uniffi::export]
+#[must_use]
+pub fn downloaded_maps_words(
+    host: String,
+    source: MapHostSource,
+    through_relay: bool,
+) -> DownloadedMapsWords {
+    let text = pingers_words::maps::downloaded_maps(
+        Language::English,
+        &MapsConfiguration {
+            host,
+            source: words_source(source),
+            through_relay,
+        },
+    );
+    DownloadedMapsWords {
+        title: text.title,
+        back: text.back,
+        intro: text.intro,
+        installed: text.installed,
+        available: text.available,
+        update_available: text.update_available,
+        update: text.update,
+        delete: text.delete,
+        download: text.download,
+        this_area: text.this_area,
+        host_title: text.host_title,
+        host_detail: text.host_detail,
+        attribution: text.attribution,
+    }
+}
+
+/// A size on disk, as screens say it: "184 MB".
+#[uniffi::export]
+#[must_use]
+pub fn size_words(bytes: u64) -> String {
+    pingers_words::device::size(
+        Language::English,
+        pingers_screens::device::Bytes::new(bytes),
+    )
+}
+
+/// A download under way: "Downloading 120 MB of 312 MB".
+#[uniffi::export]
+#[must_use]
+pub fn downloading_words(done: u64, total: u64) -> String {
+    pingers_words::maps::downloading(
+        Language::English,
+        pingers_screens::device::Bytes::new(done),
+        pingers_screens::device::Bytes::new(total),
+    )
+}
+
+const fn words_source(source: MapHostSource) -> WordsSource {
+    match source {
+        MapHostSource::UserOverride => WordsSource::UserOverride,
+        MapHostSource::Server => WordsSource::Server,
+        MapHostSource::Publisher => WordsSource::Publisher,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn downloaded_maps_words_name_the_host_and_sizes() {
+        let words = downloaded_maps_words("maps.pingers.org".into(), MapHostSource::Server, true);
+        assert_eq!(words.host_title, "From maps.pingers.org");
+        assert!(
+            words
+                .host_detail
+                .starts_with("The map host your Pingers server recommends.")
+        );
+        assert_eq!(size_words(184_000_000), "184 MB");
+        assert_eq!(
+            downloading_words(120_000_000, 312_000_000),
+            "Downloading 120 MB of 312 MB"
+        );
+    }
 
     #[test]
     fn words_come_from_pingers_words() {

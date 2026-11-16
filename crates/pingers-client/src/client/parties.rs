@@ -6,7 +6,7 @@ use pingers_proto::{LeafIndex, MailboxId, PartyId, SpotId};
 use super::Client;
 use crate::ClientError;
 use crate::ports::{JoinDecision, PartyDraft, SpotDraft};
-use crate::snapshot::{InviteLink, InviteUrl, Name};
+use crate::snapshot::{InviteLink, InviteUrl, Name, SafetyCode};
 
 impl Client {
     /// Creates a Party (New party).
@@ -136,6 +136,30 @@ impl Client {
     /// [`ClientError::Parties`].
     pub async fn leave_party(&self, party: PartyId) -> Result<(), ClientError> {
         self.published(self.crates.parties.leave_party(party).await)
+            .await
+    }
+
+    /// The safety code between this device and a member (Safety codes).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Parties`] for an unknown Party or member.
+    pub async fn safety_code(
+        &self,
+        party: PartyId,
+        member: LeafIndex,
+    ) -> Result<SafetyCode, ClientError> {
+        self.crates.parties.safety_code(party, member).await
+    }
+
+    /// Marks a member checked once the codes matched ("Codes match · Mark Ana as checked").
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Parties`] for an unknown Party or member, or one whose profile has not
+    /// arrived yet.
+    pub async fn mark_checked(&self, party: PartyId, member: LeafIndex) -> Result<(), ClientError> {
+        self.published(self.crates.parties.mark_checked(party, member).await)
             .await
     }
 

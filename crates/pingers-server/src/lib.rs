@@ -84,7 +84,8 @@ pub use crate::admin::{
 };
 pub use crate::config::{
     AddressList, AndroidPackage, AppLinks, CertificateFingerprint, CertificateSource, ConfigError,
-    Database, Logging, OhttpKeys, RelayAllowList, Required, ServedKey, ServerConfig,
+    Database, Logging, MembershipProofs, OhttpKeys, RelayAllowList, Required, ServedKey,
+    ServerConfig,
 };
 pub use crate::error::ServerError;
 pub use crate::forwarded::TrustedProxies;
@@ -151,6 +152,7 @@ pub(crate) struct PublishedParams {
     pub(crate) ohttp_relays: Vec<RelayUrl>,
     pub(crate) push_relays: Vec<PushRelayInfo>,
     pub(crate) map_host: Option<pingers_proto::MapHostUrl>,
+    pub(crate) membership_proofs: MembershipProofs,
 }
 
 /// Where live exchanges go.
@@ -437,6 +439,7 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
             ohttp_relays: config.ohttp_relay_urls,
             push_relays: config.advertised_push_relays,
             map_host: config.map_host,
+            membership_proofs: config.membership_proofs,
         },
         rng: Mutex::new(rng),
     });

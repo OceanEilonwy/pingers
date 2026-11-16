@@ -9,10 +9,10 @@ use std::sync::Arc;
 use pingers_anon::{
     AnonError, IssuerKey, PrivacyPassToken, TokenCount, begin_token_issuance, issue_tokens,
 };
-use pingers_proto::AccountId;
+use pingers_proto::{AccountId, TokenAllowance};
 use pingers_quota::{
-    DAILY_TOKEN_LIMIT, ISSUANCE_PERIOD, MemoryQuotaStore, PrivacyPass, PrivacyPassStore,
-    QuotaError, REDEMPTION_GRACE,
+    DAILY_TOKEN_LIMIT, ISSUANCE_PERIOD, IssuanceDay, MemoryQuotaStore, PrivacyPass,
+    PrivacyPassStore, QuotaError, REDEMPTION_GRACE,
 };
 use pingers_testkit::{ManualClock, seeded_rng, test_clock};
 
@@ -98,7 +98,8 @@ fn the_daily_allowance_is_per_account_and_per_day(
     );
     assert!(matches!(
         world.fetch(ALICE, &key, 1),
-        Err(TestError::Quota(QuotaError::DailyLimit))
+        Err(TestError::Quota(QuotaError::DailyLimit(allowance)))
+            if allowance.remaining == TokenAllowance::NONE
     ));
     assert_eq!(world.fetch(BOB, &key, 1)?.len(), 1);
     world.clock.advance(Duration::from_hours(24));
@@ -114,10 +115,17 @@ fn a_batch_over_the_allowance_is_refused_whole(
     let key = world.current_key()?;
     let _first = world.fetch(ALICE, &key, 2)?;
     let over = DAILY_TOKEN_LIMIT.saturating_sub(1);
-    assert!(matches!(
-        world.fetch(ALICE, &key, over),
-        Err(TestError::Quota(QuotaError::DailyLimit))
-    ));
+    let refused = world.fetch(ALICE, &key, over);
+    let Err(TestError::Quota(QuotaError::DailyLimit(allowance))) = refused else {
+        return Err(TestError::Fixture("not refused for the daily limit"));
+    };
+    assert_eq!(
+        allowance.remaining,
+        TokenAllowance::new(DAILY_TOKEN_LIMIT.saturating_sub(2)),
+        "the refusal says what is left"
+    );
+    let today = IssuanceDay::containing(pingers_time::Clock::now(&world.clock));
+    assert_eq!(Some(allowance.resets_at), today.next());
     let rest = DAILY_TOKEN_LIMIT.saturating_sub(2);
     assert_eq!(
         world.fetch(ALICE, &key, rest)?.len(),

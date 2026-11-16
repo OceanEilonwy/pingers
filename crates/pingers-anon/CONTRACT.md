@@ -98,3 +98,11 @@ RLN-v2 membership proofs and Privacy Pass type 0x0001. Features: `prover` (clien
   to the shared Privacy Pass module (available with `prover` or `issuer`) and is the only
   definition of the 300-token batch limit; `batch_token_count(request)` (issuer) gives the
   count of a batch request, replacing pingers-quota's copy of the wire layout.
+- **v1-rln (2026-11-14), additive:** `prover_self_test(SelfTestPlan, &dyn Timer, rng) ->
+  SelfTestReport` (feature `prover` + `verifier`): checks the embedded key against the PSE
+  ceremony (`circuit::ceremony`, now a run-time check as well as a test), that a proof verifies
+  and that the verifier refuses it bound to another request and with a changed share, then times
+  `SelfTestPlan::DESIGN` (20 proofs after a warm-up; p95 by nearest rank at most 1.5 s), stopping
+  early once the percentile cannot be met. `PARAMETERS_ID` names the parameters a stored result
+  belongs to. `MerklePath::{sibling_bytes, from_sibling_bytes}` and `TREE_DEPTH` let the client
+  store its path, so a proof in a wake reads one row instead of rebuilding the tree.

@@ -27,6 +27,9 @@
 //! mailbox_posts_per_bucket = 60
 //! push_timeout_s = 10              # how long a push relay has to answer
 //! expire_interval_s = 60           # how often expired board segments and mailboxes go
+//! membership_proofs = "on"         # or "off": anonymous requests then need Privacy Pass
+//!                                  # tokens, and /v1/params stops listing proofs (design
+//!                                  # B.4.8 fallback 3, a kill switch for a circuit fault)
 //!
 //! [ohttp]
 //! listen = "127.0.0.1:9471"        # the gateway's own listener: POST /ohttp and
@@ -401,6 +404,19 @@ pub struct ServerConfig {
     /// The Android apps that may open this server's invite links directly (App Links), served
     /// at `/.well-known/assetlinks.json`; `None`: that path is 404.
     pub app_links: Option<AppLinks>,
+    /// Whether RLN membership proofs are accepted (design B.4.8 fallback 3).
+    pub membership_proofs: MembershipProofs,
+}
+
+/// Whether the server accepts RLN membership proofs for anonymous requests.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MembershipProofs {
+    /// Proofs and Privacy Pass tokens are both accepted (the default).
+    #[default]
+    On,
+    /// Only Privacy Pass tokens: the operator's kill switch for a circuit or parameter fault.
+    Off,
 }
 
 /// The apps Android verifies for this server's `https://<server>/j` links.
@@ -551,6 +567,7 @@ impl ServerConfig {
             push_timeout: Duration::from_secs(default_push_timeout()),
             expire_interval: Duration::from_secs(default_expire_interval()),
             app_links: None,
+            membership_proofs: MembershipProofs::On,
         }
     }
 }
@@ -618,6 +635,8 @@ struct File {
     #[serde(default)]
     push_relays: Vec<FilePushRelay>,
     app_links: Option<FileAppLinks>,
+    #[serde(default)]
+    membership_proofs: MembershipProofs,
 }
 
 #[derive(Deserialize)]
@@ -829,6 +848,7 @@ impl ServerConfig {
             push_timeout: positive_seconds("push_timeout_s", file.push_timeout_s)?,
             expire_interval: positive_seconds("expire_interval_s", file.expire_interval_s)?,
             app_links: file.app_links.map(app_links).transpose()?,
+            membership_proofs: file.membership_proofs,
         })
     }
 }

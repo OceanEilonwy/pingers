@@ -11,7 +11,8 @@ publish.workspace = true
 layer = 3
 
 [dependencies]
-pingers-anon = { workspace = true, features = ["prover"] }
+# `verifier` for the prover self-test, which checks its own proofs (design B.4.8).
+pingers-anon = { workspace = true, features = ["prover", "verifier"] }
 # Mailbox ids, push binds, sealed push tokens and group request signatures.
 pingers-crypto = { workspace = true }
 # `BinaryRequest` and `BinaryResponse`, the shape `Transport` carries.
@@ -22,6 +23,9 @@ pingers-time = { workspace = true }
 pingers-transport = { workspace = true }
 # Identifiers in paths and the read-key header are hex (pingers-server `wire.rs`).
 hex = { workspace = true }
+# A per-proof generator seeded from the engine's randomness, so proving (up to a second) never
+# holds the engine's generator.
+rand_chacha = { workspace = true }
 rand_core = { workspace = true }
 # Registration codes are compared in constant time (style guide §8).
 subtle = { workspace = true }
@@ -38,7 +42,7 @@ pingers-time = { workspace = true, features = ["test-util"] }
 pingers-delivery = { workspace = true }
 pingers-anon = { workspace = true, features = ["prover", "verifier", "issuer"] }
 async-trait = { workspace = true }
-rand_chacha = { workspace = true }
+proptest = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [lints]

@@ -410,6 +410,13 @@ Proving-time basis: the mopro project reports Semaphore (depth 32) proofs at abo
 2. the prover fails the on-device self-test (95th percentile above 1.5 s),
 3. the operator has disabled proofs, or the app has (kill switch for a circuit or parameter fault).
 
+Implementation notes (2026-11-14):
+
+- **Self-test.** Once per set of proving parameters the main app checks, in the background, that the embedded key is the PSE ceremony's, that its proofs verify and that the verifier refuses a tampered one, and times 20 proofs after a warm-up; it passes when the 95th percentile (nearest rank: the 19th) is at most 1.5 s. Until it passes the main app uses tokens. A "too slow" result is tested again after a week; a parameter or verification fault is not.
+- **Within a wake.** The tree copy and this device's Merkle path are refreshed at most hourly (when the copy's root is no longer the current one) and the path is stored, so a proof costs one store read plus the Groth16 proof itself. A proof is made only when the wake's remaining budget covers the self-test's 95th percentile plus the time to send the request; otherwise the request spends a token. Measured on an x86_64 Android emulator (host GPU, KVM): 366 to 386 ms median, 400 to 486 ms p95, 367 to 425 ms for the first proof of a process, 17 MiB peak RSS; the self-test passed in about 8 s with a p95 of 369 to 415 ms (`crates/pingers-anon/BENCHMARK.md`).
+- **Refills.** `/v1/params` advertises `privacy_pass_daily_limit`; the device records it and what it was issued today, and asks for the shortfall capped by what is left. A 429 carries what is left, which the device adopts and asks for once more. A spent allowance leaves the stock until the next UTC day.
+- **Operator switch.** `membership_proofs = "off"` in the server configuration lists only Privacy Pass in `/v1/params` and refuses proofs (trigger 3); devices read the parameters before preparing credentials.
+
 The fallback is shown in "What your server sees". Proof devices and token devices are distinguishable as classes; acceptable while both are large.
 
 #### B.4.9 Delivery: mailboxes, sealed push tokens and the push relay
@@ -895,7 +902,8 @@ GET  /v1/params            -> Params { anon_auth: Vec<Rln|PP>, rln_slashing: boo
                                        ohttp_relays: Vec<Url>,
                                        push_relays: Vec<PushRelayInfo { relay_id, url, key_config_hash, operator: String }>,
                                        allow_custom_push_relays: bool, server_operator: String, server_time,
-                                       map_host: Option<Url> }   // the map host this server recommends (B.12)
+                                       map_host: Option<Url>,     // the map host this server recommends (B.12)
+                                       privacy_pass_daily_limit: u16 }   // tokens per account per UTC day (300); devices size refills by it
 
 // --- accounts (Acct) ---
 POST /v1/accounts          RegisterReq  { sig_pk: [u8;32], proof: Sig, reg_code: Option<String> } -> { account_id }
@@ -914,6 +922,8 @@ GET  /v1/rln/leaves?after=n (no auth, cacheable)
 
 // --- Privacy Pass (Acct) ---
 POST /v1/pp/issue          IssueReq     { blinded: Vec<BlindedElement> }   -> { evaluated: Vec<..>, proof, key_id }
+                           // | 429 PrivacyPassAllowance { remaining: u16, resets_at }: the batch would pass the daily
+                           //   limit and nothing was issued; ask for at most `remaining` (or wait for `resets_at`)
 GET  /v1/pp/keys                                                           -> { keys: Vec<PublicKeyInfo> }
 
 // --- blind board (Anon, scope Board) ---

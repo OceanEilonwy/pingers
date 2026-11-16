@@ -10,9 +10,9 @@ use pingers_proto::{
     CommitRequest, CommitResponse, CreateGroup, GroupLogEntry, GroupMessages, GroupState,
     InvitePayload, InvitePost, JoinRequest, Knock, Lease, LiveFrame, LocationPlaintext,
     MailboxMessages, MailboxSpec, MeetupMessage, MembershipLeafRequest, MembershipLeafResponse,
-    MembershipLeaves, MessageAccepted, Params, PrivacyPassIssueRequest, PrivacyPassIssueResponse,
-    PushRelayConfig, PushRequest, PushTokenPlaintext, Record, RegisterRequest, RegisterResponse,
-    RlnAuth, Subscription, WireDecode, WireEncode,
+    MembershipLeaves, MessageAccepted, Params, PrivacyPassAllowance, PrivacyPassIssueRequest,
+    PrivacyPassIssueResponse, PushRelayConfig, PushRequest, PushTokenPlaintext, Record,
+    RegisterRequest, RegisterResponse, RlnAuth, Subscription, WireDecode, WireEncode,
 };
 use proptest::prelude::*;
 use proptest::sample::Index;
@@ -142,6 +142,7 @@ wire_properties! {
     privacy_pass_issue_request: PrivacyPassIssueRequest = strategies::privacy_pass_issue_request();
     privacy_pass_issue_response: PrivacyPassIssueResponse =
         strategies::privacy_pass_issue_response();
+    privacy_pass_allowance: PrivacyPassAllowance = strategies::privacy_pass_allowance();
     create_group: CreateGroup = strategies::create_group();
     commit_request: CommitRequest = strategies::commit_request();
     commit_response: CommitResponse = strategies::commit_response();

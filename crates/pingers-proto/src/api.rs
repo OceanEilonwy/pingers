@@ -13,6 +13,7 @@ use crate::secret::option_ct_eq;
 use crate::{
     AccountId, BoardPage, Epoch, GroupLogEntry, KeyConfigHash, Lease, LeaseId, Padded, ProtoError,
     Redacted, RelayId, RelayUrl, SealedSnapshot, SecretBytes, SecretText, SequenceNumber,
+    TokenAllowance,
 };
 use subtle::ConstantTimeEq as _;
 
@@ -112,6 +113,9 @@ pub struct Params {
     /// host"); `None` leaves the app on the publisher's default. A user override in the app
     /// comes first.
     pub map_host: Option<MapHostUrl>,
+    /// How many Privacy Pass tokens one account may be issued per UTC day (design B.4.8: 300).
+    /// Devices size their refills from it, so a refill never asks for more than is left.
+    pub privacy_pass_daily_limit: TokenAllowance,
 }
 
 /// The `https://` base URL of a map host (pingers-map-host), under which `catalog.json` and the
@@ -435,10 +439,10 @@ impl CborBody for PushRelayInfo {
 
 /// Layout: `[credentials, slashing (0 off, 1 on), cover read ratio (f32), board page records,
 /// OHTTP relays, push relays, custom push relays (0 not allowed, 1 allowed), operator,
-/// server time, map host URL or null]`.
+/// server time, map host URL or null, Privacy Pass tokens per account per day]`.
 impl CborBody for Params {
     fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
-        writer.array(10)?;
+        writer.array(11)?;
         writer.list(&self.anonymous_credentials)?;
         writer.unsigned(match self.rln_slashing {
             Slashing::Off => 0_u8,
@@ -457,11 +461,13 @@ impl CborBody for Params {
         writer.unsigned(self.server_time.get());
         writer.option(self.map_host.as_ref(), |writer, url| {
             writer.text(url.as_str())
-        })
+        })?;
+        writer.unsigned(self.privacy_pass_daily_limit.get());
+        Ok(())
     }
 
     fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
-        cbor::array_of(decoder, 10)?;
+        cbor::array_of(decoder, 11)?;
         Ok(Self {
             anonymous_credentials: cbor::list(decoder)?,
             rln_slashing: match decoder.u8()? {
@@ -487,6 +493,7 @@ impl CborBody for Params {
             map_host: cbor::option(decoder, |decoder| {
                 MapHostUrl::new(decoder.str()?.to_owned())
             })?,
+            privacy_pass_daily_limit: TokenAllowance::new(decoder.u16()?),
         })
     }
 }

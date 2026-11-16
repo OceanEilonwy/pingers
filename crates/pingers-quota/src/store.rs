@@ -140,6 +140,18 @@ impl IssuanceDay {
     pub const fn get(self) -> u64 {
         self.0
     }
+
+    /// When the next day starts, or `None` past the end of time.
+    #[must_use]
+    pub const fn next(self) -> Option<UnixSeconds> {
+        match self.0.checked_add(1) {
+            Some(day) => match day.checked_mul(Self::SECONDS) {
+                Some(seconds) => Some(UnixSeconds::new(seconds)),
+                None => None,
+            },
+            None => None,
+        }
+    }
 }
 
 /// Tokens issued to an account, to count against its daily allowance.
@@ -160,7 +172,10 @@ pub enum Allowance {
     /// Counted.
     Granted,
     /// It would exceed the limit; nothing was counted.
-    Exceeded,
+    Exceeded {
+        /// How many tokens the account had already been issued that day.
+        issued: u16,
+    },
 }
 
 /// Whether a nonce was new to the spent set.
