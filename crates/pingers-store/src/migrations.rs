@@ -154,7 +154,7 @@ mod tests {
         Ok(())
     }
 
-    /// A device's data as the single-server schema (version 4) held it.
+    /// A device's data as the last single-server schema (version 5) held it.
     const SINGLE_SERVER_DATA: &str = "
         INSERT INTO identity (singleton, account_id, sig_sk, server_url, server_pin)
             VALUES (1, zeroblob(16), x'0101010101010101010101010101010101010101010101010101010101010101',
@@ -173,6 +173,10 @@ mod tests {
         INSERT INTO request_queue (group_id, keep_until, request) VALUES (NULL, 9000, x'06');
         INSERT INTO board_upload (singleton, lease_id, revoke_key) VALUES (1, zeroblob(16), zeroblob(32));
         INSERT INTO pp_allowance (singleton, daily_limit, day, issued) VALUES (1, 300, 20406, 12);
+        INSERT INTO rln_tree_state (singleton, root_epoch, root, leaf_count, path_position, path)
+            VALUES (1, 41, zeroblob(32), 8, NULL, NULL);
+        INSERT INTO prover_self_test (singleton, parameters, verdict, first_ms, median_ms, p95_ms, timed, tested_at)
+            VALUES (1, 'rln-v1', 0, 900, 400, 600, 5, 1000);
     ";
 
     #[test]
@@ -228,6 +232,15 @@ mod tests {
             server.token_allowance().load()?.map(|ledger| ledger.issued),
             Some(12)
         );
+        assert_eq!(
+            server
+                .rln_tree_state()
+                .load()?
+                .map(|state| state.leaf_count),
+            Some(8)
+        );
+        // The self-test tests this device's prover, not a server: it stays device-wide.
+        assert!(session.prover_self_test().load()?.is_some());
         Ok(())
     }
 
