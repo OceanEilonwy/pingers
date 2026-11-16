@@ -9,8 +9,9 @@
 //! With `--second-server --cross-server` phone A's app is built with `second-server.env`, so its
 //! built-in server is server B, and phone B's with `app.env` (server A). A creates a Party (on
 //! B) and shares its link; B opens it, records server B with the pins the link carries, registers
-//! there with the link's registration code and asks to join. The run ends there, with server B's
-//! metrics as the evidence that phone B reached it.
+//! there with the link's registration code and asks to join; server B's metrics must show it
+//! answered. Then the whole scenario below runs with the Party on server B, and B's Party
+//! settings must name server B's operator and say its keys came from the invite link.
 //!
 //! It uses a running local stack, or starts one (and stops it at the end); builds the foss
 //! debug APK against it unless `--apk` names one; takes both emulator leases (`--leases`,
@@ -592,10 +593,6 @@ fn play(
         Ok("opened with am start".to_owned())
     })?;
 
-    if apks.cross_server {
-        return cross_server_join(report, scene, before);
-    }
-
     // 2. Flow A.
     step(report, scene, "B asks to join (JoinA1)", |scene| {
         let b = &scene.b;
@@ -642,6 +639,10 @@ fn play(
         scene.code_b = Some(code.clone());
         Ok(format!("B's code {code}"))
     })?;
+
+    if apks.cross_server {
+        server_b_registered(report, scene, before)?;
+    }
 
     step(
         report,
@@ -691,6 +692,27 @@ fn play(
         open_party(&scene.b)?;
         Ok(format!("A's Party lists {JOINER}"))
     })?;
+
+    if apks.cross_server {
+        step(report, scene, "B's Party settings show server B", |scene| {
+            let b = &scene.b;
+            b.tap_when(&Find::tag("party_settings_open"), UI)?;
+            let keys = Find::text(Text::Is("Server keys from your invite link".into()));
+            let operator = Find::text(Text::Is(stack::SECOND_OPERATOR.into()));
+            let screen = b.screen()?;
+            if screen.find(&keys).is_none() || screen.find(&operator).is_none() {
+                // The Operators card may sit below the fold.
+                b.shell("input swipe 540 1800 540 900")?;
+            }
+            b.wait_for(&keys, UI)?;
+            b.wait_for(&operator, UI)?;
+            open_party(b)?;
+            Ok(format!(
+                "run by {:?}, keys from the invite link",
+                stack::SECOND_OPERATOR
+            ))
+        })?;
+    }
 
     // 3. A Spot.
     step(report, scene, "A creates a Spot", |scene| {
@@ -850,8 +872,10 @@ fn play(
 /// Phone B, whose built-in server is A, joins phone A's Party on server B: it records B with the
 /// invite's pins, registers there with the link's code, and asks to join. Server B answering
 /// phone B's registration and requests (direct and through B's relay) is the evidence.
-fn cross_server_join(report: &mut Report, scene: &mut Scene, before: u64) -> Result<(), Stopped> {
-    step(report, scene, "B registers on server B", |_scene| {
+/// With `--cross-server`, after B asked to join: server B answered phone B, whose built-in
+/// server is server A, so B recorded server B from the link and registered there.
+fn server_b_registered(report: &mut Report, scene: &mut Scene, before: u64) -> Result<(), Stopped> {
+    step(report, scene, "B registered on server B", |_scene| {
         let deadline = Deadline::after(NETWORK);
         loop {
             let now = server_b_answers()?;
@@ -871,15 +895,6 @@ fn cross_server_join(report: &mut Report, scene: &mut Scene, before: u64) -> Res
             }
             pause(Duration::from_secs(2));
         }
-    })?;
-    step(report, scene, "B waits to be let in", |scene| {
-        let b = &scene.b;
-        let refused =
-            Find::text(Text::Contains("keys".into())).or(Text::Contains("didn't answer".into()));
-        if b.screen()?.find(&refused).is_some() {
-            bail!("phone B shows a server error");
-        }
-        Ok("no server error on phone B".to_owned())
     })
 }
 
