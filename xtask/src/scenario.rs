@@ -18,10 +18,12 @@
 //! Then, on phone A (who invites) and phone B (who joins), driven from here with adb and
 //! UI Automator, step by step:
 //!
-//! 1. A creates a Party and shares its invite link; B opens the link.
+//! 1. A creates a Party and shares its invite link (https://<server>/j#v1.…); B opens it as a
+//!    tap would (a VIEW intent naming no app).
 //! 2. Flow A (design canvas `JoinA1` to `JoinA3`, `InviteApprove`): B asks to join under a name and
 //!    reads its safety code; A sees the request with a code; the codes must match; A lets B
-//!    in; B opens the Party.
+//!    in; B opens the Party. Then B opens the link in Chrome, whose landing page (`GET /j`)
+//!    hands it to Pingers with "Open in Pingers".
 //! 3. A creates a Spot; B sees it.
 //! 4. Both "walk in" (`adb emu geo fix`, repeated so the entry rule's two fixes 30 s apart
 //!    come in), a Meetup forms and both open it.
@@ -55,6 +57,10 @@ use crate::wait::{Deadline, pause};
 /// The foss debug build's application id.
 const PACKAGE: &str = "org.pingers.app.foss.debug";
 const ACTIVITY: &str = "org.pingers.app.foss.debug/org.pingers.app.MainActivity";
+/// The host of the stack's server as the emulators reach it (its invite links' host).
+const STACK_HOST: &str = "10.0.2.2";
+/// The browser on the Play images.
+const CHROME: &str = "com.android.chrome";
 /// The ntfy app, the UnifiedPush distributor on the emulators.
 const NTFY_PACKAGE: &str = "io.heckel.ntfy";
 
@@ -496,30 +502,26 @@ fn play(
         let a = &scene.a;
         a.tap_when(&Find::tag("invite_share").enabled(), NETWORK)
             .context("the invite link was never made (Share invite link stayed disabled)")?;
-        // The share sheet previews the text it shares: the link itself.
-        let preview = a.wait_for(&Find::text(Text::Contains("pingers://join".into())), UI)?;
+        // The share sheet previews the text it shares: the link itself, https://<server>/j#v1.…
+        let preview = a.wait_for(&Find::text(Text::Contains("/j#v1.".into())), UI)?;
         let link = preview
             .label()
             .split_whitespace()
-            .find(|word| word.starts_with("pingers://join"))
-            .context("no link in the share sheet's preview")?
+            .find(|word| word.starts_with("https://") && word.contains("/j#v1."))
+            .context("no https invite link in the share sheet's preview")?
             .to_owned();
         a.back()?;
         let length = link.len();
         scene.link = Some(link);
         Ok(format!(
-            "pingers://join#… ({length} characters) read from the share sheet"
+            "https://…/j#v1.… ({length} characters) read from the share sheet"
         ))
     })?;
 
     step(report, scene, "B opens the invite link", |scene| {
         let link = scene.link.clone().context("no link")?;
-        let b = &scene.b;
-        // Single quotes: the phone's shell must not treat '#' as a comment.
-        b.shell(&format!(
-            "am start -W -a android.intent.action.VIEW -d '{link}' {PACKAGE}"
-        ))?;
-        Ok("opened with am start".to_owned())
+        tap_link(&scene.b, &link)?;
+        Ok("opened as a tap would: a VIEW intent for the https link, no package named".to_owned())
     })?;
 
     // 2. Flow A.
@@ -575,10 +577,13 @@ fn play(
         "A sees the request (InviteApprove)",
         |scene| {
             let a = &scene.a;
-            a.wait_for(
-                &Find::text(Text::Is(format!("{JOINER} asked to join"))),
+            // Invite people lists the opened invite (it checks for requests while it shows);
+            // Verify opens InviteApprove, "Ben asked to join".
+            a.tap_when(
+                &Find::tag("invite_verify").or(Text::Is("Verify".into())),
                 NETWORK,
             )?;
+            a.wait_for(&Find::text(Text::Is(format!("{JOINER} asked to join"))), UI)?;
             let node = a.wait_for(&Find::tag("approve_code").or(Text::SafetyCode), UI)?;
             let code = safety_code(node.label())
                 .with_context(|| format!("{:?} is not a 12-digit code", node.label()))?;
@@ -607,6 +612,16 @@ fn play(
         b.wait_for(&Find::text(Text::Is(PARTY.into())), UI)?;
         Ok(format!("B opened {PARTY:?}"))
     })?;
+
+    step(
+        report,
+        scene,
+        "B's browser hands an invite to Pingers (landing page)",
+        |scene| {
+            let link = scene.link.clone().context("no link")?;
+            through_landing_page(&scene.b, &link)
+        },
+    )?;
 
     step(report, scene, "both see each other in the Party", |scene| {
         open_party(&scene.a)?;
@@ -842,16 +857,130 @@ fn install_pingers(device: &Device, apk: &Path) -> Result<()> {
     }
     device.shell("settings put secure location_mode 3")?;
     device.shell(&format!("dumpsys deviceidle whitelist +{PACKAGE}"))?;
+    // The stack's server cannot pass App Links verification (no port 443, a dev CA), so the
+    // user's approval stands in for it: a tapped https://10.0.2.2:9443/j link then opens
+    // Pingers as a verified one would. tap_link also handles the chooser if this is refused.
+    let _approved = device.shell(&format!(
+        "pm set-app-links-user-selection --user 0 --package {PACKAGE} true {STACK_HOST}"
+    ));
     device.shell("logcat -c")?;
     device.geo_fix(AWAY)?;
     device.shell(&format!("am start -W -n {ACTIVITY}"))?;
-    device
-        .wait_for(
-            &Find::tag("home_new_party").or(Text::Is("New party".into())),
-            UI,
-        )
-        .context("Home did not appear after launch")?;
+    through_first_run(device).context("Home did not appear after launch")
+}
+
+/// First run (design canvas `SetupWelcome`, `SetupBackground`) comes before Home on a fresh
+/// install. `adb install -g` has granted every permission it asks for, so each step's main
+/// button only moves on; it is tapped until Home shows.
+fn through_first_run(device: &Device) -> Result<()> {
+    let home = Find::tag("home_new_party").or(Text::Is("New party".into()));
+    let setup = Find::tag("setup_continue");
+    let deadline = Deadline::after(UI);
+    loop {
+        let screen = device.screen()?;
+        if screen.find(&home).is_some() {
+            return Ok(());
+        }
+        if deadline.passed() {
+            bail!(
+                "{device}: no {home} or {setup} within {} s; the screen shows: {}",
+                UI.as_secs(),
+                screen.summary()
+            );
+        }
+        if let Some(button) = screen.find(&setup) {
+            device.tap(button)?;
+        }
+        pause(Duration::from_millis(500));
+    }
+}
+
+/// Opens `link` as a tap in another app would: a browsable VIEW intent naming no package, so
+/// Android picks the handler (Pingers, by the approved App Link, or from the chooser).
+fn tap_link(device: &Device, link: &str) -> Result<()> {
+    // Single quotes: the phone's shell must not treat '#' as a comment.
+    device.shell(&format!(
+        "am start -W -a android.intent.action.VIEW -c android.intent.category.BROWSABLE -d '{link}'"
+    ))?;
+    // If Android asks which app should open it, Pingers, once.
+    let chooser = Find::text(Text::Is("Pingers".into()));
+    let deadline = Deadline::after(Duration::from_secs(5));
+    while !deadline.passed() {
+        let screen = device.screen()?;
+        if screen.find(&Find::tag("join_ask")).is_some() {
+            return Ok(());
+        }
+        if let Some(pingers) = screen.find(&chooser) {
+            device.tap(pingers)?;
+            pause(Duration::from_secs(1));
+            let once = Find::text(Text::Is("Just once".into())).or(Text::Is("Once".into()));
+            if let Some(button) = device.screen()?.find(&once) {
+                device.tap(button)?;
+            }
+            return Ok(());
+        }
+        pause(Duration::from_millis(500));
+    }
     Ok(())
+}
+
+/// Opens `link` in the browser, where the server's landing page at /j hands it to Pingers:
+/// gets past Chrome's first-run screens and the dev CA's warning, taps "Open in Pingers" and
+/// waits for Open invite (`JoinA1`), which it leaves with "Not now".
+fn through_landing_page(device: &Device, link: &str) -> Result<String> {
+    device.shell(&format!(
+        "am start -W -a android.intent.action.VIEW -d '{link}' {CHROME}"
+    ))?;
+    // Chrome's first run and the certificate interstitial (the stack's dev CA is not one the
+    // browser trusts), then any prompt before it opens another app.
+    let past = [
+        "Use without an account",
+        "Accept & continue",
+        "No thanks",
+        "Got it",
+        "Advanced",
+    ];
+    let open = Find::text(Text::Is("Open in Pingers".into()));
+    let joined = Find::tag("join_ask").or(Text::Is("Ask to join".into()));
+    let deadline = Deadline::after(NETWORK);
+    let mut tapped_open = false;
+    loop {
+        let screen = device.screen()?;
+        if screen.find(&joined).is_some() {
+            break;
+        }
+        if deadline.passed() {
+            bail!(
+                "the landing page never handed the invite to Pingers within {} s; the screen shows: {}",
+                NETWORK.as_secs(),
+                screen.summary()
+            );
+        }
+        let proceed = Find::text(Text::StartsWith(format!("Proceed to {STACK_HOST}")));
+        let next = past
+            .iter()
+            .find_map(|label| screen.find(&Find::text(Text::Is((*label).into()))))
+            .or_else(|| screen.find(&proceed))
+            .or_else(|| {
+                if tapped_open {
+                    // Chrome may ask before leaving for an app.
+                    screen
+                        .find(&Find::text(Text::Is("Continue".into())))
+                        .or_else(|| screen.find(&Find::text(Text::Is("Open".into()))))
+                } else {
+                    None
+                }
+            });
+        if let Some(button) = next {
+            device.tap(button)?;
+        } else if let Some(button) = screen.find(&open) {
+            device.tap(button)?;
+            tapped_open = true;
+        }
+        pause(Duration::from_secs(1));
+    }
+    device.tap_when(&Find::text(Text::Is("Not now".into())), UI)?;
+    Ok("Chrome showed the landing page; Open in Pingers opened Open invite".to_owned())
 }
 
 /// Back to Home, then into the (only) Party.

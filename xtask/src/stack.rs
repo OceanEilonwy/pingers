@@ -351,7 +351,10 @@ fn write_keys(dev: &Path, binaries: &Path, layout: &Layout) -> Result<Zeroizing<
             "local-stack: reusing the keys in {} (--fresh makes new ones)",
             layout.config().display()
         )?;
-        add_new_template_fields(&dev.join("server.toml"), &layout.server_config())?;
+        // The keys stay; the rest follows the template, so a setting added there (such as
+        // [app_links] or the map host gateway) reaches a stack made before it.
+        let server = refreshed_server_config(dev, layout)?;
+        write_secret_file(&layout.server_config(), &server)?;
         return read_registration_code(&layout.server_config());
     }
     let push_relay = push_relay_config(dev, binaries)?;
@@ -379,26 +382,6 @@ fn write_keys(dev: &Path, binaries: &Path, layout: &Layout) -> Result<Zeroizing<
         layout.config().display()
     )?;
     Ok(code)
-}
-
-/// Adds to the kept `config` the top-level fields `template` has gained since the keys were
-/// made (such as `map_host_gateway`), so an existing stack keeps its keys and pins and still
-/// runs with today's settings. Fields already there are left as they are.
-fn add_new_template_fields(template: &Path, config: &Path) -> Result<()> {
-    let template = parse_template(template)?;
-    let text = Zeroizing::new(fs::read_to_string(config)?);
-    let mut kept = text.parse::<Table>()?;
-    let mut added = false;
-    for (field, value) in template {
-        if !value.is_table() && !value.is_array() && !kept.contains_key(&field) {
-            kept.insert(field, value);
-            added = true;
-        }
-    }
-    if added {
-        write_secret_file(config, &with_header(&kept))?;
-    }
-    Ok(())
 }
 
 /// Starts every process of a prepared stack.
@@ -648,17 +631,7 @@ fn server_config(
     secrets: &ServerSecrets<'_>,
     layout: &Layout,
 ) -> Result<Zeroizing<String>> {
-    let mut table = parse_template(&dev.join("server.toml"))?;
-    for (field, file) in [
-        ("delivery_db", "groups.sqlite"),
-        ("quota_db", "quota.sqlite"),
-        ("mailbox_db", "mailboxes.sqlite"),
-    ] {
-        table.insert(
-            field.to_owned(),
-            Value::String(layout.data().join(file).display().to_string()),
-        );
-    }
+    let mut table = server_template(dev, layout)?;
     table.insert(
         "registration_codes".to_owned(),
         Value::Array(vec![Value::String(secrets.registration_code.to_owned())]),
@@ -671,6 +644,44 @@ fn server_config(
         set_secret(relay, "credential", secrets.credential)?;
         set_secret(relay, "key_config_hash", secrets.push_pin)?;
     }
+    Ok(with_header(&table))
+}
+
+/// The dev server template with its databases in the stack's data directory.
+fn server_template(dev: &Path, layout: &Layout) -> Result<Table> {
+    let mut table = parse_template(&dev.join("server.toml"))?;
+    for (field, file) in [
+        ("delivery_db", "groups.sqlite"),
+        ("quota_db", "quota.sqlite"),
+        ("mailbox_db", "mailboxes.sqlite"),
+    ] {
+        table.insert(
+            field.to_owned(),
+            Value::String(layout.data().join(file).display().to_string()),
+        );
+    }
+    Ok(table)
+}
+
+/// The dev server template again, with the secrets of the stack's existing configuration
+/// (registration code, gateway keys, the push relay's credential and pin) carried over.
+fn refreshed_server_config(dev: &Path, layout: &Layout) -> Result<Zeroizing<String>> {
+    let existing = parse_template(&layout.server_config())?;
+    let kept = |key: &str| {
+        existing
+            .get(key)
+            .cloned()
+            .with_context(|| format!("{} has no {key}", layout.server_config().display()))
+    };
+    let keys = existing
+        .get("ohttp")
+        .and_then(|ohttp| ohttp.get("keys"))
+        .cloned()
+        .with_context(|| format!("{} has no [[ohttp.keys]]", layout.server_config().display()))?;
+    let mut table = server_template(dev, layout)?;
+    table.insert("registration_codes".to_owned(), kept("registration_codes")?);
+    table.insert("push_relays".to_owned(), kept("push_relays")?);
+    table_mut(&mut table, "ohttp")?.insert("keys".to_owned(), keys);
     Ok(with_header(&table))
 }
 
@@ -818,42 +829,6 @@ mod tests {
     }
 
     #[test]
-    fn a_kept_server_config_gains_new_template_fields_and_keeps_its_own() -> Result<()> {
-        let dir = std::env::temp_dir().join(format!("pingers-xtask-fields-{}", std::process::id()));
-        fs::create_dir_all(&dir)?;
-        let template = dir.join("template.toml");
-        let config = dir.join("server.toml");
-        fs::write(
-            &template,
-            "map_host = \"https://template\"\nmap_host_gateway = \"http://127.0.0.1:9474\"\n\
-             [ohttp]\nlisten = \"127.0.0.1:1\"\n",
-        )?;
-        fs::write(
-            &config,
-            "map_host = \"https://kept\"\n[ohttp]\nlisten = \"127.0.0.1:2\"\n",
-        )?;
-        add_new_template_fields(&template, &config)?;
-        let merged = fs::read_to_string(&config)?.parse::<Table>()?;
-        assert_eq!(
-            merged.get("map_host").and_then(Value::as_str),
-            Some("https://kept")
-        );
-        assert_eq!(
-            merged.get("map_host_gateway").and_then(Value::as_str),
-            Some("http://127.0.0.1:9474")
-        );
-        assert_eq!(
-            merged
-                .get("ohttp")
-                .and_then(|ohttp| ohttp.get("listen"))
-                .and_then(Value::as_str),
-            Some("127.0.0.1:2")
-        );
-        fs::remove_dir_all(&dir)?;
-        Ok(())
-    }
-
-    #[test]
     fn options_take_paths_and_flags() {
         assert_eq!(
             StackOptions::parse(&strings(&["--dir", "/s", "--fresh", "--packs", "/p"])),
@@ -877,6 +852,38 @@ mod tests {
         assert!(!caddy.contains("target/dev-ca"));
         let maps = map_host_config(&dev, &layout)?;
         assert!(maps.contains("directory = \"/stack/maps\""));
+        Ok(())
+    }
+
+    #[test]
+    fn a_reused_stack_keeps_its_keys_and_takes_the_template_s_new_settings() -> Result<()> {
+        let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("../packaging/nodo/dev");
+        let root =
+            std::env::temp_dir().join(format!("pingers-stack-refresh-{}", std::process::id()));
+        let layout = Layout::new(root.clone());
+        fs::create_dir_all(layout.config())?;
+        // A stack made before [app_links]: its own keys, no such table.
+        let mut old = server_template(&dev, &layout)?;
+        old.remove("app_links");
+        old.insert(
+            "registration_codes".to_owned(),
+            Value::Array(vec![Value::String("kept-code".to_owned())]),
+        );
+        for key in entries_mut(table_mut(&mut old, "ohttp")?, "keys")? {
+            set_secret(key, "secret", "kept-gateway-key")?;
+        }
+        for relay in entries_mut(&mut old, "push_relays")? {
+            set_secret(relay, "credential", "kept-credential")?;
+        }
+        write_secret_file(&layout.server_config(), &with_header(&old))?;
+        let refreshed = refreshed_server_config(&dev, &layout)?;
+        fs::remove_dir_all(&root)?;
+        assert!(refreshed.contains("[app_links]"));
+        for kept in ["kept-code", "kept-gateway-key", "kept-credential"] {
+            assert!(refreshed.contains(kept), "{kept}");
+        }
+        assert!(!refreshed.contains("1111111111"));
+        assert!(!refreshed.contains("dev-registration-code"));
         Ok(())
     }
 

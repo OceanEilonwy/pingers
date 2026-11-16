@@ -15,6 +15,67 @@ use super::{
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+/// The release signing certificate's fingerprint.
+const RELEASE_CERT: &str = "AA:44:E4:54:B0:F8:FA:A8:9B:8F:69:EF:72:90:6D:AA:2A:B8:C3:F2:D6:BE:87:B1:23:C2:D3:30:C9:BD:18:16";
+
+#[test]
+fn app_links_are_optional_and_read_with_upper_case_fingerprints() -> TestResult {
+    assert_eq!(
+        ServerConfig::parse(&minimal(&key(1, SECRET_A)))?.app_links,
+        None
+    );
+    let text = format!(
+        "{}[app_links]\npackages = [\"org.pingers.app\", \"org.pingers.app.foss\"]\n\
+         certificates = [\"{}\"]\n",
+        minimal(&key(1, SECRET_A)),
+        RELEASE_CERT.to_ascii_lowercase()
+    );
+    let links = ServerConfig::parse(&text)?
+        .app_links
+        .ok_or("app links were read")?;
+    let packages: Vec<&str> = links
+        .packages
+        .iter()
+        .map(super::AndroidPackage::as_str)
+        .collect();
+    assert_eq!(packages, ["org.pingers.app", "org.pingers.app.foss"]);
+    let certificates: Vec<&str> = links
+        .certificates
+        .iter()
+        .map(super::CertificateFingerprint::as_str)
+        .collect();
+    assert_eq!(certificates, [RELEASE_CERT]);
+    Ok(())
+}
+
+#[test]
+fn malformed_app_links_are_refused() {
+    let base = minimal(&key(1, SECRET_A));
+    let short_cert = RELEASE_CERT.get(..92).unwrap_or_default();
+    let cases = [
+        format!("[app_links]\npackages = []\ncertificates = [\"{RELEASE_CERT}\"]\n"),
+        "[app_links]\npackages = [\"org.pingers.app\"]\ncertificates = []\n".to_owned(),
+        format!("[app_links]\npackages = [\"pingers\"]\ncertificates = [\"{RELEASE_CERT}\"]\n"),
+        format!(
+            "[app_links]\npackages = [\"org.1pingers\"]\ncertificates = [\"{RELEASE_CERT}\"]\n"
+        ),
+        format!(
+            "[app_links]\npackages = [\"org.pin\\\"gers\"]\ncertificates = [\"{RELEASE_CERT}\"]\n"
+        ),
+        format!(
+            "[app_links]\npackages = [\"org.pingers.app\"]\ncertificates = [\"{short_cert}\"]\n"
+        ),
+        "[app_links]\npackages = [\"org.pingers.app\"]\ncertificates = [\"zz\"]\n".to_owned(),
+    ];
+    for case in cases {
+        let refused = ServerConfig::parse(&format!("{base}{case}")).err();
+        assert!(
+            matches!(refused, Some(ConfigError::AppLinks)),
+            "{case}\n{refused:?}"
+        );
+    }
+}
 type Expected = fn(&ConfigError) -> bool;
 
 const SECRET_A: &str = "0101010101010101010101010101010101010101010101010101010101010101";
