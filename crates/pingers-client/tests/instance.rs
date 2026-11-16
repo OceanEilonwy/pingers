@@ -1154,6 +1154,55 @@ impl Phone {
             .map(|subscription| subscription.handle))
     }
 
+    /// The id of this phone's own subscription to `party`'s group, if it has one.
+    fn own_subscription(
+        &self,
+        party: pingers_proto::PartyId,
+    ) -> Result<Option<pingers_proto::SubscriptionId>, TestError> {
+        let database = Database::open(
+            &self.rig.database,
+            DatabaseKey::from_bytes(Zeroizing::new(KEY)),
+        )?;
+        let session = database.session()?;
+        let row = session
+            .parties()
+            .get(&party)?
+            .ok_or(TestError::Setup("no such Party"))?;
+        Ok(session
+            .server(&row.server)?
+            .subscriptions()
+            .get(&row.group)?
+            .map(|subscription| subscription.id))
+    }
+
+    /// The subscription id `other` last told this phone it holds in `party`'s group.
+    fn known_subscription(
+        &self,
+        party: pingers_proto::PartyId,
+        other: &Self,
+    ) -> Result<Option<pingers_proto::SubscriptionId>, TestError> {
+        let theirs = Database::open(
+            &other.rig.database,
+            DatabaseKey::from_bytes(Zeroizing::new(KEY)),
+        )?;
+        let key = theirs
+            .session()?
+            .identity()
+            .load()?
+            .ok_or(TestError::Setup("no identity"))?
+            .signing_key
+            .public_key();
+        drop(theirs);
+        let database = Database::open(
+            &self.rig.database,
+            DatabaseKey::from_bytes(Zeroizing::new(KEY)),
+        )?;
+        Ok(database
+            .session()?
+            .member_subscriptions()
+            .get(&party, &key)?)
+    }
+
     /// The names of `party`'s Spots on this phone, sorted.
     fn spots(&self, party: pingers_proto::PartyId) -> Result<Vec<String>, TestError> {
         let mut names: Vec<String> = self
@@ -1291,6 +1340,18 @@ async fn a_push_token_that_comes_late_subscribes_to_the_parties() -> Result<(), 
     ben.save_spot(party, None, "Boulders").await?;
     stack.woken(&ana, party, seen).await?;
     assert_eq!(ana.spots(party)?, ["Boulders", "Crag"]);
+
+    // Each told the other the subscription it added, so whoever removes one later drops the
+    // right subscription from the server.
+    assert_eq!(
+        ben.known_subscription(party, &ana)?,
+        ana.own_subscription(party)?
+    );
+    assert_eq!(
+        ana.known_subscription(party, &ben)?,
+        ben.own_subscription(party)?
+    );
+    assert!(ana.own_subscription(party)?.is_some());
     Ok(())
 }
 
