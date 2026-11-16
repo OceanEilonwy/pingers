@@ -114,8 +114,7 @@ mod tests {
         for start in 0..=LATEST {
             let path = directory.file(&format!("from-{start}.db"));
             {
-                let connection = Connection::open(&path)?;
-                connection.execute_batch(&key(1).pragma())?;
+                let connection = crate::database::open_keyed(&path, &key(1))?;
                 migrate_to(&connection, start)?;
                 assert_eq!(version(&connection)?, start);
             }
@@ -146,8 +145,7 @@ mod tests {
         let path = directory.file("newer.db");
         drop(Database::open(&path, key(1))?);
         {
-            let connection = Connection::open(&path)?;
-            connection.execute_batch(&key(1).pragma())?;
+            let connection = crate::database::open_keyed(&path, &key(1))?;
             connection.pragma_update(None, "user_version", LATEST + 1)?;
         }
         let result = Database::open(&path, key(1));

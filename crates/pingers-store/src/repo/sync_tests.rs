@@ -254,8 +254,7 @@ fn a_version_two_database_keeps_its_rows_and_gains_the_sync_tables() -> Result<(
     let owner = party(1)?;
     let started = meetup(&owner.id, 2);
     {
-        let connection = rusqlite::Connection::open(&path)?;
-        connection.execute_batch(&key(1).pragma())?;
+        let connection = crate::database::open_keyed(&path, &key(1))?;
         crate::migrations::migrate_to(&connection, 2)?;
         connection.execute(
             "INSERT INTO party (party_id, mls_group_id, name, my_leaf, created_at) \
