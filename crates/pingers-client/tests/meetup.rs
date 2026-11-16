@@ -130,8 +130,23 @@ impl Phone {
             server: ServerId::new(endpoints.server_id.clone())?,
             relay: format!("http://{}/ohttp", endpoints.ohttp_relay),
             push_relay: Some(format!("https://{}", endpoints.push_relay)),
-            gateway_pins: None,
-            push_relay_pins: None,
+            // As an official build pins them: nothing is pinned on first use.
+            gateway_pins: Some(pingers_ohttp::KeyPins::from(
+                pingers_crypto::key_config_hash(&endpoints.ohttp_key_config),
+            )),
+            push_relay_pins: Some(pingers_ohttp::KeyPins::from(
+                pingers_crypto::key_config_hash(
+                    &pingers_proto::PushRelayKeyConfig {
+                        key_id: pingers_proto::PushRelayKeyId::new(1),
+                        public_key: endpoints
+                            .push_relay_key
+                            .as_slice()
+                            .try_into()
+                            .map_err(|_length| TestError::Missing("the push relay's key"))?,
+                    }
+                    .to_bytes(),
+                ),
+            )),
             trust: Trust::from_pem(&endpoints.push_relay_ca)?,
             registration_code: None,
         };
