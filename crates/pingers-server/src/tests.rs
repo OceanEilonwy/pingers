@@ -1185,3 +1185,13 @@ async fn a_single_key_has_no_next_config() -> TestResult {
     assert_eq!(next.status(), StatusCode::NOT_FOUND);
     server.stop().await
 }
+
+#[test]
+fn the_counts_report_runs_only_when_logging_asks_for_it() {
+    assert_eq!(crate::counts_interval(crate::Logging::Off), None);
+    let interval = Duration::from_secs(60);
+    assert_eq!(
+        crate::counts_interval(crate::Logging::Counts { interval }),
+        Some(interval)
+    );
+}

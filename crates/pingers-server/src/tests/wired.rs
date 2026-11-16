@@ -842,3 +842,72 @@ async fn a_learned_relay_is_listed_once_it_answers_and_follows_its_key() -> Test
     .await?;
     server.stop().await
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_relay_that_has_not_answered_is_asked_again_soon_not_after_the_cache_lifetime()
+-> TestResult {
+    // A relay that is down counts the times it is asked.
+    let asked = Arc::new(Mutex::new(0_u32));
+    let router = {
+        let asked = Arc::clone(&asked);
+        Router::new().route(
+            "/v1/config",
+            axum::routing::get(move || {
+                if let Ok(mut count) = asked.lock() {
+                    *count = count.saturating_add(1);
+                }
+                async { (StatusCode::SERVICE_UNAVAILABLE, Vec::new()) }
+            }),
+        )
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    let relays = ListedRelays::new([(
+        RelayId::new(1),
+        RelayTarget {
+            url: pingers_mailbox::PushRelayUrl::new(format!("http://{address}"))?,
+            credential: RelayCredential::new("credential".to_owned()),
+        },
+    )]);
+    let server = super::run(
+        crate::ServerConfig {
+            learned_push_relays: vec![crate::LearnedPushRelay {
+                relay_id: RelayId::new(1),
+                url: RelayUrl::new("https://push.example".to_owned())?,
+                operator: "Me".to_owned(),
+            }],
+            ..super::configured(Setup {
+                push_relays: relays,
+                ..Setup::default()
+            })?
+        },
+        Echo,
+    )
+    .await?;
+    let count = || asked.lock().map(|count| *count).map_err(|_| "lock");
+    // Each further ask comes within the retry interval, one second at a time, well before the
+    // five-minute cache lifetime the server waits once every relay is known.
+    let mut seen = 0;
+    for round in 0..3 {
+        let mut asked_again = false;
+        for _ in 0..crate::tasks::RELAY_CONFIG_RETRY.as_secs().saturating_add(5) {
+            // A real moment for the request to arrive (the server's own clock is the manual one).
+            let _ =
+                tokio::time::timeout(Duration::from_millis(30), std::future::pending::<()>()).await;
+            if count()? > seen {
+                asked_again = true;
+                break;
+            }
+            server.clock.advance(Duration::from_secs(1));
+        }
+        assert!(
+            asked_again,
+            "round {round}: the relay was not asked again in time"
+        );
+        seen = count()?;
+    }
+    server.stop().await
+}

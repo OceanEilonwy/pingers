@@ -498,7 +498,8 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
     });
     start_sweeps(&shared, config.expire_interval);
     start_learning_relay_keys(&shared);
-    let reporter = start_counts_report(&shared, config.logging, clock, timer);
+    let reporter = counts_interval(config.logging)
+        .map(|interval| start_counts_report(&shared, interval, clock, timer));
     http::accept_loop(listeners, &shared, shutdown).await;
     shared.tasks.abort_all();
     if let Some(reporter) = reporter {
@@ -507,18 +508,23 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
     Ok(())
 }
 
-/// Writes the counts report every interval when `logging` asks for it.
+/// How often the counts report is written, if `logging` asks for one.
+const fn counts_interval(logging: Logging) -> Option<Duration> {
+    match logging {
+        Logging::Off => None,
+        Logging::Counts { interval } => Some(interval),
+    }
+}
+
+/// Writes the counts report every `interval`.
 fn start_counts_report(
     shared: &Arc<Shared>,
-    logging: Logging,
+    interval: Duration,
     clock: Arc<dyn Clock>,
     timer: Arc<dyn Timer>,
-) -> Option<tokio::task::JoinHandle<()>> {
-    let Logging::Counts { interval } = logging else {
-        return None;
-    };
+) -> tokio::task::JoinHandle<()> {
     let shared = Arc::clone(shared);
-    Some(tokio::spawn(async move {
+    tokio::spawn(async move {
         let report = CountsReport {
             metrics: &shared.metrics,
             clock: &clock,
@@ -526,7 +532,7 @@ fn start_counts_report(
             interval,
         };
         report.run(write_counts).await;
-    }))
+    })
 }
 
 /// Runs `work` on the blocking pool if the server is still running.
