@@ -395,8 +395,10 @@ impl Transport for Link {
 /// A device's own identified route: the real direct transport over HTTPS to the harness
 /// server's TLS front, trusting only the test CA. Records each path it carried.
 pub(crate) struct Direct {
-    direct: DirectTransport,
+    transport: DirectTransport,
     seen: Mutex<Vec<String>>,
+    /// A path answered `500` here instead of being sent.
+    failing: Mutex<Option<String>>,
 }
 
 impl Direct {
@@ -404,17 +406,23 @@ impl Direct {
         let endpoints = world.harness.endpoints();
         let roots = TlsRoots::from_der(&certificates_from_pem(&endpoints.push_relay_ca)?)?;
         Ok(Self {
-            direct: DirectTransport::new(
+            transport: DirectTransport::new(
                 &DirectConfig::new(endpoints.server_id.clone(), roots),
                 Arc::new(world.clock.clone()),
             )?,
             seen: Mutex::new(Vec::new()),
+            failing: Mutex::new(None),
         })
     }
 
     /// The paths sent so far, oldest first, and forgets them.
     pub(crate) fn take_seen(&self) -> Vec<String> {
         std::mem::take(&mut *lock(&self.seen))
+    }
+
+    /// Answers `path` with `500` from now on (`None`: send everything).
+    pub(crate) fn fail(&self, path: Option<&str>) {
+        *lock(&self.failing) = path.map(str::to_owned);
     }
 }
 
@@ -426,14 +434,17 @@ impl Transport for Direct {
         request: BinaryRequest,
     ) -> Result<BinaryResponse, TransportError> {
         lock(&self.seen).push(request.path.clone());
-        self.direct.request(class, request).await
+        if lock(&self.failing).as_deref() == Some(request.path.as_str()) {
+            return response(500, Vec::new());
+        }
+        self.transport.request(class, request).await
     }
 
     async fn stream(
         &self,
         request: BinaryRequest,
     ) -> Result<Box<dyn DuplexStream>, TransportError> {
-        self.direct.stream(request).await
+        self.transport.stream(request).await
     }
 
     fn kind(&self) -> TransportKind {

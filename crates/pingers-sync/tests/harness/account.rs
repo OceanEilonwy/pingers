@@ -69,6 +69,28 @@ async fn a_bearer_is_replaced_when_it_lapses_or_the_server_refuses_it() -> TestR
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_issuance_failure_other_than_a_refused_bearer_is_not_retried_with_a_new_one()
+-> TestResult {
+    let world = World::start()?;
+    let device = world.account_device()?;
+    // A first refill leaves a bearer the server accepts; the stock is then spent.
+    let _first = device.engine.stock_tokens(WakeBudget::UNLIMITED).await?;
+    device
+        .scoped()?
+        .server()?
+        .privacy_pass_tokens()
+        .retain_keys(&[])?;
+    direct(&device)?.fail(Some("/v1/pp/issue"));
+    let _ = direct(&device)?.take_seen();
+    assert!(matches!(
+        device.engine.stock_tokens(WakeBudget::UNLIMITED).await,
+        Err(SyncError::Status { status: 500, .. })
+    ));
+    assert_eq!(direct(&device)?.take_seen(), ["/v1/pp/issue"]);
+    Ok(())
+}
+
 fn direct(device: &Device) -> Result<&crate::support::Direct, TestError> {
     device
         .direct
