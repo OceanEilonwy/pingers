@@ -80,6 +80,21 @@ impl GrantKeyPair {
         Self::generate_for(Suite::Grant, rng)
     }
 
+    /// Generates a throwaway key pair of the same suite as `like`, which selects it by its
+    /// length: a dummy grant sealed to it has exactly the length of a real grant sealed to
+    /// `like` (design B.6.1, "Uniform traffic").
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::InvalidKey`] if `like` is of no suite this build supports;
+    /// [`CryptoError::Internal`] if key generation fails.
+    pub fn generate_like(
+        like: &GrantPublicKey,
+        rng: &mut impl CryptoRng,
+    ) -> Result<Self, CryptoError> {
+        Self::generate_for(suite_for_public_key(like)?, rng)
+    }
+
     /// Generates an X-Wing key pair, for Meetups of post-quantum Parties (design B.8).
     ///
     /// # Errors

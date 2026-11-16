@@ -6,8 +6,8 @@
 use pingers_proto::{ChatBody, Delivery, Urgency};
 
 use super::{
-    ALICE, BEN, CHLOE, DAN, Net, Sent, Setup, Shape, TestResult, asking, count, location_frames,
-    positions_from, shapes,
+    ALICE, BEN, CHLOE, DAN, GrantSuite, Net, Sent, Setup, Shape, TestResult, asking, count,
+    location_frames, positions_from, shapes,
 };
 use crate::{
     CadenceMode, ExactLocation, GrantScope, KEEP_ALIVE_INTERVAL, LIVE_FRAME_INTERVAL,
@@ -288,5 +288,92 @@ fn stored_grant_traffic_is_the_same_with_zero_one_or_all_grantees() -> TestResul
         none.iter()
             .all(|shape| shape.kind == "grant" && shape.size == 256 && shape.wake.is_none())
     );
+    Ok(())
+}
+
+/// Ben's grant frames on starting and on a newcomer joining, with `visibility`, in a
+/// quantum-resistant Meetup (X-Wing grant keys).
+fn quantum_grant_frames(
+    visibility: LocationVisibility,
+) -> Result<(Vec<Shape>, Vec<Shape>), super::TestError> {
+    let mut setups = asking(3);
+    if let Some(ben) = setups.get_mut(1) {
+        ben.visibility = visibility;
+    }
+    let mut net = Net::with_suite(&setups, 44, GrantSuite::XWing)?;
+    let at_start = grant_frame_shapes(&net.take_sent(BEN)?)?;
+    net.add_with_suite(
+        DAN,
+        &Setup::with(LocationVisibility::AskEachTime),
+        GrantSuite::XWing,
+    )?;
+    Ok((at_start, grant_frame_shapes(&net.take_sent(BEN)?)?))
+}
+
+/// In a quantum-resistant Meetup a real grant is sealed to an X-Wing key, so a dummy must be
+/// too: sealed to an X25519 throwaway key it would fall in a smaller size class, and show who
+/// was not granted.
+#[test]
+fn a_quantum_resistant_meetup_sends_the_same_grant_frames_sharing_or_not() -> TestResult {
+    let (shared_start, shared_join) = quantum_grant_frames(LocationVisibility::Everyone)?;
+    for visibility in [LocationVisibility::AskEachTime, LocationVisibility::Nobody] {
+        let (start, join) = quantum_grant_frames(visibility)?;
+        assert_eq!(start, shared_start);
+        assert_eq!(join, shared_join);
+    }
+    assert_eq!(shared_start.len(), 2);
+    assert_eq!(shared_join.len(), 1);
+    // X-Wing grants do not fit 1 KiB: every grant, real or dummy, is a 4 KiB frame.
+    assert!(
+        shared_start
+            .iter()
+            .chain(&shared_join)
+            .all(|shape| shape.size == 4096)
+    );
+
+    // A rotation: revoking a member who held the key looks like revoking one who did not.
+    let mut net = Net::with_suite(&asking(4), 45, GrantSuite::XWing)?;
+    net.grant(CHLOE, BEN, GrantScope::ThisMeetup)?;
+    net.take_sent(BEN)?;
+    net.act(BEN, MeetupAction::RevokeLocation(ALICE))?;
+    let not_a_holder = grant_frame_shapes(&net.take_sent(BEN)?)?;
+    net.act(BEN, MeetupAction::RevokeLocation(CHLOE))?;
+    let holder = grant_frame_shapes(&net.take_sent(BEN)?)?;
+    assert_eq!(not_a_holder.len(), 3);
+    assert!(
+        not_a_holder
+            .iter()
+            .chain(&holder)
+            .all(|shape| shape.size == 4096)
+    );
+    assert_eq!(
+        not_a_holder
+            .iter()
+            .map(|shape| shape.size)
+            .collect::<Vec<_>>(),
+        holder.iter().map(|shape| shape.size).collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
+/// Asks in a quantum-resistant Meetup: an ask to any member has the size of a grant, so an ask
+/// and its "Allow" cannot be told from each other or from a dummy.
+#[test]
+fn asks_in_a_quantum_resistant_meetup_are_indistinguishable() -> TestResult {
+    let mut net = Net::with_suite(&asking(3), 46, GrantSuite::XWing)?;
+    net.take_sent(CHLOE)?;
+    net.act(CHLOE, MeetupAction::AskLocation(BEN))?;
+    let to_ben = shapes(&net.take_sent(CHLOE)?)?;
+    net.act(CHLOE, MeetupAction::AskLocation(ALICE))?;
+    let to_alice = shapes(&net.take_sent(CHLOE)?)?;
+    let asks: Vec<&Shape> = to_ben
+        .iter()
+        .chain(&to_alice)
+        .filter(|shape| shape.kind == "ask")
+        .collect();
+    assert_eq!(asks.len(), 2);
+    assert!(asks.iter().all(|shape| shape.size == 4096
+        && shape.delivery == Delivery::Stored
+        && shape.wake.is_none()));
     Ok(())
 }

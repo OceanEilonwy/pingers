@@ -19,6 +19,8 @@ rand_core = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+# X-Wing grant keys, for the traffic of quantum-resistant Meetups (design B.8).
+pingers-crypto = { workspace = true, features = ["x-wing"] }
 pingers-testkit = { workspace = true }
 proptest = { workspace = true }
 serde_json = { workspace = true }

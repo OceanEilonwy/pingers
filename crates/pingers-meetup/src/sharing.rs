@@ -315,7 +315,7 @@ impl Sharing {
                 Some(end) if previous.get(leaf) != Some(&end) => {
                     self.grant(roster, Target { member, end }, rng)?
                 }
-                Some(_) | None if padded.contains(leaf) => self.dummy_grant(roster, rng)?,
+                Some(_) | None if padded.contains(leaf) => self.dummy_grant(roster, member, rng)?,
                 Some(_) | None => continue,
             };
             frames.push(frame);
@@ -345,13 +345,15 @@ impl Sharing {
     }
 
     /// A grant-sized frame nobody can open: a grant of a throwaway key sealed to a throwaway
-    /// grant key, so it has exactly the structure and length of a real one.
+    /// grant key of the same suite as `member`'s, so it has exactly the structure and length
+    /// of a real grant to that member (an X-Wing grant is far larger than an X25519 one).
     fn dummy_grant(
         &self,
         roster: &Roster<'_>,
+        member: &Member,
         rng: &mut impl CryptoRng,
     ) -> Result<OutgoingFrame, MeetupError> {
-        let throwaway = GrantKeyPair::generate(rng)?;
+        let throwaway = GrantKeyPair::generate_like(&member.grant_key, rng)?;
         let key = LocationKey::generate(rng);
         let grant = LocationGrant {
             context: GrantContext {

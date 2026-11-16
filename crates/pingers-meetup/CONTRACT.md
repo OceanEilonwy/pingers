@@ -62,7 +62,8 @@ Nothing in this crate. See "Notes for pingers-meetup-session" for what the calle
   rotation (generation + 1, fresh key, grants to everyone who keeps access).
 - **Uniform grant traffic.** A rotation, a visibility change and `start` always send exactly
   one grant-sized frame per other member (real grants, or dummies sealed to a throwaway grant
-  key so they have the real structure and length); a membership change sends one per
+  key of the same suite as that member's real one, `GrantKeyPair::generate_like`, so they have
+  the real structure and length); a membership change sends one per
   newcomer, real under `Everyone`, dummy otherwise. **Any** member leaving rotates, so a
   rotation does not show whether the leaver held the key; a revoke always rotates, even of a
   non-holder. Residual leaks: members see that an ask was sent (not by whom to whom; the MLS
@@ -74,7 +75,8 @@ Nothing in this crate. See "Notes for pingers-meetup-session" for what the calle
   reads the log after reconnecting (an ephemeral grant was simply lost: the member who
   approved believed they were sharing while the requester never got the key; after a
   rotation, likewise). They stay HPKE-sealed to the recipient's grant key with no recipient
-  field, padded to the 256 B class; dummy grants are stored exactly like real ones.
+  field, padded to the 256 B class (4 KiB with X-Wing grant keys); dummy grants are stored
+  exactly like real ones.
 - **What the server sees, per member event** (stored 256 B messages with no wake, in the log
   and on the channels): `start` N−1 (N members); a rotation or a setting change N−1; a
   membership change one per newcomer, or N−1 (newcomers included) if anyone left, which
@@ -126,10 +128,12 @@ Nothing in this crate. See "Notes for pingers-meetup-session" for what the calle
 - **Leaving** is not a session action: pingers-meetup-session proposes the MLS self-remove and
   deletes the state; the session just ends with the group.
 - **X-Wing is off** (MLS X-Wing is parked over upstream advisories), so grants and asks use the
-  classical X25519 HPKE suite, and dummy grants are sealed to throwaway X25519 keys. An X-Wing
-  grant (1,120-byte encapsulation plus 60 bytes: about 1,180 bytes) does not fit the 256 B
-  frame class: enabling X-Wing needs grants and asks (and their dummies) in the 4 KiB class,
-  and pingers-crypto then needs a way to make an X-Wing dummy grant.
+  classical X25519 HPKE suite and fit the 256 B class. An X-Wing grant or ask (1,120-byte
+  encapsulation plus its plaintext and tag, about 1,180 bytes) pads to the 4 KiB class instead,
+  and a dummy grant to an X-Wing member is sealed to a throwaway X-Wing key, so in a
+  quantum-resistant Meetup every grant and ask, real or dummy, is a 4 KiB frame (tests
+  `a_quantum_resistant_meetup_sends_the_same_grant_frames_sharing_or_not` and
+  `asks_in_a_quantum_resistant_meetup_are_indistinguishable`).
 
 ## Notes for pingers-meetup-session
 

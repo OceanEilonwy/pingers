@@ -91,6 +91,13 @@ pub(crate) fn asking(count: usize) -> Vec<Setup> {
     vec![Setup::with(LocationVisibility::AskEachTime); count]
 }
 
+/// The grant keys of a test Meetup: X25519, or X-Wing as in a quantum-resistant Party's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GrantSuite {
+    Classical,
+    XWing,
+}
+
 /// A frame a device sent, and when.
 #[derive(Clone, Debug)]
 pub(crate) struct Sent {
@@ -132,6 +139,15 @@ impl Net {
     /// Devices at leaves 0, 1, 2, … with these setups, started at [`START`] and ticked once
     /// (start grants and the first location frames are delivered).
     pub(crate) fn new(setups: &[Setup], seed: u64) -> Result<Self, TestError> {
+        Self::with_suite(setups, seed, GrantSuite::Classical)
+    }
+
+    /// As [`Net::new`], every member's grant key of `suite`.
+    pub(crate) fn with_suite(
+        setups: &[Setup],
+        seed: u64,
+        suite: GrantSuite,
+    ) -> Result<Self, TestError> {
         let mut rng = seeded_rng(seed);
         let group = GroupId::from_bytes([7; 32]);
         let mut keys = Vec::new();
@@ -139,7 +155,10 @@ impl Net {
             let leaf = LeafIndex::new(
                 u32::try_from(index).map_err(|_range| TestError::Setup("too many devices"))?,
             );
-            let pair = GrantKeyPair::generate(&mut rng)?;
+            let pair = match suite {
+                GrantSuite::Classical => GrantKeyPair::generate(&mut rng)?,
+                GrantSuite::XWing => GrantKeyPair::generate_x_wing(&mut rng)?,
+            };
             let member = Member {
                 leaf,
                 signature_key: signature(leaf)?,
@@ -416,7 +435,20 @@ impl Net {
 
     /// Adds a new member at `leaf` with `setup`: it starts, then everyone learns of it.
     pub(crate) fn add(&mut self, leaf: LeafIndex, setup: &Setup) -> TestResult {
-        let pair = GrantKeyPair::generate(&mut self.rng)?;
+        self.add_with_suite(leaf, setup, GrantSuite::Classical)
+    }
+
+    /// As [`Net::add`], the newcomer's grant key of `suite`.
+    pub(crate) fn add_with_suite(
+        &mut self,
+        leaf: LeafIndex,
+        setup: &Setup,
+        suite: GrantSuite,
+    ) -> TestResult {
+        let pair = match suite {
+            GrantSuite::Classical => GrantKeyPair::generate(&mut self.rng)?,
+            GrantSuite::XWing => GrantKeyPair::generate_x_wing(&mut self.rng)?,
+        };
         let member = Member {
             leaf,
             signature_key: signature(leaf)?,
