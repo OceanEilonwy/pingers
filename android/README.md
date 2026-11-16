@@ -68,6 +68,19 @@ SHA-1 if the key is restricted by certificate as well), download the new
 rebuild, and call it from Kotlin as `uniffi.pingers.someCall()`. `CoreInfo.kt` is the
 one Kotlin caller today.
 
+**Dependency verification.** Gradle checks every downloaded artifact (libraries, plugins, the
+Kotlin compiler, lint) against the SHA-256 in `gradle/verification-metadata.xml`, and a build
+with one that does not match or is not listed fails. After changing `gradle/libs.versions.toml`,
+a plugin or the Gradle wrapper, regenerate it and review what changed before committing:
+
+```sh
+./gradlew --write-verification-metadata sha256 help assembleGmsDebug assembleFossDebug \
+    lintGmsDebug lintFossDebug testGmsDebugUnitTest testFossDebugUnitTest
+```
+
+The release job restores no caches (`.github/workflows/release.yml`), so what it signs is
+built from artifacts fetched fresh and checked here.
+
 ## Structure
 
 `app/src/main/kotlin/org/pingers/app/`

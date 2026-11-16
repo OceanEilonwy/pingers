@@ -139,29 +139,12 @@ jobs:
           rustup toolchain install --no-self-update
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
 
-      # Separate keys from ci.yml's caches, so a pull request's run never writes what a release
-      # restores.
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ~/.cargo/bin/cargo-ndk
-            target
-          key: release-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: release-cargo-${{ runner.os }}-
-
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: release-gradle-${{ runner.os }}-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'android/gradle/libs.versions.toml', 'android/**/*.gradle.kts') }}
-          restore-keys: release-gradle-${{ runner.os }}-
-
+      # No restored caches in the job that signs: a cache is written by whichever run saved it
+      # first, and anything planted there (a build tool, a crate, a Gradle plugin) would be built
+      # into the signed APK. Everything is fetched fresh, checked against Cargo.lock and
+      # android/gradle/verification-metadata.xml.
       - name: Install cargo-ndk
-        run: command -v cargo-ndk || cargo install --locked cargo-ndk
+        run: cargo install --locked cargo-ndk --version 4.1.2
 
       - name: Write google-services.json
         if: matrix.flavour == 'gms'
