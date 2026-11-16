@@ -174,6 +174,15 @@ appliance's keys). Values have a Copy button (the terminal's clipboard, OSC 52) 
 visible as plain text. The page shows the registration code; only the owner, with the device
 passphrase, opens it.
 
+**Assumption: the page is local only.** pingers-setup listens on loopback (`listen =
+"127.0.0.1:9479"`), serves the page only to nodo, and nodo shows it only after the device
+passphrase; it is never published through the reverse proxy or a public name. Its values include
+the registration code and a setup link that carries it, so anyone who could reach the page
+could register accounts. Keep it that way: do not forward its port, do not add it to Caddy, and
+do not run the setup service on a host other people use. Its own requests go only to the
+services on loopback (each address is checked to be an `http://` URL on a loopback IP) and to
+the public names, and every answer is read with a size cap.
+
 ### 1.3 Registration code
 
 Without a registration code a Pingers server lets anyone who finds it make an account. The

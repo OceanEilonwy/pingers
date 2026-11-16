@@ -223,14 +223,20 @@ async fn get(client: &Client, url: &str) -> Result<Option<Vec<u8>>, String> {
         StatusCode::NOT_FOUND => return Ok(None),
         status => return Err(format!("answered {status}")),
     }
-    let body = response
-        .bytes()
+    // Read chunk by chunk with the cap, never buffered whole first.
+    let mut response = response;
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|_| "stopped answering".to_owned())?;
-    if body.len() > MAX_BODY_BYTES {
-        return Err("answered too much".to_owned());
+        .map_err(|_| "stopped answering".to_owned())?
+    {
+        if chunk.len() > MAX_BODY_BYTES.saturating_sub(body.len()) {
+            return Err("answered too much".to_owned());
+        }
+        body.extend_from_slice(&chunk);
     }
-    Ok(Some(body.to_vec()))
+    Ok(Some(body))
 }
 
 /// The gateway's served key's pin, then the other slot's.

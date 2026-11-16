@@ -136,7 +136,7 @@ impl Config {
             ("push_relay", &file.push_relay),
             ("map_host_local", &file.map_host_local),
         ] {
-            if !url.starts_with("http://127.") && !url.starts_with("http://[::1]") {
+            if !loopback_http(url) {
                 return Err(ConfigError::Field {
                     field,
                     problem: "must be an http:// URL on loopback",
@@ -253,6 +253,20 @@ fn is_domain(text: &str) -> bool {
         })
 }
 
+/// Whether `text` is an `http://` URL whose host is a loopback IP address literal, with no user
+/// or password: parsed, not matched by prefix (`http://127.0.0.1.example.org` is no loopback).
+fn loopback_http(text: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(text) else {
+        return false;
+    };
+    let loopback = url
+        .host_str()
+        .map(|host| host.trim_start_matches('[').trim_end_matches(']'))
+        .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+        .is_some_and(|address| address.is_loopback());
+    url.scheme() == "http" && loopback && url.username().is_empty() && url.password().is_none()
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
@@ -300,6 +314,27 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn loopback_addresses_are_parsed_not_matched_by_prefix() {
+        for good in [
+            "http://127.0.0.1:9472",
+            "http://127.1.2.3/x",
+            "http://[::1]:9474",
+        ] {
+            assert!(super::loopback_http(good), "{good}");
+        }
+        for bad in [
+            "http://127.0.0.1.example.org:9472",
+            "https://127.0.0.1:9472",
+            "http://10.0.0.1:9472",
+            "http://user:pass@127.0.0.1:9472",
+            "http://localhost:9472",
+            "127.0.0.1:9472",
+        ] {
+            assert!(!super::loopback_http(bad), "{bad}");
+        }
+    }
+
+    #[test]
     fn bad_fields_are_named_and_values_never_shown() {
         let cases = [
             ("127.0.0.1:9479", "0.0.0.0:9479", "listen"),
@@ -312,6 +347,16 @@ pub(crate) mod tests {
             (
                 "http://127.0.0.1:9472",
                 "http://10.0.0.1:9472",
+                "push_relay",
+            ),
+            (
+                "http://127.0.0.1:9472",
+                "http://127.0.0.1.example.org:9472",
+                "push_relay",
+            ),
+            (
+                "http://127.0.0.1:9472",
+                "http://user@127.0.0.1:9472",
                 "push_relay",
             ),
             ("OceanEilonwy/pingers", "pingers", "github_repository"),
