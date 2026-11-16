@@ -240,12 +240,22 @@ impl MailboxStorage for SqliteStorage {
         })
     }
 
-    fn clear_push(&mut self, id: &MailboxId) -> Result<(), StorageError> {
+    fn set_push(&mut self, id: &MailboxId, push: Option<&SealedPush>) -> Result<(), StorageError> {
+        let push = PushColumns::from_push(push);
         self.connection.execute(
-            "UPDATE mailbox SET relay_id = NULL, relay_url = NULL, relay_key_hash = NULL,
-                 relay_key_id = NULL, push_blob = NULL, urgency = NULL, handle = NULL
+            "UPDATE mailbox SET relay_id = ?2, relay_url = ?3, relay_key_hash = ?4,
+                 relay_key_id = ?5, push_blob = ?6, urgency = ?7, handle = ?8
              WHERE mailbox_id = ?1",
-            params![id.as_bytes().as_slice()],
+            params![
+                id.as_bytes().as_slice(),
+                push.relay_id,
+                push.relay_url,
+                push.relay_key_hash,
+                push.key_id,
+                push.blob,
+                push.urgency,
+                push.handle,
+            ],
         )?;
         Ok(())
     }

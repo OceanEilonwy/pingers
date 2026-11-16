@@ -195,8 +195,12 @@ pub trait ServerPort: Send + Sync {
         lease_start: Bucket,
     ) -> Option<MailboxId>;
 
-    /// Registers at most one new mailbox for `server`'s pool (design E.2, F.3).
-    fn refill_mailbox_pool(
+    /// Makes at most one push registration on `server` (design E.2, F.3): seals one stale
+    /// mailbox or subscription there again (a new push token or relay key, pushes switched on
+    /// or off, a seal running out), or else registers one new mailbox for its pool. One per
+    /// server per wake, so a server cannot group a device's registrations by when they were
+    /// made.
+    fn maintain_push_registrations(
         &self,
         server: &ServerId,
     ) -> impl Future<Output = Result<(), PortError>> + Send;

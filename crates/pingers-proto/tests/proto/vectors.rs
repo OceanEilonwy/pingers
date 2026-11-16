@@ -10,14 +10,15 @@ use pingers_proto::{
     AppMessage, BoardBeacon, BoardCursor, BoardPage, ChatBody, ChatMessageId, Delivery,
     DisplayName, E7Coordinate, Epoch, HeadingDegrees, InvitePayload, InvitePost,
     InviterFingerprint, JoinRequest, KeyConfigHash, KeyPackageBytes, Knock, KnockSignature,
-    Lamport, LeafIndex, Lease, LocationGeneration, LocationPlaintext, MailboxId, MailboxSpec,
-    MeetPoint, MeetPointLabel, MeetupHint, MeetupMessage, MlsMessageBytes, PrivacyPassIssueRequest,
-    PrivacyPassIssueResponse, ProtoError, PushBind, PushClass, PushHandle, PushPlatform,
-    PushRelayConfig, PushRelayKeyConfig, PushRelayKeyId, PushRequest, PushToken,
+    Lamport, LeafIndex, Lease, LocationGeneration, LocationPlaintext, MailboxId, MailboxPush,
+    MailboxSpec, MeetPoint, MeetPointLabel, MeetupHint, MeetupMessage, MlsMessageBytes,
+    PrivacyPassIssueRequest, PrivacyPassIssueResponse, ProtoError, PushBind, PushClass, PushHandle,
+    PushPlatform, PushRelayConfig, PushRelayKeyConfig, PushRelayKeyId, PushRequest, PushToken,
     PushTokenPlaintext, Record, RecordRandomness, RecordTag, RelayId, RelayRef, RelayUrl,
-    RevokeCommitment, RlnAuth, RlnScope, SealedBeacon, SealedLocationFrame, SealedPush,
-    SealedPushBlob, SecretBytes, SecretText, SeenSegment, SegmentHash, SegmentInfo, ServerId,
-    Subscription, SubscriptionId, TimeToLive, Urgency, WireDecode, WireEncode,
+    RevokeCommitment, RlnAuth, RlnScope, ScheduledPushRelayConfig, SealedBeacon,
+    SealedLocationFrame, SealedPush, SealedPushBlob, SecretBytes, SecretText, SeenSegment,
+    SegmentHash, SegmentInfo, ServerId, Subscription, SubscriptionId, TimeToLive, Urgency,
+    WireDecode, WireEncode,
 };
 use pingers_testkit::{Vector, VectorError, load_vectors};
 use pingers_time::{Bucket, UnixSeconds};
@@ -468,6 +469,41 @@ fn push_relay_config_vectors() -> Result<(), TestError> {
         build: push_relay_config,
         encode: PushRelayConfig::encode,
         decode: PushRelayConfig::decode,
+    })
+}
+
+#[test]
+fn scheduled_push_relay_config_vectors() -> Result<(), TestError> {
+    check(&Format {
+        file: "scheduled-push-relay-config-encoding",
+        bytes_field: "encoding",
+        build: |vector| {
+            Ok(ScheduledPushRelayConfig {
+                config: push_relay_config(vector)?,
+                activates_at: UnixSeconds::new(number(vector, "activates_at")?),
+            })
+        },
+        encode: ScheduledPushRelayConfig::encode,
+        decode: ScheduledPushRelayConfig::decode,
+    })
+}
+
+#[test]
+fn mailbox_push_vectors() -> Result<(), TestError> {
+    check(&Format {
+        file: "mailbox-push-encoding",
+        bytes_field: "encoding",
+        build: |vector| {
+            Ok(MailboxPush {
+                push: if text(vector, "blob").is_ok_and(|blob| blob.is_empty()) {
+                    None
+                } else {
+                    Some(sealed_push(vector)?)
+                },
+            })
+        },
+        encode: MailboxPush::encode,
+        decode: MailboxPush::decode,
     })
 }
 

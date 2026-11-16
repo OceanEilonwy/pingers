@@ -21,8 +21,7 @@ object Push {
     const val PREFS = "pingers.push"
     private const val KEY_UP_ENDPOINT = "unifiedpush.endpoint"
     private const val KEY_FCM_TOKEN = "fcm.token"
-    private const val KEY_SENT_HIGH = "fcm.sent-high"
-    private const val KEY_DOWNGRADED = "fcm.downgraded"
+    private const val KEY_OPTED_OUT = "unifiedpush.opted-out"
 
     /** The connector's instance; Pingers has exactly one registration. */
     const val INSTANCE = "pingers"
@@ -60,6 +59,7 @@ object Push {
      * The endpoint arrives later through [PingersPushService].
      */
     fun registerUnifiedPush(context: Context, distributor: String? = null): Boolean {
+        prefs(context).edit { putBoolean(KEY_OPTED_OUT, false) }
         val chosen = distributor
             ?: UnifiedPush.getSavedDistributor(context)?.takeIf { it in distributors(context) }
             ?: when (val resolved = UnifiedPush.resolveDefaultDistributor(context)) {
@@ -74,8 +74,20 @@ object Push {
 
     /** Ends the UnifiedPush registration ("No wake-up pushes", design B.7). */
     fun unregisterUnifiedPush(context: Context) {
+        prefs(context).edit { putBoolean(KEY_OPTED_OUT, true) }
         UnifiedPush.unregister(context, INSTANCE)
         setEndpoint(context, null)
+    }
+
+    /**
+     * At every start, as UnifiedPush asks: registers again with the saved distributor (or the
+     * default one), so a new endpoint reaches the core; unless the user turned wake-up pushes off.
+     * When no distributor is left (it was uninstalled), the endpoint goes, and the core marks
+     * wake-ups downgraded ("no push service").
+     */
+    fun renew(context: Context) {
+        if (prefs(context).getBoolean(KEY_OPTED_OUT, false)) return
+        if (!registerUnifiedPush(context)) setEndpoint(context, null)
     }
 
     internal fun setEndpoint(context: Context, endpoint: String?) {
@@ -93,46 +105,19 @@ object Push {
         executor.execute { PlatformHost.sink.onPushTokensChanged(tokens) }
     }
 
-    /** FCM's priority downgrades so far (design B.4.9): high-priority messages received, and how many came downgraded. */
-    data class DowngradeCount(val sentHigh: Long, val downgraded: Long)
-
     /**
-     * Records one FCM message's original and delivered priority; returns whether it was
-     * downgraded. The count is local only and feeds the core's `Notice::PushDowngraded`.
+     * A push woke the app: the core reads the mailbox or group log the handle names, and posts
+     * what the wake led to through its events (CoreHost) before this returns. Runs off the main
+     * thread; the distributor (or FCM) holds a wake lock for the few seconds this takes. FCM
+     * messages bring their [priority], which the core counts (design B.4.9).
      */
-    fun recordPriority(context: Context, sentHigh: Boolean, deliveredHigh: Boolean): Boolean {
-        if (!sentHigh) return false
-        val downgraded = !deliveredHigh
-        synchronized(this) {
-            val prefs = prefs(context)
-            prefs.edit {
-                putLong(KEY_SENT_HIGH, prefs.getLong(KEY_SENT_HIGH, 0) + 1)
-                if (downgraded) putLong(KEY_DOWNGRADED, prefs.getLong(KEY_DOWNGRADED, 0) + 1)
-            }
-        }
-        return downgraded
-    }
-
-    fun downgradeCount(context: Context): DowngradeCount {
-        val prefs = prefs(context)
-        return DowngradeCount(prefs.getLong(KEY_SENT_HIGH, 0), prefs.getLong(KEY_DOWNGRADED, 0))
-    }
-
-    /**
-     * A push woke the app: the core reads the mailbox or group log the handle names and says
-     * what to show. Runs off the main thread; the distributor (or FCM) holds a wake lock for
-     * the few seconds this takes.
-     */
-    fun wake(context: Context, platform: PushPlatform, payload: ByteArray, downgraded: Boolean) {
-        val app = context.applicationContext
+    fun wake(platform: PushPlatform, payload: ByteArray, priority: FcmPriority?) {
         executor.execute {
-            val notification = try {
-                PlatformHost.sink.onPush(platform, payload, downgraded)
+            try {
+                PlatformHost.sink.onPush(platform, payload, priority)
             } catch (e: RuntimeException) {
                 Log.w(TAG, "core failed on push: ${e.message}")
-                null
             }
-            notification?.let { Notifications.post(app, it) }
         }
     }
 }
@@ -151,7 +136,7 @@ class PingersPushService : PushService() {
         if (instance != Push.INSTANCE) return
         // UnifiedPush has no priorities to lose: every push counts as on time.
         PhoneLog.recordWake(this, onTime = true)
-        Push.wake(this, PushPlatform.UNIFIED_PUSH, message.content, downgraded = false)
+        Push.wake(PushPlatform.UNIFIED_PUSH, message.content, priority = null)
     }
 
     override fun onRegistrationFailed(reason: FailedReason, instance: String) {

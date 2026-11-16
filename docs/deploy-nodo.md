@@ -380,8 +380,10 @@ tests, `crates/pingers-e2e`, and the push relay's ntfy script.
    `PINGERS_MAP_HOST=https://10.0.2.2:9446` and `PINGERS_EXTRA_CA=target/dev-ca/ca.pem` (debug
    builds only), plus `PINGERS_DEV_REGISTRATION_CODE=dev-registration-code` for the first
    emulator (the dev server.toml's code; the second joins by invite and needs none).
-5. Two emulators (one foss with UnifiedPush through a local ntfy, one gms only if a real service
-   account is in place locally): create a Party, join by invite, define a Spot, walk both in with
+5. Two emulators (one foss with UnifiedPush through a local ntfy, one gms with Play services
+   when FCM is wanted: `cargo xtask local-stack --fcm-service-account <key.json> --fcm-project
+   <id>` points the local push relay at a service account key kept outside the repository, read
+   in place and never copied; there is no default): create a Party, join by invite, define a Spot, walk both in with
    `adb -s emulator-5554 emu geo fix <lon> <lat>`, and expect the knock, the Meetup with a live
    channel both ways, and chat.
 

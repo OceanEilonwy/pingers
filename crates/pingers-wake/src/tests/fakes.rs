@@ -466,7 +466,7 @@ impl ServerPort for FakeServer {
         ]))
     }
 
-    async fn refill_mailbox_pool(&self, server: &ServerId) -> Result<(), PortError> {
+    async fn maintain_push_registrations(&self, server: &ServerId) -> Result<(), PortError> {
         self.gate(server, CallKind::Refill, Call::Refill).await
     }
 }

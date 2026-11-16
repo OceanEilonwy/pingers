@@ -387,6 +387,24 @@ pub async fn join(
     Ok(spawn(runtime, core, own_subscription))
 }
 
+/// The current log-auth key of a Meetup group this device is in, for the requests it makes
+/// about the group outside the session: renewing its own sealed-push subscription when the
+/// push token or the relay key changes (design B.4.9).
+///
+/// # Errors
+///
+/// [`SessionError::NotFound`] without an identity; [`SessionError::Mls`] if the group is
+/// not held; [`SessionError::Store`].
+pub async fn meetup_log_auth_key(
+    database: &Arc<Database>,
+    group: GroupId,
+) -> Result<LogAuthKeyPair, SessionError> {
+    run_blocking(database, move |local| {
+        Ok(local.mls().meetup_group(&group)?.log_auth_key_pair()?)
+    })
+    .await
+}
+
 /// Deletes every Meetup left in the store, with its MLS state: call once at launch. A
 /// Meetup's state machine lives only in its task, so one that outlived its task (the process
 /// was killed) cannot be resumed, and its keys must not linger (design B.5).
@@ -492,6 +510,19 @@ impl MeetupHandle {
         answer.await.map_err(|_| SessionError::Ended)?
     }
 
+    /// Reads the group log now, and returns once what it held has been applied: a push for
+    /// this Meetup's subscription arrived (design B.4.9), so a message or commit is waiting,
+    /// possibly while the live channel is down.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::Ended`] once the Meetup is over.
+    pub async fn read_log(&self) -> Result<(), SessionError> {
+        let (reply, answer) = oneshot::channel();
+        self.send(Command::ReadLog { reply }).await?;
+        answer.await.map_err(|_| SessionError::Ended)
+    }
+
     /// Leaves: sends this device's self-remove proposal (or, when alone, deletes the group
     /// on the server), closes the channel and deletes the Meetup's keys and content.
     ///
@@ -553,6 +584,9 @@ enum Command {
         reply: oneshot::Sender<Result<WelcomeBytes, SessionError>>,
     },
     Leave {
+        reply: oneshot::Sender<()>,
+    },
+    ReadLog {
         reply: oneshot::Sender<()>,
     },
 }
@@ -799,6 +833,11 @@ impl Driver {
                 let ended = self.leave().await;
                 let _answered = reply.send(());
                 ended.map(Some)
+            }
+            Command::ReadLog { reply } => {
+                let ended = self.read_log().await?;
+                let _answered = reply.send(());
+                Ok(ended)
             }
         }
     }

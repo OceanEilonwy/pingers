@@ -664,6 +664,9 @@ pub struct PrivacyText {
     pub wakeups: String,
     /// "On · through ntfy".
     pub wakeups_summary: String,
+    /// Why wake-ups reach this phone late or not at all (the core's downgrade), under the
+    /// Wake-ups link; `None` when they arrive as they should or are off by choice.
+    pub push_delivery: Option<String>,
     /// "How Pingers keeps you private".
     pub security_link: String,
 }
@@ -917,6 +920,7 @@ impl Snapshot {
             delivery_heading: text.delivery_heading,
             wakeups: text.wakeups,
             wakeups_summary: text.wakeups_summary,
+            push_delivery: text.push_delivery,
             security_link: text.security_link,
         }
     }

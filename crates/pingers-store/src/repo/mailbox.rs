@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! `mailbox` and `subscription`.
 
-use pingers_crypto::{MailboxReadKey, mailbox_id};
+use pingers_crypto::{MailboxReadKey, PushSealFingerprint, mailbox_id};
 use pingers_proto::{GroupId, MailboxId, PushHandle, SubscriptionId};
 use pingers_time::UnixSeconds;
 use rusqlite::{OptionalExtension as _, Row, params};
 
-use crate::codec::{read_array, read_optional_array, read_secret, read_time, time};
+use crate::codec::{
+    read_array, read_optional_array, read_optional_time, read_secret, read_time, time,
+};
 use crate::repo::expect_one;
 use crate::server::Scope;
 use crate::{ServerSession, StoreError};
@@ -69,6 +71,45 @@ impl MailboxState {
     }
 }
 
+/// What a registered sealed push was sealed with (schema version 8): the fingerprint of the
+/// relay key and push token, and the `not_after` sealed into it. pingers-sync seals the push
+/// again when either no longer fits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SealStamp {
+    /// pingers-crypto's fingerprint of the relay key and token.
+    pub fingerprint: PushSealFingerprint,
+    /// The relay drops the blob after this.
+    pub not_after: UnixSeconds,
+}
+
+fn seal_columns(seal: Option<&SealStamp>) -> Result<(Option<[u8; 16]>, Option<i64>), StoreError> {
+    Ok(match seal {
+        Some(seal) => (
+            Some(*seal.fingerprint.as_bytes()),
+            Some(time(seal.not_after, "sealed_until")?),
+        ),
+        None => (None, None),
+    })
+}
+
+/// The seal columns at `index` and `index + 1`: both set or both NULL.
+fn read_seal(
+    row: &Row<'_>,
+    index: usize,
+    field: &'static str,
+) -> Result<Option<SealStamp>, StoreError> {
+    let fingerprint = read_optional_array::<16>(row, index, field)?;
+    let not_after = read_optional_time(row, index.saturating_add(1), field)?;
+    match (fingerprint, not_after) {
+        (Some(fingerprint), Some(not_after)) => Ok(Some(SealStamp {
+            fingerprint: PushSealFingerprint::from_bytes(fingerprint),
+            not_after,
+        })),
+        (None, None) => Ok(None),
+        (Some(_), None) | (None, Some(_)) => Err(StoreError::Corrupt { field }),
+    }
+}
+
 /// One of this device's mailboxes (design C.2 `mailbox`). Its id is derived from the read key,
 /// so the two cannot disagree.
 pub struct Mailbox {
@@ -81,6 +122,9 @@ pub struct Mailbox {
     /// The handle in its sealed push token, or `None` if it was registered without one
     /// (`has_push` is false).
     pub push: Option<PushHandle>,
+    /// What its sealed push was sealed with; `None` without a push, or if it was registered
+    /// before the fingerprint was kept.
+    pub seal: Option<SealStamp>,
     /// When the server forgets it.
     pub expires_at: UnixSeconds,
 }
@@ -98,7 +142,8 @@ pub struct Mailboxes<'session> {
     session: Scope<'session>,
 }
 
-const MAILBOX_COLUMNS: &str = "mailbox_id, read_key, purpose, state, handle, expires_at";
+const MAILBOX_COLUMNS: &str =
+    "mailbox_id, read_key, purpose, state, handle, expires_at, seal, sealed_until";
 
 fn mailbox_from_row(row: &Row<'_>) -> Result<Mailbox, StoreError> {
     let mailbox = Mailbox {
@@ -124,6 +169,7 @@ fn mailbox_from_row(row: &Row<'_>) -> Result<Mailbox, StoreError> {
         },
         push: read_optional_array(row, 4, "mailbox.handle")?.map(PushHandle::from_bytes),
         expires_at: read_time(row, 5, "mailbox.expires_at")?,
+        seal: read_seal(row, 6, "mailbox.seal")?,
     };
     if mailbox.id().as_bytes() == &read_array::<16>(row, 0, "mailbox.mailbox_id")? {
         Ok(mailbox)
@@ -141,10 +187,12 @@ impl Mailboxes<'_> {
     ///
     /// [`StoreError::Database`] if it, or another mailbox with the same push handle, exists.
     pub fn insert(&self, mailbox: &Mailbox) -> Result<(), StoreError> {
+        let (seal, sealed_until) = seal_columns(mailbox.seal.as_ref())?;
         self.session.with(|connection| {
             connection.execute(
                 "INSERT INTO mailbox (mailbox_id, read_key, purpose, state, has_push, handle, \
-                 expires_at, server_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 expires_at, seal, sealed_until, server_key) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     mailbox.id().as_bytes(),
                     mailbox.read_key.expose_bytes(),
@@ -153,6 +201,8 @@ impl Mailboxes<'_> {
                     i64::from(mailbox.push.is_some()),
                     mailbox.push.as_ref().map(PushHandle::as_bytes),
                     time(mailbox.expires_at, "mailbox.expires_at")?,
+                    seal,
+                    sealed_until,
                     self.session.key(),
                 ],
             )?;
@@ -262,6 +312,62 @@ impl Mailboxes<'_> {
         })
     }
 
+    /// Every unexpired mailbox on this server, for the device's push maintenance (pingers-sync).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Corrupt`] if a stored value does not decode.
+    pub fn live(&self, now: UnixSeconds) -> Result<Vec<Mailbox>, StoreError> {
+        self.session.with(|connection| {
+            let mut statement = connection.prepare(&format!(
+                "SELECT {MAILBOX_COLUMNS} FROM mailbox WHERE expires_at > ?1 AND server_key = ?2 \
+                 ORDER BY mailbox_id"
+            ))?;
+            let rows = statement
+                .query_map(params![time(now, "now")?, self.session.key()], |row| {
+                    Ok(mailbox_from_row(row))
+                })?;
+            let mut mailboxes = Vec::new();
+            for row in rows {
+                mailboxes.push(row??);
+            }
+            Ok(mailboxes)
+        })
+    }
+
+    /// Replaces a mailbox's push handle and seal after its sealed push was replaced on the
+    /// server (both `None`: the push was removed).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotFound`] if there is no such mailbox; [`StoreError::Database`] if
+    /// another mailbox has the handle.
+    pub fn set_push(
+        &self,
+        id: &MailboxId,
+        push: Option<PushHandle>,
+        seal: Option<SealStamp>,
+    ) -> Result<(), StoreError> {
+        let (seal, sealed_until) = seal_columns(seal.as_ref())?;
+        self.session.with(|connection| {
+            expect_one(
+                connection.execute(
+                    "UPDATE mailbox SET has_push = ?2, handle = ?3, seal = ?4, sealed_until = ?5 \
+                     WHERE mailbox_id = ?1 AND server_key = ?6",
+                    params![
+                        id.as_bytes(),
+                        i64::from(push.is_some()),
+                        push.as_ref().map(PushHandle::as_bytes),
+                        seal,
+                        sealed_until,
+                        self.session.key(),
+                    ],
+                )?,
+                "mailbox",
+            )
+        })
+    }
+
     /// Moves a mailbox to `state`.
     ///
     /// # Errors
@@ -322,6 +428,9 @@ pub struct StoredSubscription {
     pub handle: PushHandle,
     /// When the server forgets it.
     pub expires_at: UnixSeconds,
+    /// What its sealed push was sealed with; `None` if it was stored before the fingerprint
+    /// was kept.
+    pub seal: Option<SealStamp>,
 }
 
 /// Repository for the `subscription` table.
@@ -329,12 +438,15 @@ pub struct Subscriptions<'session> {
     session: Scope<'session>,
 }
 
+const SUBSCRIPTION_COLUMNS: &str = "group_id, sub_id, handle, expires_at, seal, sealed_until";
+
 fn subscription_from_row(row: &Row<'_>) -> Result<StoredSubscription, StoreError> {
     Ok(StoredSubscription {
         group: GroupId::from_bytes(read_array(row, 0, "subscription.group_id")?),
         id: SubscriptionId::from_bytes(read_array(row, 1, "subscription.sub_id")?),
         handle: PushHandle::from_bytes(read_array(row, 2, "subscription.handle")?),
         expires_at: read_time(row, 3, "subscription.expires_at")?,
+        seal: read_seal(row, 4, "subscription.seal")?,
     })
 }
 
@@ -345,15 +457,18 @@ impl Subscriptions<'_> {
     ///
     /// [`StoreError::Database`] if another group's subscription has the same id or handle.
     pub fn put(&self, subscription: &StoredSubscription) -> Result<(), StoreError> {
+        let (seal, sealed_until) = seal_columns(subscription.seal.as_ref())?;
         self.session.with(|connection| {
             connection.execute(
-                "INSERT OR REPLACE INTO subscription (group_id, sub_id, handle, expires_at, \
-                 server_key) VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT OR REPLACE INTO subscription (group_id, sub_id, handle, expires_at, seal, \
+                 sealed_until, server_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     subscription.group.as_bytes(),
                     subscription.id.as_bytes(),
                     subscription.handle.as_bytes(),
                     time(subscription.expires_at, "subscription.expires_at")?,
+                    seal,
+                    sealed_until,
                     self.session.key(),
                 ],
             )?;
@@ -388,7 +503,7 @@ impl Subscriptions<'_> {
             connection
                 .query_row(
                     &format!(
-                        "SELECT group_id, sub_id, handle, expires_at FROM subscription \
+                        "SELECT {SUBSCRIPTION_COLUMNS} FROM subscription \
                          WHERE {column} = ?1 AND server_key = ?2"
                     ),
                     params![value, self.session.key()],
@@ -396,6 +511,27 @@ impl Subscriptions<'_> {
                 )
                 .optional()?
                 .transpose()
+        })
+    }
+
+    /// Every subscription on this server, for the device's push maintenance (pingers-sync).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Corrupt`] if a stored value does not decode.
+    pub fn all(&self) -> Result<Vec<StoredSubscription>, StoreError> {
+        self.session.with(|connection| {
+            let mut statement = connection.prepare(&format!(
+                "SELECT {SUBSCRIPTION_COLUMNS} FROM subscription WHERE server_key = ?1 \
+                 ORDER BY group_id"
+            ))?;
+            let rows =
+                statement.query_map([self.session.key()], |row| Ok(subscription_from_row(row)))?;
+            let mut subscriptions = Vec::new();
+            for row in rows {
+                subscriptions.push(row??);
+            }
+            Ok(subscriptions)
         })
     }
 
@@ -445,6 +581,7 @@ mod tests {
             state: MailboxState::Pooled,
             push: Some(PushHandle::from_bytes([fill; 8])),
             expires_at: UnixSeconds::new(expires_at),
+            seal: None,
         }
     }
 
@@ -575,12 +712,83 @@ mod tests {
         Ok(())
     }
 
+    fn stamp(fill: u8, not_after: u64) -> SealStamp {
+        SealStamp {
+            fingerprint: PushSealFingerprint::from_bytes([fill; 16]),
+            not_after: UnixSeconds::new(not_after),
+        }
+    }
+
+    #[test]
+    fn live_mailboxes_carry_their_seal_and_a_replaced_push_is_stored() -> Result<(), TestError> {
+        let fixture = Fixture::new()?;
+        let server = fixture.server()?;
+        let mailboxes = server.mailboxes();
+        let mut sealed = mailbox(1, MailboxPurpose::Knock, 500);
+        sealed.seal = Some(stamp(1, 900));
+        let expired = mailbox(2, MailboxPurpose::Reply, 100);
+        mailboxes.insert(&sealed)?;
+        mailboxes.insert(&expired)?;
+        let live = mailboxes.live(UnixSeconds::new(100))?;
+        assert_eq!(
+            live.iter().map(Mailbox::id).collect::<Vec<_>>(),
+            vec![sealed.id()]
+        );
+        assert_eq!(
+            live.first().and_then(|mailbox| mailbox.seal),
+            Some(stamp(1, 900))
+        );
+        let handle = PushHandle::from_bytes([7; 8]);
+        mailboxes.set_push(&sealed.id(), Some(handle), Some(stamp(3, 950)))?;
+        let stored = mailboxes.get(&sealed.id())?;
+        assert_eq!(
+            stored.as_ref().and_then(|mailbox| mailbox.push),
+            Some(handle)
+        );
+        assert_eq!(stored.and_then(|mailbox| mailbox.seal), Some(stamp(3, 950)));
+        assert!(
+            mailboxes
+                .by_handle(&PushHandle::from_bytes([1; 8]))?
+                .is_none()
+        );
+        mailboxes.set_push(&sealed.id(), None, None)?;
+        let cleared = mailboxes.get(&sealed.id())?;
+        assert_eq!(cleared.as_ref().and_then(|mailbox| mailbox.push), None);
+        assert_eq!(cleared.and_then(|mailbox| mailbox.seal), None);
+        assert!(matches!(
+            mailboxes.set_push(&MailboxId::from_bytes([9; 16]), None, None),
+            Err(StoreError::NotFound { table: "mailbox" })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn half_a_seal_is_corrupt() -> Result<(), TestError> {
+        let fixture = Fixture::new()?;
+        let mut sealed = mailbox(1, MailboxPurpose::Knock, 500);
+        sealed.seal = Some(stamp(1, 900));
+        let server = fixture.server()?;
+        server.mailboxes().insert(&sealed)?;
+        fixture.session.with(|connection| {
+            connection.execute("UPDATE mailbox SET sealed_until = NULL", [])?;
+            Ok(())
+        })?;
+        assert!(matches!(
+            server.mailboxes().get(&sealed.id()),
+            Err(StoreError::Corrupt {
+                field: "mailbox.seal"
+            })
+        ));
+        Ok(())
+    }
+
     fn subscription(fill: u8, expires_at: u64) -> StoredSubscription {
         StoredSubscription {
             group: GroupId::from_bytes([fill; 32]),
             id: SubscriptionId::from_bytes([fill; 16]),
             handle: PushHandle::from_bytes([fill; 8]),
             expires_at: UnixSeconds::new(expires_at),
+            seal: None,
         }
     }
 
@@ -593,12 +801,14 @@ mod tests {
         let second = subscription(2, 300);
         subscriptions.put(&first)?;
         subscriptions.put(&second)?;
+        assert_eq!(subscriptions.all()?, vec![first, second]);
         assert_eq!(subscriptions.get(&first.group)?, Some(first));
         assert_eq!(subscriptions.by_handle(&second.handle)?, Some(second));
         let renewed = StoredSubscription {
             id: SubscriptionId::from_bytes([9; 16]),
             handle: PushHandle::from_bytes([9; 8]),
             expires_at: UnixSeconds::new(200),
+            seal: Some(stamp(9, 200)),
             ..first
         };
         subscriptions.put(&renewed)?;

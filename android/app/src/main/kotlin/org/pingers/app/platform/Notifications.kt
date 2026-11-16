@@ -60,20 +60,28 @@ object Notifications {
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) &&
             NotificationManagerCompat.from(context).areNotificationsEnabled()
 
-    /** Posts what the core returned from a push. Without the permission, nothing is shown. */
+    /**
+     * Posts what a wake led to (design B.7: Meetups, chat, requests; all alerts). Tapping a
+     * Meetup notification opens the Meetup; a join request opens the app. Without the
+     * permission, nothing is shown.
+     */
     fun post(context: Context, notification: CoreNotification) {
         if (!canPost(context)) return
         ensureChannels(context)
-        val n = NotificationCompat.Builder(context, if (notification.alert) CHANNEL_ALERTS else CHANNEL_QUIET)
+        val tap = when (notification.kind) {
+            NotificationKind.JOIN_REQUEST -> openApp(context)
+            NotificationKind.MEETUP_STARTED, NotificationKind.CHAT_MESSAGE, NotificationKind.LOCATION_REQUEST -> openMeetup(context, notification.id)
+        }
+        val n = NotificationCompat.Builder(context, CHANNEL_ALERTS)
             .setSmallIcon(R.drawable.ic_stat_pingers)
             .setColor(ContextCompat.getColor(context, R.color.blue))
             .setContentTitle(notification.title)
             .setContentText(notification.body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(notification.body))
             .setCategory(NotificationCompat.CATEGORY_SOCIAL)
-            .setPriority(if (notification.alert) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
-            .setContentIntent(openApp(context))
+            .setContentIntent(tap)
             .build()
         try {
             NotificationManagerCompat.from(context).notify(notification.id, n)
@@ -129,6 +137,16 @@ object Notifications {
             .setContentIntent(openApp(context))
             .build()
     }
+
+    /** Opens the Meetup screen, as the co-presence alert's "Open meetup" does. */
+    private fun openMeetup(context: Context, code: Int): PendingIntent = PendingIntent.getActivity(
+        context,
+        code,
+        Intent(context, org.pingers.app.MainActivity::class.java)
+            .putExtra(org.pingers.app.CoPresenceNotifier.EXTRA_ACTION, org.pingers.app.CoPresenceNotifier.OPEN_MEETUP)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
     private fun openApp(context: Context): PendingIntent? {
         val launch = context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return null

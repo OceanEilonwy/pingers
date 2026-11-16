@@ -126,8 +126,9 @@ axum = { version = "0.8.9", features = ["http2"] }
 tokio-util = { version = "0.7.20", default-features = false, features = ["io"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2", "json"] }
 url = "2.5.8"
-# RS256 for the push relay's FCM service-account JWT (RFC 7523): a Google protocol requirement,
-# not a Pingers primitive. Already in the tree as rustls's provider; it zeroizes keys on free.
+# RS256 for the push relay's FCM service-account JWT (RFC 7523), in pingers-crypto behind its
+# `rs256` feature: a Google protocol requirement. Already in the tree as rustls's provider; it
+# zeroizes keys on free.
 aws-lc-rs = { version = "1.19.0", default-features = false, features = ["aws-lc-sys"] }
 # Base64url for that JWT and the service account's PEM key.
 base64 = "0.23.1"

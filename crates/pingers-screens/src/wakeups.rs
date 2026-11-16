@@ -11,7 +11,7 @@
 use pingers_time::UnixSeconds;
 
 use crate::device::PushService;
-use crate::snapshot::{ClientSnapshot, Toggle, WakePushes};
+use crate::snapshot::{ClientSnapshot, PushDelivery, PushDowngrade, Toggle, WakePushes};
 
 /// Whether Android may limit Pingers in the background.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -150,7 +150,12 @@ pub fn status(snapshot: &ClientSnapshot, platform: &WakePlatform) -> WakeupsStat
     match (snapshot.settings.wake_pushes, &platform.push_service) {
         (WakePushes::NoWakePushes, _) => WakeupsStatus::Off,
         (WakePushes::On, PushService::Nothing) => WakeupsStatus::NothingCanWake,
-        (WakePushes::On, _) if platform.downgrade == Downgrade::Reported => {
+        // FCM holding back wake-ups, as the platform reported it or as the core counted it.
+        (WakePushes::On, _)
+            if platform.downgrade == Downgrade::Reported
+                || snapshot.push_delivery
+                    == PushDelivery::Downgraded(PushDowngrade::PriorityLowered) =>
+        {
             WakeupsStatus::Delayed(platform.delayed_this_week)
         }
         (WakePushes::On, _) => WakeupsStatus::Working(platform.last_wake),
@@ -271,6 +276,16 @@ mod tests {
         platform.downgrade = Downgrade::None;
         assert!(matches!(
             status(&snapshot, &platform),
+            WakeupsStatus::Working(_)
+        ));
+        // The core counting FCM's downgrades in its snapshot is a fault too.
+        let mut counted = snapshot.clone();
+        counted.push_delivery = PushDelivery::Downgraded(PushDowngrade::PriorityLowered);
+        assert_eq!(status(&counted, &platform), WakeupsStatus::Delayed(6));
+        // Another downgrade reason is not a delay.
+        counted.push_delivery = PushDelivery::Downgraded(PushDowngrade::RelayKeyMismatch);
+        assert!(matches!(
+            status(&counted, &platform),
             WakeupsStatus::Working(_)
         ));
         Ok(())

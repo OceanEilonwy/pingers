@@ -72,7 +72,7 @@
 //!   ([`PartyName`], [`SpotName`], ...), [`ZoneId`], [`Avatar`], [`UnspentToken`],
 //!   [`TokenKeyId`], [`TreePosition`], [`TreeLevel`], [`TreeNodeHash`], [`RootEpoch`].
 //!   Privacy Pass tokens are opaque bytes so this crate does not link pingers-anon's prover.
-//! - **One device, several servers** (schema version 8, decided 2026-11-14). `identity` holds
+//! - **One device, several servers** (schema version 9, decided 2026-11-14). `identity` holds
 //!   only the device's account key; `server_url` and `server_pin` moved to a `server` row per
 //!   server, with its relays, push relay, key pins and how they were trusted
 //!   ([`ServerRecord`], [`ServerTrust`]). Every row that belongs to one server (account
@@ -95,7 +95,7 @@
 //!   records which hourly root the leaf copy reproduces and this device's Merkle path in it, so a
 //!   proof reads one row instead of rebuilding the tree; `pp_allowance` the server's daily token
 //!   limit and what was issued today, so a refill never exceeds it (both per server since schema
-//!   version 8); `prover_self_test` the last self-test and the parameters it tested (device-wide).
+//!   version 9); `prover_self_test` the last self-test and the parameters it tested (device-wide).
 //! - **pingers-parties' per-Party state** (schema version 6), which it kept as key-value rows
 //!   before: `party_config` and `party_relay` (server, suite, relays in order),
 //!   `roster_epoch` and `roster_entry` (rosters of recent epochs, pruned by the caller with
@@ -109,6 +109,11 @@
 //!   `JoinRequest`s, in arrival order; cascade with their invite), `party_join` (a join this
 //!   device asked for, with the link and the key packages it sent; no Party row exists yet) and
 //!   `joined_via` (who let this device in, and the join code).
+//! - **What each sealed push was sealed with** (schema version 9): `mailbox` and
+//!   `subscription` gain `seal` (pingers-crypto's fingerprint of the relay key and push token)
+//!   and `sealed_until` (the `not_after` sealed in), so pingers-sync seals a push again when the
+//!   token changes, the relay key rotates or `not_after` comes near. Rows from before version 8
+//!   have neither and are sealed again.
 //! - **Unsigned values past `i64::MAX`** are refused ([`StoreError::OutOfRange`]), never
 //!   wrapped.
 //!
@@ -150,7 +155,7 @@ pub use repo::board::{
     StoredLease,
 };
 pub use repo::mailbox::{
-    Mailbox, MailboxPurpose, MailboxState, Mailboxes, StoredSubscription, Subscriptions,
+    Mailbox, MailboxPurpose, MailboxState, Mailboxes, SealStamp, StoredSubscription, Subscriptions,
 };
 pub use repo::meetup::{
     GrantScope, GrantedKey, LocationAsks, LocationGrants, LocationRequest, LocationRequestState,

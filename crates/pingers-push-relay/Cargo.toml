@@ -11,15 +11,13 @@ publish.workspace = true
 layer = 5
 
 [dependencies]
-pingers-crypto = { workspace = true }
+# `rs256`: the FCM service-account assertion.
+pingers-crypto = { workspace = true, features = ["rs256"] }
 pingers-proto = { workspace = true }
 pingers-time = { workspace = true }
 # The production Timer (TokioTimer) for upstream timeouts and the counts report.
 pingers-transport = { workspace = true }
-# RS256 for the FCM service-account JWT (see the workspace manifest).
-aws-lc-rs = { workspace = true }
 axum = { workspace = true }
-base64 = { workspace = true }
 # `keygen`: a ChaCha generator seeded from the operating system (the server's pattern).
 getrandom = { workspace = true }
 hex = { workspace = true }
@@ -37,6 +35,9 @@ url = { workspace = true }
 zeroize = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
+# Checks the FCM assertion's signature against the test key's public half.
+aws-lc-rs = { workspace = true }
+base64 = { workspace = true }
 pingers-testkit = { workspace = true }
 # Throwaway RSA keys for the service-account tests.
 rcgen = { workspace = true }

@@ -5,6 +5,7 @@
 //! ```text
 //! cargo xtask local-stack [--dir <dir>] [--packs <dir>] [--ntfy <binary>] [--caddy <binary>]
 //!                         [--fresh] [--prepare-only] [--second-server]
+//!                         [--fcm-service-account <key.json> --fcm-project <id>]
 //! ```
 //!
 //! It builds the four service binaries (release), and on first use in `<dir>` generates every
@@ -54,6 +55,14 @@
 //! credential of its own. B requires a registration code of its own, so an app can exercise
 //! "code required" and "code refused"; A is unchanged. B's origin, relay, pins and code are
 //! written to `<dir>/second-server.env`, in `app.env`'s names. `--fresh` regenerates B too.
+//!
+//! # FCM
+//!
+//! FCM is opt-in and has no default: `--fcm-service-account` names a Firebase service account
+//! key file, outside the repository and the stack directory, and `--fcm-project` its project
+//! id. The push relay configuration then names that file in its `[fcm]` table and the push
+//! relay reads it in place at start; this command never reads, copies or prints it. A run
+//! without the options takes the table out again.
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -117,6 +126,11 @@ pub(crate) struct StackOptions {
     pub(crate) prepare_only: bool,
     /// Also run server B with its own OHTTP relay.
     pub(crate) second_server: bool,
+    /// A Firebase service account key file the push relay reads in place, to send FCM.
+    /// Opt-in and never defaulted: without it the local push relay has no FCM.
+    pub(crate) fcm_service_account: Option<PathBuf>,
+    /// The Firebase project id that service account sends for.
+    pub(crate) fcm_project: Option<String>,
 }
 
 impl StackOptions {
@@ -147,6 +161,10 @@ impl StackOptions {
             "--fresh" => self.fresh = true,
             "--prepare-only" => self.prepare_only = true,
             "--second-server" => self.second_server = true,
+            "--fcm-service-account" => {
+                self.fcm_service_account = Some(PathBuf::from(rest.next()?));
+            }
+            "--fcm-project" => self.fcm_project = Some(rest.next()?.clone()),
             _ => return Some(false),
         }
         Some(true)
@@ -218,7 +236,7 @@ impl Layout {
     fn server_config(&self) -> PathBuf {
         self.config().join("server.toml")
     }
-    fn push_relay_config(&self) -> PathBuf {
+    pub(crate) fn push_relay_config(&self) -> PathBuf {
         self.config().join("push-relay.toml")
     }
     fn relay_config(&self) -> PathBuf {
@@ -367,6 +385,7 @@ pub(crate) fn prepare(workspace: &Path, options: &StackOptions) -> Result<Prepar
 
     let dev = workspace.join("packaging/nodo/dev");
     let registration_code = write_keys(&dev, &binaries, &layout)?;
+    set_fcm(&layout, workspace, options)?;
     fs::copy(dev.join("relay.toml"), layout.relay_config())?;
     fs::write(layout.map_host_config(), map_host_config(&dev, &layout)?)?;
     let mut caddy_text = caddy_config(&dev, &layout)?;
@@ -771,6 +790,65 @@ fn push_relay_config(dev: &Path, binaries: &Path) -> Result<Zeroizing<String>> {
         set_secret(server, "credential", &credential)?;
     }
     Ok(with_header(&table))
+}
+
+/// Sets or clears the push relay's `[fcm]` table, on every run, so the stack has FCM exactly
+/// when this run asked for it. The service account file is named, never read here: the push
+/// relay reads it in place at start, and neither its text nor a copy reaches the stack
+/// directory or the output.
+fn set_fcm(layout: &Layout, workspace: &Path, options: &StackOptions) -> Result<()> {
+    let path = layout.push_relay_config();
+    let text = Zeroizing::new(fs::read_to_string(&path)?);
+    let mut table = text.parse::<Table>()?;
+    let removed = table.remove("fcm").is_some();
+    let fcm = fcm_table(options, &[workspace, layout.root()])?;
+    let has_fcm = fcm.is_some();
+    if let Some(fcm) = fcm {
+        table.insert("fcm".to_owned(), Value::Table(fcm));
+    }
+    if removed || has_fcm {
+        write_secret_file(&path, &with_header(&table))?;
+    }
+    if let Some(project) = &options.fcm_project
+        && has_fcm
+    {
+        writeln!(
+            io::stdout(),
+            "local-stack: the push relay sends FCM for project {project}"
+        )?;
+    }
+    Ok(())
+}
+
+/// The `[fcm]` table `--fcm-service-account` and `--fcm-project` ask for, if any. A key file
+/// inside any of `refused` (the repository, the stack directory) is refused, so it is never
+/// committed or kept with the stack.
+fn fcm_table(options: &StackOptions, refused: &[&Path]) -> Result<Option<Table>> {
+    match (&options.fcm_service_account, &options.fcm_project) {
+        (None, None) => Ok(None),
+        (Some(account), Some(project)) => {
+            let account = absolute(account)?;
+            if !account.is_file() {
+                bail!("--fcm-service-account does not name a file");
+            }
+            if refused.iter().any(|dir| is_inside(&account, dir)) {
+                bail!(
+                    "--fcm-service-account must be outside the repository and the stack directory"
+                );
+            }
+            let account = account
+                .to_str()
+                .context("--fcm-service-account is not UTF-8")?;
+            let mut fcm = Table::new();
+            fcm.insert("project_id".to_owned(), Value::String(project.clone()));
+            fcm.insert(
+                "service_account_file".to_owned(),
+                Value::String(account.to_owned()),
+            );
+            Ok(Some(fcm))
+        }
+        _ => bail!("--fcm-service-account and --fcm-project go together"),
+    }
 }
 
 /// The server credential the push relay configuration issues.
@@ -1432,5 +1510,88 @@ mod tests {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR"));
         assert!(is_inside(&workspace.join("target/stack"), workspace));
         assert!(!is_inside(Path::new("/nonexistent-stack"), workspace));
+    }
+
+    #[test]
+    fn fcm_is_opt_in_and_names_the_key_file_in_place() -> Result<()> {
+        let options = |account: Option<&Path>, project: Option<&str>| StackOptions {
+            fcm_service_account: account.map(Path::to_path_buf),
+            fcm_project: project.map(str::to_owned),
+            ..StackOptions::default()
+        };
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let outside = std::env::temp_dir().join(format!("xtask-fcm-{}", std::process::id()));
+        fs::create_dir_all(&outside)?;
+        let key = outside.join("account.json");
+        fs::write(&key, "not read")?;
+        let stack = outside.join("stack");
+        assert_eq!(fcm_table(&options(None, None), &[workspace])?, None);
+        let table = fcm_table(&options(Some(&key), Some("demo")), &[workspace, &stack])?
+            .context("an [fcm] table")?;
+        assert_eq!(
+            table.get("project_id").and_then(Value::as_str),
+            Some("demo")
+        );
+        assert_eq!(
+            table.get("service_account_file").and_then(Value::as_str),
+            key.to_str()
+        );
+        assert_eq!(table.len(), 2);
+        assert!(fcm_table(&options(Some(&key), None), &[workspace]).is_err());
+        assert!(fcm_table(&options(None, Some("demo")), &[workspace]).is_err());
+        assert!(fcm_table(&options(Some(&outside.join("absent")), Some("demo")), &[]).is_err());
+        assert!(fcm_table(&options(Some(&key), Some("demo")), &[&outside]).is_err());
+        assert_eq!(
+            StackOptions::parse(&strings(&[
+                "--fcm-service-account",
+                "/k.json",
+                "--fcm-project",
+                "p"
+            ])),
+            Some(StackOptions {
+                fcm_service_account: Some(PathBuf::from("/k.json")),
+                fcm_project: Some("p".to_owned()),
+                ..StackOptions::default()
+            })
+        );
+        fs::remove_dir_all(&outside)?;
+        Ok(())
+    }
+
+    #[test]
+    fn each_run_puts_in_or_takes_out_the_fcm_table_without_reading_the_key() -> Result<()> {
+        let outside = std::env::temp_dir().join(format!("xtask-set-fcm-{}", std::process::id()));
+        let layout = Layout::new(outside.join("stack"));
+        fs::create_dir_all(layout.config())?;
+        fs::write(layout.push_relay_config(), "listen = \"127.0.0.1:9472\"\n")?;
+        let key = outside.join("account.json");
+        fs::write(&key, "key text that must stay out")?;
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let with_fcm = StackOptions {
+            fcm_service_account: Some(key.clone()),
+            fcm_project: Some("demo".to_owned()),
+            ..StackOptions::default()
+        };
+        set_fcm(&layout, workspace, &with_fcm)?;
+        let written = fs::read_to_string(layout.push_relay_config())?.parse::<Table>()?;
+        let fcm = written
+            .get("fcm")
+            .and_then(Value::as_table)
+            .context("an [fcm] table")?;
+        assert_eq!(
+            fcm.get("service_account_file").and_then(Value::as_str),
+            key.to_str()
+        );
+        assert_eq!(
+            written.get("listen").and_then(Value::as_str),
+            Some("127.0.0.1:9472")
+        );
+        assert!(!fs::read_to_string(layout.push_relay_config())?.contains("key text"));
+        set_fcm(&layout, workspace, &StackOptions::default())?;
+        let written = fs::read_to_string(layout.push_relay_config())?.parse::<Table>()?;
+        assert!(written.get("fcm").is_none());
+        assert!(written.get("listen").is_some());
+        fs::remove_dir_all(&outside)?;
+        Ok(())
     }
 }

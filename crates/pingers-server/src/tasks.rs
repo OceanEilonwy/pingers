@@ -14,8 +14,8 @@ use pingers_mailbox::{
     RelayDirectory as _, RelayTarget, RelayUnreachable, forward,
 };
 use pingers_proto::{
-    CommitRequest, GroupId, PushRelayConfig, RelayId, RelayRef, SubscriptionId, WireDecode as _,
-    WireEncode as _,
+    CommitRequest, GroupId, PushRelayConfig, RelayId, RelayRef, ScheduledPushRelayConfig,
+    SubscriptionId, WireDecode as _, WireEncode as _,
 };
 use pingers_time::{MonotonicTime, Timer};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -84,28 +84,34 @@ impl HttpPushRelay {
         }
     }
 
-    /// `GET {url}/v1/config` from a push relay: its published key config, at most
-    /// [`MAX_RELAY_CONFIG_BYTES`], only on a 200 and only if it decodes. No credential goes
-    /// with it: the route is public at the relay.
+    /// `GET {url}/v1/config` or `/v1/config/next` from a push relay: the config, at most
+    /// [`MAX_RELAY_CONFIG_BYTES`], only on a 200 and only if it decodes as `kind`'s type.
+    /// `Ok(None)` when the relay answers 404 for the next key: none is scheduled. No credential
+    /// goes with it: the routes are public at the relay.
     pub(crate) fn fetch_config(
         &self,
         relay_url: &str,
-    ) -> impl Future<Output = Result<Vec<u8>, RelayUnreachable>> + Send + use<> {
-        let url = format!("{}{CONFIG_PATH}", relay_url.trim_end_matches('/'));
+        kind: RelayConfigKind,
+    ) -> impl Future<Output = Result<Option<Vec<u8>>, RelayUnreachable>> + Send + use<> {
+        let url = format!("{}{}", relay_url.trim_end_matches('/'), kind.path());
         let sent = self.client.get(url).send();
         let timer = Arc::clone(&self.timer);
         let timeout = self.timeout;
         async move {
             let fetched = async {
                 let response = sent.await.map_err(|_| RelayUnreachable)?;
-                if response.status() != reqwest::StatusCode::OK {
+                let status = response.status();
+                if status == reqwest::StatusCode::NOT_FOUND && kind == RelayConfigKind::Next {
+                    return Ok(None);
+                }
+                if status != reqwest::StatusCode::OK {
                     return Err(RelayUnreachable);
                 }
                 let body = response.bytes().await.map_err(|_| RelayUnreachable)?;
-                if body.len() > MAX_RELAY_CONFIG_BYTES || PushRelayConfig::decode(&body).is_err() {
+                if body.len() > MAX_RELAY_CONFIG_BYTES || !kind.decodes(&body) {
                     return Err(RelayUnreachable);
                 }
-                Ok(body.to_vec())
+                Ok(Some(body.to_vec()))
             };
             tokio::select! {
                 fetched = fetched => fetched,
@@ -115,8 +121,30 @@ impl HttpPushRelay {
     }
 }
 
-/// The push relay's key config path (design D, push relay API).
-const CONFIG_PATH: &str = "/v1/config";
+/// Which of a push relay's two key configs (design D, push relay API).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum RelayConfigKind {
+    /// `GET /v1/config`: the key devices seal to now, a `PushRelayConfig`.
+    Published,
+    /// `GET /v1/config/next`: the key scheduled next, a `ScheduledPushRelayConfig`.
+    Next,
+}
+
+impl RelayConfigKind {
+    const fn path(self) -> &'static str {
+        match self {
+            Self::Published => "/v1/config",
+            Self::Next => "/v1/config/next",
+        }
+    }
+
+    fn decodes(self, body: &[u8]) -> bool {
+        match self {
+            Self::Published => PushRelayConfig::decode(body).is_ok(),
+            Self::Next => ScheduledPushRelayConfig::decode(body).is_ok(),
+        }
+    }
+}
 
 /// The most a push relay's config may hold: 41 bytes of key, a few platforms, an operator.
 pub(crate) const MAX_RELAY_CONFIG_BYTES: usize = 4096;
@@ -405,7 +433,7 @@ pub(crate) const RELAY_CONFIG_RETRY: Duration = Duration::from_secs(30);
 
 /// A push relay's key config as last fetched.
 struct CachedConfig {
-    fetched: Result<Vec<u8>, RelayUnreachable>,
+    fetched: Result<Option<Vec<u8>>, RelayUnreachable>,
     until: MonotonicTime,
 }
 
@@ -419,7 +447,7 @@ pub(crate) struct Tasks {
     running: Mutex<JoinSet<()>>,
     /// Held across a fetch, so concurrent requests wait for one fetch instead of each
     /// making their own.
-    relay_configs: Arc<tokio::sync::Mutex<HashMap<RelayId, CachedConfig>>>,
+    relay_configs: Arc<tokio::sync::Mutex<HashMap<(RelayId, RelayConfigKind), CachedConfig>>>,
 }
 
 impl Tasks {
@@ -485,21 +513,23 @@ impl Tasks {
         });
     }
 
-    /// The key config of the listed push relay `relay`: `None` if this server lists no such
-    /// relay, `Some(Err)` if it did not answer with a config. Fetched from the relay at most
-    /// once per [`RELAY_CONFIG_TTL`] (once per [`RELAY_CONFIG_RETRY`] while it fails), however
-    /// many ask.
+    /// The `kind` key config of the listed push relay `relay`: `None` if this server lists no
+    /// such relay, `Some(Err)` if it did not answer with a config, `Some(Ok(None))` if it has no
+    /// next key scheduled. Each kind is fetched from the relay at most once per
+    /// [`RELAY_CONFIG_TTL`] (once per [`RELAY_CONFIG_RETRY`] while it fails), however many ask.
     pub(crate) fn push_relay_config(
         &self,
         relay: RelayId,
-    ) -> Option<impl Future<Output = Result<Vec<u8>, RelayUnreachable>> + Send + use<>> {
+        kind: RelayConfigKind,
+    ) -> Option<impl Future<Output = Result<Option<Vec<u8>>, RelayUnreachable>> + Send + use<>>
+    {
         let target = self.directory.resolve(&RelayRef::Listed(relay))?;
-        let fetch = self.relay.fetch_config(target.url.as_str());
+        let fetch = self.relay.fetch_config(target.url.as_str(), kind);
         let cache = Arc::clone(&self.relay_configs);
         let timer = Arc::clone(&self.timer);
         Some(async move {
             let mut cache = cache.lock().await;
-            if let Some(cached) = cache.get(&relay)
+            if let Some(cached) = cache.get(&(relay, kind))
                 && timer.now() < cached.until
             {
                 return cached.fetched.clone();
@@ -510,7 +540,7 @@ impl Tasks {
                 Err(_) => RELAY_CONFIG_RETRY,
             };
             cache.insert(
-                relay,
+                (relay, kind),
                 CachedConfig {
                     fetched: fetched.clone(),
                     until: timer.now().saturating_add(lasts),

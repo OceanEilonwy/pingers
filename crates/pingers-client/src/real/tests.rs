@@ -758,6 +758,7 @@ async fn pool_invite_mailbox(store: &Store, fill: u8) -> Result<(), ClientError>
                 purpose: pingers_store::MailboxPurpose::Invite,
                 state: pingers_store::MailboxState::Pooled,
                 push: None,
+                seal: None,
                 expires_at: UnixSeconds::new(1_900_000_000),
             })?;
         Ok(())

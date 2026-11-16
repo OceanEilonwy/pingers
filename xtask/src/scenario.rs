@@ -3,7 +3,8 @@
 //!
 //! ```text
 //! cargo xtask e2e-emulators [<local-stack options>] [--avd <name>] [--leases <dir>]
-//!                           [--apk <file>] [--ntfy-apk <file>] [--cross-server]
+//!                           [--apk <file>] [--ntfy-apk <file>] [--flavour foss|gms]
+//!                           [--cross-server]
 //! ```
 //!
 //! With `--second-server --cross-server` phone A's app is built with `second-server.env`, so its
@@ -13,8 +14,9 @@
 //! answered. Then the whole scenario below runs with the Party on server B, and B's Party
 //! settings must name server B's operator and say its keys came from the invite link.
 //!
-//! It uses a running local stack, or starts one (and stops it at the end); builds the foss
-//! debug APK against it unless `--apk` names one; takes both emulator leases (`--leases`,
+//! It uses a running local stack, or starts one (and stops it at the end); builds the debug
+//! APK (foss, or gms with `--flavour gms`) against it unless `--apk` names one; takes both
+//! emulator leases (`--leases`,
 //! `$PINGERS_EMULATOR_LEASES`, else the stack directory) and boots two emulators of `--avd`
 //! (`$PINGERS_E2E_AVD`, default `Pixel_9_Pro`) with `-gpu host -accel on`, checking that both
 //! render on the AMD GPU. If an ntfy app is installed, or `--ntfy-apk` (`$PINGERS_NTFY_APK`)
@@ -38,6 +40,12 @@
 //! 6. B asks to see A's exact location, A allows, and B's compass points at A.
 //! 7. Both walk out and the Meetup ends on both phones.
 //!
+//! Pushes are checked where they arrive (`dumpsys notification`): A is notified of B's join
+//! request, both of the Meetup, and B, sent to the launcher first, of A's chat message.
+//! With `--flavour gms` against a stack started with `--fcm-service-account`, one push also
+//! goes from the local push relay through FCM to a phone ([`crate::fcm_push`]), and its core
+//! must take it.
+//!
 //! Each step names what it waits for. The first failure stops the run and says which step
 //! failed and why; screenshots, UI dumps and logcat of both phones are saved in
 //! `<stack dir>/e2e-out/`, with `report.txt`. The emulators are shut down and the leases
@@ -57,13 +65,13 @@ use anyhow::{Context as _, Result, bail};
 use crate::Outcome;
 use crate::device::{Device, Find, Position, Text, safety_code};
 use crate::emulator::{Emulator, EmulatorSpec, Sdk, take_leases};
+use crate::local_app::Flavour;
 use crate::stack::{self, Layout, NTFY_PORT, StackOptions, environment};
 use crate::supervise::Supervisor;
 use crate::wait::{Deadline, pause};
 
-/// The foss debug build's application id.
-const PACKAGE: &str = "org.pingers.app.foss.debug";
-const ACTIVITY: &str = "org.pingers.app.foss.debug/org.pingers.app.MainActivity";
+/// The main activity, after the application id.
+const ACTIVITY: &str = "org.pingers.app.MainActivity";
 /// The host of the stack's server as the emulators reach it (its invite links' host).
 const STACK_HOST: &str = "10.0.2.2";
 /// The browser on the Play images.
@@ -111,8 +119,9 @@ pub(crate) struct ScenarioOptions {
     leases: Option<PathBuf>,
     apk: Option<PathBuf>,
     ntfy_apk: Option<PathBuf>,
+    flavour: Flavour,
     /// `--cross-server`: phone A's built-in server is server B (`--second-server`), phone B's
-    /// is server A; the run ends once B has joined A's Party on server B by its invite.
+    /// is server A; B joins A's Party on server B by its invite, and the scenario runs there.
     cross_server: bool,
 }
 
@@ -130,6 +139,7 @@ impl ScenarioOptions {
                 "--leases" => parsed.leases = Some(PathBuf::from(options.next()?)),
                 "--apk" => parsed.apk = Some(PathBuf::from(options.next()?)),
                 "--ntfy-apk" => parsed.ntfy_apk = Some(PathBuf::from(options.next()?)),
+                "--flavour" => parsed.flavour = Flavour::parse(options.next()?)?,
                 "--cross-server" => parsed.cross_server = true,
                 _ => return None,
             }
@@ -249,6 +259,10 @@ impl Report {
 /// What the steps share.
 struct Scene {
     out: PathBuf,
+    /// The application id of the build under test.
+    package: &'static str,
+    /// The stack's push relay configuration when the build is gms, for the FCM step.
+    gms_push_relay: Option<PathBuf>,
     a: Device,
     b: Device,
     link: Option<String>,
@@ -363,7 +377,7 @@ fn setup_and_play(
     setup_step(report, "app built for the stack", || {
         apk = match &options.apk {
             Some(apk) => apk.clone(),
-            None => crate::local_app::build(workspace, &options.stack)?,
+            None => crate::local_app::build(workspace, &options.stack, options.flavour)?,
         };
         if !apk.is_file() {
             bail!("{} does not exist", apk.display());
@@ -384,7 +398,10 @@ fn setup_and_play(
             apk_a = crate::local_app::build_with(
                 workspace,
                 &options.stack,
-                &layout.second_server_env(),
+                crate::local_app::AppBuild {
+                    env: &layout.second_server_env(),
+                    flavour: options.flavour,
+                },
             )?;
             Ok(format!(
                 "A: {} (built-in server B); B: {} (built-in server A)",
@@ -458,6 +475,8 @@ fn setup_and_play(
     };
     let mut scene = Scene {
         out: layout.e2e_out(),
+        package: options.flavour.package(),
+        gms_push_relay: (options.flavour == Flavour::Gms).then(|| layout.push_relay_config()),
         a: Device::new("A", first.serial.clone(), sdk.adb.clone()),
         b: Device::new("B", second.serial.clone(), sdk.adb.clone()),
         link: None,
@@ -528,9 +547,12 @@ fn play(
     })?;
 
     step(report, scene, "Pingers installed", |scene| {
-        install_pingers(&scene.a, apks.a)?;
-        install_pingers(&scene.b, apks.b)?;
-        Ok("foss debug build, permissions granted, Home shown on both".to_owned())
+        install_pingers(&scene.a, apks.a, scene.package)?;
+        install_pingers(&scene.b, apks.b, scene.package)?;
+        Ok(format!(
+            "{} installed, permissions granted, Home shown on both",
+            scene.package
+        ))
     })?;
 
     // 1. Create a Party and invite.
@@ -552,6 +574,59 @@ fn play(
         a.wait_for(&Find::text(Text::Is("Invite people".into())), NETWORK)?;
         Ok(format!("{PARTY:?} created; Invite people shown"))
     })?;
+
+    step(
+        report,
+        scene,
+        "a UnifiedPush message wakes A's core",
+        |scene| {
+            let a = &scene.a;
+            let endpoint = unifiedpush_endpoint(a, scene.package)?;
+            a.shell("logcat -c")?;
+            // A content-free push naming no handle of A's: the core wakes, reads nothing, shows
+            // nothing. What a real one leads to is checked at the Meetup and chat steps.
+            let sent = std::process::Command::new("curl")
+                .args([
+                    "-fsS",
+                    "-X",
+                    "POST",
+                    "-d",
+                    r#"{"v":1,"h":"0000000000000000"}"#,
+                ])
+                .arg(endpoint.replace("10.0.2.2", "127.0.0.1"))
+                .output()
+                .context("running curl")?;
+            if !sent.status.success() {
+                bail!(
+                    "ntfy refused the push: {}",
+                    String::from_utf8_lossy(&sent.stderr)
+                );
+            }
+            let deadline = Deadline::after(NETWORK);
+            loop {
+                let log = a.shell("logcat -d -s PingersCore")?;
+                if let Some(line) = log
+                    .lines()
+                    .find(|line| line.contains("onPush UNIFIED_PUSH"))
+                {
+                    return Ok(format!("A's logcat: {}", line.trim()));
+                }
+                if deadline.passed() {
+                    bail!("the push never reached A's core (no onPush in logcat)");
+                }
+                pause(Duration::from_secs(1));
+            }
+        },
+    )?;
+
+    if scene.gms_push_relay.is_some() {
+        step(
+            report,
+            scene,
+            "an FCM message through the push relay wakes a core",
+            fcm_wakes_the_core,
+        )?;
+    }
 
     step(report, scene, "A shares the invite link", |scene| {
         let a = &scene.a;
@@ -665,6 +740,11 @@ fn play(
         },
     )?;
 
+    step(report, scene, "A is notified of the request", |scene| {
+        let text = notification_shown(&scene.a, scene.package, "opened your invite", NETWORK)?;
+        Ok(format!("A's notification: {text}"))
+    })?;
+
     step(report, scene, "A lets B in", |scene| {
         scene.a.tap_when(
             &Find::tag("approve_let_in").or(Text::StartsWith("Codes match · Let".into())),
@@ -694,12 +774,12 @@ fn play(
     )?;
 
     step(report, scene, "both see each other in the Party", |scene| {
-        open_party(&scene.a)?;
+        open_party(&scene.a, scene.package)?;
         scene
             .a
             .wait_for(&Find::text(Text::Is(JOINER.into())), NETWORK)
             .context("A's Party does not list B")?;
-        open_party(&scene.b)?;
+        open_party(&scene.b, scene.package)?;
         Ok(format!("A's Party lists {JOINER}"))
     })?;
 
@@ -716,7 +796,7 @@ fn play(
             }
             b.wait_for(&keys, UI)?;
             b.wait_for(&operator, UI)?;
-            open_party(b)?;
+            open_party(b, scene.package)?;
             Ok(format!(
                 "run by {:?}, keys from the invite link",
                 stack::SECOND_OPERATOR
@@ -791,6 +871,15 @@ fn play(
         }
     })?;
 
+    step(report, scene, "both are notified of the Meetup", |scene| {
+        let mut seen = Vec::new();
+        for device in [&scene.a, &scene.b] {
+            let text = notification_shown(device, scene.package, "too. Say hi?", NETWORK)?;
+            seen.push(format!("{}: {text}", device.label));
+        }
+        Ok(seen.join("; "))
+    })?;
+
     step(report, scene, "both open the Meetup", |scene| {
         for device in [&scene.a, &scene.b] {
             let open = Find::tag("alert_open").or(Text::Is("Open meetup".into()));
@@ -802,7 +891,12 @@ fn play(
         Ok("Meetup shows 2 here on both".to_owned())
     })?;
 
-    // 5. Chat.
+    // 5. Chat, with B out of the app so the message reaches it as a push and a notification.
+    step(report, scene, "B leaves the app", |scene| {
+        scene.b.shell("input keyevent KEYCODE_HOME")?;
+        Ok("B is on the launcher".to_owned())
+    })?;
+
     step(report, scene, "A sends a chat message", |scene| {
         let a = &scene.a;
         a.tap_when(&Find::tag("meetup_chat"), UI)?;
@@ -813,8 +907,14 @@ fn play(
         Ok(format!("sent {MESSAGE:?}"))
     })?;
 
+    step(report, scene, "B is notified of it", |scene| {
+        let text = notification_shown(&scene.b, scene.package, MESSAGE, NETWORK)?;
+        Ok(format!("B's notification: {text}"))
+    })?;
+
     step(report, scene, "B receives it", |scene| {
         let b = &scene.b;
+        b.shell(&format!("am start -W -n {}/{ACTIVITY}", scene.package))?;
         b.tap_when(&Find::tag("meetup_chat"), UI)?;
         b.wait_for(&Find::text(Text::Is(MESSAGE.into())), NETWORK)?;
         b.back()?;
@@ -875,6 +975,168 @@ fn play(
         }
     })?;
     Ok(())
+}
+
+/// The gms flavour's FCM check (see [`crate::fcm_push`]): a content-free push naming no handle
+/// goes from the local push relay through FCM to a phone, and that phone's core takes it.
+/// Without FCM in the stack (no `--fcm-service-account`) the step says so and passes, since
+/// FCM is opt-in.
+///
+/// Both emulators boot read-only from the same AVD, so they share one Play services identity.
+/// FCM then keeps one registration for the pair and delivers to whichever phone holds the
+/// identity's connection: the other phone's registration fails or its token answers
+/// `UNREGISTERED` (the relay's 410), and a push for A's token can arrive at B. So A's token is
+/// tried first and B's after a 410 or no token, and the push counts when either phone's core
+/// takes it.
+fn fcm_wakes_the_core(scene: &mut Scene) -> Result<String> {
+    let config = scene.gms_push_relay.clone().context("not a gms build")?;
+    if !crate::fcm_push::configured(&config)? {
+        return Ok(
+            "not run: the stack's push relay has no FCM (local-stack --fcm-service-account)"
+                .to_owned(),
+        );
+    }
+    let phones = [&scene.a, &scene.b];
+    let mut skipped = Vec::new();
+    for device in phones {
+        let label = device.label;
+        let Ok(token) = push_preference(device, scene.package, "fcm.token") else {
+            skipped.push(format!("{label} has no FCM token"));
+            continue;
+        };
+        for phone in phones {
+            phone.shell("logcat -c")?;
+        }
+        match crate::fcm_push::send(&config, &token, [0; 8])? {
+            crate::fcm_push::Sent::Gone => skipped.push(format!("{label}'s token unregistered")),
+            crate::fcm_push::Sent::Accepted(status) => {
+                let arrival = fcm_reached_a_core(&phones, &status)?;
+                let note = if skipped.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " ({}: the emulators share one Play services identity)",
+                        skipped.join(", ")
+                    )
+                };
+                return Ok(format!(
+                    "relay answered {status} for {label}'s token; {}'s logcat: {}{note}",
+                    arrival.label, arrival.line
+                ));
+            }
+        }
+    }
+    bail!(
+        "no phone took an FCM push ({}; no Play services, or no google-services.json?)",
+        skipped.join(", ")
+    )
+}
+
+/// Where an FCM push arrived: the phone and its core's log line.
+struct Arrival {
+    label: &'static str,
+    line: String,
+}
+
+/// Waits for either phone's core to take an FCM push the relay accepted with `status`.
+fn fcm_reached_a_core(phones: &[&Device], status: &str) -> Result<Arrival> {
+    let deadline = Deadline::after(NETWORK);
+    loop {
+        for device in phones {
+            let log = device.shell("logcat -d -s PingersCore")?;
+            if let Some(line) = log.lines().find(|line| line.contains("onPush FCM")) {
+                if !line.contains("onPush FCM: ok") {
+                    bail!(
+                        "{}'s core did not take the FCM push: {}",
+                        device.label,
+                        line.trim()
+                    );
+                }
+                return Ok(Arrival {
+                    label: device.label,
+                    line: line.trim().to_owned(),
+                });
+            }
+        }
+        if deadline.passed() {
+            bail!(
+                "the relay took the push ({status}) but it never reached a core (no onPush FCM in either phone's logcat)"
+            );
+        }
+        pause(Duration::from_secs(1));
+    }
+}
+
+/// The preference `name` of Pingers' push preferences on `device` (a debug build's, read
+/// with run-as), once it is set.
+fn push_preference(device: &Device, package: &str, name: &str) -> Result<String> {
+    let deadline = Deadline::after(NETWORK);
+    let key = format!("name=\"{name}\"");
+    loop {
+        let prefs = device
+            .shell(&format!(
+                "run-as {package} cat shared_prefs/pingers.push.xml"
+            ))
+            .unwrap_or_default();
+        if let Some(value) = prefs
+            .lines()
+            .find(|line| line.contains(&key))
+            .and_then(|line| line.split('>').nth(1))
+            .and_then(|rest| rest.split('<').next())
+        {
+            return Ok(value.replace("&amp;", "&"));
+        }
+        if deadline.passed() {
+            bail!("no {name} in Pingers' push preferences");
+        }
+        pause(Duration::from_secs(1));
+    }
+}
+
+/// The UnifiedPush endpoint the app on `device` registered (a debug build's preferences,
+/// read with run-as).
+fn unifiedpush_endpoint(device: &Device, package: &str) -> Result<String> {
+    push_preference(device, package, "unifiedpush.endpoint").context(
+        "A never registered with a UnifiedPush distributor (no endpoint in its preferences)",
+    )
+}
+
+/// Waits until one of Pingers' notifications on `device` contains `text` (title or body, as
+/// `dumpsys notification` shows them) and returns that line.
+fn notification_shown(
+    device: &Device,
+    package: &str,
+    text: &str,
+    within: Duration,
+) -> Result<String> {
+    let deadline = Deadline::after(within);
+    loop {
+        let dump = device.shell("dumpsys notification --noredact")?;
+        if let Some(line) = notification_line(&dump, package, text) {
+            return Ok(line);
+        }
+        if deadline.passed() {
+            bail!(
+                "no notification containing {text:?} within {} s",
+                within.as_secs()
+            );
+        }
+        pause(Duration::from_secs(1));
+    }
+}
+
+/// The first line of `dump` that belongs to a notification of `package` and contains `text`.
+fn notification_line(dump: &str, package: &str, text: &str) -> Option<String> {
+    let mut in_pingers = false;
+    for line in dump.lines() {
+        if line.contains("NotificationRecord(") {
+            in_pingers = line.contains(&format!("pkg={package} "));
+        }
+        if in_pingers && line.contains(text) {
+            return Some(line.trim().to_owned());
+        }
+    }
+    None
 }
 
 /// Installs (or finds) ntfy and points its default server at the stack's, through `adb
@@ -986,14 +1248,16 @@ fn set_ntfy_server(device: &Device, server: &str) -> Result<()> {
         UI,
     )?;
     device.wait_for(&Find::text(Text::Is(server.to_owned())), UI)?;
-    device.shell(&format!("am force-stop {NTFY_PACKAGE}"))?;
+    // Leave ntfy running in the background, not force-stopped: Android delivers no broadcast to
+    // a stopped app, so Pingers' UnifiedPush registration would never get an endpoint.
+    device.shell("input keyevent KEYCODE_HOME")?;
     Ok(())
 }
 
 /// A fresh install with every runtime permission granted (so onboarding has nothing to ask),
 /// animations off, the phone away from the Spot, and Home on screen.
-fn install_pingers(device: &Device, apk: &Path) -> Result<()> {
-    let _ignored = device.adb(&["uninstall", PACKAGE]);
+fn install_pingers(device: &Device, apk: &Path, package: &str) -> Result<()> {
+    let _ignored = device.adb(&["uninstall", package]);
     device.adb(&["install", "-r", "-g", &apk.display().to_string()])?;
     for setting in [
         "window_animation_scale",
@@ -1003,16 +1267,16 @@ fn install_pingers(device: &Device, apk: &Path) -> Result<()> {
         device.shell(&format!("settings put global {setting} 0"))?;
     }
     device.shell("settings put secure location_mode 3")?;
-    device.shell(&format!("dumpsys deviceidle whitelist +{PACKAGE}"))?;
+    device.shell(&format!("dumpsys deviceidle whitelist +{package}"))?;
     // The stack's server cannot pass App Links verification (no port 443, a dev CA), so the
     // user's approval stands in for it: a tapped https://10.0.2.2:9443/j link then opens
     // Pingers as a verified one would. tap_link also handles the chooser if this is refused.
     let _approved = device.shell(&format!(
-        "pm set-app-links-user-selection --user 0 --package {PACKAGE} true {STACK_HOST}"
+        "pm set-app-links-user-selection --user 0 --package {package} true {STACK_HOST}"
     ));
     device.shell("logcat -c")?;
     device.geo_fix(AWAY)?;
-    device.shell(&format!("am start -W -n {ACTIVITY}"))?;
+    device.shell(&format!("am start -W -n {package}/{ACTIVITY}"))?;
     through_first_run(device).context("Home did not appear after launch")
 }
 
@@ -1131,7 +1395,7 @@ fn through_landing_page(device: &Device, link: &str) -> Result<String> {
 }
 
 /// Back to Home, then into the (only) Party.
-fn open_party(device: &Device) -> Result<()> {
+fn open_party(device: &Device, package: &str) -> Result<()> {
     let home = Find::tag("home_new_party");
     for _press in 0..5 {
         if device.screen()?.find(&home).is_some() {
@@ -1141,7 +1405,7 @@ fn open_party(device: &Device) -> Result<()> {
         pause(Duration::from_millis(500));
     }
     if device.screen()?.find(&home).is_none() {
-        device.shell(&format!("am start -W -n {ACTIVITY}"))?;
+        device.shell(&format!("am start -W -n {package}/{ACTIVITY}"))?;
     }
     device.tap_when(&Find::tag("party_row").or(Text::Is(PARTY.into())), NETWORK)?;
     device.wait_for(&Find::tag("party_add_spot"), UI)?;
@@ -1168,7 +1432,16 @@ mod tests {
     #[test]
     fn options_mix_stack_and_scenario_flags() {
         let parsed = ScenarioOptions::parse(&strings(&[
-            "--dir", "/s", "--avd", "Pixel", "--leases", "/l", "--apk", "/a.apk",
+            "--dir",
+            "/s",
+            "--avd",
+            "Pixel",
+            "--leases",
+            "/l",
+            "--apk",
+            "/a.apk",
+            "--flavour",
+            "gms",
         ]));
         assert_eq!(
             parsed,
@@ -1181,6 +1454,7 @@ mod tests {
                 leases: Some(PathBuf::from("/l")),
                 apk: Some(PathBuf::from("/a.apk")),
                 ntfy_apk: None,
+                flavour: Flavour::Gms,
                 cross_server: false,
             })
         );
@@ -1192,6 +1466,15 @@ mod tests {
         );
         assert!(crossing.is_some_and(|options| options.stack.second_server));
         assert_eq!(ScenarioOptions::parse(&strings(&["--avd"])), None);
+        assert_eq!(
+            ScenarioOptions::parse(&strings(&["--flavour", "play"])),
+            None
+        );
+        assert_eq!(
+            ScenarioOptions::parse(&[]).map(|options| options.flavour.package()),
+            Some("org.pingers.app.foss.debug")
+        );
+        assert_eq!(Flavour::Gms.package(), "org.pingers.app.debug");
     }
 
     #[test]
@@ -1206,6 +1489,31 @@ mod tests {
             assert!(metres(SPOT_CENTRE, inside) < 50.0);
         }
         assert!(metres(SPOT_CENTRE, AWAY) > 1_000.0);
+    }
+
+    #[test]
+    fn only_pingers_notifications_are_read_from_the_dump() {
+        let dump = "  NotificationRecord(0x1: pkg=io.heckel.ntfy user=0 id=1)\n    \
+                    android.text=String (Hello from A)\n  \
+                    NotificationRecord(0x2: pkg=org.pingers.app.foss.debug user=0 id=7)\n    \
+                    android.title=String (Ana · Crag)\n    android.text=String (Hello from A)\n";
+        assert_eq!(
+            notification_line(dump, "org.pingers.app.foss.debug", "Hello from A").as_deref(),
+            Some("android.text=String (Hello from A)")
+        );
+        assert_eq!(
+            notification_line(dump, "org.pingers.app.foss.debug", "Ana · Crag").as_deref(),
+            Some("android.title=String (Ana · Crag)")
+        );
+        assert_eq!(
+            notification_line(dump, "org.pingers.app.foss.debug", "nothing"),
+            None
+        );
+        let ntfy_only = "NotificationRecord(0x1: pkg=io.heckel.ntfy id=1)\n android.text=String (Hello from A)\n";
+        assert_eq!(
+            notification_line(ntfy_only, "org.pingers.app.foss.debug", "Hello from A"),
+            None
+        );
     }
 
     #[test]

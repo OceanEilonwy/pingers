@@ -292,6 +292,7 @@ class FakeSection4(private val variants: Set<String>) {
         deliveryHeading = "Delivery",
         wakeups = "Wake-ups",
         wakeupsSummary = wakeupsSummary(kind),
+        pushDelivery = null,
         securityLink = "How Pingers keeps you private",
     )
 

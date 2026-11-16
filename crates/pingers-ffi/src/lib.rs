@@ -24,6 +24,7 @@ mod error;
 mod geo;
 mod ids;
 mod maps;
+mod notifications;
 mod party_views;
 mod servers;
 mod snapshot;
@@ -33,7 +34,7 @@ mod wiping;
 
 pub use callbacks::{
     Events, FixQuality, FocusState, LocationMode, Notice, OsRegion, Platform, PlatformError,
-    PushPlatform, PushTokens,
+    PushPlatform, PushPriority, PushTokens,
 };
 pub use core::{
     Core, GeofenceEvent, InstanceConfig, MeetPointChoice, NewPartyDraft, QuietHoursDraft,
@@ -53,6 +54,7 @@ pub use maps::{
     MapFile, MapHostFailure, MapHostInfo, MapHostProblem, MapHostSource, MapManifest, MapOffer,
     MapSettings, MapsWords, downloaded_maps_words, downloading_words, maps_words, size_words,
 };
+pub use notifications::{CoreNotification, NotificationKind};
 pub use party_views::{CodeAnswer, PartySettingsView, SafetyCodesView};
 pub use servers::{KeysTrusted, ServerIssue, ServerLook};
 pub use snapshot::{AreaEditor, LocalClock, Snapshot};

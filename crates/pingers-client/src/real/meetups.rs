@@ -105,6 +105,25 @@ impl Meetups {
         Ok(self.handle(meetup)?.act(action).await?)
     }
 
+    /// A push for this device's subscription in `group` arrived: if it is a live Meetup, its
+    /// log is read before the wake goes on, so the message or commit it announced is in the
+    /// snapshot (and its notification) when the wake ends. A group that is no live Meetup (a
+    /// Party) is the pipeline's.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::MeetupSession`] if the Meetup failed.
+    pub(crate) async fn pushed(&self, group: GroupId) -> Result<(), ClientError> {
+        let Ok(handle) = self.handle(group) else {
+            return Ok(());
+        };
+        match handle.read_log().await {
+            // It ended meanwhile: nothing left to read.
+            Err(pingers_meetup_session::SessionError::Ended) => Ok(()),
+            other => Ok(other?),
+        }
+    }
+
     /// The Meetup screen opened or closed, or the app came on screen or left it.
     pub(crate) async fn screen(&self, screen: MeetupScreen) -> Result<(), ClientError> {
         for handle in self.handles() {
@@ -138,17 +157,26 @@ impl Meetups {
             .runtime(spot.party)
             .await
             .ok_or(PortError::Unavailable)?;
-        let (group, suite) = self
+        let (group, suite, server) = self
             .backend
             .store(move |session, clock, rng| {
-                let suite = PartyLifecycle::new(session, clock)
-                    .settings(&spot.party)?
-                    .post_quantum
-                    .suite();
+                let settings = PartyLifecycle::new(session, clock).settings(&spot.party)?;
                 let mut group = [0_u8; GroupId::LENGTH];
                 rng.fill_bytes(&mut group);
-                Ok((GroupId::from_bytes(group), suite))
+                Ok((
+                    GroupId::from_bytes(group),
+                    settings.post_quantum.suite(),
+                    settings.server,
+                ))
             })
+            .await
+            .map_err(|_failed| PortError::Unavailable)?;
+        // This device's own subscription on the Party's server goes in with the knocker's, so a
+        // member's chat or meet point wakes it while the app is not running (design B.4.9). A
+        // knocker that joins gets its own from its next maintenance step.
+        let own = self
+            .net
+            .own_subscription(&server)
             .await
             .map_err(|_failed| PortError::Unavailable)?;
         let created = create(
@@ -157,14 +185,24 @@ impl Meetups {
                 key,
                 group,
                 knocker: knocker.key_package,
-                subscriptions: knocker.subscription.into_iter().collect(),
-                own_subscription: None,
+                subscriptions: knocker
+                    .subscription
+                    .into_iter()
+                    .chain(own.clone())
+                    .collect(),
+                own_subscription: own.as_ref().map(|own| own.id),
                 suite,
             },
             (self.backend.outside.rng)(),
         )
         .await
         .map_err(|_failed| PortError::Unavailable)?;
+        if let Some(own) = &own {
+            self.net
+                .remember_own_subscription(&server, &group, own)
+                .await
+                .map_err(|_failed| PortError::Unavailable)?;
+        }
         // WAITING(client events): Meetup events are not forwarded to the shell yet.
         drop(created.events);
         self.live().push(Live {

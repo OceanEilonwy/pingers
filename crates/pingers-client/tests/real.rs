@@ -122,6 +122,7 @@ async fn rig() -> Result<Rig, TestError> {
                 purpose: MailboxPurpose::Invite,
                 state: MailboxState::Pooled,
                 push: None,
+                seal: None,
                 expires_at: UnixSeconds::new(clock.now().get().saturating_add(7 * 86_400)),
             })?;
     }
@@ -283,10 +284,38 @@ async fn a_party_its_spot_and_an_invite_show_in_the_snapshot() -> Result<(), Tes
         rig.client.set_wake_pushes(WakePushes::On).await,
         Err(ClientError::Unavailable(Unavailable::NoPushRelay))
     ));
+    rig.client.publish_snapshot().await?;
+    assert_eq!(
+        rig.client.snapshot().push_delivery,
+        pingers_client::snapshot::PushDelivery::Downgraded(
+            pingers_client::snapshot::PushDowngrade::NoPushRelay
+        )
+    );
     rig.client.set_wake_pushes(WakePushes::NoWakePushes).await?;
     assert_eq!(
         rig.client.snapshot().settings.wake_pushes,
         WakePushes::NoWakePushes
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn without_a_push_relay_wake_ups_are_downgraded_before_anything_is_tried()
+-> Result<(), TestError> {
+    let rig = rig().await?;
+    rig.platform
+        .set_push_registration(Some(pingers_testkit::PushRegistration {
+            platform: pingers_proto::PushPlatform::UnifiedPush,
+            token: pingers_proto::PushToken::from_bytes(b"endpoint".to_vec()),
+        }));
+    // Wake-up pushes are on by default and there is a token, but no push relay: the snapshot
+    // says so without a failed registration having taught the client.
+    rig.client.publish_snapshot().await?;
+    assert_eq!(
+        rig.client.snapshot().push_delivery,
+        pingers_client::snapshot::PushDelivery::Downgraded(
+            pingers_client::snapshot::PushDowngrade::NoPushRelay
+        )
     );
     Ok(())
 }

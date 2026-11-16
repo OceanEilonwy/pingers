@@ -3605,6 +3605,8 @@ name = "pingers-crypto"
 version = "0.1.0"
 dependencies = [
  "aes-gcm 0.11.1",
+ "aws-lc-rs",
+ "base64",
  "chacha20poly1305 0.11.0",
  "ed25519-dalek 3.0.0",
  "hkdf 0.13.0",
@@ -3616,6 +3618,7 @@ dependencies = [
  "pingers-time",
  "proptest",
  "rand_core 0.10.1",
+ "rcgen",
  "sha2 0.11.1",
  "subtle",
  "thiserror",
@@ -6532,6 +6535,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flate2",
+ "getrandom 0.4.3",
  "hex",
  "http-body-util",
  "hyper",
@@ -6544,6 +6548,8 @@ dependencies = [
  "pingers-proto",
  "pingers-push-relay",
  "pingers-server",
+ "pingers-time",
+ "rand_core 0.10.1",
  "rcgen",
  "reqwest",
  "rustls",

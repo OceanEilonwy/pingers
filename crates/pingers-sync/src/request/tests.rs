@@ -31,7 +31,7 @@ enum TestError {
     BadHeader(&'static str),
 }
 
-const ALL: [Route; 26] = [
+const ALL: [Route; 28] = [
     Route::Params,
     Route::CreateAccount,
     Route::Auth,
@@ -58,6 +58,8 @@ const ALL: [Route; 26] = [
     Route::Live,
     Route::OhttpConfig,
     Route::PushRelayConfig,
+    Route::PushRelayNextConfig,
+    Route::ReplaceMailboxPush,
 ];
 
 fn header<'request>(
@@ -95,6 +97,7 @@ fn only_account_routes_are_identified_and_only_the_live_channel_is_a_stream() {
             Route::Params
             | Route::OhttpConfig
             | Route::PushRelayConfig
+            | Route::PushRelayNextConfig
             | Route::RlnLeaves
             | Route::PrivacyPassKeys
             | Route::BoardSync
@@ -104,6 +107,7 @@ fn only_account_routes_are_identified_and_only_the_live_channel_is_a_stream() {
             | Route::PostToMailbox
             | Route::ReadMailbox
             | Route::DeleteMailbox
+            | Route::ReplaceMailboxPush
             | Route::CreateGroup
             | Route::Commit
             | Route::PutSubscription
@@ -139,11 +143,13 @@ fn writes_carry_a_credential_of_their_scope_and_capability_requests_none() {
             | Route::BoardRevokeLease
             | Route::ReadMailbox
             | Route::DeleteMailbox
+            | Route::ReplaceMailboxPush
             | Route::DeleteSubscription
             | Route::ReadGroupMessages
             | Route::GroupState
             | Route::OhttpConfig
             | Route::PushRelayConfig
+            | Route::PushRelayNextConfig
             | Route::DeleteGroup
             | Route::Live => None,
         };
@@ -220,6 +226,34 @@ fn a_push_relay_config_is_asked_by_its_listed_id() {
     assert_eq!(request.path(), "/v1/push-relays/513/config");
     assert_eq!(request.route(), Route::PushRelayConfig);
     assert!(request.body().is_empty());
+}
+
+#[test]
+fn the_next_push_relay_key_is_asked_by_its_listed_id() {
+    let request = ApiRequest::push_relay_next_config(pingers_proto::RelayId::new(513));
+    assert_eq!(request.method(), "GET");
+    assert_eq!(request.path(), "/v1/push-relays/513/config/next");
+    assert_eq!(request.route(), Route::PushRelayNextConfig);
+    assert!(request.body().is_empty());
+}
+
+#[test]
+fn a_mailbox_push_is_replaced_by_its_read_key() -> Result<(), TestError> {
+    let mailbox = MailboxId::from_bytes([0x0f; 16]);
+    let read_key = MailboxReadKey::from_bytes(Zeroizing::new([0xa5; 32]));
+    let update = pingers_proto::MailboxPush { push: None };
+    let request = ApiRequest::replace_mailbox_push(&mailbox, &read_key, &update)?;
+    assert_eq!(request.method(), "PUT");
+    assert_eq!(
+        request.path(),
+        format!("/v1/mailboxes/{}/push", "0f".repeat(16))
+    );
+    assert_eq!(
+        header(&request, READ_KEY_HEADER)?,
+        "a5".repeat(32).as_bytes()
+    );
+    assert_eq!(request.body(), update.encode()?.as_slice());
+    Ok(())
 }
 
 #[test]

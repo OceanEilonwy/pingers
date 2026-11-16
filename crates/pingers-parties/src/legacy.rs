@@ -96,7 +96,7 @@ fn upgrade_party(session: &Session, party: &PartyId) -> Result<(), PartiesError>
     };
     if let Some(bytes) = take(session, &key(SETTINGS))? {
         // The Party's server is its row's since the store moved every Party onto a server
-        // (schema version 8); the old record's copy is not trusted to be spelt the same.
+        // (schema version 9); the old record's copy is not trusted to be spelt the same.
         let mut settings = StoredSettings::decode(&bytes)?;
         settings.server = crate::lifecycle::party_row(session, party)?.server;
         settings.write(session, party)?;

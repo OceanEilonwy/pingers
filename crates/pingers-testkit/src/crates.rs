@@ -84,6 +84,7 @@ pub enum CrateCall {
     MarkChecked(PartyId, LeafIndex),
     PushTokensChanged(Option<PushTokens>),
     SetWakePushes(WakePushes, Option<PushTokens>),
+    ReportPushPriority(pingers_wake::PushPriority, pingers_wake::PushPriority),
     CheckReachability,
     ProbeServer(String),
     TrustServer(ServerId),
@@ -121,6 +122,7 @@ struct State {
     meetups: MeetupsSection,
     probe: Option<ServerProbe>,
     section_reads: usize,
+    priority_notice: Option<pingers_client::Notice>,
 }
 
 impl FakeCrates {
@@ -173,10 +175,12 @@ impl FakeCrates {
                 relay: RelayStatus::Reachable,
                 map_host: None,
                 operators: None,
+                push_delivery: pingers_client::snapshot::PushDelivery::Full,
             },
             meetups: MeetupsSection::default(),
             probe: None,
             section_reads: 0,
+            priority_notice: None,
         };
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
@@ -235,6 +239,11 @@ impl FakeCrates {
     /// What `probe_server` answers from now on (`None`: an unknown server).
     pub fn set_probe(&self, probe: Option<ServerProbe>) {
         self.lock().probe = probe;
+    }
+
+    /// What every later `report_push_priority` answers (`None` until set).
+    pub fn set_priority_notice(&self, notice: Option<pingers_client::Notice>) {
+        self.lock().priority_notice = notice;
     }
 
     /// pingers-meetup-session's section from now on.
@@ -456,6 +465,17 @@ impl SyncPort for FakeCrates {
     ) -> Result<(), ClientError> {
         let call = CrateCall::SetWakePushes(setting, tokens);
         self.answer(CrateName::Sync, call, ())
+    }
+
+    /// Answers what [`FakeCrates::set_priority_notice`] last set.
+    async fn report_push_priority(
+        &self,
+        original: pingers_wake::PushPriority,
+        delivered: pingers_wake::PushPriority,
+    ) -> Result<Option<pingers_client::Notice>, ClientError> {
+        let notice = self.lock().priority_notice;
+        let call = CrateCall::ReportPushPriority(original, delivered);
+        self.answer(CrateName::Sync, call, notice)
     }
 
     /// Answers the relay status of the section [`FakeCrates::set_server`] last set.

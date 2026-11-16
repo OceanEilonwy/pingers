@@ -101,6 +101,11 @@ impl PartiesPort for Parties {
         // wants a registration code says so now.
         self.net.account(&server).await?;
         let party_server = server.clone();
+        // This device's own subscription on that server goes into the new group, so commits by
+        // members who join later wake it (design B.4.9). Without wake-up pushes, maintenance
+        // adds one later.
+        let subscription = self.net.own_subscription(&server).await?;
+        let own = subscription.clone();
         let created = self
             .backend
             .store(move |session, clock, rng| {
@@ -117,7 +122,7 @@ impl PartiesPort for Parties {
                         },
                         location_visibility: None,
                     },
-                    subscription: None,
+                    subscription: own,
                 };
                 let created = PartyLifecycle::new(session, clock).create_party(new, rng)?;
                 records::write(session, &Key::Colour(&created.party), |writer| {
@@ -126,6 +131,13 @@ impl PartiesPort for Parties {
                 Ok(created)
             })
             .await?;
+        if let (Some(subscription), Outbound::CreateGroup(request)) =
+            (&subscription, &created.outbound)
+        {
+            self.net
+                .remember_own_subscription(&server, &request.group_id, subscription)
+                .await?;
+        }
         self.send(&server, [created.outbound]).await?;
         Ok(created.party)
     }

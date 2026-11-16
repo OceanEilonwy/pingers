@@ -6,7 +6,8 @@
 
 use pingers_crypto::{PushRelayPublicKey, key_config_hash};
 use pingers_ohttp::{KeyPins, OhttpError};
-use pingers_proto::{Params, PushRelayConfig, RelayId};
+use pingers_proto::{Params, PushRelayConfig, RelayId, ScheduledPushRelayConfig};
+use pingers_time::UnixSeconds;
 use pingers_transport::{PrivacyClass, Transport, TransportError};
 
 use crate::engine::Response;
@@ -45,6 +46,39 @@ pub struct VerifiedPushRelay {
     pub key: PushRelayPublicKey,
     /// What the relay published with it (platforms, longest token lifetime, operator).
     pub config: PushRelayConfig,
+}
+
+/// A push relay key announced to activate later, already checked against the pins.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScheduledPushRelay {
+    /// The key, as it will be published.
+    pub verified: VerifiedPushRelay,
+    /// When the relay starts publishing it and opening blobs sealed to it.
+    pub activates_at: UnixSeconds,
+}
+
+/// What the push relay says about its next key (`GET /v1/config/next`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[must_use]
+pub enum NextPushRelayKey {
+    /// No rotation is scheduled.
+    NotScheduled,
+    /// A rotation is scheduled to a key the pins allow: pre-seal to it from its activation.
+    Pinned(ScheduledPushRelay),
+    /// A rotation is scheduled to a key the pins do not allow. Nothing is sealed to it; once it
+    /// is published, [`SyncEngine::push_relay_key`] reports the mismatch.
+    Unpinned {
+        /// When it is due to be published.
+        activates_at: UnixSeconds,
+    },
+}
+
+fn verified(relay: RelayId, config: PushRelayConfig) -> VerifiedPushRelay {
+    VerifiedPushRelay {
+        relay,
+        key: PushRelayPublicKey::new(config.key_config.key_id.get(), config.key_config.public_key),
+        config,
+    }
 }
 
 impl SyncEngine {
@@ -120,17 +154,49 @@ impl SyncEngine {
             .await?
             .success()?
             .decode()?;
-        let hash = key_config_hash(&config.key_config.to_bytes());
-        if pins.is_some_and(|pins| !pins.contains(&hash)) {
+        if !allowed(&config, pins) {
             return Err(SyncError::PushRelayKeyMismatch);
         }
-        Ok(VerifiedPushRelay {
-            relay,
-            key: PushRelayPublicKey::new(
-                config.key_config.key_id.get(),
-                config.key_config.public_key,
-            ),
-            config,
-        })
+        Ok(verified(relay, config))
     }
+
+    /// The key a listed push relay publishes next and when (`GET
+    /// /v1/push-relays/{id}/config/next`, through the relay), checked against `pins` like
+    /// [`SyncEngine::push_relay_key`]. Fetched ahead of a rotation so devices switch to it on
+    /// time without asking again, and seal nothing to the old key past its retirement.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Status`] for an unlisted relay (404 means none is scheduled only for a
+    /// listed one: the server answers 404 for both, and both mean nothing to pre-seal);
+    /// [`SyncError::BadResponse`]; as [`SyncEngine::send`].
+    pub async fn push_relay_next_key(
+        &self,
+        relay: RelayId,
+        pins: Option<&KeyPins>,
+        budget: WakeBudget,
+    ) -> Result<NextPushRelayKey, SyncError> {
+        let response = self
+            .exchange(ApiRequest::push_relay_next_config(relay), budget)
+            .await?;
+        if response.status() == 404 {
+            return Ok(NextPushRelayKey::NotScheduled);
+        }
+        let scheduled: ScheduledPushRelayConfig = response.success()?.decode()?;
+        if !allowed(&scheduled.config, pins) {
+            return Ok(NextPushRelayKey::Unpinned {
+                activates_at: scheduled.activates_at,
+            });
+        }
+        Ok(NextPushRelayKey::Pinned(ScheduledPushRelay {
+            verified: verified(relay, scheduled.config),
+            activates_at: scheduled.activates_at,
+        }))
+    }
+}
+
+/// Whether `pins` allow the config's key; no pins (a build without them) allow any.
+fn allowed(config: &PushRelayConfig, pins: Option<&KeyPins>) -> bool {
+    let hash = key_config_hash(&config.key_config.to_bytes());
+    pins.is_none_or(|pins| pins.contains(&hash))
 }

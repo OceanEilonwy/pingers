@@ -190,6 +190,7 @@ fn a_push_handle_names_its_server_and_kind() -> Result<(), TestError> {
             id: SubscriptionId::from_bytes([2; 16]),
             handle,
             expires_at: UnixSeconds::new(100),
+            seal: None,
         })?;
     assert_eq!(
         fixture.session.push_handle_owner(&handle)?,

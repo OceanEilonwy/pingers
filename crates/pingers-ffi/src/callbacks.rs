@@ -224,6 +224,29 @@ pub trait Events: Send + Sync {
     fn notice(&self, notice: Notice);
     /// The "What your server sees" status changed.
     fn privacy_status_changed(&self);
+    /// A wake led to something the user should see outside the app: post it (design B.7).
+    /// Called from the core's thread while the push, wake or fix that caused it is still
+    /// being handled, so a push handler posts it in time.
+    fn notify(&self, notification: crate::notifications::CoreNotification);
+}
+
+/// The priority FCM reports for a message (`RemoteMessage.getOriginalPriority()` and
+/// `getPriority()`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum PushPriority {
+    /// High priority.
+    High,
+    /// Normal priority.
+    Normal,
+}
+
+impl From<PushPriority> for client::PushPriority {
+    fn from(priority: PushPriority) -> Self {
+        match priority {
+            PushPriority::High => Self::High,
+            PushPriority::Normal => Self::Normal,
+        }
+    }
 }
 
 /// The app's [`Platform`] as pingers-client's.

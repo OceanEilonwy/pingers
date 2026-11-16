@@ -144,7 +144,8 @@ private fun PrivacyBody(state: PrivacyState, text: PrivacyText, repo: PingersRep
     }
     Section(text.deliveryHeading)
     Card {
-        LinkRow(text.wakeups, text.wakeupsSummary, { nav.go(Route.Wakeups) }, Modifier.testTag(E2eTags.PRIVACY_WAKEUPS))
+        // The core's reason wake-ups are downgraded, when it has one, says more than the summary.
+        LinkRow(text.wakeups, text.pushDelivery ?: text.wakeupsSummary, { nav.go(Route.Wakeups) }, Modifier.testTag(E2eTags.PRIVACY_WAKEUPS))
     }
     SecurityLink(text.securityLink) { nav.go(Route.Security) }
 }

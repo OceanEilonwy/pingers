@@ -149,10 +149,8 @@ class MainActivity : ComponentActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 core.events.collect { event ->
                     when (event) {
-                        is CoreRepository.Event.MeetupStarted -> {
-                            event.alert?.let { if (CoPresenceNotifier.canPost(this@MainActivity)) CoPresenceNotifier.post(this@MainActivity, it) }
-                            nav.go(Route.Alert)
-                        }
+                        // The core posted the notification already (CoreHost); in the app the alert screen opens.
+                        is CoreRepository.Event.MeetupStarted -> nav.go(Route.Alert)
                         CoreRepository.Event.LocationRequested -> nav.go(Route.LocationRequest)
                         CoreRepository.Event.MeetupEnded -> nav.reset(Route.MeetupEnded)
                     }

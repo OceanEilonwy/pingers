@@ -1,0 +1,45 @@
+{
+  "name": "scheduled-push-relay-config-encoding",
+  "description": "GET /v1/config/next body (push relay API) as canonical CBOR: [config (as in push-relay-config-encoding), activates at (Unix seconds)] (design B.4.9, C.1a, D)",
+  "vectors": [
+    {
+      "name": "next-key-both-platforms",
+      "inputs": {
+        "key_id": 2,
+        "public_key": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+        "platforms": "fcm,unifiedpush",
+        "max_ttl_seconds": 2592000,
+        "operator": "Example Relay Ltd",
+        "activates_at": 1790000000
+      },
+      "expected": {
+        "key_config": "020020606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f000400010001",
+        "encoding": "820182845829020020606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f0004000100018201021a00278d00714578616d706c652052656c6179204c74641a6ab13b80"
+      }
+    },
+    {
+      "name": "far-future-placeholder",
+      "inputs": {
+        "key_id": 1,
+        "public_key": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+        "platforms": "unifiedpush",
+        "max_ttl_seconds": 3600,
+        "operator": "Ünïcode Relay",
+        "activates_at": 4102444800
+      },
+      "expected": {
+        "key_config": "010020606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f000400010001",
+        "encoding": "820182845829010020606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f0004000100018102190e106fc39c6ec3af636f64652052656c61791af4865700"
+      }
+    },
+    {
+      "name": "missing-activation",
+      "inputs": {
+        "encoding": "820181845829010020606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f0004000100018102190e106fc39c6ec3af636f64652052656c6179"
+      },
+      "expected": {
+        "error": "Cbor"
+      }
+    }
+  ]
+}

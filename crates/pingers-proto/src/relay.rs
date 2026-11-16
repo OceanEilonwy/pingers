@@ -3,6 +3,7 @@
 //! `POST /v1/push`. CBOR like the server API.
 
 use minicbor::Decoder;
+use pingers_time::UnixSeconds;
 
 use crate::cbor::{self, CborBody, Writer, versioned_cbor};
 use crate::{
@@ -154,7 +155,43 @@ impl CborBody for PushRelayConfig {
     }
 }
 
-versioned_cbor!(PushRequest, PushRelayConfig);
+/// How long a replaced push relay key keeps opening blobs after its successor activates: the
+/// longest a sealed token lives (30 days, design B.4.9). The relay refuses a schedule that
+/// retires a key sooner; devices cap a token sealed to a key with a successor at that
+/// successor's activation plus this, and re-seal to the successor within it.
+pub const PUSH_RELAY_KEY_OVERLAP: core::time::Duration = core::time::Duration::from_hours(30 * 24);
+
+/// `GET /v1/config/next` (design B.4.9, C.1a): the key the relay publishes next, and from when.
+/// Devices check it against their pins before it activates and switch to it at
+/// `activates_at`; the key it replaces keeps opening blobs for [`PUSH_RELAY_KEY_OVERLAP`] after
+/// that, so no wake is missed across a rotation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScheduledPushRelayConfig {
+    /// What `GET /v1/config` will serve once the key activates.
+    pub config: PushRelayConfig,
+    /// When the relay starts publishing the key and opening blobs sealed to it.
+    pub activates_at: UnixSeconds,
+}
+
+/// Layout: `[config (as PushRelayConfig), activates at (Unix seconds)]`.
+impl CborBody for ScheduledPushRelayConfig {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(2)?;
+        self.config.encode_body(writer)?;
+        writer.unsigned(self.activates_at.get());
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 2)?;
+        Ok(Self {
+            config: PushRelayConfig::decode_body(decoder)?,
+            activates_at: UnixSeconds::new(decoder.u64()?),
+        })
+    }
+}
+
+versioned_cbor!(PushRequest, PushRelayConfig, ScheduledPushRelayConfig);
 
 #[cfg(test)]
 mod tests {
@@ -187,5 +224,13 @@ mod tests {
             config(3)
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod overlap_tests {
+    #[test]
+    fn the_key_overlap_is_thirty_days() {
+        assert_eq!(super::PUSH_RELAY_KEY_OVERLAP.as_secs(), 30 * 24 * 60 * 60);
     }
 }

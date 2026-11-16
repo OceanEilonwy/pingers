@@ -72,3 +72,11 @@ design B.5, B.6, B.6.1, G.4 to G.7).
 
 - `subscriptions_removed` in remove commits is empty: this crate does not know other members'
   subscription ids.
+
+## Read the log on a push (added 2026-11-14, v1-push)
+
+- **`MeetupHandle::read_log`** reads the group log and returns once it is applied: the client
+  calls it for a push naming the Meetup's subscription, so a message sent while the live channel
+  was down is applied before the wake ends.
+- **`meetup_log_auth_key(database, group)`**: the current log-auth key of a Meetup group, for this
+  device's own subscription requests outside the session.

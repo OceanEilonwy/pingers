@@ -176,6 +176,8 @@ fn per_minute(count: u32) -> RateLimit {
 /// What the push relay is built from, all derived from the harness seed.
 struct PushRelayKeys {
     private: PushRelayPrivateKey,
+    /// A second key and when it is published.
+    next: Option<(PushRelayPrivateKey, UnixSeconds)>,
     credential_hash_key: KeyedHashKey,
     token_hash_key: KeyedHashKey,
 }
@@ -190,6 +192,7 @@ fn push_relay(
     };
     let PushRelayKeys {
         private,
+        next,
         credential_hash_key,
         token_hash_key,
     } = keys;
@@ -204,7 +207,23 @@ fn push_relay(
     .map_err(|_| HarnessError::Keys {
         service: Service::PushRelay,
     })?;
-    let ring = KeyRing::new(vec![relay_key]).map_err(failed)?;
+    let mut keys = vec![relay_key];
+    if let Some((next_private, activated_at)) = next {
+        keys.push(
+            RelayKey::new(
+                PushRelayKeyId::new(2),
+                next_private,
+                KeyLifetime {
+                    activated_at,
+                    retired_at: None,
+                },
+            )
+            .map_err(|_| HarnessError::Keys {
+                service: Service::PushRelay,
+            })?,
+        );
+    }
+    let ring = KeyRing::new(keys).map_err(failed)?;
     // The relay keeps only the keyed hash of the credential the server presents.
     let credential_hash = keyed_hash(
         &credential_hash_key,
@@ -271,6 +290,32 @@ fn map_host() -> Result<pingers_proto::MapHostUrl, HarnessError> {
     })
 }
 
+/// The push relay's keys could not be made.
+fn push_relay_keys<E>(_: E) -> HarnessError {
+    HarnessError::Keys {
+        service: Service::PushRelay,
+    }
+}
+
+/// The scheduled second push relay key, if the config asks for one, and its public key.
+/// From a generator of its own, so every other key stays as it is without a rotation.
+fn next_push_key(config: &HarnessConfig) -> Result<NextPushKey, HarnessError> {
+    let Some(activated_at) = config.push_relay_next_key_at else {
+        return Ok((None, None));
+    };
+    let private = PushRelayPrivateKey::from_bytes(Zeroizing::new(random_array(&mut seeded_rng(
+        config.seed.wrapping_add(1),
+    ))));
+    let public = private.public_key(2).map_err(push_relay_keys)?;
+    Ok((
+        Some((private, activated_at)),
+        Some(public.public_key().to_vec()),
+    ))
+}
+
+/// A scheduled push relay key with its activation, and its public key.
+type NextPushKey = (Option<(PushRelayPrivateKey, UnixSeconds)>, Option<Vec<u8>>);
+
 /// Where the server forwards map downloads through the relay.
 fn map_host_gateway(
     config: &HarnessConfig,
@@ -304,17 +349,14 @@ pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started,
     })?;
     let ohttp_key_config = gateway_key.config().encoded().to_vec();
     let push_private = PushRelayPrivateKey::from_bytes(Zeroizing::new(random_array(&mut rng)));
-    let push_public = push_private.public_key(1).map_err(|_| HarnessError::Keys {
-        service: Service::PushRelay,
-    })?;
+    let push_public = push_private.public_key(1).map_err(push_relay_keys)?;
     let seed = RngSeed::from_bytes(Zeroizing::new(random_array(&mut rng)));
     let credential_hash_key = KeyedHashKey::from_bytes(Zeroizing::new(random_array(&mut rng)));
     let token_hash_key = KeyedHashKey::from_bytes(Zeroizing::new(random_array(&mut rng)));
+    let (next, next_public) = next_push_key(config)?;
 
     let push_address = address(&listeners.push, Service::PushRelay)?;
-    let tls = super::tls::test_tls(config.bind).map_err(|_| HarnessError::Keys {
-        service: Service::PushRelay,
-    })?;
+    let tls = super::tls::test_tls(config.bind).map_err(push_relay_keys)?;
     let server_id = format!("https://{server_https}");
     let endpoints = Endpoints {
         server,
@@ -327,6 +369,7 @@ pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started,
         server_id: server_id.clone(),
         ohttp_key_config,
         push_relay_key: push_public.public_key().to_vec(),
+        push_relay_next_key: next_public,
     };
     let keys_error = |_| HarnessError::Keys {
         service: Service::Server,
@@ -371,6 +414,7 @@ pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started,
     let push = push_relay(
         PushRelayKeys {
             private: push_private,
+            next,
             credential_hash_key,
             token_hash_key,
         },

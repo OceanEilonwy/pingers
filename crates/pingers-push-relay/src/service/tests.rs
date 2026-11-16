@@ -598,7 +598,9 @@ fn the_next_key_is_announced_before_it_is_published() -> TestResult {
     let mut setup = Setup::new(FakeOpener::default());
     setup.key_3_activates_at = Some(NOW + DAY);
     let harness = setup.build()?;
-    let next = harness.relay.next_config().ok_or("no next key")?;
+    let scheduled = harness.relay.next_config().ok_or("no next key")?;
+    assert_eq!(scheduled.activates_at, UnixSeconds::new(NOW + DAY));
+    let next = scheduled.config;
     assert_eq!(next.key_config.key_id, PushRelayKeyId::new(3));
     assert_eq!(next.operator, "Test Relay Ltd");
     let published = harness

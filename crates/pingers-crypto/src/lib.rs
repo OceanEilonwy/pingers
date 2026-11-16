@@ -15,6 +15,8 @@
 //! - Invite join requests (D).
 //! - Keyed hashes for the push relay's rate limits and stored credentials (C.1a).
 //! - The SHA-256 preimage hashes of RLN's external nullifier and request digest (B.4.8).
+//! - With the `rs256` feature: RS256 compact JWS for the push relay's FCM service-account
+//!   assertion (RFC 7523), a Google requirement rather than a Pingers primitive.
 //! - Content checksums of public map files (B.12, "Map host").
 //!
 //! Secret types wrap `zeroize::Zeroizing` and implement neither `Debug`, `Display`, `Clone`
@@ -40,6 +42,8 @@ mod padded;
 mod presence;
 mod primitives;
 mod rln;
+#[cfg(feature = "rs256")]
+mod rs256;
 mod safety;
 mod secret;
 #[cfg(test)]
@@ -73,9 +77,9 @@ pub use location::{
     seal_location_ask, seal_location_grant,
 };
 pub use mailbox::{
-    MailboxReadKey, PushBind, PushRelayPrivateKey, PushRelayPublicKey, PushTokenToOpen,
-    PushTokenToSeal, key_config_hash, mailbox_id, open_push_token, push_bind_for_mailbox,
-    push_bind_for_subscription, seal_push_token,
+    MailboxReadKey, PushBind, PushRelayPrivateKey, PushRelayPublicKey, PushSealFingerprint,
+    PushTokenToOpen, PushTokenToSeal, key_config_hash, mailbox_id, open_push_token,
+    push_bind_for_mailbox, push_bind_for_subscription, push_seal_fingerprint, seal_push_token,
 };
 pub use presence::{
     BeaconHeader, KnockKey, KnockPlaintext, KnockSignedFields, MeetupPsk, PresenceRoot, SealKey,
@@ -84,4 +88,6 @@ pub use presence::{
     sign_knock, tag_matches, verify_knock,
 };
 pub use rln::{RlnPreimageHash, rln_external_nullifier_hash, rln_request_hash};
+#[cfg(feature = "rs256")]
+pub use rs256::{Rs256Key, sign_compact_jws_rs256};
 pub use safety::{SAFETY_NUMBER_DIGITS, SafetyNumber, inviter_fingerprint, safety_number};

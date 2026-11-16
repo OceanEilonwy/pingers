@@ -15,8 +15,11 @@
 //!       (pingers-presence), only against that server's Spots that are confirmed `Inside`;
 //!    2. knock on matches, and answer knocks on that board's records with a liveness check;
 //!    3. hand accepted knocks and Welcomes to pingers-meetup-session;
-//!    4. refill that server's mailbox pool;
+//!    4. make that server's one push registration of the wake (renew a stale sealed push, or
+//!       refill its mailbox pool);
 //! 4. set the location mode and schedule the next wake.
+//!
+//! [`PriorityWindow`] watches FCM's priority downgrades of the pushes that start wakes.
 //!
 //! The wake owns its budget: every outside call is bounded by it. Each board round gets an
 //! equal share of what is left when it starts, and a failure or timeout ends only that round's
@@ -32,6 +35,7 @@ mod budget;
 mod error;
 mod pipeline;
 pub mod ports;
+mod push_priority;
 mod state;
 
 #[cfg(test)]
@@ -44,6 +48,7 @@ pub use pipeline::{
     UploadOutcome, WakeEnding, WakeEnv, WakeInput, WakeNotice, WakeReport, WakeSettings, WakeStep,
     WakeTrigger,
 };
+pub use push_priority::{PriorityChange, PriorityWindow, PushPriority};
 pub use state::{
     BoardSnapshot, DecidedKnock, KnockStatus, KnownEpoch, LeaseSlot, LiveLease, PeerActivity,
     RealRecord, SentKnock, SpotSnapshot, SpotTransition, WakeSnapshot, WakeState,

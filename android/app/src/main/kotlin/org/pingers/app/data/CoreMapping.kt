@@ -313,6 +313,7 @@ internal fun uniffi.pingers.PrivacyView.toUi() = PrivacyState(
         uniffi.pingers.Visibility.NOBODY -> Visibility.Nobody
     },
     noWakePushes = noWakePushes,
+    pushDelivery = pushDelivery,
 )
 
 internal fun uniffi.pingers.ServerSeesView.toUi() = ServerViewState(server, selfHosted, privacy.toUi(), canSee, neverSees)
