@@ -100,6 +100,7 @@ struct Setup {
     trusted_proxies: Vec<IpAddr>,
     metrics: Vec<IpAddr>,
     push_relays: pingers_mailbox::ListedRelays,
+    membership_proofs: crate::MembershipProofs,
 }
 
 impl Default for Setup {
@@ -109,6 +110,7 @@ impl Default for Setup {
             trusted_proxies: Vec::new(),
             metrics: Vec::new(),
             push_relays: pingers_mailbox::ListedRelays::default(),
+            membership_proofs: crate::MembershipProofs::On,
         }
     }
 }
@@ -119,6 +121,7 @@ fn configured(setup: Setup) -> Result<ServerConfig, TestError> {
         metrics: AddressList::new(setup.metrics),
         push_relays: setup.push_relays,
         trusted_proxies: TrustedProxies::new(setup.trusted_proxies),
+        membership_proofs: setup.membership_proofs,
         ..ServerConfig::new(Required {
             listen: SocketAddr::new(LOOPBACK, 0),
             server_id: server_id()?,

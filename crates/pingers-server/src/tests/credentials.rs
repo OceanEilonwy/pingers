@@ -14,10 +14,11 @@ use pingers_anon::{
 use pingers_crypto::{GroupRequest, LogAuthKeyPair, sign_group_request};
 use pingers_ohttp::{BinaryRequest, BinaryResponse, ChunkPosition, Header};
 use pingers_proto::{
-    AppMessage, CommitRequest, CommitResponse, CreateGroup, Delivery as Mode, Epoch, GroupId,
-    GroupMessages, GroupState, LiveFrame, MembershipIndex, MembershipLeafRequest,
-    MembershipLeafResponse, MembershipLeaves, MessageAccepted, MlsMessageBytes, Params, Redacted,
-    RlnAuth, RlnScope, SealedSnapshot, Urgency, WireDecode as _, WireEncode as _,
+    AnonymousCredential, AppMessage, CommitRequest, CommitResponse, CreateGroup, Delivery as Mode,
+    Epoch, GroupId, GroupMessages, GroupState, LiveFrame, MembershipIndex, MembershipLeafRequest,
+    MembershipLeafResponse, MembershipLeaves, MessageAccepted, MlsMessageBytes, Params,
+    PrivacyPassAllowance, Redacted, RlnAuth, RlnScope, SealedSnapshot, TokenAllowance, Urgency,
+    WireDecode as _, WireEncode as _,
 };
 use pingers_quota::root_epoch;
 use pingers_time::{Clock as _, UnixSeconds};
@@ -148,6 +149,70 @@ async fn issuance_needs_a_bearer_and_a_well_formed_batch() -> TestResult {
     assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(Wallet::issue(&server, &wallet.bearer, 2).await?.len(), 2);
     // The daily allowance itself is pingers-quota's (its tests issue the 300).
+    server.stop().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn params_advertise_the_daily_token_limit_and_both_credentials() -> TestResult {
+    let server = started(Echo).await?;
+    let params = direct(&server, "GET /v1/params", None, Vec::new()).await?;
+    let params = Params::decode(&params.body)?;
+    assert_eq!(
+        params.privacy_pass_daily_limit,
+        TokenAllowance::new(pingers_quota::DAILY_TOKEN_LIMIT)
+    );
+    assert_eq!(
+        params.anonymous_credentials,
+        [
+            AnonymousCredential::MembershipProof,
+            AnonymousCredential::PrivacyPass
+        ]
+    );
+    server.stop().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_batch_past_the_daily_limit_is_refused_with_what_is_left() -> TestResult {
+    let server = started(Echo).await?;
+    let wallet = Wallet::fetch(&server, 1, 0).await?;
+    // 290 of the day's 300, in batches small enough for a loaded machine.
+    for _ in 0..10 {
+        assert_eq!(Wallet::issue(&server, &wallet.bearer, 29).await?.len(), 29);
+    }
+    let keys = direct(&server, "GET /v1/pp/keys", None, Vec::new()).await?;
+    let public_key = pingers_proto::PrivacyPassKeys::decode(&keys.body)?
+        .keys
+        .last()
+        .ok_or("the issuer has no key")?
+        .public_key
+        .clone();
+    let pending = pingers_anon::begin_token_issuance(
+        &public_key,
+        pingers_anon::TokenCount::new(11)?,
+        &mut rng(6),
+    )?;
+    let refused = direct(
+        &server,
+        "POST /v1/pp/issue",
+        Some(&wallet.bearer),
+        pingers_proto::PrivacyPassIssueRequest::new(pending.request().to_vec())?.encode()?,
+    )
+    .await?;
+    assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
+    let allowance = PrivacyPassAllowance::decode(&refused.body)?;
+    assert_eq!(allowance.remaining, TokenAllowance::new(10));
+    let day = 86_400;
+    let next_day = server
+        .clock
+        .now()
+        .get()
+        .checked_div(day)
+        .and_then(|today| today.checked_add(1))
+        .and_then(|tomorrow| tomorrow.checked_mul(day))
+        .ok_or("time out of range")?;
+    assert_eq!(allowance.resets_at, UnixSeconds::new(next_day));
+    // Nothing was counted: exactly what is left is still issued.
+    assert_eq!(Wallet::issue(&server, &wallet.bearer, 10).await?.len(), 10);
     server.stop().await
 }
 
@@ -339,6 +404,41 @@ async fn rln_proofs_are_checked_for_scope_request_bucket_and_nullifier() -> Test
         .advance(pingers_time::Bucket::LENGTH.saturating_add(Duration::from_secs(61)));
     let stale = call(&server, &with(first, proof)).await?;
     assert_eq!(stale.status.get(), 401);
+    server.stop().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_operator_can_turn_membership_proofs_off() -> TestResult {
+    let server = start(
+        Setup {
+            membership_proofs: crate::MembershipProofs::Off,
+            ..Setup::default()
+        },
+        Echo,
+    )
+    .await?;
+    let params = direct(&server, "GET /v1/params", None, Vec::new()).await?;
+    assert_eq!(
+        Params::decode(&params.body)?.anonymous_credentials,
+        [AnonymousCredential::PrivacyPass]
+    );
+    let wallet = Wallet::fetch(&server, 1, 1).await?;
+    let member = enrol(&server, &wallet).await?;
+    let request = board_sync(&server, 1)?;
+    let proof = rln_header(
+        &server,
+        &member,
+        &Proving {
+            scope: RlnScope::Board,
+            request: &request,
+            slot: 0,
+        },
+    )
+    .await?;
+    let refused = call(&server, &with(request.clone(), proof)).await?;
+    assert_eq!(refused.status.get(), 403, "a valid proof is not accepted");
+    let paid = call(&server, &with(request, wallet.spend()?)).await?;
+    assert_eq!(paid.status.get(), 200, "a token still is");
     server.stop().await
 }
 

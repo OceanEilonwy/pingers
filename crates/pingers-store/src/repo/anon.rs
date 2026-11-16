@@ -368,6 +368,69 @@ impl RlnTree<'_> {
         })
     }
 
+    /// Sets many leaves in one transaction: a page of the server's leaf list.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Database`] if a write fails; then none is kept.
+    pub fn set_leaves(&self, leaves: &[TreeLeaf]) -> Result<(), StoreError> {
+        self.session.transaction(|session| {
+            session.with(|connection| {
+                let mut statement = connection.prepare(
+                    "INSERT OR REPLACE INTO rln_tree_leaf (position, value) VALUES (?1, ?2)",
+                )?;
+                for leaf in leaves {
+                    statement.execute(params![leaf.position.get(), leaf.value.as_bytes()])?;
+                }
+                Ok(())
+            })
+        })
+    }
+
+    /// How many leaves are held.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Corrupt`] if the count does not fit.
+    pub fn leaf_count(&self) -> Result<u32, StoreError> {
+        self.session.with(|connection| {
+            narrow(
+                connection.query_row("SELECT count(*) FROM rln_tree_leaf", [], |row| row.get(0))?,
+                "rln_tree_leaf count",
+            )
+        })
+    }
+
+    /// The leaf at `position`, if held.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Corrupt`] if the stored value does not decode.
+    pub fn leaf(&self, position: TreePosition) -> Result<Option<LeafValue>, StoreError> {
+        self.session.with(|connection| {
+            connection
+                .query_row(
+                    "SELECT value FROM rln_tree_leaf WHERE position = ?1",
+                    [position.get()],
+                    |row| Ok(read_array(row, 0, "rln_tree_leaf.value").map(LeafValue::from_bytes)),
+                )
+                .optional()?
+                .transpose()
+        })
+    }
+
+    /// Deletes every leaf and cached node: the copy is fetched again from the start.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Database`] if the delete fails.
+    pub fn clear(&self) -> Result<(), StoreError> {
+        self.session.with(|connection| {
+            connection.execute_batch("DELETE FROM rln_tree_leaf; DELETE FROM rln_tree_node;")?;
+            Ok(())
+        })
+    }
+
     /// Caches an interior node.
     ///
     /// # Errors
@@ -630,6 +693,35 @@ mod tests {
         tree.clear_nodes()?;
         assert_eq!(tree.node(TreeLevel::new(3), TreePosition::new(1))?, None);
         assert_eq!(tree.leaves()?.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn leaves_are_set_in_pages_counted_and_cleared() -> Result<(), TestError> {
+        let fixture = Fixture::new()?;
+        let tree = fixture.session.rln_tree();
+        let page: Vec<TreeLeaf> = (0..5_u8)
+            .map(|fill| TreeLeaf {
+                position: TreePosition::new(u32::from(fill)),
+                value: LeafValue::from_bytes([fill; 32]),
+            })
+            .collect();
+        tree.set_leaves(&page)?;
+        assert_eq!(tree.leaf_count()?, 5);
+        assert_eq!(
+            tree.leaf(TreePosition::new(3))?,
+            Some(LeafValue::from_bytes([3; 32]))
+        );
+        assert_eq!(tree.leaf(TreePosition::new(5))?, None);
+        assert_eq!(tree.leaves()?, page);
+        tree.put_node(
+            TreeLevel::new(1),
+            TreePosition::new(0),
+            &TreeNodeHash::from_bytes([7; 32]),
+        )?;
+        tree.clear()?;
+        assert_eq!(tree.leaf_count()?, 0);
+        assert_eq!(tree.node(TreeLevel::new(1), TreePosition::new(0))?, None);
         Ok(())
     }
 }

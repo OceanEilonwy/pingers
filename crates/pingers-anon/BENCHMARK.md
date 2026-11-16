@@ -30,6 +30,31 @@ the key and witness graph for `RLN(20, 16)` (5,820 constraints) are small, so pr
 about 11 MiB above the baseline. That is far below the "tens of MB" design B.4.8 assumed,
 which is worth re-checking against the iOS extension budget (blocker 3).
 
+## On an Android emulator
+
+2026-11-14, Pixel 9 Pro AVD (Android 16, x86_64 system image, 4 virtual CPUs), started with
+`-gpu host -accel on` (KVM 12; renderer the host AMD RX 6800 XT, not SwiftShader) on the Ryzen 9
+5950X above at load average 12 to 20, `--profile android` build for `x86_64-linux-android`, three
+runs of `prove_bench 30`:
+
+| Measure | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| Proof, median of 30 | 386 ms | 366 ms | 367 ms |
+| Proof, p95 | 486 ms | 400 ms | 423 ms |
+| First proof (decodes the key) | 425 ms | 367 ms | 393 ms |
+| Verification, median | 1.8 ms | 1.7 ms | 2.2 ms |
+| Tree of 10,000 leaves, one batch | 229 ms | 216 ms | 217 ms |
+| Self-test (`SelfTestPlan::DESIGN`) | Passed, p95 369 ms, 7.7 s | Passed, p95 377 ms, 7.7 s | Passed, p95 415 ms, 8.1 s |
+| Peak RSS | 17.1 MiB | 17.3 MiB | 17.1 MiB |
+
+An emulator runs x86_64 code on the host's cores under KVM, so this is near desktop speed, not a
+phone's: it shows the shipped build and the self-test work end to end on Android, not a device
+class. Against the 20 s wake budget (pingers-client `WAKE_BUDGET`) a proof is about 2 %; the
+engine also proves only when the wake's remaining time covers the self-test's p95 plus the
+request (`MIN_REQUEST_TIME`, 2 s), and spends a Privacy Pass token otherwise. In a wake a proof
+reads the stored Merkle path and root (no tree rebuild); the tree is rebuilt only by the hourly
+refresh in a new process (about 0.2 s here at 10,000 devices).
+
 ## On an Android phone
 
 Needs `cargo-ndk`, an NDK (the workspace builds with NDK 27), `adb`, and a phone with USB
