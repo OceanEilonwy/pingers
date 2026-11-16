@@ -39,6 +39,7 @@ mod roster;
 mod roster_history;
 mod safety;
 mod settings;
+mod snapshot_padding;
 mod spots;
 #[cfg(test)]
 mod test_support;

@@ -2,7 +2,7 @@
 //! The entry point: Party creation, roster changes, commits, incoming messages, settings.
 //! Invites and joins are in `joining`, Spots in `spots`.
 
-use pingers_crypto::{AccountPublicKey, LogAuthKeyPair, seal_state_snapshot};
+use pingers_crypto::{AccountPublicKey, LogAuthKeyPair};
 use pingers_mls::{
     CommitSummary, Group, MlsContext, Party as PartyGroup, ProcessedMessage, Roster,
 };
@@ -24,6 +24,7 @@ use crate::ops::{PartyOperation, Profile, Snapshot, spot_wins};
 use crate::roster::{Myself, RosterMember, RosterView};
 use crate::roster_history;
 use crate::settings::StoredSettings;
+use crate::snapshot_padding;
 use crate::{
     Outbound, OutgoingCommit, PartiesError, PartySettings, RelayChoice, SafetyCode, WelcomeDelivery,
 };
@@ -217,7 +218,7 @@ impl<'session> PartyLifecycle<'session> {
                 set_subscription(session, &party_id, own_key, Some(subscription.id))?;
             }
             let snapshot = snapshot(session, &party_id, &[])?;
-            let state = seal_state_snapshot(&group.state_key()?, &snapshot.encode()?, rng)?;
+            let state = snapshot_padding::seal(&group.state_key()?, &snapshot.encode()?, rng)?;
             Ok(CreatedParty {
                 party: party_id,
                 outbound: Outbound::CreateGroup(pingers_proto::CreateGroup {
@@ -817,7 +818,7 @@ pub(crate) fn finish_commit(
         .pending_commits()
         .put(&row.id, &parts.pending.encode()?)?;
     let snapshot = snapshot(session, &row.id, parts.excluded)?;
-    let state = seal_state_snapshot(&group.pending_state_key()?, &snapshot.encode()?, rng)?;
+    let state = snapshot_padding::seal(&group.pending_state_key()?, &snapshot.encode()?, rng)?;
     let (subscriptions_added, welcome) = match (parts.added, parts.commit.welcome) {
         (Some(added), Some(welcome)) => (
             added.subscription.into_iter().collect(),

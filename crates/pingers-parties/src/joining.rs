@@ -10,7 +10,7 @@
 
 use pingers_crypto::{
     InviteSecret, JoinCode, JoinKeyPackages, LogAuthKeyPair, join_code, open_join_request,
-    open_state_snapshot, seal_join_request,
+    seal_join_request,
 };
 use pingers_mls::{CipherSuitePolicy, KeyPackagePurpose, MlsContext, MlsError};
 use pingers_proto::{
@@ -625,7 +625,7 @@ impl PartyLifecycle<'_> {
                 })
                 .ok_or(PartiesError::InviterNotInGroup)?
                 .leaf;
-            let opened = open_state_snapshot(&group.state_key()?, &arrived.snapshot)?;
+            let opened = crate::snapshot_padding::open(&group.state_key()?, &arrived.snapshot)?;
             let snapshot = Snapshot::decode(&opened)?;
             let party = snapshot.party;
             let own_name = MemberName::new(joining.name.as_str().to_owned())?;

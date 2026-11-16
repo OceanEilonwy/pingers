@@ -180,7 +180,7 @@ Configuration:
 - External commits, external proposals and external senders: disabled.
 - Application messages in the Party group carry only **Party state operations** (roster profiles and Spot create/edit/delete). There is no Party-wide chat in the initial release.
 - Every member sends an Update at least every 7 days when online (post-compromise security).
-- New members cannot read history under MLS, so the committer uploads an encrypted **state snapshot** with each Commit: `XChaCha20-Poly1305(MLS-Exporter("pingers/v1/state", epoch), snapshot)`.
+- New members cannot read history under MLS, so the committer uploads an encrypted **state snapshot** with each Commit: `XChaCha20-Poly1305(MLS-Exporter("pingers/v1/state", epoch), snapshot)`. The snapshot is padded before sealing (`be32(length) || encoding || zeros`) to 1, 4, 16 or 48 KiB, so the server learns only that class, not how many members, Spots or names the Party has (decided 2026-11-17, from the pre-launch review).
 
 **Server access control without membership knowledge**: each epoch all members derive an Ed25519 keypair from `MLS-Exporter("pingers/v1/log-auth", group_id, 32)`. The committer sends the next epoch's public key with the Commit; the server stores it and requires a signature by it on reads and writes of that group log. Removed members cannot derive the new key.
 

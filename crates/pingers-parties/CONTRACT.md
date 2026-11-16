@@ -107,7 +107,8 @@ pooled `Reply` one; with none, `NoPooledMailbox`.
   on receipt.
 - **Party operations** (profile, Spot) are pingers-proto `PartyOperation`s, padded to the
   smallest mailbox class and sent stored with a Quiet wake (design G.2). The snapshot is a
-  pingers-proto `PartySnapshot`. Commits wake Quiet.
+  pingers-proto `PartySnapshot`. It is padded to 1, 4, 16 or 48 KiB (`snapshot_padding.rs`) before it
+  is sealed under the state key, and unpadded when opened. Commits wake Quiet.
 - **Settings**: server and suite are fixed at creation; a joiner takes the server from the
   link and the suite from the group it joined (`Group::suite`).
 - **Quantum-resistant Parties** (feature `x-wing`, over pingers-mls's): the group runs X-Wing
