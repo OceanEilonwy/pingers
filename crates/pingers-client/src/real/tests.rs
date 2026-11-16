@@ -1031,3 +1031,40 @@ async fn without_an_instance_relayed_maps_have_no_route_and_send_nothing() -> Te
     );
     Ok(())
 }
+
+/// The parameters read while a server was looked at are kept: nothing fetches them again in
+/// this process (one request fewer through its relay), and its operator shows at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parameters_learned_from_a_look_are_not_fetched_again() -> TestResult {
+    use pingers_proto::{
+        AnonymousCredential, CoverReadRatio, CustomPushRelays, Params, RelayUrl, Slashing,
+        TokenAllowance,
+    };
+
+    let store = store()?;
+    let net = offline(&store);
+    let link = net.servers.built_in_link().await?;
+    link.learn_params(Params {
+        anonymous_credentials: vec![AnonymousCredential::PrivacyPass],
+        rln_slashing: Slashing::Off,
+        cover_read_ratio: CoverReadRatio::ALWAYS,
+        board_page_records: 64,
+        ohttp_relays: vec![RelayUrl::new("https://relay.invalid".to_owned())?],
+        push_relays: Vec::new(),
+        custom_push_relays: CustomPushRelays::NotAllowed,
+        server_operator: "Flat 7".to_owned(),
+        server_time: store.clock.now(),
+        map_host: None,
+        privacy_pass_daily_limit: TokenAllowance::new(300),
+    })
+    .await?;
+    // The relay never resolves: a fetch would fail, not answer `None`.
+    assert!(matches!(link.fetch_params_once().await, Ok(None)));
+    assert_eq!(
+        link.operators()
+            .map(|known| known.server.as_str().to_owned())
+            .as_deref(),
+        Some("Flat 7")
+    );
+    Ok(())
+}
