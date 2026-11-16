@@ -1031,6 +1031,7 @@ Welcome messages travel as mailbox posts. Invites reuse mailboxes (below). There
 | Map host key config (`GET /v1/maps/ohttp-keys`) | fetched from the map host at most once per 5 minutes, however many ask | cached |
 | Board cursors | each good for one page within its 10 minutes, so a page cannot be fetched again to amplify a read | 410 |
 | RLN proofs, order of checks | bucket, then a nullifier already spent on another request in the bucket, then root and request digest, and only then the proof (a pairing check) | 403 |
+| Push relay connections (the relay's own limits, its configuration file) | `max_connections` (256) at once, one more closed on arrival; closed after `idle_timeout_s` (30 s) without a complete request head, on a new connection or between keep-alive requests; each request done within the upstream timeout plus 10 s; HTTP/1.1 only | close, 408 |
 
 **Push relay API** (a separate service, B.4.9):
 

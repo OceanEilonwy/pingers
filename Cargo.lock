@@ -3931,6 +3931,8 @@ dependencies = [
  "base64",
  "getrandom 0.4.3",
  "hex",
+ "hyper",
+ "hyper-util",
  "pingers-crypto",
  "pingers-proto",
  "pingers-testkit",

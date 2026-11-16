@@ -18,6 +18,9 @@ pingers-time = { workspace = true }
 # The production Timer (TokioTimer) for upstream timeouts and the counts report.
 pingers-transport = { workspace = true }
 axum = { workspace = true }
+# The accept loop (connections.rs): HTTP/1.1 connections with an idle timeout.
+hyper = { workspace = true, features = ["http1"] }
+hyper-util = { workspace = true, features = ["service"] }
 # `keygen`: a ChaCha generator seeded from the operating system (the server's pattern).
 getrandom = { workspace = true }
 hex = { workspace = true }

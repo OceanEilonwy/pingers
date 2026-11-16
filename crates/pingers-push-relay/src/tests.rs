@@ -292,3 +292,127 @@ async fn serve_with_uses_the_injected_sender_and_clock() -> TestResult {
     assert!(server.await?.is_ok());
     Ok(())
 }
+
+/// Starts the relay with `limits` on a free port; the server stops when the returned sender
+/// is dropped.
+async fn limited(
+    limits: connections::ConnectionLimits,
+) -> Result<(std::net::SocketAddr, tokio::sync::oneshot::Sender<()>), Box<dyn std::error::Error>> {
+    let mut config = RelayConfig::parse(&config_text("127.0.0.1:0", 4_000_000_000))?;
+    config.connections = limits;
+    let listener = listen(&config).await?;
+    let address = listener.local_addr()?;
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(serve_with(
+        config,
+        Outside {
+            sender: Capture(std::sync::Arc::default()),
+            clock: ManualClock::new(UnixSeconds::new(4_000_000_000)),
+        },
+        listener,
+        async {
+            drop(stopped.await);
+        },
+    ));
+    Ok((address, stop))
+}
+
+/// Whether the relay closes `stream` within `wait` of real time (reading and discarding any
+/// answer first).
+async fn closed_within(stream: &mut tokio::net::TcpStream, wait: Duration) -> bool {
+    use tokio::io::AsyncReadExt as _;
+    let mut buffer = [0_u8; 1024];
+    loop {
+        match tokio::time::timeout(wait, stream.read(&mut buffer)).await {
+            Ok(Ok(0) | Err(_)) => return true,
+            Ok(Ok(_)) => {}
+            Err(_) => return false,
+        }
+    }
+}
+
+/// A connection that sends nothing, or nothing after its last request, is closed after the
+/// idle timeout; one beyond the connection limit is closed at once.
+#[tokio::test]
+async fn idle_connections_close_and_the_relay_holds_a_bounded_number() -> TestResult {
+    use tokio::io::AsyncWriteExt as _;
+    let idle = Duration::from_millis(300);
+    let (address, _stop) = limited(connections::ConnectionLimits {
+        max_connections: 2,
+        idle_timeout: idle,
+        request_timeout: Duration::from_secs(5),
+    })
+    .await?;
+
+    // Silent from the start.
+    let mut silent = tokio::net::TcpStream::connect(address).await?;
+    // One request answered, then silent with the connection kept alive.
+    let mut kept = tokio::net::TcpStream::connect(address).await?;
+    kept.write_all(b"GET /status HTTP/1.1\r\nHost: relay\r\n\r\n")
+        .await?;
+    let mut answer = [0_u8; 12];
+    tokio::io::AsyncReadExt::read_exact(&mut kept, &mut answer).await?;
+    assert_eq!(&answer, b"HTTP/1.1 200");
+
+    // Both slots are taken: a third connection is closed without an answer.
+    let mut third = tokio::net::TcpStream::connect(address).await?;
+    assert!(closed_within(&mut third, Duration::from_secs(2)).await);
+
+    // Neither of the first two is closed before the idle timeout, both are soon after.
+    assert!(!closed_within(&mut silent, idle / 3).await);
+    assert!(closed_within(&mut silent, idle * 4).await);
+    assert!(closed_within(&mut kept, idle * 4).await);
+
+    // With the slots free again, a new connection is served.
+    let response = reqwest::Client::new()
+        .get(format!("http://{address}/status"))
+        .send()
+        .await?;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    Ok(())
+}
+
+/// A request whose body never finishes is answered 408 after the request timeout, and its
+/// connection closed.
+#[tokio::test]
+async fn a_request_that_trickles_is_cut_off() -> TestResult {
+    use tokio::io::AsyncWriteExt as _;
+    let (address, _stop) = limited(connections::ConnectionLimits {
+        max_connections: 4,
+        idle_timeout: Duration::from_secs(5),
+        request_timeout: Duration::from_millis(300),
+    })
+    .await?;
+    let mut stream = tokio::net::TcpStream::connect(address).await?;
+    stream
+        .write_all(b"POST /v1/push HTTP/1.1\r\nHost: relay\r\nContent-Length: 400\r\n\r\nab")
+        .await?;
+    let mut answer = [0_u8; 12];
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        tokio::io::AsyncReadExt::read_exact(&mut stream, &mut answer),
+    )
+    .await??;
+    assert_eq!(&answer, b"HTTP/1.1 408");
+    assert!(closed_within(&mut stream, Duration::from_secs(2)).await);
+    Ok(())
+}
+
+#[test]
+fn connection_limits_come_from_the_file_with_defaults() -> TestResult {
+    let defaults = RelayConfig::parse(&config_text("127.0.0.1:0", 0))?;
+    assert_eq!(defaults.connections.max_connections, 256);
+    assert_eq!(defaults.connections.idle_timeout, Duration::from_secs(30));
+    let text = config_text("127.0.0.1:0", 0).replace(
+        "hash_key =",
+        "max_connections = 10\nidle_timeout_s = 5\nhash_key =",
+    );
+    let set = RelayConfig::parse(&text)?;
+    assert_eq!(set.connections.max_connections, 10);
+    assert_eq!(set.connections.idle_timeout, Duration::from_secs(5));
+    assert!(
+        RelayConfig::parse(&text.replace("max_connections = 10", "max_connections = 0")).is_err()
+    );
+    assert!(RelayConfig::parse(&text.replace("idle_timeout_s = 5", "idle_timeout_s = 0")).is_err());
+    Ok(())
+}

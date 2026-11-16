@@ -21,6 +21,7 @@
 pub mod address;
 pub mod command;
 pub mod config;
+pub mod connections;
 pub mod counts;
 pub mod credentials;
 pub mod delivery;
@@ -197,8 +198,8 @@ pub struct Outside<S, C> {
 ///
 /// # Errors
 ///
-/// [`RelayError::NoActiveKey`] if no key is active at the injected clock's time, or
-/// [`RelayError::Serve`] if the HTTP server fails.
+/// [`RelayError::NoActiveKey`] if no key is active at the injected clock's time. Connections are
+/// served within the configured [`connections::ConnectionLimits`].
 pub async fn serve_with<S: PushSender, C: Clock + 'static>(
     config: RelayConfig,
     outside: Outside<S, C>,
@@ -230,14 +231,11 @@ pub async fn serve_with<S: PushSender, C: Clock + 'static>(
             }))
         }
     };
-    let served = axum::serve(listener, http::router(relay))
-        .with_graceful_shutdown(shutdown)
-        .await
-        .map_err(RelayError::Serve);
+    connections::serve(listener, http::router(relay), config.connections, shutdown).await;
     if let Some(reporter) = reporter {
         reporter.abort();
     }
-    served
+    Ok(())
 }
 
 #[expect(

@@ -9,6 +9,8 @@
 //! upstream_timeout_ms = 10000
 //! token_pushes_per_minute = 30
 //! max_ttl_s = 2592000
+//! max_connections = 256            # connections held at once; one more is closed at once
+//! idle_timeout_s = 30              # a connection with no request for this long is closed
 //! hash_key = "<64 hex>"            # keys the credential hashes and the token rate limits
 //!
 //! [[keys]]
@@ -206,6 +208,8 @@ pub struct RelayConfig {
     pub unifiedpush: Option<EndpointPolicy>,
     /// FCM, if enabled.
     pub fcm: Option<FcmConfig>,
+    /// Connections held at once, and how long one may stay idle.
+    pub connections: crate::connections::ConnectionLimits,
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -229,6 +233,12 @@ const fn default_token_rate() -> u32 {
 }
 const fn default_max_ttl() -> u64 {
     30 * 24 * 60 * 60
+}
+const fn default_max_connections() -> u32 {
+    crate::connections::DEFAULT_MAX_CONNECTIONS
+}
+const fn default_idle_timeout() -> u64 {
+    crate::connections::DEFAULT_IDLE_TIMEOUT_S
 }
 fn default_fcm_endpoint() -> String {
     "https://fcm.googleapis.com/".to_owned()
@@ -256,6 +266,10 @@ struct FileConfig {
     servers: Vec<FileServer>,
     unifiedpush: Option<FileUnifiedPush>,
     fcm: Option<FileFcm>,
+    #[serde(default = "default_max_connections")]
+    max_connections: u32,
+    #[serde(default = "default_idle_timeout")]
+    idle_timeout_s: u64,
 }
 
 #[derive(Deserialize)]
@@ -321,6 +335,19 @@ impl RelayConfig {
             }
             millis => Duration::from_millis(millis),
         };
+        let connections = crate::connections::ConnectionLimits {
+            max_connections: match file.max_connections {
+                0 => {
+                    return Err(ConfigError::OutOfRange {
+                        field: "max_connections",
+                    });
+                }
+                count => usize::try_from(count).unwrap_or(usize::MAX),
+            },
+            idle_timeout: positive_seconds("idle_timeout_s", file.idle_timeout_s)?,
+            // Reading a 4 KiB body and one wait for the push service, with room to spare.
+            request_timeout: upstream_timeout.saturating_add(Duration::from_secs(10)),
+        };
         let fcm = file.fcm.map(fcm_config).transpose()?;
         let hash_key = hex_32("hash_key", &file.hash_key);
         file.hash_key.zeroize();
@@ -356,6 +383,7 @@ impl RelayConfig {
                 }
             }),
             fcm,
+            connections,
         })
     }
 }
