@@ -651,6 +651,31 @@ async fn relayed_answers(harness: &InProcessHarness) -> Result<u64, TestError> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_flush_restocks_a_server_s_tokens_before_sending_there() -> TestResult {
+    let world = World::start()?;
+    let (ana, _on_a, _on_b) = ana_on_both(&world).await?;
+    {
+        let database = Database::open(&ana.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+        let session = database.session()?;
+        let _spent = session
+            .server(&world.b_server()?)?
+            .privacy_pass_tokens()
+            .retain_keys(&[])?;
+    }
+    // The next day, when B issues a fresh allowance. A new name goes to the Party on B; with
+    // B's stock spent, the flush refills it first, so the profile operation goes out now
+    // rather than waiting for a wake.
+    world.clock.advance(std::time::Duration::from_hours(25));
+    let before = relayed_answers(world.b()?).await?;
+    ana.client.set_display_name(Name::new("Anna")?).await?;
+    assert!(
+        relayed_answers(world.b()?).await? > before,
+        "the new name reached B"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn leaving_the_party_on_b_posts_the_leave_to_b_once() -> TestResult {
     let world = World::start()?;
     let (ana, on_a, on_b) = ana_on_both(&world).await?;
