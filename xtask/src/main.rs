@@ -19,8 +19,9 @@
 //! - `cargo xtask no-python`: fails if a Python file is in the repository (also a `ci` step).
 //!   See [`no_python`].
 //! - `cargo xtask pins <server.toml> <push-relay.toml>`: the app's two key pin build
-//!   variables from the deployed configurations; `cargo xtask pins --relay <url> --push <url>`:
-//!   the same from the running services. See [`pins`].
+//!   variables from the deployed configurations; `cargo xtask pins --relay <url> --push <url>
+//!   [--maps <url>]`: the same from the running services, and the map host's with `--maps`.
+//!   See [`pins`].
 //! - `cargo xtask release-android [--flavour gms|foss]... [--tag <v-tag>]`: the signed release
 //!   build CI's `release.yml` runs, from the same environment variables, named for Obtainium.
 //!   See [`release_android`]. `cargo xtask release-version <v-tag>` and `cargo xtask
@@ -123,9 +124,10 @@ const USAGE: &str = "usage: cargo xtask <command>\n\n\
                      pins <server.toml> <push-relay.toml>\n          \
                      print PINGERS_GATEWAY_KEY_PINS and PINGERS_PUSH_RELAY_KEY_PINS\n          \
                      from the deployed configurations (public values only)\n  \
-                     pins --relay <ohttp relay url> --push <push relay url>\n          \
+                     pins --relay <ohttp relay url> --push <push relay url> [--maps <map host url>]\n          \
                      the same lines from the running services: the served gateway key\n          \
-                     through the relay, the push relay's published and next keys\n  \
+                     through the relay, the push relay's published and next keys, and\n          \
+                     with --maps PINGERS_MAP_HOST_KEY_PINS from the map host\n  \
                      release-android [--flavour gms|foss]... [--tag <v-tag>]\n          \
                      signed release APKs and AABs from PINGERS_KEYSTORE_PATH,\n          \
                      PINGERS_KEYSTORE_PASSWORD and PINGERS_KEY_ALIAS, checked with\n          \

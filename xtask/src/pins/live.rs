@@ -9,12 +9,15 @@
 //! - The push relay's comes from `GET <push>/v1/config` (the published key), followed by
 //!   `GET <push>/v1/config/next` when a next key is scheduled (`404` when none is), in that
 //!   order.
+//! - With `--maps <map host>`, the map host gateway's from `GET <maps>/ohttp-keys`, printed as a
+//!   third line, `PINGERS_MAP_HOST_KEY_PINS` (the map host has one key).
 //!
 //! Each body is decoded with the same parsers the app uses (pingers-ohttp's `KeyConfig`,
 //! pingers-proto's `PushRelayConfig`) and hashed with pingers-crypto's `key_config_hash`, so a
 //! malformed answer fails here rather than in a build. Compare the output with the file mode
 //! (or the binaries' `pins` subcommands) before storing the CI variables.
 
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
@@ -22,7 +25,7 @@ use pingers_ohttp::KeyConfig;
 use pingers_proto::{KeyConfigHash, PushRelayConfig, WireDecode as _};
 use reqwest::{Client, StatusCode, Url};
 
-use super::variables;
+use super::{MAP_HOST_VARIABLE, variables};
 
 /// Per request, connection included.
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -38,18 +41,23 @@ pub(crate) struct LiveOptions {
     pub(crate) relay: Url,
     /// The push relay's origin.
     pub(crate) push: Url,
+    /// The map host's origin, if its pin is wanted too.
+    pub(crate) maps: Option<Url>,
 }
 
 impl LiveOptions {
-    /// Parses `--relay <url> --push <url>`, in either order; `None` for anything else.
+    /// Parses `--relay <url> --push <url> [--maps <url>]`, in any order; `None` for anything
+    /// else.
     pub(crate) fn parse(options: &[String]) -> Option<Self> {
         let mut relay = None;
         let mut push = None;
+        let mut maps = None;
         let mut options = options.iter();
         while let Some(option) = options.next() {
             let slot = match option.as_str() {
                 "--relay" => &mut relay,
                 "--push" => &mut push,
+                "--maps" => &mut maps,
                 _ => return None,
             };
             if slot.is_some() {
@@ -60,6 +68,7 @@ impl LiveOptions {
         Some(Self {
             relay: relay?,
             push: push?,
+            maps,
         })
     }
 }
@@ -105,12 +114,29 @@ async fn fetch(options: &LiveOptions) -> Result<String> {
         .context("building the HTTP client")?;
     let gateway = gateway_pin(&client, &options.relay).await?;
     let push_relay = push_relay_pins(&client, &options.push).await?;
-    Ok(variables(&[gateway], &push_relay))
+    let mut output = variables(&[gateway], &push_relay);
+    if let Some(maps) = &options.maps {
+        let pin = map_host_pin(&client, maps).await?;
+        // Writing to a String cannot fail.
+        let _infallible = writeln!(output, "{MAP_HOST_VARIABLE}={}", pin.to_pin());
+    }
+    Ok(output)
 }
 
 /// The served gateway key's pin, through the relay.
 async fn gateway_pin(client: &Client, relay: &Url) -> Result<KeyConfigHash> {
     let url = endpoint(relay, "/v1/ohttp/config", StripOhttp::Yes);
+    let body = get(client, &url)
+        .await?
+        .with_context(|| format!("{url}: no key config (404)"))?;
+    let config = KeyConfig::decode(&body)
+        .map_err(|_error| anyhow::anyhow!("{url}: not a valid OHTTP key config"))?;
+    Ok(config.hash())
+}
+
+/// The map host gateway's key pin, from its own `/ohttp-keys`.
+async fn map_host_pin(client: &Client, maps: &Url) -> Result<KeyConfigHash> {
+    let url = endpoint(maps, "/ohttp-keys", StripOhttp::No);
     let body = get(client, &url)
         .await?
         .with_context(|| format!("{url}: no key config (404)"))?;

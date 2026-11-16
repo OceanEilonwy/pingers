@@ -217,7 +217,10 @@ bytes are a valid X25519 key). The FCM service account is the only secret a pers
 only the owner, pasting it into nodo-tui on the device. No tool reads or copies it.
 
 Both HPKE key sets (the OHTTP gateway's and the push relay's) have two slots, and app builds pin
-the hashes of both, so the app never meets an unpinned key:
+the hashes of both, so the app never meets an unpinned key. The map host has one OHTTP key, made
+on its first start (`ohttp_key_file`); its pin, `PINGERS_MAP_HOST_KEY_PINS`, is on the Setup page
+too, and changing that key needs a new app build with the new pin (relayed map downloads stop
+until then; direct ones do not):
 
 1. At install, slots A and B are generated. A is served (`ohttp_served_key_id = 1`; the push
    relay's B activates in 2100). Put both pins in CI: the Setup page shows the two lines,
@@ -573,8 +576,9 @@ with this appliance's values filled in and each step marked done where the appli
    | `PINGERS_MAP_HOST` | `https://maps.example.org` |
    | `PINGERS_GATEWAY_KEY_PINS` | the gateway's two pins, comma-separated, served key first (from the page) |
    | `PINGERS_PUSH_RELAY_KEY_PINS` | the push relay's two pins, the same way (from the page) |
+   | `PINGERS_MAP_HOST_KEY_PINS` | the map host gateway's pin (one key; from the page, which reads it from the map host's `/ohttp-keys`) |
 
-   The page also shows the six as `gh variable set <NAME> --repo OceanEilonwy/pingers
+   The page also shows the seven as `gh variable set <NAME> --repo OceanEilonwy/pingers
    --body=<value>` lines (`--body=`, since a pin can start with `-`).
 
    Secrets, which the appliance does not hold (android/docs/release.md says where each comes

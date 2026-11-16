@@ -9,9 +9,9 @@
 //! `pingers://join#s1.<...>` form the landing page forwards.
 //!
 //! Besides the server and the code, the payload carries the key pins the appliance computed
-//! from its own keys (the OHTTP gateway's and the push relay's, the served key first), the same
-//! values the owner copies into the app build's `PINGERS_GATEWAY_KEY_PINS` and
-//! `PINGERS_PUSH_RELAY_KEY_PINS`. The app checks them against its build's pins, or, in a build
+//! from its own keys (the OHTTP gateway's, the push relay's and the map host's, the served key
+//! first), the same values the owner copies into the app build's `PINGERS_GATEWAY_KEY_PINS`,
+//! `PINGERS_PUSH_RELAY_KEY_PINS` and `PINGERS_MAP_HOST_KEY_PINS`. The app checks them against its build's pins, or, in a build
 //! without pins, against the keys it meets before it registers.
 
 use base64::Engine as _;
@@ -50,6 +50,10 @@ pub struct SetupPayload {
     pub gateway_pins: Vec<KeyConfigHash>,
     /// The push relay's key pins, the published key first. One to [`MAX_SETUP_PINS`].
     pub push_relay_pins: Vec<KeyConfigHash>,
+    /// The map host gateway's key pins (`PINGERS_MAP_HOST_KEY_PINS`): maps fetched through
+    /// the privacy relay are sealed only to a key among them. Zero (the appliance serves no
+    /// map host) to [`MAX_SETUP_PINS`].
+    pub map_host_pins: Vec<KeyConfigHash>,
 }
 
 impl PartialEq for SetupPayload {
@@ -58,6 +62,7 @@ impl PartialEq for SetupPayload {
             && bool::from(self.registration_code.ct_eq(&other.registration_code))
             && self.gateway_pins == other.gateway_pins
             && self.push_relay_pins == other.push_relay_pins
+            && self.map_host_pins == other.map_host_pins
     }
 }
 
@@ -127,11 +132,12 @@ impl SetupPayload {
                 field: "registration code",
             });
         }
-        for (pins, field) in [
-            (&self.gateway_pins, "gateway pins"),
-            (&self.push_relay_pins, "push relay pins"),
+        for (pins, minimum, field) in [
+            (&self.gateway_pins, 1, "gateway pins"),
+            (&self.push_relay_pins, 1, "push relay pins"),
+            (&self.map_host_pins, 0, "map host pins"),
         ] {
-            if pins.is_empty() || pins.len() > MAX_SETUP_PINS {
+            if !(minimum..=MAX_SETUP_PINS).contains(&pins.len()) {
                 return Err(ProtoError::OutOfRange { field });
             }
         }
@@ -161,24 +167,26 @@ fn read_pins(decoder: &mut Decoder<'_>) -> Result<Vec<KeyConfigHash>, ProtoError
 }
 
 /// Layout: `[server (text), registration code (text), gateway pins ([32 bytes]), push relay
-/// pins ([32 bytes])]`.
+/// pins ([32 bytes]), map host pins ([32 bytes])]`.
 impl CborBody for SetupPayload {
     fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
         self.check()?;
-        writer.array(4)?;
+        writer.array(5)?;
         writer.text(self.server.as_str())?;
         writer.text(self.registration_code.expose())?;
         write_pins(writer, &self.gateway_pins)?;
-        write_pins(writer, &self.push_relay_pins)
+        write_pins(writer, &self.push_relay_pins)?;
+        write_pins(writer, &self.map_host_pins)
     }
 
     fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
-        cbor::array_of(decoder, 4)?;
+        cbor::array_of(decoder, 5)?;
         let payload = Self {
             server: ServerId::new(decoder.str()?.to_owned())?,
             registration_code: SecretText::new(decoder.str()?.to_owned()),
             gateway_pins: read_pins(decoder)?,
             push_relay_pins: read_pins(decoder)?,
+            map_host_pins: read_pins(decoder)?,
         };
         payload.check()?;
         Ok(payload)
@@ -205,6 +213,7 @@ mod tests {
                 KeyConfigHash::from_bytes([3; 32]),
                 KeyConfigHash::from_bytes([4; 32]),
             ],
+            map_host_pins: vec![KeyConfigHash::from_bytes([5; 32])],
         })
     }
 
@@ -227,11 +236,13 @@ mod tests {
 
     #[test]
     fn a_link_fits_a_small_qr_code() -> Result<(), ProtoError> {
-        // A long server name and two pins of each kind stay well under 400 characters, which
-        // a version 13 QR code holds at error correction level M.
+        // A long server name, two gateway and two push relay pins and the map host's pin stay
+        // under 440 characters, which a version 16 QR code holds at error correction level M
+        // (450 bytes).
         let mut payload = payload()?;
         payload.server = ServerId::new(format!("https://{}.example.org", "p".repeat(40)))?;
-        assert!(payload.to_link()?.len() < 400);
+        let length = payload.to_link()?.len();
+        assert!(length < 440, "{length}");
         Ok(())
     }
 

@@ -47,6 +47,7 @@ fn relay_config(key_id: u8, public: u8) -> Result<PushRelayConfig, pingers_proto
 struct Fakes {
     gateway: Vec<KeyConfigHash>,
     push: Vec<KeyConfigHash>,
+    map_host: Vec<KeyConfigHash>,
     config: Config,
 }
 
@@ -91,10 +92,20 @@ async fn fakes() -> Result<Fakes, Box<dyn std::error::Error>> {
             ),
     )
     .await?;
-    let maps = serve_fake(Router::new().route(
-        "/catalog.json",
-        get(|| std::future::ready(r#"{"format":1,"regions":[{"id":"a"},{"id":"b"}]}"#)),
-    ))
+    let map_key = GatewayKey::generate(1, &mut rng)?.config();
+    let map_host = vec![map_key.hash()];
+    let map_key = map_key.encoded().to_vec();
+    let maps = serve_fake(
+        Router::new()
+            .route(
+                "/catalog.json",
+                get(|| std::future::ready(r#"{"format":1,"regions":[{"id":"a"},{"id":"b"}]}"#)),
+            )
+            .route(
+                "/ohttp-keys",
+                get(move || std::future::ready(map_key.clone())),
+            ),
+    )
     .await?;
     let text = crate::config::tests::file()
         .replace("example.org", "example.invalid")
@@ -104,6 +115,7 @@ async fn fakes() -> Result<Fakes, Box<dyn std::error::Error>> {
     Ok(Fakes {
         gateway: gateway_pins,
         push: push_pins,
+        map_host,
         config: Config::parse(&text)?,
     })
 }
@@ -113,10 +125,12 @@ async fn the_facts_come_from_the_services_on_loopback() -> TestResult {
     let Fakes {
         gateway,
         push,
+        map_host,
         config,
     } = fakes().await?;
     let facts = checks::gather(&config, &Clients::new()?).await;
     assert_eq!(facts.gateway_pins, Ok(gateway));
+    assert_eq!(facts.map_host_pins, Ok(map_host));
     let relay = facts.push_relay.map_err(|why| why.clone())?;
     assert_eq!(relay.pins, push);
     assert!(relay.fcm);
@@ -140,6 +154,7 @@ async fn the_page_is_served_on_loopback_with_a_working_link() -> TestResult {
     let Fakes {
         gateway,
         push,
+        map_host: _,
         config,
     } = fakes().await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;

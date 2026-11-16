@@ -182,11 +182,12 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
   targets `invite_payload`, `join_request` and `invite_post`. The files come from `cargo xtask vectors`
   (`xtask/src/vectors/proto/invite.rs`).
 - **Key pins in the link** (added 2026-11-14, v1-multiserver): the payload is `[server, invite
-  mailbox, invite secret, inviter fingerprint, expires, gateway pins, push relay pins]` plus the
-  code: seven or eight elements. `gateway_pins` (1 to `MAX_PINS` = 4 `KeyConfigHash`es) and
-  `push_relay_pins` (0 to 4) are the hashes the inviter trusts for the Party's server, so a joiner
-  new to the server pins them rather than whatever key it is first shown (owner decision:
-  nothing is pinned on first use).
+  mailbox, invite secret, inviter fingerprint, expires, gateway pins, push relay pins, map host
+  pins]` plus the code: eight or nine elements. `gateway_pins` (1 to `MAX_PINS` = 4
+  `KeyConfigHash`es), `push_relay_pins` (0 to 4) and `map_host_pins` (0 to 4; added 2026-11-17)
+  are the hashes the inviter trusts for the Party's server, its push relay and the map host it
+  forwards relayed map downloads to, so a joiner new to the server pins them rather than
+  whatever key it is first shown (owner decision: nothing is pinned on first use).
 
 ### First-phone setup link (added 2026-11-16, v1-setup)
 
@@ -194,8 +195,9 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
   (`https://<server>/j#s1.<base64url(encoding)>`, also `pingers://join#s1.<...>` as the `/j`
   landing page forwards it): `[server (ServerId text), registration code (SecretText, 1 to 128
   bytes), gateway key pins ([32-byte KeyConfigHash], served key first, 1 to 4), push relay key
-  pins (the same, published key first, 1 to 4)]`. The pins are the values of the app build's
-  `PINGERS_GATEWAY_KEY_PINS` and `PINGERS_PUSH_RELAY_KEY_PINS`. Unlike invites, the `s1.` prefix
+  pins (the same, published key first, 1 to 4), map host key pins (the same, 0 to 4; added
+  2026-11-17)]`. The pins are the values of the app build's `PINGERS_GATEWAY_KEY_PINS`,
+  `PINGERS_PUSH_RELAY_KEY_PINS` and `PINGERS_MAP_HOST_KEY_PINS`. Unlike invites, the `s1.` prefix
   and base64url live here (`SetupPayload::to_link`, `from_link`, `is_setup_link`), since the
   appliance's setup service builds the link and depends on this crate only; pingers-proto
   already had the base64 dependency for pins. `==` compares the code in constant time and

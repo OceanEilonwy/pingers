@@ -744,8 +744,6 @@ async fn map_calls_reach_the_maps_port_and_pass_its_errors_on() -> Result<(), Te
         rig.fakes.calls().last(),
         Some(&CrateCall::MapCatalog(hosts, MapRoute::Direct))
     );
-    rig.client.forget_map_host_key().await?;
-    assert_eq!(rig.fakes.calls().last(), Some(&CrateCall::ForgetMapHostKey));
     let missing = std::env::temp_dir().join("pingers-client-no-maps-here");
     assert!(rig.client.installed_maps(missing.clone()).await?.is_empty());
     rig.client
@@ -753,7 +751,9 @@ async fn map_calls_reach_the_maps_port_and_pass_its_errors_on() -> Result<(), Te
         .await?;
     rig.fakes.set_failing(Some(CrateName::Maps));
     assert!(matches!(
-        rig.client.forget_map_host_key().await,
+        rig.client
+            .delete_map(std::env::temp_dir(), "oceania/none".to_owned())
+            .await,
         Err(ClientError::Maps(_))
     ));
     Ok(())

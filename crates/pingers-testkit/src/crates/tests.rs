@@ -252,7 +252,7 @@ fn touch(
         // The maps port has no section: two calls instead.
         CrateName::Maps => [
             now(crates.maps.catalog(no_hosts(), MapRoute::Direct))?.map(drop),
-            now(crates.maps.forget_key_pin())?,
+            now(crates.maps.catalog(no_hosts(), MapRoute::Relay))?.map(drop),
         ],
     })
 }
@@ -358,8 +358,6 @@ async fn the_fake_maps_port_has_no_hosts_but_a_real_maps_directory() -> TestResu
             "oceania/fake".to_owned()
         ))
     );
-    crates.maps.forget_key_pin().await?;
-    assert_eq!(fakes.calls().last(), Some(&CrateCall::ForgetMapHostKey));
     // With no hosts, nothing is offered to download.
     let job = MapDownload {
         offer: pingers_map_downloads::catalog::RegionOffer {
@@ -565,6 +563,7 @@ fn setup_payload() -> Result<SetupPayload, TestError> {
         registration_code: SecretText::new("setup-code-0123456789".into()),
         gateway_pins: vec![pin],
         push_relay_pins: vec![pin],
+        map_host_pins: Vec::new(),
     })
 }
 

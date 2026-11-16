@@ -103,6 +103,7 @@ async fn link_server(
     let pins = InvitePins {
         gateway,
         push_relay: KeyPins::new(link.push_relay_pins.iter().copied()).ok(),
+        map_host: link.map_host_pins.clone(),
     };
     match net.invited_server(&link.server, pins).await {
         Ok(recorded) => Ok(Ok(recorded)),

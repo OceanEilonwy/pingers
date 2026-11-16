@@ -344,7 +344,15 @@ impl Servers {
                             .get(&record.server)?
                             .is_some_and(|stored| !stored.gateway_pins.is_empty());
                     if !keep {
-                        session.servers().put(record)?;
+                        // Likewise a build without map host pins keeps those a setup link or
+                        // an invite recorded.
+                        let mut record = record.clone();
+                        if record.map_host_pins.is_empty()
+                            && let Some(stored) = session.servers().get(&record.server)?
+                        {
+                            record.map_host_pins = stored.map_host_pins;
+                        }
+                        session.servers().put(&record)?;
                     }
                 }
                 Ok(session.servers().list()?)

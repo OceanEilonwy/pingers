@@ -573,7 +573,4 @@ pub trait MapsPort: Send + Sync {
     ) -> Result<Vec<pingers_map_downloads::RegionManifest>, ClientError>;
     /// Removes region `id` from `directory`.
     async fn delete(&self, directory: std::path::PathBuf, id: String) -> Result<(), ClientError>;
-    /// Forgets the map host gateway key pinned on first use, so relayed downloads trust the
-    /// key the host serves now (the user's answer to "the map host's key changed").
-    async fn forget_key_pin(&self) -> Result<(), ClientError>;
 }

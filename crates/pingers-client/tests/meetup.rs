@@ -159,6 +159,7 @@ impl Phone {
                     .to_bytes(),
                 ),
             )),
+            map_host_pins: None,
             trust: Trust::from_pem(trust_pem)?,
             registration_code: None,
         };

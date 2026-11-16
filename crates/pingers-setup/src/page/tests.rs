@@ -32,6 +32,7 @@ fn running() -> Facts {
             fcm: true,
         }),
         map_regions: Ok(2),
+        map_host_pins: Ok(vec![KeyConfigHash::from_bytes([5; 32])]),
         public: Vec::new(),
     }
 }
@@ -41,6 +42,7 @@ fn down() -> Facts {
         gateway_pins: Err("pingers-server's gateway is not answering".to_owned()),
         push_relay: Err("pingers-push-relay is not answering".to_owned()),
         map_regions: Err("pingers-map-host is not answering".to_owned()),
+        map_host_pins: Err("pingers-map-host's gateway is not answering".to_owned()),
         public: Vec::new(),
     }
 }
@@ -126,6 +128,10 @@ fn the_github_variables_carry_this_appliances_values() -> TestResult {
         Some(pin_list(&pins(3)))
     );
     assert_eq!(
+        value_of(&page, "PINGERS_MAP_HOST_KEY_PINS"),
+        Some(pin_list(&[KeyConfigHash::from_bytes([5; 32])]))
+    );
+    assert_eq!(
         value_of(&page, "Tag").as_deref(),
         Some("git tag -a v1.0.0-rc.1 -m \"Pingers v1.0.0-rc.1\"")
     );
@@ -157,6 +163,7 @@ fn the_first_phone_link_carries_the_server_code_and_pins() -> TestResult {
     );
     assert_eq!(payload.gateway_pins, pins(1));
     assert_eq!(payload.push_relay_pins, pins(3));
+    assert_eq!(payload.map_host_pins, [KeyConfigHash::from_bytes([5; 32])]);
     assert_eq!(value_of(&page, "Setup link"), Some(qr));
     assert_eq!(
         value_of(&page, "Registration code").as_deref(),
@@ -185,6 +192,7 @@ fn with_the_services_down_the_page_says_why_and_shows_no_link() -> TestResult {
     for label in [
         "PINGERS_GATEWAY_KEY_PINS",
         "PINGERS_PUSH_RELAY_KEY_PINS",
+        "PINGERS_MAP_HOST_KEY_PINS",
         "The map host serves map packs",
         "pingers-server's gateway answers on the appliance",
     ] {
@@ -324,7 +332,7 @@ const CI_WORKFLOW: &str = include_str!("../../../../.github/workflows/ci.yml");
 fn the_page_names_every_variable_the_release_reads_with_a_value() -> TestResult {
     let page = build(&config()?, &running());
     let variables = workflow_names(RELEASE_WORKFLOW, "vars.");
-    assert_eq!(variables.len(), 6, "{variables:?}");
+    assert_eq!(variables.len(), 7, "{variables:?}");
     let commands = value_of(&page, "The same with the gh command line").ok_or("no gh lines")?;
     for name in &variables {
         let shown = value_of(&page, name).ok_or_else(|| format!("{name} not on the page"))?;

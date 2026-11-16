@@ -262,6 +262,10 @@ pub struct InstanceConfig {
     /// `PINGERS_PUSH_RELAY_KEY_PINS`, in the same form. `None` pins nothing: no push token is
     /// sealed until an invite or setup link brings push relay pins.
     pub push_relay_key_pins: Option<String>,
+    /// `PINGERS_MAP_HOST_KEY_PINS`, in the same form: the map host gateway keys relayed map
+    /// downloads may be sealed to. `None` pins nothing: maps are not fetched through the
+    /// relay until a setup link or invite brings map host pins.
+    pub map_host_key_pins: Option<String>,
     /// `PINGERS_EXTRA_CA`: a PEM bundle trusted instead of Mozilla's roots, for a local test
     /// stack. The app passes it only in debug builds; release builds pass `None`.
     pub extra_ca_pem: Option<String>,
@@ -294,6 +298,10 @@ impl TryFrom<InstanceConfig> for pingers_client::Instance {
             push_relay_pins: pins(
                 config.push_relay_key_pins,
                 "the push relay key pins must be base64url SHA-256 hashes",
+            )?,
+            map_host_pins: pins(
+                config.map_host_key_pins,
+                "the map host key pins must be base64url SHA-256 hashes",
             )?,
             trust: match config.extra_ca_pem.filter(|pem| !pem.trim().is_empty()) {
                 None => pingers_client::Trust::Mozilla,
@@ -922,15 +930,6 @@ impl Core {
         Ok(self.client.delete_map(PathBuf::from(directory), id).await?)
     }
 
-    /// Trusts the map host's current gateway key for relayed downloads, after it changed.
-    ///
-    /// # Errors
-    ///
-    /// [`CoreError::Storage`] if the pin cannot be removed.
-    pub async fn forget_map_host_key(&self) -> Result<(), CoreError> {
-        Ok(self.client.forget_map_host_key().await?)
-    }
-
     /// A fix from the platform.
     ///
     /// # Errors
@@ -1240,6 +1239,7 @@ mod tests {
             push_relay: None,
             gateway_key_pins: None,
             push_relay_key_pins: None,
+            map_host_key_pins: None,
             extra_ca_pem: None,
             registration_code: None,
         }
@@ -1603,8 +1603,6 @@ mod tests {
             core.delete_map(directory, "../x".into()).await,
             Err(CoreError::Map { .. })
         ));
-        core.forget_map_host_key().await?;
-        assert_eq!(fakes.calls().last(), Some(&CrateCall::ForgetMapHostKey));
         Ok(())
     }
 
@@ -1745,6 +1743,7 @@ mod tests {
             registration_code: pingers_proto::SecretText::new("0123456789abcdef".into()),
             gateway_pins: vec![pingers_proto::KeyConfigHash::from_bytes([1; 32])],
             push_relay_pins: vec![pingers_proto::KeyConfigHash::from_bytes([2; 32])],
+            map_host_pins: Vec::new(),
         };
         Ok(payload.to_link()?.to_string())
     }

@@ -104,6 +104,7 @@ fn instance(harness: &InProcessHarness, code: Option<&str>) -> Result<Instance, 
             &endpoints.ohttp_key_config,
         ))),
         push_relay_pins: Some(push_relay_pins(endpoints)?),
+        map_host_pins: None,
         trust: Trust::from_pem(&endpoints.push_relay_ca)?,
         registration_code: code.map(|code| SecretText::new(code.to_owned())),
     })
@@ -379,6 +380,7 @@ async fn an_invite_links_registration_code_registers_the_joiner() -> Result<(), 
             &harness.endpoints().ohttp_key_config,
         )],
         push_relay_pins: Vec::new(),
+        map_host_pins: Vec::new(),
         registration_code: Some(SecretText::new(CODE.to_owned())),
     })?;
     // Opening the link registers the account with the link's code first; the join then goes

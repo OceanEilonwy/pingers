@@ -23,6 +23,8 @@ struct Invite<'fields> {
     gateway_pins: &'fields [Vec<u8>],
     /// Its push relay's key config hashes: 0 to 4.
     push_relay_pins: &'fields [Vec<u8>],
+    /// Its map host's key config hashes: 0 to 4.
+    map_host_pins: &'fields [Vec<u8>],
     registration_code: Option<&'fields str>,
 }
 
@@ -35,8 +37,8 @@ impl Invite<'_> {
         ramp(0x08, 8)
     }
 
-    /// `[server, mailbox, secret, fingerprint, expires, gateway pins, push relay pins]`, then the
-    /// registration code only when there is one.
+    /// `[server, mailbox, secret, fingerprint, expires, gateway pins, push relay pins, map host
+    /// pins]`, then the registration code only when there is one.
     fn fields(&self) -> Vec<Vec<u8>> {
         let mut fields = vec![
             text(self.server),
@@ -46,6 +48,7 @@ impl Invite<'_> {
             uint(u64::from(self.expires)),
             array_of(self.gateway_pins.iter().map(|pin| bytes(pin)).collect()),
             array_of(self.push_relay_pins.iter().map(|pin| bytes(pin)).collect()),
+            array_of(self.map_host_pins.iter().map(|pin| bytes(pin)).collect()),
         ];
         fields.extend(self.registration_code.map(text));
         fields
@@ -65,6 +68,7 @@ impl Invite<'_> {
             ("expires".to_owned(), Json::from(i64::from(self.expires))),
             ("gateway_pins".to_owned(), pins(self.gateway_pins)),
             ("push_relay_pins".to_owned(), pins(self.push_relay_pins)),
+            ("map_host_pins".to_owned(), pins(self.map_host_pins)),
         ];
         pairs.extend(
             self.registration_code
@@ -87,6 +91,7 @@ fn invite_payload() -> Result<VectorFile> {
     let secret = ramp(0xa0, 32);
     let gateway = [ramp(0xc0, 32), ramp(0xe0, 32)];
     let push_relay = [ramp(0x70, 32)];
+    let map_host = [ramp(0x90, 32)];
     let five: Vec<Vec<u8>> = (0..5).map(|index| ramp(index, 32)).collect();
     let short_secret = prefix(&secret, 31)?;
     let invite = |expires: u32| Invite {
@@ -95,6 +100,7 @@ fn invite_payload() -> Result<VectorFile> {
         expires,
         gateway_pins: &gateway,
         push_relay_pins: &push_relay,
+        map_host_pins: &map_host,
         registration_code: None,
     };
     let link = invite(1_800_604_800);
@@ -109,6 +115,7 @@ fn invite_payload() -> Result<VectorFile> {
     };
     let without_push_pins = Invite {
         push_relay_pins: &[],
+        map_host_pins: &[],
         ..earlier
     };
     let no_gateway_pins = Invite {
@@ -119,7 +126,7 @@ fn invite_payload() -> Result<VectorFile> {
         gateway_pins: &five,
         ..link
     };
-    let nine_elements = versioned(array_of([with_code.fields(), vec![uint(0)]].concat()));
+    let ten_elements = versioned(array_of([with_code.fields(), vec![uint(0)]].concat()));
     // The layout before join flow A: a use count (1, single use) after the expiry.
     let old_layout = versioned(array_of([link.fields(), vec![uint(1)]].concat()));
     let http_server = Invite {
@@ -132,7 +139,7 @@ fn invite_payload() -> Result<VectorFile> {
     };
     proto_file(
         "invite-payload-encoding",
-        "Invite link fragment payload (https://<host>/j#v1.<base64url(this)>) as canonical CBOR: [server, invite mailbox, invite secret, inviter fingerprint, expires, gateway pins (array of 1 to 4 SHA-256 key config hashes of the server's OHTTP gateway), push relay pins (array of 0 to 4 hashes of its push relay's key config), registration code (text; present only when the inviter passes one on, so the array has 7 elements without it and 8 with it)] (design D, invite flow; join flow A: nothing about the Party, and no use count, since every invite waits for the inviter and stops after the first joiner is let in; design B.1 registration codes; B.12 key pinning: a joiner new to the server pins the inviter's hashes, never the first key it sees). An empty registration code is refused.",
+        "Invite link fragment payload (https://<host>/j#v1.<base64url(this)>) as canonical CBOR: [server, invite mailbox, invite secret, inviter fingerprint, expires, gateway pins (array of 1 to 4 SHA-256 key config hashes of the server's OHTTP gateway), push relay pins (array of 0 to 4 hashes of its push relay's key config), map host pins (array of 0 to 4 hashes of the key config of the map host its server forwards relayed downloads to), registration code (text; present only when the inviter passes one on, so the array has 8 elements without it and 9 with it)] (design D, invite flow; join flow A: nothing about the Party, and no use count, since every invite waits for the inviter and stops after the first joiner is let in; design B.1 registration codes; B.12 key pinning: a joiner new to the server pins the inviter's hashes, never the first key it sees). An empty registration code is refused.",
         vec![
             case(
                 "link",
@@ -170,8 +177,8 @@ fn invite_payload() -> Result<VectorFile> {
                 error("OutOfRange"),
             ),
             case(
-                "nine-elements",
-                object! { "encoding": hex(&nine_elements) },
+                "ten-elements",
+                object! { "encoding": hex(&ten_elements) },
                 error("Cbor"),
             ),
             case(

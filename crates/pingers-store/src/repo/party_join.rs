@@ -719,6 +719,7 @@ mod tests {
                 expires: UnixSeconds::new(900),
                 gateway_pins: vec![pingers_proto::KeyConfigHash::from_bytes([9; 32])],
                 push_relay_pins: Vec::new(),
+                map_host_pins: Vec::new(),
                 registration_code: None,
             },
             name: DisplayName::new("Ben".into())?,

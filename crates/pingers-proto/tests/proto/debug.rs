@@ -144,6 +144,7 @@ fn structs_holding_secrets_compare_every_field() -> Result<(), ProtoError> {
         expires: UnixSeconds::new(4),
         gateway_pins: vec![pingers_proto::KeyConfigHash::from_bytes([5; 32])],
         push_relay_pins: Vec::new(),
+        map_host_pins: Vec::new(),
         registration_code: Some(SecretText::new(String::from("code"))),
     };
     assert_eq!(invite, invite.clone());

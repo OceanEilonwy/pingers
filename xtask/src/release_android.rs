@@ -6,8 +6,8 @@
 //! `PINGERS_KEYSTORE_PATH`, `PINGERS_KEYSTORE_PASSWORD` and `PINGERS_KEY_ALIAS` for the upload
 //! key, the deployment hosts (`PINGERS_SERVER_HOST`, `PINGERS_OHTTP_RELAY`,
 //! `PINGERS_PUSH_RELAY`, `PINGERS_MAP_HOST`) and `PINGERS_GOOGLE_SERVICES_JSON` for the gms
-//! flavour, and the key pins (`PINGERS_GATEWAY_KEY_PINS`, `PINGERS_PUSH_RELAY_KEY_PINS`), which a
-//! release must have. Gradle reads them itself; this only checks that the key and the pins are
+//! flavour, and the key pins (`PINGERS_GATEWAY_KEY_PINS`, `PINGERS_PUSH_RELAY_KEY_PINS`,
+//! `PINGERS_MAP_HOST_KEY_PINS`), which a release must have. Gradle reads them itself; this only checks that the key and the pins are
 //! there, warns about hosts left at their `.invalid` defaults, runs `assemble<Flavour>Release`
 //! and `bundle<Flavour>Release`, and then checks that every APK and AAB is signed by the keystore's
 //! certificate and nothing else. The password is never read into this process.
@@ -45,7 +45,11 @@ const HOST_VARIABLES: [&str; 4] = [
 /// pins nothing on first use: it reaches its built-in server only after a setup link or invite
 /// has recorded that server's gateway pins, and seals no push token without push relay pins.
 /// That is a development build, never an official one (proposal decision 7).
-const PIN_VARIABLES: [&str; 2] = ["PINGERS_GATEWAY_KEY_PINS", "PINGERS_PUSH_RELAY_KEY_PINS"];
+const PIN_VARIABLES: [&str; 3] = [
+    "PINGERS_GATEWAY_KEY_PINS",
+    "PINGERS_PUSH_RELAY_KEY_PINS",
+    "PINGERS_MAP_HOST_KEY_PINS",
+];
 
 /// Where the gms flavour finds Firebase's configuration.
 const GOOGLE_SERVICES_VARIABLE: &str = "PINGERS_GOOGLE_SERVICES_JSON";

@@ -246,6 +246,10 @@ android {
         }
         pins("pingersGatewayKeyPins", "PINGERS_GATEWAY_KEY_PINS")
         pins("pingersPushRelayKeyPins", "PINGERS_PUSH_RELAY_KEY_PINS")
+        // The map host gateway's key (one key; base64url SHA-256), as the appliance's Setup page
+        // shows it. Unset, maps are not fetched through the privacy relay until a setup link or
+        // invite brings a pin: the key the server forwards is never taken on first use.
+        pins("pingersMapHostKeyPins", "PINGERS_MAP_HOST_KEY_PINS")
     }
 
     testOptions {

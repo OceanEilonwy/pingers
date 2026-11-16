@@ -106,7 +106,7 @@ fun MapRegionsScreen(maps: Maps, around: Coordinate?, nav: Navigator) {
                 if (c.offers.isEmpty() && c.failedHosts.none { it.problem != HostProblem.Unreachable }) {
                     Text(stringResource(R.string.maps_none), style = body(14.sp, color = Pc.Muted, lineHeight = 1.45f), modifier = Modifier.padding(top = 12.dp))
                 }
-                c.failedHosts.forEach { failed -> HostProblemLine(failed, maps) }
+                c.failedHosts.forEach { failed -> HostProblemLine(failed) }
             }
             CatalogState.NoCore ->
                 Text(stringResource(R.string.maps_no_core), style = body(14.sp, color = Pc.OrangeText, lineHeight = 1.45f), modifier = Modifier.padding(start = 4.dp, top = 20.dp))
@@ -127,9 +127,9 @@ private fun org.pingers.app.maps.MapHostSource.toFfi() = when (this) {
 
 private fun RegionOffer.bbox() = (entry as? CatalogEntry.Ready)?.manifest?.bbox
 
-/** Why a host offered nothing; a changed key can be trusted from here. */
+/** Why a host offered nothing. */
 @Composable
-private fun HostProblemLine(failed: FailedHost, maps: Maps) {
+private fun HostProblemLine(failed: FailedHost) {
     val text = when (failed.problem) {
         HostProblem.Unreachable -> stringResource(R.string.maps_host_failed, failed.host.name)
         HostProblem.NotThroughRelay -> stringResource(R.string.maps_host_not_through_relay, failed.host.name)
@@ -141,11 +141,7 @@ private fun HostProblemLine(failed: FailedHost, maps: Maps) {
         text,
         style = body(if (warning) 14.sp else 12.sp, color = if (warning) Pc.OrangeText else Pc.Muted, lineHeight = 1.4f),
         modifier = Modifier.padding(top = 6.dp),
-    )
-    if (failed.problem == HostProblem.KeyChanged) {
-        Box(Modifier.padding(top = 8.dp)) { RowButton(stringResource(R.string.maps_trust_new_key), Pc.Ink, outlined = true) { maps.trustNewKey() } }
-    }
-}
+    )}
 
 private fun Manifest.bytes() = (pack.size + index.size).coerceAtLeast(0).toULong()
 

@@ -26,11 +26,12 @@
 #   PINGERS_SERVER_HOST, PINGERS_OHTTP_RELAY, PINGERS_PUSH_RELAY, PINGERS_MAP_HOST
 #                              the deployment's hosts. Unset, the app gets a .invalid host and
 #                              the run warns.
-#   PINGERS_GATEWAY_KEY_PINS, PINGERS_PUSH_RELAY_KEY_PINS
-#                              the gateway's and push relay's key config hashes (base64url
-#                              SHA-256, comma-separated: the served key and the next one), as
-#                              `cargo xtask pins` prints them. Required: release-android fails
-#                              without them (an unpinned build pins nothing and reaches no server
+#   PINGERS_GATEWAY_KEY_PINS, PINGERS_PUSH_RELAY_KEY_PINS, PINGERS_MAP_HOST_KEY_PINS
+#                              the gateway's, push relay's and map host's key config hashes
+#                              (base64url SHA-256, comma-separated: the served key and the next
+#                              one), as `cargo xtask pins` and the appliance's Setup page show
+#                              them. Required: release-android fails without them (an unpinned
+#                              build pins nothing and reaches no server, nor its map host,
 #                              until a setup link or invite brings pins).
 # Every name is described in android/docs/release.md.
 #
@@ -201,6 +202,7 @@ jobs:
           PINGERS_MAP_HOST: ${{ vars.PINGERS_MAP_HOST || secrets.PINGERS_MAP_HOST }}
           PINGERS_GATEWAY_KEY_PINS: ${{ vars.PINGERS_GATEWAY_KEY_PINS }}
           PINGERS_PUSH_RELAY_KEY_PINS: ${{ vars.PINGERS_PUSH_RELAY_KEY_PINS }}
+          PINGERS_MAP_HOST_KEY_PINS: ${{ vars.PINGERS_MAP_HOST_KEY_PINS }}
         run: cargo xtask release-android --flavour "$FLAVOUR" --tag "$RELEASE_TAG"
 
       - name: Delete the keystore and google-services.json

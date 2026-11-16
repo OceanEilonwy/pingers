@@ -187,7 +187,7 @@ Client side:
 **pingers-map-downloads**: region map packs for the app (design B.12, "Map host"), so the shell makes no network calls.
 - Fetches `catalog.json` from each host in the chain (user override, the server's map host, the publisher's default) and offers each region from the first host listing it.
 - Downloads a region's index and pack in byte-range pieces, resuming a partial file named after its checksum; checks each against the manifest (pingers-crypto's content checksum) and writes the manifest last; lists and removes installed regions.
-- Two routes: direct HTTPS (pingers-transport's `PublicClient`), or through the relay: each request sealed to the map host's own OHTTP gateway (pingers-ohttp, padded), sent as an anonymous request to the server, which forwards it unopened; the gateway key is pinned on first use through a store the caller provides; request counts are padded to size classes.
+- Two routes: direct HTTPS (pingers-transport's `PublicClient`), or through the relay: each request sealed to the map host's own OHTTP gateway (pingers-ohttp, padded), sent as an anonymous request to the server, which forwards it unopened; the gateway key is used only if it is among the server's map host pins (build, setup link or invite; never first use); request counts are padded to size classes.
 - Deps: pingers-transport, pingers-map-packs, pingers-ohttp, pingers-crypto, pingers-proto, pingers-time, `tokio` (files).
 
 **pingers-client**: the composition root, the only crate pingers-ffi and pingers-screens see.

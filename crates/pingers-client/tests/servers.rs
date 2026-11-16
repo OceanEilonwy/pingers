@@ -145,6 +145,7 @@ impl World {
                 &endpoints.ohttp_key_config,
             ))),
             push_relay_pins: None,
+            map_host_pins: None,
             trust: Trust::from_pem(&self.trust)?,
             registration_code: None,
         })

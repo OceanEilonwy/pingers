@@ -94,25 +94,6 @@ impl MapFetch for DirectFetch {
     }
 }
 
-/// Where the map host gateway keys seen on first use are kept, one per host (design B.12:
-/// the server forwards the key config, so a key that changes later fails closed).
-#[async_trait::async_trait]
-pub trait KeyPinStore: Send + Sync {
-    /// The pinned key config hash for `host`, if any.
-    ///
-    /// # Errors
-    ///
-    /// [`MapsError::PinStore`] if the store cannot be read.
-    async fn pinned(&self, host: &MapHostUrl) -> Result<Option<KeyConfigHash>, MapsError>;
-
-    /// Pins `hash` for `host`.
-    ///
-    /// # Errors
-    ///
-    /// [`MapsError::PinStore`] if the store cannot be written.
-    async fn pin(&self, host: &MapHostUrl, hash: KeyConfigHash) -> Result<(), MapsError>;
-}
-
 /// Through the OHTTP relay and the Pingers server, sealed to the map host's own gateway.
 ///
 /// Only the host the server advertises can be reached this way: the server forwards to its
@@ -120,7 +101,7 @@ pub trait KeyPinStore: Send + Sync {
 pub struct RelayFetch {
     transport: Arc<dyn Transport>,
     server_host: Option<MapHostUrl>,
-    pins: Arc<dyn KeyPinStore>,
+    pins: Vec<KeyConfigHash>,
     rng: Mutex<Box<dyn CryptoRng + Send>>,
     key: tokio::sync::Mutex<Option<KeyConfig>>,
 }
@@ -131,8 +112,9 @@ pub struct RelayParts {
     pub transport: Arc<dyn Transport>,
     /// The map host the server advertises, if it has said.
     pub server_host: Option<MapHostUrl>,
-    /// Where gateway keys are pinned.
-    pub pins: Arc<dyn KeyPinStore>,
+    /// The map host gateway key config hashes allowed (design B.12): from the build, a setup
+    /// link or an invite, never from what the server forwards. Empty: no relayed download.
+    pub pins: Vec<KeyConfigHash>,
     /// Randomness for sealing.
     pub rng: Box<dyn CryptoRng + Send>,
 }
@@ -154,8 +136,13 @@ impl RelayFetch {
         }
     }
 
-    /// The gateway's key config, fetched through the relay once and checked against the pin.
-    async fn key_config(&self, host: &MapHostUrl) -> Result<KeyConfig, MapsError> {
+    /// The gateway's key config, fetched through the relay once and used only if it is among
+    /// the pins. The server forwards it, so a key it substitutes is refused; with no pins
+    /// nothing is fetched at all.
+    async fn key_config(&self) -> Result<KeyConfig, MapsError> {
+        if self.pins.is_empty() {
+            return Err(MapsError::KeyNotPinned);
+        }
         let mut key = self.key.lock().await;
         if let Some(config) = key.as_ref() {
             return Ok(config.clone());
@@ -174,10 +161,8 @@ impl RelayFetch {
             .await?;
         check_forwarded(&answer)?;
         let config = KeyConfig::decode(&answer.body)?;
-        match self.pins.pinned(host).await? {
-            Some(pinned) if pinned != config.hash() => return Err(MapsError::KeyChanged),
-            Some(_) => {}
-            None => self.pins.pin(host, config.hash()).await?,
+        if !self.pins.contains(&config.hash()) {
+            return Err(MapsError::KeyChanged);
         }
         *key = Some(config.clone());
         Ok(config)
@@ -210,7 +195,7 @@ impl MapFetch for RelayFetch {
         if self.server_host.as_ref() != Some(host.url()) {
             return Err(MapsError::NotThroughRelay);
         }
-        let key = self.key_config(host.url()).await?;
+        let key = self.key_config().await?;
         headers.push(Header {
             name: "pingers-pad".to_owned(),
             value: RELAY_PADDED.to_string().into_bytes(),

@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use pingers_map_downloads::catalog::{Catalog, HostFailure, fetch_catalog};
-use pingers_map_downloads::fetch::{DirectFetch, KeyPinStore, MapFetch, RelayFetch, RelayParts};
+use pingers_map_downloads::fetch::{DirectFetch, MapFetch, RelayFetch, RelayParts};
 use pingers_map_downloads::install::{Download, DownloadProgress, download, installed};
 use pingers_map_downloads::{HostChain, MapsError};
 use pingers_map_host::config::{Logging, MapHostConfig};
@@ -102,6 +102,10 @@ struct MapHost {
 async fn map_host() -> Result<MapHost, Box<dyn std::error::Error>> {
     let directory = TempDir::new("host")?;
     write_region(directory.path())?;
+    std::fs::write(
+        directory.path().join(".ohttp-key"),
+        format!("{}\n", hex::encode(MAP_HOST_KEY)),
+    )?;
     let config = MapHostConfig {
         listen: SocketAddr::new(LOOPBACK, 0),
         directory: directory.path().to_owned(),
@@ -151,29 +155,17 @@ impl DownloadProgress for Progress {
     fn preparing(&self, _retry_after: Duration) {}
 }
 
-/// Gateway key pins in memory.
-#[derive(Default)]
-struct Pins(Mutex<Vec<(String, KeyConfigHash)>>);
+/// The map host's gateway key secret, written before it starts, so its pin is known as a
+/// build's would be.
+const MAP_HOST_KEY: [u8; 32] = [0x42; 32];
 
-#[async_trait::async_trait]
-impl KeyPinStore for Pins {
-    async fn pinned(&self, host: &MapHostUrl) -> Result<Option<KeyConfigHash>, MapsError> {
-        Ok(self
-            .0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .find(|(pinned, _)| pinned == host.as_str())
-            .map(|(_, hash)| *hash))
-    }
-
-    async fn pin(&self, host: &MapHostUrl, hash: KeyConfigHash) -> Result<(), MapsError> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push((host.as_str().to_owned(), hash));
-        Ok(())
-    }
+/// The pin of [`MAP_HOST_KEY`]'s key config.
+fn map_host_pin() -> Result<KeyConfigHash, Box<dyn std::error::Error>> {
+    Ok(
+        pingers_ohttp::GatewayKey::from_bytes(1, zeroize::Zeroizing::new(MAP_HOST_KEY))?
+            .config()
+            .hash(),
+    )
 }
 
 /// Fetches the catalog from `chain` and downloads its one region into a new directory, then
@@ -278,8 +270,12 @@ impl Relayed {
         })
     }
 
-    /// A relayed route to the server's map host, pinning keys in `pins`.
-    fn fetch(&self, pins: Arc<Pins>, seed: u64) -> Result<RelayFetch, Box<dyn std::error::Error>> {
+    /// A relayed route to the server's map host, sealing only to a key among `pins`.
+    fn fetch(
+        &self,
+        pins: Vec<KeyConfigHash>,
+        seed: u64,
+    ) -> Result<RelayFetch, Box<dyn std::error::Error>> {
         let transport: Arc<dyn pingers_transport::Transport> = self.transport.clone();
         Ok(RelayFetch::new(RelayParts {
             transport,
@@ -293,9 +289,8 @@ impl Relayed {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_region_downloads_through_the_relay_and_the_server() -> TestResult {
     let host = map_host().await?;
-    let pins = Arc::new(Pins::default());
     let relayed = Relayed::start(Some(&host))?;
-    let fetch = relayed.fetch(Arc::clone(&pins), 12)?;
+    let fetch = relayed.fetch(vec![map_host_pin()?], 12)?;
     let server_host = MapHostUrl::new(HARNESS_MAP_HOST.to_owned())?;
     let elsewhere = MapHostUrl::new("https://maps.elsewhere.invalid".to_owned())?;
     let catalog = catalog_and_download(
@@ -310,39 +305,47 @@ async fn a_region_downloads_through_the_relay_and_the_server() -> TestResult {
         catalog.failed.first().map(|failed| failed.reason),
         Some(HostFailure::NotThroughRelay)
     );
-    // The gateway key was pinned on first use...
-    assert_eq!(
-        pins.0.lock().unwrap_or_else(PoisonError::into_inner).len(),
-        1
-    );
-    // ...and a later route (a new process) that finds the same key pinned goes on.
-    let later = relayed.fetch(Arc::clone(&pins), 13)?;
+    // A route that also pins the next key (two-slot rotation) goes on just the same.
+    let later = relayed.fetch(
+        vec![KeyConfigHash::from_bytes([7; 32]), map_host_pin()?],
+        13,
+    )?;
     let again = fetch_catalog(&later, &HostChain::new(None, Some(&server_host), None)).await;
     assert_eq!(again.offers.len(), 1);
     assert!(again.failed.is_empty());
-    assert_eq!(
-        pins.0.lock().unwrap_or_else(PoisonError::into_inner).len(),
-        1
-    );
     relayed.harness.shutdown();
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_changed_map_host_key_stops_relayed_downloads() -> TestResult {
+async fn a_map_host_key_outside_the_pins_stops_relayed_downloads() -> TestResult {
     let host = map_host().await?;
-    let pins = Arc::new(Pins::default());
     let server_host = MapHostUrl::new(HARNESS_MAP_HOST.to_owned())?;
-    pins.pin(&server_host, KeyConfigHash::from_bytes([7; 32]))
-        .await?;
     let relayed = Relayed::start(Some(&host))?;
-    let fetch = relayed.fetch(pins, 12)?;
+    // The key the server forwards is not pinned (as if the server had substituted its own).
+    let fetch = relayed.fetch(vec![KeyConfigHash::from_bytes([7; 32])], 12)?;
     let catalog = fetch_catalog(&fetch, &HostChain::new(None, Some(&server_host), None)).await;
     assert!(catalog.offers.is_empty());
     assert_eq!(
         catalog.failed.first().map(|failed| failed.reason),
         Some(HostFailure::KeyChanged)
     );
+    // With no pins at all nothing is fetched through the relay: no key is taken on first use.
+    let unpinned = relayed.fetch(Vec::new(), 13)?;
+    let catalog = fetch_catalog(&unpinned, &HostChain::new(None, Some(&server_host), None)).await;
+    assert!(catalog.offers.is_empty());
+    assert_eq!(
+        catalog.failed.first().map(|failed| failed.reason),
+        Some(HostFailure::NotThroughRelay)
+    );
+    let host = pingers_map_downloads::MapHost::new(
+        &server_host,
+        pingers_map_downloads::MapHostSource::Server,
+    );
+    assert!(matches!(
+        unpinned.get(&host, "/catalog.json", Vec::new()).await,
+        Err(MapsError::KeyNotPinned)
+    ));
     relayed.harness.shutdown();
     Ok(())
 }
@@ -350,7 +353,7 @@ async fn a_changed_map_host_key_stops_relayed_downloads() -> TestResult {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_server_whose_map_host_does_not_answer_says_so() -> TestResult {
     let relayed = Relayed::start(None)?;
-    let fetch = relayed.fetch(Arc::new(Pins::default()), 12)?;
+    let fetch = relayed.fetch(vec![KeyConfigHash::from_bytes([7; 32])], 12)?;
     let host = pingers_map_downloads::MapHost::new(
         &MapHostUrl::new(HARNESS_MAP_HOST.to_owned())?,
         pingers_map_downloads::MapHostSource::Server,

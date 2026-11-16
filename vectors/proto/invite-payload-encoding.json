@@ -1,6 +1,6 @@
 {
   "name": "invite-payload-encoding",
-  "description": "Invite link fragment payload (https://<host>/j#v1.<base64url(this)>) as canonical CBOR: [server, invite mailbox, invite secret, inviter fingerprint, expires, gateway pins (array of 1 to 4 SHA-256 key config hashes of the server's OHTTP gateway), push relay pins (array of 0 to 4 hashes of its push relay's key config), registration code (text; present only when the inviter passes one on, so the array has 7 elements without it and 8 with it)] (design D, invite flow; join flow A: nothing about the Party, and no use count, since every invite waits for the inviter and stops after the first joiner is let in; design B.1 registration codes; B.12 key pinning: a joiner new to the server pins the inviter's hashes, never the first key it sees). An empty registration code is refused.",
+  "description": "Invite link fragment payload (https://<host>/j#v1.<base64url(this)>) as canonical CBOR: [server, invite mailbox, invite secret, inviter fingerprint, expires, gateway pins (array of 1 to 4 SHA-256 key config hashes of the server's OHTTP gateway), push relay pins (array of 0 to 4 hashes of its push relay's key config), map host pins (array of 0 to 4 hashes of the key config of the map host its server forwards relayed downloads to), registration code (text; present only when the inviter passes one on, so the array has 8 elements without it and 9 with it)] (design D, invite flow; join flow A: nothing about the Party, and no use count, since every invite waits for the inviter and stops after the first joiner is let in; design B.1 registration codes; B.12 key pinning: a joiner new to the server pins the inviter's hashes, never the first key it sees). An empty registration code is refused.",
   "vectors": [
     {
       "name": "link",
@@ -16,10 +16,13 @@
         ],
         "push_relay_pins": [
           "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
+        ],
+        "map_host_pins": [
+          "909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
         ]
       },
       "expected": {
-        "encoding": "8201877768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c80825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
+        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c80825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f815820909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
       }
     },
     {
@@ -36,10 +39,13 @@
         ],
         "push_relay_pins": [
           "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
+        ],
+        "map_host_pins": [
+          "909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
         ]
       },
       "expected": {
-        "encoding": "8201877768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b49d200825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
+        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b49d200825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f815820909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
       }
     },
     {
@@ -57,16 +63,19 @@
         "push_relay_pins": [
           "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
         ],
+        "map_host_pins": [
+          "909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+        ],
         "registration_code": "friends-2026"
       },
       "expected": {
-        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c80825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f6c667269656e64732d32303236"
+        "encoding": "8201897768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c80825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f815820909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf6c667269656e64732d32303236"
       }
     },
     {
       "name": "empty-registration-code",
       "inputs": {
-        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c80825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f60"
+        "encoding": "8201897768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c80825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f815820909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf60"
       },
       "expected": {
         "error": "OutOfRange"
@@ -84,16 +93,17 @@
           "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
           "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
         ],
-        "push_relay_pins": []
+        "push_relay_pins": [],
+        "map_host_pins": []
       },
       "expected": {
-        "encoding": "8201877768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b49d200825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff80"
+        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b49d200825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff8080"
       }
     },
     {
       "name": "no-gateway-pins",
       "inputs": {
-        "encoding": "8201877768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c8080815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
+        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c8080815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f815820909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
       },
       "expected": {
         "error": "OutOfRange"
@@ -102,16 +112,16 @@
     {
       "name": "five-gateway-pins",
       "inputs": {
-        "encoding": "8201877768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c80855820000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f58200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20582002030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20215820030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212258200405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
+        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c80855820000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f58200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20582002030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20215820030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212258200405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f815820909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
       },
       "expected": {
         "error": "OutOfRange"
       }
     },
     {
-      "name": "nine-elements",
+      "name": "ten-elements",
       "inputs": {
-        "encoding": "8201897768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c80825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f6c667269656e64732d3230323600"
+        "encoding": "82018a7768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c80825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f815820909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf6c667269656e64732d3230323600"
       },
       "expected": {
         "error": "Cbor"
@@ -120,7 +130,7 @@
     {
       "name": "http-server",
       "inputs": {
-        "encoding": "82018776687474703a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f01825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
+        "encoding": "82018876687474703a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f01825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f815820909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
       },
       "expected": {
         "error": "OutOfRange"
@@ -129,7 +139,7 @@
     {
       "name": "short-secret",
       "inputs": {
-        "encoding": "8201877768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f30581fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbe4808090a0b0c0d0e0f01825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f"
+        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f30581fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbe4808090a0b0c0d0e0f01825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f815820909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
       },
       "expected": {
         "error": "WrongLength"
@@ -138,7 +148,7 @@
     {
       "name": "old-layout-with-use-count",
       "inputs": {
-        "encoding": "8201887768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c80825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f01"
+        "encoding": "8201897768747470733a2f2f70696e676572732e6578616d706c65502122232425262728292a2b2c2d2e2f305820a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf4808090a0b0c0d0e0f1a6b530c80825820c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf5820e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff815820707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f815820909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf01"
       },
       "expected": {
         "error": "Cbor"

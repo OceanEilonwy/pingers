@@ -98,6 +98,9 @@ pub struct Facts {
     pub push_relay: Result<PushRelayFacts, String>,
     /// How many regions the map host serves; or why it could not be read.
     pub map_regions: Result<usize, String>,
+    /// The map host gateway's key pin (`PINGERS_MAP_HOST_KEY_PINS`); or why it could not be
+    /// read.
+    pub map_host_pins: Result<Vec<KeyConfigHash>, String>,
     /// The checks through the public names, in the order of [`Config::origins`].
     pub public: Vec<Check>,
 }
@@ -184,9 +187,13 @@ pub async fn gather(config: &Config, clients: &Clients) -> Facts {
     let gateway = gateway_pins(clients, &config.gateway_key_config);
     let push = push_relay(clients, &config.push_relay);
     let catalog = format!("{}/catalog.json", config.map_host_local);
-    let maps = map_regions(clients, &catalog);
+    let maps = Box::pin(map_regions(clients, &catalog));
+    let map_keys = format!("{}/ohttp-keys", config.map_host_local);
+    // Boxed: five requests at once make too large a future to keep on the stack.
+    let map_pins = Box::pin(map_host_pins(clients, &map_keys));
     let public = public_checks(config, clients);
-    let (gateway_pins, push_relay, map_regions, public) = tokio::join!(gateway, push, maps, public);
+    let (gateway_pins, push_relay, map_regions, map_host_pins, public) =
+        tokio::join!(gateway, push, maps, map_pins, public);
     let known = Known {
         gateway: gateway_pins.as_ref().ok().and_then(|pins| pins.first()),
         push: push_relay
@@ -199,6 +206,7 @@ pub async fn gather(config: &Config, clients: &Clients) -> Facts {
         gateway_pins,
         push_relay,
         map_regions,
+        map_host_pins,
         public,
     }
 }
@@ -245,6 +253,17 @@ async fn gateway_pins(clients: &Clients, served_url: &str) -> Result<Vec<KeyConf
         pins.push(decode(&next)?);
     }
     Ok(pins)
+}
+
+/// The map host gateway's key pin (it has one key, made on its first start).
+async fn map_host_pins(clients: &Clients, url: &str) -> Result<Vec<KeyConfigHash>, String> {
+    let body = get(&clients.plain, url)
+        .await
+        .map_err(|why| format!("pingers-map-host's gateway is {why}"))?
+        .ok_or("pingers-map-host has no key config")?;
+    let config = KeyConfig::decode(&body)
+        .map_err(|_| "pingers-map-host sent a bad key config".to_owned())?;
+    Ok(vec![config.hash()])
 }
 
 /// The pin of a push relay config, and the config.

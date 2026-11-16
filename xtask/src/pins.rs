@@ -19,8 +19,9 @@
 //! this needs neither binary built. The tests check the push relay half against
 //! `pingers_push_relay::command::pin_set`.
 //!
-//! `cargo xtask pins --relay <url> --push <url>` prints the same lines from the running
-//! services instead (see [`live`]).
+//! `cargo xtask pins --relay <url> --push <url> [--maps <url>]` prints the same lines from the
+//! running services instead, and with `--maps` the map host's `PINGERS_MAP_HOST_KEY_PINS` too
+//! (see [`live`]). The appliance's Setup page shows all three.
 
 mod live;
 
@@ -40,6 +41,8 @@ pub(crate) use live::{LiveOptions, run as run_live};
 pub(crate) const GATEWAY_VARIABLE: &str = "PINGERS_GATEWAY_KEY_PINS";
 /// The app build's variable for the push relay's key pins.
 pub(crate) const PUSH_RELAY_VARIABLE: &str = "PINGERS_PUSH_RELAY_KEY_PINS";
+/// The app build's variable for the map host gateway's key pin.
+pub(crate) const MAP_HOST_VARIABLE: &str = "PINGERS_MAP_HOST_KEY_PINS";
 
 /// Reads both files and prints the two variable lines.
 pub(crate) fn run(server: &Path, push_relay: &Path) -> Result<String> {

@@ -62,13 +62,4 @@ impl Client {
     pub async fn delete_map(&self, directory: PathBuf, id: String) -> Result<(), ClientError> {
         self.crates.maps.delete(directory, id).await
     }
-
-    /// Forgets the pinned map host gateway key (the user trusts the host's new key).
-    ///
-    /// # Errors
-    ///
-    /// [`ClientError::Store`] or [`ClientError::Records`] if the record cannot be removed.
-    pub async fn forget_map_host_key(&self) -> Result<(), ClientError> {
-        self.crates.maps.forget_key_pin().await
-    }
 }

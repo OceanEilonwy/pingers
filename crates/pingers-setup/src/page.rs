@@ -435,6 +435,17 @@ fn github_step(config: &Config, facts: &Facts) -> Step {
             why.clone(),
         )),
     }
+    match &facts.map_host_pins {
+        Ok(pins) => {
+            items.push(value("PINGERS_MAP_HOST_KEY_PINS", pin_list(pins)));
+            variables.push(("PINGERS_MAP_HOST_KEY_PINS", pin_list(pins)));
+        }
+        Err(why) => items.push(check_of(
+            "PINGERS_MAP_HOST_KEY_PINS",
+            State::Failed,
+            why.clone(),
+        )),
+    }
     items.push(value(
         "The same with the gh command line",
         variables
@@ -492,6 +503,9 @@ fn phone_step(config: &Config, facts: &Facts) -> Step {
             registration_code: config.registration_code.clone(),
             gateway_pins: gateway.clone(),
             push_relay_pins: relay.pins.clone(),
+            // Without the map host's pin the phone still sets up; it just fetches no maps
+            // through the privacy relay.
+            map_host_pins: facts.map_host_pins.clone().unwrap_or_default(),
         }
         .to_link()
         .map_err(|_| "the setup link could not be made".to_owned()),

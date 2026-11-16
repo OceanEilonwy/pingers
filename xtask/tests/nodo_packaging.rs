@@ -785,12 +785,14 @@ fn the_setup_page_passes_nodos_own_owner_page_check() -> TestResult {
             fcm: true,
         }),
         map_regions: Ok(1),
+        map_host_pins: Ok(pins(5)),
         public: failing.clone(),
     };
     let down = Facts {
         gateway_pins: Err("pingers-server's gateway is not answering".to_owned()),
         push_relay: Err("pingers-push-relay is not answering".to_owned()),
         map_regions: Err("pingers-map-host is not answering".to_owned()),
+        map_host_pins: Err("pingers-map-host's gateway is not answering".to_owned()),
         public: failing,
     };
     for facts in [up, down] {

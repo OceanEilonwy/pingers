@@ -39,16 +39,16 @@ pub enum MapsError {
     /// The relay route is not set up: the app has no Pingers server yet.
     #[error("downloads through the privacy relay need a Pingers server")]
     NoRelayRoute,
-    /// The map host's gateway key differs from the one pinned on first use: relayed
-    /// downloads from it stop until the pin is forgotten.
-    #[error("the map host's key changed")]
+    /// The key config the server forwarded for the map host is not among the pins: relayed
+    /// downloads from it stop (the server may have substituted a key of its own).
+    #[error("the map host's key is not pinned")]
     KeyChanged,
+    /// No map host key pins are known for the server, so nothing is fetched through its relay.
+    #[error("no map host key pins")]
+    KeyNotPinned,
     /// Sealing or opening a relayed request failed.
     #[error("relayed map request could not be sealed or opened")]
     Ohttp(#[source] pingers_ohttp::OhttpError),
-    /// The pin store could not be read or written.
-    #[error("the map host key pin could not be stored")]
-    PinStore,
     /// The maps directory could not be read or written.
     #[error("the maps directory could not be used")]
     Io(#[source] std::io::Error),

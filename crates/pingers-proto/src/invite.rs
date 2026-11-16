@@ -76,6 +76,10 @@ pub struct InvitePayload {
     /// The key config hashes of the push relay the inviter's server uses, as the inviter pins
     /// them; empty when the inviter has none. At most [`InvitePayload::MAX_PINS`].
     pub push_relay_pins: Vec<KeyConfigHash>,
+    /// The key config hashes of the map host the Party's server forwards relayed map
+    /// downloads to, as the inviter pins them; empty when the inviter has none, and then the
+    /// joiner fetches no maps through that server's relay. At most [`InvitePayload::MAX_PINS`].
+    pub map_host_pins: Vec<KeyConfigHash>,
     /// The operator's registration code (design B.1), passed on by an inviter who registered
     /// with one, so the joiner's first `POST /v1/accounts` on that server needs no typing.
     /// Like the link itself it is a bearer capability. Never empty.
@@ -91,6 +95,7 @@ impl PartialEq for InvitePayload {
             && self.expires == other.expires
             && self.gateway_pins == other.gateway_pins
             && self.push_relay_pins == other.push_relay_pins
+            && self.map_host_pins == other.map_host_pins
             && option_ct_eq(
                 self.registration_code.as_ref(),
                 other.registration_code.as_ref(),
@@ -107,20 +112,26 @@ impl InvitePayload {
 
 /// Layout: `[server (text), invite mailbox (16 bytes), invite secret (32 bytes), inviter
 /// fingerprint (8 bytes), expires (seconds), gateway pins (array of 32-byte hashes, 1 to 4),
-/// push relay pins (array of 32-byte hashes, 0 to 4), registration code (text, only when
-/// present)]`. Without a code the array has seven elements.
+/// push relay pins (array of 32-byte hashes, 0 to 4), map host pins (array of 32-byte hashes, 0
+/// to 4), registration code (text, only when present)]`. Without a code the array has eight
+/// elements.
 impl CborBody for InvitePayload {
     fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
         let code = registration_code(self.registration_code.as_ref())?;
         check_pins(&self.gateway_pins, 1, "gateway pins")?;
         check_pins(&self.push_relay_pins, 0, "push relay pins")?;
-        writer.array(if code.is_some() { 8 } else { 7 })?;
+        check_pins(&self.map_host_pins, 0, "map host pins")?;
+        writer.array(if code.is_some() { 9 } else { 8 })?;
         writer.text(self.server.as_str())?;
         writer.bytes(self.invite_mailbox.as_bytes())?;
         writer.bytes(self.invite_secret.expose())?;
         writer.bytes(self.inviter_fingerprint.as_bytes())?;
         writer.unsigned(self.expires.get());
-        for pins in [&self.gateway_pins, &self.push_relay_pins] {
+        for pins in [
+            &self.gateway_pins,
+            &self.push_relay_pins,
+            &self.map_host_pins,
+        ] {
             writer.array(pins.len())?;
             for pin in pins {
                 writer.bytes(pin.as_bytes())?;
@@ -134,8 +145,8 @@ impl CborBody for InvitePayload {
 
     fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
         let elements = cbor::array(decoder)?;
-        if elements != 8 {
-            cbor::expect_length(elements, 7)?;
+        if elements != 9 {
+            cbor::expect_length(elements, 8)?;
         }
         Ok(Self {
             server: ServerId::new(decoder.str()?.to_owned())?,
@@ -145,7 +156,8 @@ impl CborBody for InvitePayload {
             expires: UnixSeconds::new(decoder.u64()?),
             gateway_pins: decode_pins(decoder, 1, "gateway pins")?,
             push_relay_pins: decode_pins(decoder, 0, "push relay pins")?,
-            registration_code: if elements == 8 {
+            map_host_pins: decode_pins(decoder, 0, "map host pins")?,
+            registration_code: if elements == 9 {
                 let code = SecretText::new(decoder.str()?.to_owned());
                 registration_code(Some(&code))?;
                 Some(code)
@@ -361,6 +373,7 @@ mod tests {
                 expires: UnixSeconds::new(4),
                 gateway_pins: pins(gateway),
                 push_relay_pins: pins(push),
+                map_host_pins: Vec::new(),
                 registration_code: None,
             })
         };

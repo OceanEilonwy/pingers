@@ -39,6 +39,8 @@ use crate::{ClientError, ServerProblem};
 pub(crate) struct InvitePins {
     pub(crate) gateway: KeyPins,
     pub(crate) push_relay: Option<KeyPins>,
+    /// The server's map host gateway pins; empty when the link carries none.
+    pub(crate) map_host: Vec<KeyConfigHash>,
 }
 
 /// Servers looked at and not yet trusted, by origin. In memory only.
@@ -131,6 +133,7 @@ impl Net {
             gateway: KeyPins::new(payload.gateway_pins.iter().copied())
                 .map_err(|_none| ServerProblem::KeyMismatch)?,
             push_relay: KeyPins::new(payload.push_relay_pins.iter().copied()).ok(),
+            map_host: payload.map_host_pins.clone(),
         };
         self.invited_server(&payload.server, pins).await
     }
@@ -262,6 +265,9 @@ impl Net {
                 None => vec![gateway_key],
             },
             push_relay_pins: push_relay_pins_to_record(push_relay.as_ref(), invite, build.as_ref()),
+            // Only a link brings map host pins: a server the user looks at and trusts on New party
+            // gets none, and no map is fetched through it.
+            map_host_pins: invite.map(|pins| pins.map_host.clone()).unwrap_or_default(),
             trust: if invite.is_some() {
                 ServerTrust::Invite
             } else {
@@ -492,6 +498,7 @@ mod tests {
         let invite = InvitePins {
             gateway: KeyPins::from(KeyConfigHash::from_bytes([9; 32])),
             push_relay: Some(KeyPins::from(KeyConfigHash::from_bytes([3; 32]))),
+            map_host: Vec::new(),
         };
         let id = |chosen: Option<&PushRelayInfo>| chosen.map(|relay| relay.relay_id);
         assert_eq!(
@@ -535,6 +542,7 @@ mod tests {
         let invite = InvitePins {
             gateway: KeyPins::from(hash(1)),
             push_relay: Some(KeyPins::from(hash(9))),
+            map_host: Vec::new(),
         };
         let official = chosen(true)?;
         let own = chosen(false)?;

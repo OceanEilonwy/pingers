@@ -19,6 +19,7 @@ struct Setup<'fields> {
     code: &'fields str,
     gateway: Vec<Vec<u8>>,
     push_relay: Vec<Vec<u8>>,
+    map_host: Vec<Vec<u8>>,
 }
 
 impl Setup<'_> {
@@ -29,6 +30,7 @@ impl Setup<'_> {
             text(self.code),
             pins(&self.gateway),
             pins(&self.push_relay),
+            pins(&self.map_host),
         ]))
     }
 
@@ -39,6 +41,7 @@ impl Setup<'_> {
             "registration_code": self.code,
             "gateway_pins": hex(&self.gateway.concat()),
             "push_relay_pins": hex(&self.push_relay.concat()),
+            "map_host_pins": hex(&self.map_host.concat()),
         }
     }
 }
@@ -50,10 +53,12 @@ fn setup_payload() -> Result<VectorFile> {
         code: "0123456789abcdef0123456789abcdef",
         gateway: two(0x10),
         push_relay: two(0x80),
+        map_host: vec![ramp(0xa0, 32)],
     };
     let one_each = Setup {
         gateway: vec![ramp(0x10, 32)],
         push_relay: vec![ramp(0x80, 32)],
+        map_host: Vec::new(),
         ..two_pins(&link)
     };
     let empty_code = Setup {
@@ -80,7 +85,7 @@ fn setup_payload() -> Result<VectorFile> {
     };
     proto_file(
         "setup-payload-encoding",
-        "First-phone setup link payload (https://<server>/j#s1.<base64url(this)>, shown by the owner's appliance as a QR code) as canonical CBOR: [server, registration code (text, 1 to 128 bytes), gateway key pins ([32-byte SHA-256 of the key config], served key first, 1 to 4), push relay key pins (the same, published key first, 1 to 4)]. Inputs give each pin list as the hex of its hashes, concatenated.",
+        "First-phone setup link payload (https://<server>/j#s1.<base64url(this)>, shown by the owner's appliance as a QR code) as canonical CBOR: [server, registration code (text, 1 to 128 bytes), gateway key pins ([32-byte SHA-256 of the key config], served key first, 1 to 4), push relay key pins (the same, published key first, 1 to 4), map host key pins (the same, 0 to 4)]. Inputs give each pin list as the hex of its hashes, concatenated.",
         vec![
             case(
                 "link",
@@ -128,5 +133,6 @@ fn two_pins<'fields>(setup: &Setup<'fields>) -> Setup<'fields> {
         code: setup.code,
         gateway: setup.gateway.clone(),
         push_relay: setup.push_relay.clone(),
+        map_host: setup.map_host.clone(),
     }
 }

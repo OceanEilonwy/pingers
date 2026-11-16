@@ -208,6 +208,7 @@ impl World {
                     push_relay: None,
                     gateway_pins: Vec::new(),
                     push_relay_pins: Vec::new(),
+                    map_host_pins: Vec::new(),
                     trust: pingers_store::ServerTrust::BuiltIn,
                 })?;
                 session.parties().insert(&Party {

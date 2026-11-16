@@ -65,7 +65,6 @@ core (pingers-ffi, over `crates/pingers-map-downloads`):
 | `downloadMap(MapDownloadRequest, listener)` | downloads the region's index and pack into `files/maps` in byte-range pieces, resuming a `.partial` file named after the checksum it must reach, checks each against the manifest's SHA-256 (pingers-crypto), moves it into place and writes the manifest last; reports bytes and "preparing" to the listener; retries a preparing cache-mode host after its `Retry-After` |
 | `installedMaps(dir)` | the manifests in `files/maps` whose pack is there at full length |
 | `deleteMap(dir, id)` | removes the manifest first, then the files and any partial downloads |
-| `forgetMapHostKey()` | trusts a map host's changed gateway key (below) |
 
 The shell keeps the user's settings (the override and the relay switch, in shared preferences),
 draws the installed packs with MapLibre and searches their indexes on the phone. Cancelling a
@@ -100,8 +99,8 @@ Advanced → Maps → Downloaded maps, or the prompt on any placeholder map. It 
 - the rest, grouped by region group (a country's states under the country), with the download
   size and host;
 - below, each host that offered nothing and why: it did not answer, it cannot be reached
-  through the privacy relay, there is no Pingers server to relay through yet, or its key changed
-  (with **Trust the new key**).
+  through the privacy relay (or the app holds no pin for its key), there is no Pingers server to
+  relay through yet, or its key is not the one the app pins.
 
 ## Download maps through privacy relay
 
@@ -115,9 +114,11 @@ through the privacy relay"):
   do not name a region.
 - Only the server's own map host can be reached this way (the server forwards to it and nowhere
   else). The override and the publisher's host are skipped, and the picker says so.
-- The map host's key config comes through the server too; the core pins it on first use. If it
-  changes, relayed downloads from that host stop until the user taps **Trust the new key**
-  (`forgetMapHostKey`).
+- The map host's key config comes through the server too, so the core uses it only if it is
+  among the map host pins: `BuildConfig.MAP_HOST_KEY_PINS` (`PINGERS_MAP_HOST_KEY_PINS`, from the
+  appliance's Setup page) for the built-in server, or the pins a setup link or invite brought.
+  Nothing is pinned on first use and the user cannot override a mismatch; without pins nothing
+  is fetched through the relay.
 - Without a Pingers server (no instance), there is no relay route: nothing is sent, and the picker
   says so.
 

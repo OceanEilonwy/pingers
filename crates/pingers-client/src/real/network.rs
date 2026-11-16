@@ -44,6 +44,10 @@ pub struct Instance {
     /// The push relay key config hashes allowed. `None` pins nothing: no push token is sealed
     /// until a setup link or invite brings pins for the server's push relay.
     pub push_relay_pins: Option<KeyPins>,
+    /// The map host gateway key config hashes relayed map downloads may be sealed to. `None`
+    /// (a development build) pins nothing: no map is fetched through the relay until a setup
+    /// link or invite brings pins.
+    pub map_host_pins: Option<KeyPins>,
     /// Which certificate authorities HTTPS trusts.
     pub trust: Trust,
     /// The operator's registration code for this device's first registration (design B.1),
@@ -104,6 +108,11 @@ impl Instance {
                 .unwrap_or_default(),
             push_relay_pins: self
                 .push_relay_pins
+                .as_ref()
+                .map(|pins| pins.hashes().to_vec())
+                .unwrap_or_default(),
+            map_host_pins: self
+                .map_host_pins
                 .as_ref()
                 .map(|pins| pins.hashes().to_vec())
                 .unwrap_or_default(),

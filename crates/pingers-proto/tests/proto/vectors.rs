@@ -554,6 +554,7 @@ fn invite_payload_vectors() -> Result<(), TestError> {
                 expires: UnixSeconds::new(number(vector, "expires")?),
                 gateway_pins: pins(vector, "gateway_pins")?,
                 push_relay_pins: pins(vector, "push_relay_pins")?,
+                map_host_pins: pins(vector, "map_host_pins")?,
                 registration_code: vector
                     .inputs
                     .get("registration_code")
@@ -589,6 +590,7 @@ fn setup_payload_vectors() -> Result<(), TestError> {
                 registration_code: SecretText::new(text(vector, "registration_code")?),
                 gateway_pins: pins("gateway_pins")?,
                 push_relay_pins: pins("push_relay_pins")?,
+                map_host_pins: pins("map_host_pins")?,
             })
         },
         encode: SetupPayload::encode,

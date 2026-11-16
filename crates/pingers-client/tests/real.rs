@@ -93,6 +93,7 @@ fn unreachable() -> Result<Instance, TestError> {
         push_relay: None,
         gateway_pins: Some(KeyPins::from(KeyConfigHash::from_bytes([3; 32]))),
         push_relay_pins: None,
+        map_host_pins: None,
         trust: Trust::Mozilla,
         registration_code: None,
     })

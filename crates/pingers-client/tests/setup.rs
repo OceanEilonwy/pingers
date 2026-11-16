@@ -121,9 +121,15 @@ fn link(
         registration_code: SecretText::new(code.to_owned()),
         gateway_pins: vec![gateway, stranger()],
         push_relay_pins: vec![push_relay, stranger()],
+        map_host_pins: vec![map_host_pin()],
     };
     // As the app gets it: through the link's text.
     Ok(SetupPayload::from_link(&link.to_link()?)?)
+}
+
+/// The map host key pin every test link carries.
+fn map_host_pin() -> KeyConfigHash {
+    KeyConfigHash::from_bytes([0x4d; 32])
 }
 
 /// The build's pins: `None` pins nothing (a development build).
@@ -146,6 +152,7 @@ fn instance(harness: &InProcessHarness, pins: BuildPins) -> Result<Instance, Tes
         push_relay: Some(format!("https://{}", endpoints.push_relay)),
         gateway_pins: pins.gateway,
         push_relay_pins: pins.push_relay,
+        map_host_pins: None,
         trust: Trust::from_pem(&endpoints.push_relay_ca)?,
         registration_code: None,
     })
@@ -261,6 +268,7 @@ async fn a_build_without_pins_registers_with_the_link_and_keeps_its_pins() -> Re
     let row = recorded(&dir.database(), &server)?.ok_or(TestError::Setup("no server row"))?;
     assert_eq!(row.gateway_pins, link.gateway_pins);
     assert_eq!(row.push_relay_pins, link.push_relay_pins);
+    assert_eq!(row.map_host_pins, [map_host_pin()]);
     assert_eq!(row.trust, ServerTrust::Invite);
 
     // Opened again, the link finds the account made: nothing is offered.
@@ -282,6 +290,8 @@ async fn a_build_without_pins_registers_with_the_link_and_keeps_its_pins() -> Re
     );
     let row = recorded(&dir.database(), &server)?.ok_or(TestError::Setup("no server row"))?;
     assert_eq!(row.gateway_pins, link.gateway_pins);
+    // And the link's map host pin, which a build without one does not overwrite.
+    assert_eq!(row.map_host_pins, [map_host_pin()]);
     Ok(())
 }
 

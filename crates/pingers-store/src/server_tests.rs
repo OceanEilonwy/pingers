@@ -40,6 +40,7 @@ fn a_server_record_round_trips_and_an_update_keeps_its_rows() -> Result<(), Test
             KeyConfigHash::from_bytes([2; 32]),
         ],
         push_relay_pins: vec![KeyConfigHash::from_bytes([3; 32])],
+        map_host_pins: Vec::new(),
         trust: ServerTrust::Invite,
     };
     fixture

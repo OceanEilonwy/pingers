@@ -130,6 +130,7 @@ object CoreHost {
         pushRelay = BuildConfig.PUSH_RELAY.trimEnd('/'),
         gatewayKeyPins = BuildConfig.GATEWAY_KEY_PINS.ifBlank { null },
         pushRelayKeyPins = BuildConfig.PUSH_RELAY_KEY_PINS.ifBlank { null },
+        mapHostKeyPins = BuildConfig.MAP_HOST_KEY_PINS.ifBlank { null },
         extraCaPem = BuildConfig.EXTRA_CA.takeIf { BuildConfig.DEBUG && it.isNotBlank() },
         registrationCode =
             BuildConfig.DEV_REGISTRATION_CODE.takeIf { BuildConfig.DEBUG && it.isNotBlank() },

@@ -57,7 +57,7 @@ cargo xtask release-notes --tag v1.0.0-rc.1 --dir target/release-android   # the
 ```
 
 It takes the version from `--tag`, or from the `v*` tag on `HEAD`, and refuses a tag that does
-not come after every other `v*` tag. It refuses to start without the three signing variables or the two key pin variables, or
+not come after every other `v*` tag. It refuses to start without the three signing variables or the three key pin variables, or
 when the keystore's certificate is not the published upload certificate below, and warns about
 each host left unset. It runs `./gradlew -PpingersVersionCode=<code>
 -PpingersVersionName=<name> assemble<Flavour>Release bundle<Flavour>Release` (without the
@@ -95,6 +95,7 @@ create the environment first under Settings > Environments.
 | `PINGERS_MAP_HOST` | variable | The publisher's map host, the last link of the map host chain (`BuildConfig.MAP_HOST`, [maps.md](maps.md)). Unset: `https://maps.pingers.invalid`. | As above. | `gh variable set PINGERS_MAP_HOST --body https://...` |
 | `PINGERS_GATEWAY_KEY_PINS` | variable | The OHTTP gateway's key config hashes (`BuildConfig.GATEWAY_KEY_PINS`, into `Core.open`): base64url SHA-256, comma-separated, the key served now and the next one (two-slot rotation). The core never pins on first use; a malformed entry fails the build. Required for a release (`release-android` fails without it); unset, a development build reaches the server only once a setup link or invite has recorded its pins. | `cargo xtask pins --relay <url> --push <url>` (served key, from the live relay) and `pingers-server pins` (both slots); compare them before storing. Public values. | `gh variable set PINGERS_GATEWAY_KEY_PINS --body <hashA>,<hashB>` |
 | `PINGERS_PUSH_RELAY_KEY_PINS` | variable | The push relay's key config hashes (`BuildConfig.PUSH_RELAY_KEY_PINS`), in the same form. No push token is sealed to a key outside the set. Required for a release; unset, a development build seals no push token until a setup link or invite brings pins. | `cargo xtask pins --relay <url> --push <url>` (published and next key, from the live relay) and `pingers-push-relay pins`. Public values. | `gh variable set PINGERS_PUSH_RELAY_KEY_PINS --body <hashA>,<hashB>` |
+| `PINGERS_MAP_HOST_KEY_PINS` | variable | The map host gateway's key config hash (`BuildConfig.MAP_HOST_KEY_PINS`), in the same form (the map host has one key). Maps fetched through the privacy relay are sealed only to a key in the set; the key the server forwards is never taken on first use. Required for a release; unset, a development build fetches no map through the relay until a setup link or invite brings the pin. | The appliance's Setup page (GitHub step), or `cargo xtask pins --relay <url> --push <url> --maps <map host url>`. Public value. | `gh variable set PINGERS_MAP_HOST_KEY_PINS --body <hash>` |
 | `PINGERS_EXTRA_CA` | local only, debug builds | A test CA (a PEM file's path, relative to the repository, or the PEM itself) that debug builds trust instead of Mozilla's roots, for a local stack. Release builds never read it. | `target/dev-ca/ca.pem` | Never set in CI. |
 
 The hosts are variables because they ship inside the APK anyway. `release.yml` reads

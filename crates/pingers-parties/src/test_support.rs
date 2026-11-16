@@ -94,6 +94,7 @@ impl Device {
             push_relay: None,
             gateway_pins: vec![pingers_proto::KeyConfigHash::from_bytes([8; 32])],
             push_relay_pins: Vec::new(),
+            map_host_pins: Vec::new(),
             trust: ServerTrust::BuiltIn,
         })?;
         Ok(Self {

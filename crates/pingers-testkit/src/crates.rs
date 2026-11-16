@@ -106,7 +106,6 @@ pub enum CrateCall {
     DownloadMap(MapDownload),
     InstalledMaps(PathBuf),
     DeleteMap(PathBuf, String),
-    ForgetMapHostKey,
 }
 
 /// The four fake crates. Clones share state.
@@ -363,10 +362,6 @@ impl MapsPort for FakeCrates {
         let call = CrateCall::DeleteMap(directory.clone(), id.clone());
         self.answer(CrateName::Maps, call, ())?;
         Ok(pingers_map_downloads::install::delete(&directory, &id).await?)
-    }
-
-    async fn forget_key_pin(&self) -> Result<(), ClientError> {
-        self.answer(CrateName::Maps, CrateCall::ForgetMapHostKey, ())
     }
 }
 

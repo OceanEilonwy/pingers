@@ -199,6 +199,7 @@ impl PartyLifecycle<'_> {
                 server: settings.server,
                 gateway_pins: pins.gateway_pins,
                 push_relay_pins: pins.push_relay_pins,
+                map_host_pins: pins.map_host_pins,
                 invite_mailbox: id,
                 invite_secret: SecretBytes::new(*secret.expose_bytes()),
                 inviter_fingerprint: inviter_fingerprint(&identity.signing_key.public_key()),

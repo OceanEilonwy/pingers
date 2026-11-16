@@ -77,11 +77,19 @@ fn write_region(directory: &Path) -> std::io::Result<()> {
     )
 }
 
+/// The map host's gateway key, written before it starts, so its pin can be built in as a
+/// release build's `PINGERS_MAP_HOST_KEY_PINS` is.
+const MAP_HOST_KEY: [u8; 32] = [0x24; 32];
+
 /// The map host, serving the region; its directory goes with it.
 async fn map_host(
     directory: &TestDir,
 ) -> Result<(SocketAddr, tokio::sync::oneshot::Sender<()>), Box<dyn std::error::Error>> {
     write_region(&directory.0)?;
+    std::fs::write(
+        directory.0.join(".ohttp-key"),
+        format!("{}\n", hex::encode(MAP_HOST_KEY)),
+    )?;
     let config = MapHostConfig {
         listen: SocketAddr::from(([127, 0, 0, 1], 0)),
         directory: directory.0.clone(),
@@ -142,6 +150,11 @@ async fn open(
             pingers_crypto::key_config_hash(&endpoints.ohttp_key_config),
         )),
         push_relay_pins: None,
+        map_host_pins: Some(pingers_ohttp::KeyPins::from(
+            pingers_ohttp::GatewayKey::from_bytes(1, zeroize::Zeroizing::new(MAP_HOST_KEY))?
+                .config()
+                .hash(),
+        )),
         trust: Trust::from_pem(&endpoints.push_relay_ca)?,
         registration_code: None,
     };

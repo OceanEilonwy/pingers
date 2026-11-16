@@ -36,6 +36,9 @@ pingers-crypto = { workspace = true }
 pingers-map-host = { workspace = true }
 pingers-time = { workspace = true, features = ["test-util"] }
 tokio = { workspace = true, features = ["fs", "io-util", "net", "test-util"] }
+# The map host's gateway key, written before it starts so the tests know its pin.
+hex = { workspace = true }
+zeroize = { workspace = true }
 
 [lints]
 workspace = true

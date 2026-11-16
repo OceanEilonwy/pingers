@@ -2,22 +2,20 @@
 //! [`MapsPort`] over pingers-map-downloads. Maps are a device setting, so they follow the app's
 //! built-in server whatever servers the Parties are on: the chain gets its map host from
 //! [`Net`], direct downloads use a public HTTPS client trusting the instance's roots, relayed
-//! ones go through the built-in server's router, and the map host gateway key pinned on first
-//! use is a record in the store.
+//! ones go through the built-in server's router, sealed only to a map host gateway key among
+//! that server's pins (from the build, a setup link or an invite; never taken on first use).
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use pingers_map_downloads::catalog::{Catalog, FailedHost, HostFailure, fetch_catalog};
-use pingers_map_downloads::fetch::{DirectFetch, KeyPinStore, MapFetch, RelayFetch, RelayParts};
+use pingers_map_downloads::fetch::{DirectFetch, MapFetch, RelayFetch, RelayParts};
 use pingers_map_downloads::install::{self, Download, DownloadProgress};
 use pingers_map_downloads::{HostChain, MapsError, RegionManifest};
-use pingers_proto::{KeyConfigHash, MapHostUrl};
 use pingers_transport::{PublicClient, PublicConfig, TlsRoots};
 
 use super::Backend;
-use super::records::{self, Key};
 use super::sync::Net;
 use crate::ClientError;
 use crate::ports::{MapDownload, MapHosts, MapRoute, MapsPort};
@@ -61,7 +59,7 @@ impl Maps {
                 Ok(link) => Some(Arc::new(RelayFetch::new(RelayParts {
                     transport: Arc::clone(&link.transport),
                     server_host: self.net.map_host().await?,
-                    pins: Arc::new(StoredPins(Arc::clone(&self.backend))),
+                    pins: link.record.map_host_pins.clone(),
                     rng: (self.backend.outside.rng)(),
                 }))),
             },
@@ -127,49 +125,5 @@ impl MapsPort for Maps {
 
     async fn delete(&self, directory: PathBuf, id: String) -> Result<(), ClientError> {
         Ok(install::delete(&directory, &id).await?)
-    }
-
-    async fn forget_key_pin(&self) -> Result<(), ClientError> {
-        self.backend
-            .store(|session, _clock, _rng| records::delete(session, &Key::MapHostPin))
-            .await
-    }
-}
-
-/// The map host gateway key pinned on first use, in the store: one record naming the host
-/// and the hash (the server forwards to one map host at a time).
-pub(super) struct StoredPins(pub(super) Arc<Backend>);
-
-#[async_trait]
-impl KeyPinStore for StoredPins {
-    async fn pinned(&self, host: &MapHostUrl) -> Result<Option<KeyConfigHash>, MapsError> {
-        let host = host.as_str().to_owned();
-        let stored = self
-            .0
-            .store(|session, _clock, _rng| {
-                records::read(session, &Key::MapHostPin, |reader| {
-                    let hash: [u8; 32] = reader.fixed()?;
-                    let pinned_host =
-                        String::from_utf8(reader.rest()).map_err(|_not_text| records::corrupt())?;
-                    Ok((pinned_host, KeyConfigHash::from_bytes(hash)))
-                })
-            })
-            .await
-            .map_err(|_store| MapsError::PinStore)?;
-        // A pin for another host says nothing about this one.
-        Ok(stored.and_then(|(pinned_host, hash)| (pinned_host == host).then_some(hash)))
-    }
-
-    async fn pin(&self, host: &MapHostUrl, hash: KeyConfigHash) -> Result<(), MapsError> {
-        let host = host.as_str().to_owned();
-        self.0
-            .store(move |session, _clock, _rng| {
-                records::write(session, &Key::MapHostPin, |writer| {
-                    writer.fixed(hash.as_bytes());
-                    writer.fixed(host.as_bytes());
-                })
-            })
-            .await
-            .map_err(|_store| MapsError::PinStore)
     }
 }

@@ -10,7 +10,8 @@
 //! write one server's credentials by mistake while talking to another.
 //!
 //! A server row holds what the client needs to reach the server again after a restart: its
-//! OHTTP relays, its push relay, the key pins its gateway and push relay must match, and how
+//! OHTTP relays, its push relay, the key pins its gateway, push relay and map host must match,
+//! and how
 //! those pins were first recorded ([`ServerTrust`]). Deleting a server deletes all its rows.
 
 use core::ops::Deref;
@@ -74,6 +75,9 @@ pub struct ServerRecord {
     pub gateway_pins: Vec<KeyConfigHash>,
     /// The push relay key config hashes allowed.
     pub push_relay_pins: Vec<KeyConfigHash>,
+    /// The key config hashes allowed for the map host this server forwards relayed map
+    /// downloads to; empty: none is trusted, and maps are not fetched through its relay.
+    pub map_host_pins: Vec<KeyConfigHash>,
     /// How the pins were recorded.
     pub trust: ServerTrust,
 }
@@ -282,15 +286,17 @@ impl Servers<'_> {
             session.with(|connection| {
                 connection.execute(
                     "INSERT INTO server (origin, push_relay, gateway_pins, push_relay_pins, \
-                     trust) VALUES (?1, ?2, ?3, ?4, ?5) \
+                     map_host_pins, trust) VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
                      ON CONFLICT (origin) DO UPDATE SET push_relay = excluded.push_relay, \
                      gateway_pins = excluded.gateway_pins, \
-                     push_relay_pins = excluded.push_relay_pins, trust = excluded.trust",
+                     push_relay_pins = excluded.push_relay_pins, \
+                     map_host_pins = excluded.map_host_pins, trust = excluded.trust",
                     params![
                         record.server.as_str(),
                         record.push_relay,
                         pins_blob(&record.gateway_pins),
                         pins_blob(&record.push_relay_pins),
+                        pins_blob(&record.map_host_pins),
                         record.trust.code(),
                     ],
                 )?;
@@ -333,8 +339,8 @@ impl Servers<'_> {
     pub fn list(&self) -> Result<Vec<ServerRecord>, StoreError> {
         self.session.with(|connection| {
             let mut statement = connection.prepare(
-                "SELECT server_key, origin, push_relay, gateway_pins, push_relay_pins, trust \
-                 FROM server ORDER BY server_key",
+                "SELECT server_key, origin, push_relay, gateway_pins, push_relay_pins, trust, \
+                 map_host_pins FROM server ORDER BY server_key",
             )?;
             let rows = statement.query_map([], |row| {
                 Ok((
@@ -344,11 +350,13 @@ impl Servers<'_> {
                     row.get::<_, Vec<u8>>(3)?,
                     row.get::<_, Vec<u8>>(4)?,
                     row.get::<_, i64>(5)?,
+                    row.get::<_, Vec<u8>>(6)?,
                 ))
             })?;
             let mut records = Vec::new();
             for row in rows {
-                let (key, origin, push_relay, gateway_pins, push_relay_pins, trust) = row?;
+                let (key, origin, push_relay, gateway_pins, push_relay_pins, trust, map_host_pins) =
+                    row?;
                 let mut relays = connection.prepare(
                     "SELECT url FROM server_relay WHERE server_key = ?1 ORDER BY position",
                 )?;
@@ -361,6 +369,7 @@ impl Servers<'_> {
                     push_relay,
                     gateway_pins: pins_from_blob(&gateway_pins, "server.gateway_pins")?,
                     push_relay_pins: pins_from_blob(&push_relay_pins, "server.push_relay_pins")?,
+                    map_host_pins: pins_from_blob(&map_host_pins, "server.map_host_pins")?,
                     trust: ServerTrust::from_code(trust)?,
                 });
             }

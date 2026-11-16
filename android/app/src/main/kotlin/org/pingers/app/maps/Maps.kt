@@ -178,20 +178,6 @@ class Maps(
         }
     }
 
-    /** Trusts the map host's new gateway key after it changed, and asks again. */
-    fun trustNewKey() {
-        scope.launch {
-            val core = core() ?: return@launch
-            try {
-                core.forgetMapHostKey()
-            } catch (_: CoreException) {
-                return@launch
-            }
-            _downloads.update { downloads -> downloads.filterValues { (it as? DownloadState.Failed)?.reason != Failure.KeyChanged } }
-            refreshCatalog()
-        }
-    }
-
     private fun fail(id: String, reason: Failure) = _downloads.update { it + (id to DownloadState.Failed(reason)) }
 
     fun delete(id: String) {

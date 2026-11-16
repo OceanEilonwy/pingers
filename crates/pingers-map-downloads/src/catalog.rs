@@ -31,14 +31,14 @@ pub enum HostFailure {
     NotThroughRelay,
     /// The relay route has no Pingers server to go through yet.
     NoRelayRoute,
-    /// Its gateway key changed since it was pinned.
+    /// Its gateway key, as the server forwarded it, is not among the pins.
     KeyChanged,
 }
 
 impl HostFailure {
     fn of(error: &MapsError) -> Self {
         match error {
-            MapsError::NotThroughRelay => Self::NotThroughRelay,
+            MapsError::NotThroughRelay | MapsError::KeyNotPinned => Self::NotThroughRelay,
             MapsError::NoRelayRoute => Self::NoRelayRoute,
             MapsError::KeyChanged => Self::KeyChanged,
             MapsError::Transport(_)
@@ -48,7 +48,6 @@ impl HostFailure {
             | MapsError::Checksum
             | MapsError::BadAnswer
             | MapsError::Ohttp(_)
-            | MapsError::PinStore
             | MapsError::Io(_)
             | MapsError::Internal => Self::Unreachable,
         }

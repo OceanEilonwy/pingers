@@ -227,6 +227,7 @@ async fn rig_as(
         push_relay: Some(format!("https://{}/", endpoints.push_relay)),
         gateway_pins: Some(pins.gateway),
         push_relay_pins: pins.push_relay,
+        map_host_pins: None,
         trust: Trust::from_pem(&endpoints.push_relay_ca)?,
         registration_code: None,
     };
@@ -420,6 +421,7 @@ fn harness_link(
             &harness.endpoints().ohttp_key_config,
         )],
         push_relay_pins: Vec::new(),
+        map_host_pins: Vec::new(),
         registration_code: None,
     })
     .map_err(|_bad| TestError::Setup("invite link"))?;

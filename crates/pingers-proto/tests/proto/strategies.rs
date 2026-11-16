@@ -222,11 +222,12 @@ pub(crate) fn invite_payload() -> impl Strategy<Value = InvitePayload> {
         (
             proptest::collection::vec(bytes32(), 1..=InvitePayload::MAX_PINS),
             proptest::collection::vec(bytes32(), 0..=InvitePayload::MAX_PINS),
+            proptest::collection::vec(bytes32(), 0..=InvitePayload::MAX_PINS),
         ),
         option::of(text(40).prop_filter("never empty", |code| !code.is_empty())),
     )
         .prop_map(
-            |(server, mailbox, secret, fingerprint, expires, (gateway, push), code)| {
+            |(server, mailbox, secret, fingerprint, expires, (gateway, push, maps), code)| {
                 InvitePayload {
                     server,
                     invite_mailbox: MailboxId::from_bytes(mailbox),
@@ -235,6 +236,7 @@ pub(crate) fn invite_payload() -> impl Strategy<Value = InvitePayload> {
                     expires,
                     gateway_pins: gateway.into_iter().map(KeyConfigHash::from_bytes).collect(),
                     push_relay_pins: push.into_iter().map(KeyConfigHash::from_bytes).collect(),
+                    map_host_pins: maps.into_iter().map(KeyConfigHash::from_bytes).collect(),
                     registration_code: code.map(SecretText::new),
                 }
             },
@@ -252,13 +254,16 @@ pub(crate) fn setup_payload() -> impl Strategy<Value = SetupPayload> {
         }),
         pins(),
         pins(),
+        proptest::collection::vec(bytes32(), 0..=4)
+            .prop_map(|pins| pins.into_iter().map(KeyConfigHash::from_bytes).collect()),
     )
         .prop_map(
-            |(server, code, gateway_pins, push_relay_pins)| SetupPayload {
+            |(server, code, gateway_pins, push_relay_pins, map_host_pins)| SetupPayload {
                 server,
                 registration_code: SecretText::new(code),
                 gateway_pins,
                 push_relay_pins,
+                map_host_pins,
             },
         )
 }

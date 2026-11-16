@@ -225,7 +225,7 @@ pub enum MapHostProblem {
     NotThroughRelay,
     /// The relay route has no Pingers server yet.
     NoRelayRoute,
-    /// Its gateway key changed since it was first seen.
+    /// Its gateway key, as the server forwarded it, is not among the pins.
     KeyChanged,
 }
 
@@ -340,7 +340,7 @@ pub enum MapFailure {
     NotThroughRelay,
     /// The relay route has no Pingers server yet.
     NoRelayRoute,
-    /// The map host's gateway key changed.
+    /// The map host's gateway key is not among the pins.
     KeyChanged,
     /// The maps directory could not be written.
     Storage,
@@ -356,10 +356,10 @@ impl From<&MapsError> for MapFailure {
             MapsError::Checksum => Self::Checksum,
             MapsError::NotOffered => Self::NotOffered,
             MapsError::Preparing { .. } => Self::Preparing,
-            MapsError::NotThroughRelay => Self::NotThroughRelay,
+            MapsError::NotThroughRelay | MapsError::KeyNotPinned => Self::NotThroughRelay,
             MapsError::NoRelayRoute => Self::NoRelayRoute,
             MapsError::KeyChanged => Self::KeyChanged,
-            MapsError::Io(_) | MapsError::PinStore => Self::Storage,
+            MapsError::Io(_) => Self::Storage,
             _ => Self::Network,
         }
     }
@@ -638,7 +638,7 @@ mod tests {
             (MapsError::NotThroughRelay, MapFailure::NotThroughRelay),
             (MapsError::NoRelayRoute, MapFailure::NoRelayRoute),
             (MapsError::KeyChanged, MapFailure::KeyChanged),
-            (MapsError::PinStore, MapFailure::Storage),
+            (MapsError::KeyNotPinned, MapFailure::NotThroughRelay),
             (MapsError::Status { status: 500 }, MapFailure::Network),
         ] {
             assert_eq!(MapFailure::from(&error), failure);
