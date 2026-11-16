@@ -10,6 +10,7 @@ mod group_extras;
 mod lifecycle;
 mod mailbox;
 mod queue;
+mod registrations;
 mod restart;
 mod rln;
 mod server;

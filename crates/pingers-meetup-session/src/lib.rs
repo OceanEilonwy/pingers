@@ -45,7 +45,7 @@ pub use error::SessionError;
 pub use live::{
     CreateMeetup, Created, Ended, JoinMeetup, Joined, KnockKeyPackage, Knocking,
     MAX_RECONNECT_DELAY, MeetupHandle, MeetupScreen, NETWORK_TIMEOUT, Runtime, SessionRng, create,
-    discard_stale, join, knock_key_package,
+    discard_stale, join, knock_key_package, meetup_log_auth_key,
 };
 pub use network::{GroupNetwork, NetworkError};
 pub use state::AddMember;

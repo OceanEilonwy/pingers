@@ -13,11 +13,16 @@ layer = 0
 [features]
 # Post-quantum grant keys (X-Wing HPKE) for Parties that opt in (design B.8).
 x-wing = ["dep:x-wing"]
+# RS256 compact JWS for the push relay's FCM service-account assertion (RFC 7523); only the
+# push relay enables it.
+rs256 = ["dep:aws-lc-rs", "dep:base64"]
 
 [dependencies]
 pingers-proto = { workspace = true }
 pingers-time = { workspace = true }
 aes-gcm = { workspace = true }
+aws-lc-rs = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
 chacha20poly1305 = { workspace = true }
 ed25519-dalek = { workspace = true }
 hkdf = { workspace = true }
@@ -35,6 +40,8 @@ zeroize = { workspace = true }
 [dev-dependencies]
 pingers-testkit = { workspace = true }
 proptest = { workspace = true }
+# Throwaway RSA keys for the rs256 tests.
+rcgen = { workspace = true }
 
 [lints]
 workspace = true

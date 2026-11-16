@@ -490,3 +490,19 @@ async fn a_store_that_fails_stops_the_meetup() -> TestResult {
     assert!(matches!(finished, Err(SessionError::Store(_))));
     Ok(())
 }
+
+#[tokio::test]
+async fn members_read_the_same_log_auth_key_for_their_own_requests() -> TestResult {
+    let world = World::new(2)?;
+    let [_alice, _bob] = world.meetup_of_two().await?;
+    let alice_key = crate::meetup_log_auth_key(world.device(0)?.database(), GROUP).await?;
+    let bob_key = crate::meetup_log_auth_key(world.device(1)?.database(), GROUP).await?;
+    assert_eq!(alice_key.public_key(), bob_key.public_key());
+    let unknown = pingers_proto::GroupId::from_bytes([1; 32]);
+    assert!(
+        crate::meetup_log_auth_key(world.device(0)?.database(), unknown)
+            .await
+            .is_err()
+    );
+    Ok(())
+}

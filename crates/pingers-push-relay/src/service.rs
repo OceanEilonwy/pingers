@@ -6,7 +6,8 @@ use std::sync::{Mutex, PoisonError};
 
 use pingers_crypto::{KeyedHashKey, KeyedHashPurpose, keyed_hash};
 use pingers_proto::{
-    PushPlatform, PushRelayConfig, PushRelayKeyId, PushRequest, TimeToLive, WireDecode as _,
+    PushPlatform, PushRelayConfig, PushRelayKeyId, PushRequest, ScheduledPushRelayConfig,
+    TimeToLive, WireDecode as _,
 };
 use pingers_time::{Clock, UnixSeconds};
 
@@ -147,10 +148,15 @@ impl<O: TokenOpener, S: PushSender, C: Clock> Relay<O, S, C> {
     }
 
     /// The `GET /v1/config/next` body: the config devices will fetch once the next key
-    /// activates, or `None` if no key is scheduled. Announcing it early lets members add its
-    /// hash to their pins before the relay starts publishing it (two-slot rotation).
-    pub fn next_config(&self) -> Option<PushRelayConfig> {
-        Some(self.config_for(self.keys.next(self.clock.now())?))
+    /// activates, and when that is, or `None` if no key is scheduled. Announcing it early lets
+    /// members check its hash against their pins and switch to it at its activation without
+    /// asking again (two-slot rotation).
+    pub fn next_config(&self) -> Option<ScheduledPushRelayConfig> {
+        let next = self.keys.next(self.clock.now())?;
+        Some(ScheduledPushRelayConfig {
+            config: self.config_for(next),
+            activates_at: next.activated_at(),
+        })
     }
 
     /// The `GET /status` facts: nothing secret and no counts.

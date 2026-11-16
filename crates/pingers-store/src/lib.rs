@@ -101,7 +101,12 @@
 //!   `JoinRequest`s, in arrival order; cascade with their invite), `party_join` (a join this
 //!   device asked for, with the link and the key packages it sent; no Party row exists yet) and
 //!   `joined_via` (who let this device in, and the join code).
-//! - **A knock's grant secret waits in `knock_key`** (schema version 8), keyed by the knock's
+//! - **What each sealed push was sealed with** (schema version 8): `mailbox` and
+//!   `subscription` gain `seal` (pingers-crypto's fingerprint of the relay key and push token)
+//!   and `sealed_until` (the `not_after` sealed in), so pingers-sync seals a push again when the
+//!   token changes, the relay key rotates or `not_after` comes near. Rows from before version 8
+//!   have neither and are sealed again.
+//! - **A knock's grant secret waits in `knock_key`** (schema version 9), keyed by the knock's
 //!   reply mailbox, with the Meetup subscription the knock carried: the Welcome arrives in
 //!   that mailbox, and joining takes the row ([`KnockKeys`]). Rows of unanswered knocks are
 //!   deleted once no Welcome can come; leaving the Party cascades. Not in design C.2.
@@ -144,7 +149,7 @@ pub use repo::board::{
 };
 pub use repo::knock::{KnockKey, KnockKeys};
 pub use repo::mailbox::{
-    Mailbox, MailboxPurpose, MailboxState, Mailboxes, StoredSubscription, Subscriptions,
+    Mailbox, MailboxPurpose, MailboxState, Mailboxes, SealStamp, StoredSubscription, Subscriptions,
 };
 pub use repo::meetup::{
     GrantScope, GrantedKey, LocationAsks, LocationGrants, LocationRequest, LocationRequestState,

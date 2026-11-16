@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use pingers_client::snapshot::{RelayStatus, WakePushes};
+use pingers_client::snapshot::{PushDelivery, PushDowngrade, RelayStatus, WakePushes};
 use pingers_client::{
     Client, ClientConfig, ClientError, Crates, Instance, KeyPins, Outside, Trust, Unavailable,
 };
@@ -22,6 +22,7 @@ use pingers_testkit::{
     FakePlatform, HARNESS_MAP_HOST, HarnessConfig, InProcessHarness, PushRegistration,
     RecordingEvents,
 };
+use pingers_wake::PushPriority;
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng as _;
 use zeroize::Zeroizing;
@@ -481,6 +482,83 @@ async fn wake_pushes_need_the_platform_s_push_token() -> Result<(), TestError> {
         rig.client.set_wake_pushes(WakePushes::On).await,
         Err(ClientError::Unavailable(Unavailable::NoPushToken))
     ));
+    Ok(())
+}
+
+fn delivery(rig: &Rig) -> PushDelivery {
+    rig.client.snapshot().push_delivery
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_snapshot_says_why_wake_pushes_are_downgraded() -> Result<(), TestError> {
+    let config = HarnessConfig::default();
+    let harness = InProcessHarness::start(&config)?;
+    let rig = rig(&harness, &config, harness_pins(&harness)?).await?;
+    rig.client.publish_snapshot().await?;
+    // No UnifiedPush distributor or FCM registration yet.
+    assert_eq!(
+        delivery(&rig),
+        PushDelivery::Downgraded(PushDowngrade::NoPushToken)
+    );
+    up_token(&rig);
+    rig.client.set_wake_pushes(WakePushes::On).await?;
+    assert_eq!(delivery(&rig), PushDelivery::Full);
+    rig.client.set_wake_pushes(WakePushes::NoWakePushes).await?;
+    assert_eq!(
+        delivery(&rig),
+        PushDelivery::Downgraded(PushDowngrade::WakePushesOff)
+    );
+    rig.client.set_wake_pushes(WakePushes::On).await?;
+
+    // FCM delivering high-priority pushes at normal priority: three in twenty downgrades it.
+    for delivered in [
+        PushPriority::Normal,
+        PushPriority::High,
+        PushPriority::Normal,
+    ] {
+        rig.client
+            .report_push_priority(PushPriority::High, delivered)
+            .await?;
+        assert_eq!(delivery(&rig), PushDelivery::Full);
+    }
+    rig.client
+        .report_push_priority(PushPriority::High, PushPriority::Normal)
+        .await?;
+    assert_eq!(
+        delivery(&rig),
+        PushDelivery::Downgraded(PushDowngrade::PriorityLowered)
+    );
+    for _ in 0..18 {
+        rig.client
+            .report_push_priority(PushPriority::High, PushPriority::High)
+            .await?;
+    }
+    assert_eq!(delivery(&rig), PushDelivery::Full);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_push_relay_key_off_the_pins_downgrades_wake_pushes() -> Result<(), TestError> {
+    let config = HarnessConfig::default();
+    let harness = InProcessHarness::start(&config)?;
+    let pins = harness_pins(&harness)?;
+    let rig = rig(
+        &harness,
+        &config,
+        Pins {
+            gateway: pins.gateway,
+            push_relay: Some(KeyPins::new([KeyConfigHash::from_bytes([1; 32])])?),
+            recorded: None,
+        },
+    )
+    .await?;
+    up_token(&rig);
+    assert!(rig.client.set_wake_pushes(WakePushes::On).await.is_err());
+    rig.client.publish_snapshot().await?;
+    assert_eq!(
+        delivery(&rig),
+        PushDelivery::Downgraded(PushDowngrade::RelayKeyMismatch)
+    );
     Ok(())
 }
 

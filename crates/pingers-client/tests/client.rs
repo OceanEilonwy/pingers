@@ -179,6 +179,7 @@ async fn open_builds_the_crates_and_publishes_their_sections() -> Result<(), Tes
         relay: RelayStatus::KeyMismatch,
         map_host: None,
         operators: None,
+        push_delivery: pingers_client::snapshot::PushDelivery::Full,
     });
     fakes.set_meetups(MeetupsSection {
         meetups: Vec::new(),
@@ -205,6 +206,7 @@ async fn open_builds_the_crates_and_publishes_their_sections() -> Result<(), Tes
         relay: RelayStatus::KeyMismatch,
         map_host: None,
         operators: None,
+        push_delivery: pingers_client::snapshot::PushDelivery::Full,
     };
     assert_eq!(*snapshot, expected);
     assert_eq!(fakes.section_reads(), reads.saturating_add(4));
@@ -425,6 +427,7 @@ async fn a_reachability_check_reaches_sync_and_answers_its_status() -> Result<()
         relay: RelayStatus::Unreachable,
         map_host: None,
         operators: None,
+        push_delivery: pingers_client::snapshot::PushDelivery::Full,
     });
     let reads = rig.fakes.section_reads();
     assert_eq!(
@@ -649,6 +652,7 @@ async fn subscribers_see_each_published_snapshot() -> Result<(), TestError> {
         relay: RelayStatus::Unreachable,
         map_host: None,
         operators: None,
+        push_delivery: pingers_client::snapshot::PushDelivery::Full,
     });
     let published = rig.client.publish_snapshot().await?;
     assert!(receiver.has_changed().unwrap_or(false));
@@ -697,6 +701,29 @@ async fn meetup_events_republish_the_snapshot_then_tell_the_shell_once_each()
     // One snapshot for the batch, published before the events.
     assert_eq!(rig.fakes.section_reads(), reads.saturating_add(4));
     assert_eq!(rig.client.snapshot().alert, Some(meetup));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_push_priority_report_raises_the_notice_pingers_sync_returns() -> Result<(), TestError> {
+    use pingers_wake::PushPriority;
+    let rig = rig().await?;
+    rig.client
+        .report_push_priority(PushPriority::High, PushPriority::Normal)
+        .await?;
+    assert!(rig.events.events().is_empty());
+    rig.fakes.set_priority_notice(Some(Notice::PushDowngraded));
+    rig.client
+        .report_push_priority(PushPriority::High, PushPriority::Normal)
+        .await?;
+    assert_eq!(
+        rig.events.events(),
+        [RecordedEvent::Notice(Notice::PushDowngraded)]
+    );
+    assert!(rig.fakes.calls().contains(&CrateCall::ReportPushPriority(
+        PushPriority::High,
+        PushPriority::Normal
+    )));
     Ok(())
 }
 

@@ -254,6 +254,8 @@ pub struct ServerSection {
     pub map_host: Option<pingers_proto::MapHostUrl>,
     /// Who runs the server and its push relay, once read.
     pub operators: Option<crate::snapshot::ServerOperators>,
+    /// Whether wake-up pushes reach this phone.
+    pub push_delivery: crate::snapshot::PushDelivery,
 }
 
 /// pingers-meetup-session's part of the snapshot.
@@ -335,6 +337,13 @@ pub trait SyncPort: Send + Sync {
         setting: WakePushes,
         tokens: Option<PushTokens>,
     ) -> Result<(), ClientError>;
+    /// Records the priority a push was sent with and the one FCM delivered it at; returns
+    /// `Notice::PushDowngraded` when downgrades have just become frequent (design B.4.9).
+    async fn report_push_priority(
+        &self,
+        original: pingers_wake::PushPriority,
+        delivered: pingers_wake::PushPriority,
+    ) -> Result<Option<crate::Notice>, ClientError>;
     /// Checks whether this device reaches its server through the privacy relay, and records
     /// the answer as the section's [`RelayStatus`].
     ///

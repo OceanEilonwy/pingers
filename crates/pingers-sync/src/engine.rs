@@ -2,12 +2,13 @@
 //! The engine: sends one request with the right privacy class and credential, inside the wake
 //! budget, and queues or drops what could not be sent.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use pingers_anon::SelfTestPlan;
 use pingers_ohttp::{BinaryResponse, Header, OhttpError};
-use pingers_proto::{CommitResponse, MessageAccepted, Params, ServerId, WireDecode};
-use pingers_store::{Database, NewQueuedRequest, Pushed, Session};
+use pingers_proto::{CommitResponse, MessageAccepted, Params, PushHandle, ServerId, WireDecode};
+use pingers_store::{Database, NewQueuedRequest, Pushed, SealStamp, Session};
 use pingers_time::{Clock, Timer, UnixSeconds};
 use pingers_transport::{DuplexStream, PrivacyClass, Transport, TransportError};
 use rand_chacha::ChaCha20Rng;
@@ -225,6 +226,9 @@ pub struct SyncEngine {
     pub(crate) settings: Mutex<SyncSettings>,
     clock_status: Mutex<ClockStatus>,
     pub(crate) wake_push: Mutex<Option<WakePush>>,
+    /// What each subscription handed out in this process was sealed with, by handle, until it
+    /// is recorded.
+    pub(crate) issued: Mutex<HashMap<PushHandle, SealStamp>>,
     /// The membership tree between refreshes (`membership.rs`).
     pub(crate) tree_cache: Mutex<Option<TreeCache>>,
     /// The background prover self-test, while one runs (`prover.rs`).
@@ -270,6 +274,7 @@ impl SyncEngine {
             rng: Arc::new(Mutex::new(parts.rng)),
             clock_status: Mutex::new(ClockStatus::Unchecked),
             wake_push: Mutex::new(None),
+            issued: Mutex::new(HashMap::new()),
             tree_cache: Mutex::new(None),
             self_test: Mutex::new(None),
             settings: Mutex::new(settings),

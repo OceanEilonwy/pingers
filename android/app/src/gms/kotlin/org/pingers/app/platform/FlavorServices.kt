@@ -13,6 +13,12 @@ object FlavorServices {
     /** Whether FCM is configured in this build. */
     fun fcmAvailable(context: Context): Boolean = Fcm.available(context)
 
-    /** Starts FCM: fetches the token, which goes to the core through [Push.setFcmToken]. */
-    fun startPush(context: Context) = Fcm.refreshToken(context)
+    /**
+     * Registers UnifiedPush again ([Push.renew]; it wins when a distributor is installed) and
+     * fetches the FCM token, which goes to the core through [Push.setFcmToken].
+     */
+    fun startPush(context: Context) {
+        Push.renew(context)
+        Fcm.refreshToken(context)
+    }
 }

@@ -38,6 +38,7 @@
 
 mod device;
 mod emulator;
+mod fcm_push;
 mod full;
 mod local_app;
 mod no_python;
@@ -141,6 +142,7 @@ const USAGE: &str = "usage: cargo xtask <command>\n\n\
                      throwaway CA and server certificate in target/dev-ca/\n  \
                      local-stack [--dir <dir>] [--packs <dir>] [--ntfy <bin>] [--caddy <bin>]\n          \
                      [--fresh] [--prepare-only]\n          \
+                     [--fcm-service-account <key.json> --fcm-project <id>]\n          \
                      the tier-1 stack with fresh keys in <dir> (default $PINGERS_LOCAL_STACK),\n          \
                      behind Caddy or the built-in TLS front, until Ctrl-C\n  \
                      local-app [<local-stack options>]\n          \

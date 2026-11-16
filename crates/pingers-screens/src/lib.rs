@@ -29,6 +29,7 @@ pub mod location_request;
 pub mod meet_point;
 pub mod meetup;
 pub mod notices;
+pub mod notifications;
 pub mod party;
 pub mod party_settings;
 pub mod security;

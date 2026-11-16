@@ -8,7 +8,9 @@ use axum::http::StatusCode;
 use pingers_crypto::MailboxReadKey;
 use pingers_mailbox::{ListedRelays, MailboxError, Mailboxes, PostsPerBucket, SqliteStorage};
 use pingers_ohttp::BinaryRequest;
-use pingers_proto::{MailboxId, MailboxSpec, MessageAccepted, Padded, RlnScope, SequenceNumber};
+use pingers_proto::{
+    MailboxId, MailboxPush, MailboxSpec, MessageAccepted, Padded, RlnScope, SequenceNumber,
+};
 use pingers_time::Clock;
 use zeroize::Zeroizing;
 
@@ -145,6 +147,18 @@ pub(crate) async fn delete(shared: &Shared, request: &BinaryRequest) -> Result<R
     })
     .await?;
     Ok(answer(deleted, |()| Reply::status(StatusCode::NO_CONTENT)))
+}
+
+/// `PUT /v1/mailboxes/{id}/push`: Cap (the read key). Replaces the sealed push.
+pub(crate) async fn replace_push(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
+    let id = mailbox_id(request)?;
+    let key = read_key(request)?;
+    let update = decode::<MailboxPush>(&request.body)?;
+    let replaced = blocking(&shared.mailboxes, move |mailboxes| {
+        mailboxes.replace_push(&id, &key, &update)
+    })
+    .await?;
+    Ok(answer(replaced, |()| Reply::status(StatusCode::NO_CONTENT)))
 }
 
 /// Deletes expired mailboxes (the sweep timer). A storage failure is retried next sweep.

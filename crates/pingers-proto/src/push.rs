@@ -547,7 +547,31 @@ impl CborBody for Subscription {
     }
 }
 
-versioned_cbor!(MailboxSpec, Subscription);
+/// `PUT /v1/mailboxes/{id}/push` (Cap: the read key): replaces a mailbox's sealed push, for a
+/// device whose push token changed, whose relay key rotated, or whose seal is near its
+/// `not_after` (design B.4.9). `None` removes it ("No wake-up pushes").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MailboxPush {
+    /// The new sealed push, bound to the same mailbox.
+    pub push: Option<SealedPush>,
+}
+
+/// Layout: `[sealed push or null]`.
+impl CborBody for MailboxPush {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(1)?;
+        writer.option(self.push.as_ref(), |writer, push| push.encode_body(writer))
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        cbor::array_of(decoder, 1)?;
+        Ok(Self {
+            push: cbor::option(decoder, SealedPush::decode_body)?,
+        })
+    }
+}
+
+versioned_cbor!(MailboxSpec, MailboxPush, Subscription);
 
 #[cfg(test)]
 mod tests {

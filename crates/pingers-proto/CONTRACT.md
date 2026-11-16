@@ -199,6 +199,22 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
   the only leaf position and root epoch types; pingers-anon and pingers-store alias or
   re-export them. Additive, except that pingers-store's `RootEpoch` is now this `u32` type.
 
+### Push lifecycle (added 2026-11-14, v1-push)
+
+- **`ScheduledPushRelayConfig`** (`GET /v1/config/next` at the push relay, passed on unchanged
+  by the server at `GET /v1/push-relays/{relay id}/config/next`): `[config (as
+  PushRelayConfig), activates at (Unix seconds)]`. The relay used to serve a bare
+  `PushRelayConfig` there; with the activation time devices switch to the next key on time
+  without asking again. Additive for every other type.
+- **`PUSH_RELAY_KEY_OVERLAP`** (30 days): how long a replaced relay key keeps opening blobs
+  after its successor activates. pingers-push-relay refuses a shorter schedule; devices cap
+  tokens sealed to a key with a successor at the activation plus this.
+- **`MailboxPush`** (`PUT /v1/mailboxes/{id}/push`, Cap: the read key): `[sealed push or
+  null]`, a mailbox's new sealed push after a token change, a key rotation or before its seal
+  expires; null removes it.
+- Vectors `scheduled-push-relay-config-encoding` and `mailbox-push-encoding`; fuzz targets
+  `scheduled_push_relay_config` and `mailbox_push`.
+
 ### Party state (added 2026-11-14, v1-parties; pingers-parties request 1)
 
 - **`PartyOperation`**, the plaintext of a Party group application message before padding

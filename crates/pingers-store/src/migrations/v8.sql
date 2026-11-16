@@ -1,24 +1,12 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- Schema version 8: what a knock leaves behind until its Welcome arrives (design B.5, B.6.1).
+-- Schema version 8: what each registered sealed push was sealed with (design B.4.9).
 --
--- knock_key: the grant secret whose public half is in the Meetup KeyPackage a knock carried,
--- and the Meetup subscription the knock carried, keyed by the knock's reply mailbox (where the
--- Welcome arrives). Joining from the Welcome takes the row: the secret moves to `meetup.gk_sk`
--- and the subscription becomes the device's own in the Meetup. Rows of knocks that were never
--- answered are deleted once no Welcome can come (a lease after the knock), so no grant secret
--- outlives the knock that needed it (style guide section 8). The Party cascade covers a Party
--- this device leaves meanwhile.
-CREATE TABLE knock_key (
-    reply_mailbox BLOB PRIMARY KEY CHECK (length(reply_mailbox) = 16),
-    party_id      BLOB NOT NULL REFERENCES party (party_id) ON DELETE CASCADE,
-    gk_sk         BLOB NOT NULL CHECK (length(gk_sk) = 32),
-    subscription  BLOB CHECK (subscription IS NULL OR length(subscription) > 0),
-    created_at    INTEGER NOT NULL CHECK (created_at >= 0)
-) STRICT;
-
--- A Meetup's subscription row (its push handle) goes when the Meetup ends, like everything
--- else that names the group (design B.5, G.7).
-CREATE TRIGGER meetup_end_forgets_subscription AFTER DELETE ON meetup
-BEGIN
-    DELETE FROM subscription WHERE group_id = OLD.group_id;
-END;
+-- seal: pingers-crypto's 16-byte fingerprint of the relay key and push token the mailbox's or
+-- subscription's sealed push was made from; sealed_until: the not_after sealed into it. When
+-- the token changes, the relay key rotates or not_after comes near, pingers-sync seals the push
+-- again and replaces it on the server. Both NULL for a row with no sealed push, and for rows
+-- written before this version (their seal is unknown, so they are sealed again).
+ALTER TABLE mailbox ADD COLUMN seal BLOB CHECK (seal IS NULL OR length(seal) = 16);
+ALTER TABLE mailbox ADD COLUMN sealed_until INTEGER CHECK (sealed_until IS NULL OR sealed_until >= 0);
+ALTER TABLE subscription ADD COLUMN seal BLOB CHECK (seal IS NULL OR length(seal) = 16);
+ALTER TABLE subscription ADD COLUMN sealed_until INTEGER CHECK (sealed_until IS NULL OR sealed_until >= 0);

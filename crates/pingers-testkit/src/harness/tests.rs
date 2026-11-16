@@ -200,6 +200,38 @@ mod running {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_scheduled_push_relay_key_is_announced_until_it_is_published() -> TestResult {
+        use pingers_proto::WireDecode as _;
+
+        let unscheduled = InProcessHarness::start(&HarnessConfig::default())?;
+        assert_eq!(unscheduled.endpoints().push_relay_next_key, None);
+        unscheduled.shutdown();
+
+        let activates_at = UnixSeconds::new(crate::TEST_START.get().saturating_add(3_600));
+        let harness = InProcessHarness::start(&HarnessConfig {
+            push_relay_next_key_at: Some(activates_at),
+            ..HarnessConfig::default()
+        })?;
+        let endpoints = harness.endpoints().clone();
+        let next = endpoints.push_relay_next_key.clone().ok_or("no next key")?;
+        assert_ne!(next, endpoints.push_relay_key);
+        let answer = push_client(&endpoints)?
+            .get(format!("https://{}/v1/config/next", endpoints.push_relay))
+            .send()
+            .await?;
+        assert_eq!(answer.status().as_u16(), 200);
+        let scheduled = pingers_proto::ScheduledPushRelayConfig::decode(&answer.bytes().await?)?;
+        assert_eq!(scheduled.activates_at, activates_at);
+        assert_eq!(scheduled.config.key_config.key_id.get(), 2);
+        assert_eq!(
+            scheduled.config.key_config.public_key.as_slice(),
+            next.as_slice()
+        );
+        harness.shutdown();
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_proof_switch_reaches_the_server() -> TestResult {
         use pingers_proto::{AnonymousCredential, WireDecode as _};
 

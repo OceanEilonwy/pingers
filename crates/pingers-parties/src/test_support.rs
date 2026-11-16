@@ -122,6 +122,7 @@ impl Device {
             purpose,
             state: MailboxState::Pooled,
             push: None,
+            seal: None,
             expires_at,
         })?;
         Ok(())

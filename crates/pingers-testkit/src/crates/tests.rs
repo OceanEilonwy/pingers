@@ -10,11 +10,12 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use pingers_client::snapshot::{PartyColour, PostQuantum};
-use pingers_client::{Fallback, Unavailable};
+use pingers_client::{Fallback, Notice, Unavailable};
 use pingers_gate::{PauseState, SuppressReason};
 use pingers_geo::{Circle, Coordinate, Fence, GeoError, Meters};
 use pingers_meetup::{AllowListChoice, AskBack, GrantScope};
 use pingers_proto::{PushPlatform, PushToken, SecretText};
+use pingers_wake::PushPriority;
 
 use super::*;
 
@@ -429,6 +430,7 @@ fn sections_and_answers_follow_what_the_test_set_and_reads_are_counted() -> Test
         relay: RelayStatus::KeyMismatch,
         map_host: None,
         operators: None,
+        push_delivery: pingers_client::snapshot::PushDelivery::Full,
     };
     fakes.set_server(server.clone());
     let meetups = MeetupsSection {
@@ -502,5 +504,20 @@ fn raised_events_reach_the_one_receiver_handed_out() -> TestResult {
         Some(ClientEvent::MeetupEnded(MEETUP))
     );
     assert!(events.try_recv().is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_priority_report_is_recorded_and_answers_the_notice_set() -> Result<(), FakeCratesError> {
+    let fakes = FakeCrates::new()?;
+    let report =
+        || SyncPort::report_push_priority(&fakes, PushPriority::High, PushPriority::Normal);
+    assert!(matches!(report().await, Ok(None)));
+    fakes.set_priority_notice(Some(Notice::PushDowngraded));
+    assert!(matches!(report().await, Ok(Some(Notice::PushDowngraded))));
+    assert_eq!(
+        fakes.calls(),
+        vec![CrateCall::ReportPushPriority(PushPriority::High, PushPriority::Normal); 2]
+    );
     Ok(())
 }

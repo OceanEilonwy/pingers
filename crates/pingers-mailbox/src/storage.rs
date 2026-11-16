@@ -63,12 +63,13 @@ pub trait MailboxStorage {
     /// A backend error.
     fn delete_mailbox(&mut self, id: &MailboxId) -> Result<Removal, StorageError>;
 
-    /// Forgets a mailbox's sealed push, keeping the mailbox and its messages.
+    /// Replaces a mailbox's sealed push (`None` forgets it), keeping the mailbox and its
+    /// messages.
     ///
     /// # Errors
     ///
-    /// A backend error. Clearing an absent mailbox is not an error.
-    fn clear_push(&mut self, id: &MailboxId) -> Result<(), StorageError>;
+    /// A backend error. Setting the push of an absent mailbox is not an error.
+    fn set_push(&mut self, id: &MailboxId, push: Option<&SealedPush>) -> Result<(), StorageError>;
 
     /// Appends a message and returns its sequence number: one more than the last one given in
     /// this mailbox, starting at 1.
@@ -157,9 +158,9 @@ impl MailboxStorage for MemoryStorage {
         })
     }
 
-    fn clear_push(&mut self, id: &MailboxId) -> Result<(), StorageError> {
+    fn set_push(&mut self, id: &MailboxId, push: Option<&SealedPush>) -> Result<(), StorageError> {
         if let Some(entry) = self.mailboxes.get_mut(id) {
-            entry.mailbox.push = None;
+            entry.mailbox.push = push.cloned();
         }
         Ok(())
     }
@@ -262,7 +263,7 @@ pub(crate) mod contract {
         sequence_numbers_start_at_one_per_mailbox(make()?)?;
         messages_after_skips_what_was_read(make()?)?;
         deleting_a_mailbox_deletes_its_messages(make()?)?;
-        clearing_the_push_keeps_the_messages(make()?)?;
+        replacing_and_clearing_the_push_keeps_the_messages(make()?)?;
         expiry_deletes_only_expired_mailboxes(make()?)?;
         append_to_an_absent_mailbox_is_refused(make()?)?;
         Ok(())
@@ -393,7 +394,7 @@ pub(crate) mod contract {
         Ok(())
     }
 
-    fn clearing_the_push_keeps_the_messages(
+    fn replacing_and_clearing_the_push_keeps_the_messages(
         mut storage: impl MailboxStorage,
     ) -> Result<(), ContractError> {
         let stored = mailbox(
@@ -406,8 +407,16 @@ pub(crate) mod contract {
         );
         storage.insert_mailbox(&stored)?;
         storage.append_message(&stored.id, &body(1)?)?;
-        storage.clear_push(&stored.id)?;
-        storage.clear_push(&MailboxId::from_bytes([8; 16]))?;
+        let replacement = sealed_push(RelayRef::Listed(RelayId::new(2)), Urgency::Quiet);
+        storage.set_push(&stored.id, Some(&replacement))?;
+        assert_eq!(
+            storage
+                .mailbox(&stored.id)?
+                .and_then(|mailbox| mailbox.push),
+            Some(replacement)
+        );
+        storage.set_push(&stored.id, None)?;
+        storage.set_push(&MailboxId::from_bytes([8; 16]), None)?;
         assert_eq!(
             storage.mailbox(&stored.id)?,
             Some(StoredMailbox {

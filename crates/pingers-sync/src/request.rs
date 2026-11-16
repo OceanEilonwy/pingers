@@ -12,7 +12,7 @@ use pingers_crypto::{GroupRequest, LogAuthKeyPair, MailboxReadKey, sign_group_re
 use pingers_ohttp::{BinaryRequest, Header};
 use pingers_proto::{
     AppMessage, AuthRequest, BoardCursor, BoardSyncRequest, CommitRequest, CreateGroup, GroupId,
-    LeaseId, MailboxId, MailboxSpec, MembershipIndex, MembershipLeafRequest, Padded,
+    LeaseId, MailboxId, MailboxPush, MailboxSpec, MembershipIndex, MembershipLeafRequest, Padded,
     PrivacyPassIssueRequest, RegisterRequest, RelayId, RlnScope, SecretBytes, SecretText,
     SequenceNumber, Subscription, SubscriptionId, WireEncode,
 };
@@ -93,6 +93,12 @@ pub enum Route {
     /// server fetches from the relay so that devices ask for it through the OHTTP relay too
     /// (design B.12: the push relay key config is anonymous traffic).
     PushRelayConfig,
+    /// `GET /v1/push-relays/{relay id}/config/next`: the key that relay publishes next and
+    /// when, fetched the same way, so devices pre-seal for a rotation (design B.4.9).
+    PushRelayNextConfig,
+    /// `PUT /v1/mailboxes/{id}/push`: replaces a mailbox's sealed push, authorised by the read
+    /// key (design B.4.9).
+    ReplaceMailboxPush,
 }
 
 impl Route {
@@ -111,6 +117,7 @@ impl Route {
             Self::Params
             | Self::OhttpConfig
             | Self::PushRelayConfig
+            | Self::PushRelayNextConfig
             | Self::PrivacyPassKeys
             | Self::RlnLeaves
             | Self::BoardSync
@@ -120,6 +127,7 @@ impl Route {
             | Self::PostToMailbox
             | Self::ReadMailbox
             | Self::DeleteMailbox
+            | Self::ReplaceMailboxPush
             | Self::CreateGroup
             | Self::Commit
             | Self::PutSubscription
@@ -145,6 +153,7 @@ impl Route {
             Self::Params
             | Self::OhttpConfig
             | Self::PushRelayConfig
+            | Self::PushRelayNextConfig
             | Self::CreateAccount
             | Self::Auth
             | Self::DeleteAccount
@@ -156,6 +165,7 @@ impl Route {
             | Self::BoardRevokeLease
             | Self::ReadMailbox
             | Self::DeleteMailbox
+            | Self::ReplaceMailboxPush
             | Self::DeleteSubscription
             | Self::ReadGroupMessages
             | Self::GroupState
@@ -434,6 +444,16 @@ impl ApiRequest {
         )
     }
 
+    /// `GET /v1/push-relays/{relay id}/config/next`.
+    #[must_use]
+    pub fn push_relay_next_config(relay: RelayId) -> Self {
+        Self::new(
+            Route::PushRelayNextConfig,
+            "GET",
+            format!("/v1/push-relays/{}/config/next", relay.get()),
+        )
+    }
+
     /// `POST /v1/board/sync`.
     ///
     /// # Errors
@@ -514,6 +534,25 @@ impl ApiRequest {
             format!("/v1/mailboxes/{}", id_hex(mailbox.as_bytes())),
         )
         .with_read_key(read_key)
+    }
+
+    /// `PUT /v1/mailboxes/{id}/push`, authorised by the read key.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Encode`] if the body does not encode.
+    pub fn replace_mailbox_push(
+        mailbox: &MailboxId,
+        read_key: &MailboxReadKey,
+        update: &MailboxPush,
+    ) -> Result<Self, SyncError> {
+        Self::new(
+            Route::ReplaceMailboxPush,
+            "PUT",
+            format!("/v1/mailboxes/{}/push", id_hex(mailbox.as_bytes())),
+        )
+        .with_cbor(update)
+        .map(|request| request.with_read_key(read_key))
     }
 
     /// `POST /v1/groups?lifetime=meetup|party&epoch=n`.

@@ -28,6 +28,7 @@ mod parties;
 mod party_log;
 mod push;
 mod records;
+mod registrations;
 mod sync;
 mod wake;
 mod wake_codec;

@@ -96,6 +96,10 @@ class CoreRepository(
         // CoreHost has kept it (PhoneFacts.record); Home's notice and Wake-ups read it from there.
         override fun notice(notice: uniffi.pingers.Notice) = refreshLater()
         override fun privacyStatusChanged() = refreshLater()
+
+        // CoreHost posts the notification for the whole process; the screens refresh on the
+        // event that came with it.
+        override fun notify(notification: uniffi.pingers.CoreNotification) = Unit
     }
 
     /** Null until [Core.open] finishes, or if it failed (then [openError] says why). */

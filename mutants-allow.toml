@@ -19,6 +19,15 @@ name = "crates/pingers-geo/src/presence.rs: replace > with >= in SpotPresence::r
 reason = "equivalent (two sites): when the compared times are equal, both branches pick the same UnixSeconds"
 
 [[mutant]]
+[[mutant]]
+name = "crates/pingers-client/src/real/meetups.rs: replace Meetups::pushed -> Result<(), ClientError> with Ok(())"
+reason = "equivalent in the client tests: without a harness server no Meetup goes live, so a push never names a live Meetup and there is no log to read. What it calls is pinned by pingers-meetup-session (a_push_has_an_offline_member_read_the_log_at_once). Remove when a client test runs a Meetup against the harness server."
+
+[[mutant]]
+name = "crates/pingers-wake/src/push_priority.rs: replace | with ^ in PriorityWindow::record"
+reason = "equivalent: the shifted window has its lowest bit clear, so ORing and XORing the new bit agree for every input"
+
+[[mutant]]
 name = "crates/pingers-parties/src/link.rs: replace | with ^ in base64url_encode"
 reason = "equivalent (two sites): the shifted fields combined into one sextet never share a set bit, so OR and XOR agree"
 

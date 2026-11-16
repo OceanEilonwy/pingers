@@ -346,6 +346,25 @@ impl Meetups {
         Ok(self.handle(meetup)?.act(action).await?)
     }
 
+    /// A push for this device's subscription in `group` arrived: if it is a live Meetup, its
+    /// log is read before the wake goes on, so the message or commit it announced is in the
+    /// snapshot (and its notification) when the wake ends. A group that is no live Meetup (a
+    /// Party) is the pipeline's.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::MeetupSession`] if the Meetup failed.
+    pub(crate) async fn pushed(&self, group: GroupId) -> Result<(), ClientError> {
+        let Ok(handle) = self.handle(group) else {
+            return Ok(());
+        };
+        match handle.read_log().await {
+            // It ended meanwhile: nothing left to read.
+            Err(pingers_meetup_session::SessionError::Ended) => Ok(()),
+            other => Ok(other?),
+        }
+    }
+
     /// The Meetup screen opened or closed, or the app came on screen or left it. Best effort
     /// per Meetup: one that has just ended is past caring, and its watcher reports the end.
     pub(crate) async fn screen(&self, screen: MeetupScreen) {
@@ -439,15 +458,27 @@ impl Meetups {
             })
             .await
             .map_err(|_failed| PortError::Unavailable)?;
-        let own = self.meetup_subscription().await;
+        // This device's own subscription goes in with the knocker's, so a member's chat or meet
+        // point wakes it while the app is not running (design B.4.9). The knocker's came with
+        // its knock.
+        let own = self
+            .shared
+            .net
+            .own_subscription()
+            .await
+            .map_err(|_failed| PortError::Unavailable)?;
         let created = create(
             &runtime,
             CreateMeetup {
                 key,
                 group,
                 knocker: knocker.key_package,
-                subscriptions: own.iter().cloned().chain(knocker.subscription).collect(),
-                own_subscription: own.as_ref().map(|subscription| subscription.id),
+                subscriptions: knocker
+                    .subscription
+                    .into_iter()
+                    .chain(own.clone())
+                    .collect(),
+                own_subscription: own.as_ref().map(|own| own.id),
                 board_seen: self.board_seen().await,
                 suite,
             },
@@ -455,7 +486,13 @@ impl Meetups {
         )
         .await
         .map_err(|_failed| PortError::Unavailable)?;
-        self.remember(group, own.as_ref()).await;
+        if let Some(own) = &own {
+            self.shared
+                .net
+                .remember_own_subscription(&group, own)
+                .await
+                .map_err(|_failed| PortError::Unavailable)?;
+        }
         self.shared
             .start(Started {
                 handle: created.handle,

@@ -62,6 +62,9 @@ pub(crate) const SUBSCRIPTION_BIND: &[u8] = b"pingers/v1/sub-bind";
 pub(crate) const RELAY_TOKEN: &[u8] = b"pingers/v1/relay-token";
 /// Keyed hash of a server credential as the relay stores it. Decision: the design gives none.
 pub(crate) const RELAY_CREDENTIAL: &[u8] = b"pingers/v1/relay-credential";
+/// The device-local fingerprint of what a push token was sealed with. Decision: local only, so
+/// the design needs none; a label keeps it from equalling any other hash.
+pub(crate) const PUSH_SEAL_ID: &[u8] = b"pingers/v1/push-seal-id";
 /// HPKE info prefix of location grants (design B.6.1).
 pub(crate) const LOCATION_GRANT: &[u8] = b"pingers/v1/lk-grant";
 /// HPKE info prefix of location asks. Decision: the design gives none.
@@ -87,7 +90,7 @@ pub(crate) const SAFETY_NUMBER: &[u8] = b"pingers/v1/safety-number";
 
 /// Every private label, so tests can check they are distinct and vectors can name them.
 #[cfg(test)]
-pub(crate) const ALL: [&[u8]; 25] = [
+pub(crate) const ALL: [&[u8]; 26] = [
     SAFETY_NUMBER,
     JOIN_CODE,
     AUTH_CHALLENGE,
@@ -108,6 +111,7 @@ pub(crate) const ALL: [&[u8]; 25] = [
     SUBSCRIPTION_BIND,
     RELAY_TOKEN,
     RELAY_CREDENTIAL,
+    PUSH_SEAL_ID,
     LOCATION_GRANT,
     LOCATION_ASK,
     INVITE_JOIN,

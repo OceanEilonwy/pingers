@@ -12,10 +12,11 @@ use pingers_proto::{
     PushHandle, PushRelayKeyId, PushTokenPlaintext, RelayRef, SealedPush, SequenceNumber,
     Subscription, SubscriptionId, TimeToLive, Urgency,
 };
-use pingers_store::{Mailbox, MailboxPurpose, MailboxState, StoredSubscription};
+use pingers_store::{Mailbox, MailboxPurpose, MailboxState, SealStamp, StoredSubscription};
 use pingers_time::UnixSeconds;
 
 use crate::engine::blocking;
+use crate::registrations::stamp_of;
 use crate::{
     ApiRequest, NotSentReason, Outcome, Sending, SyncEngine, SyncError, SyncRng, WakeBudget,
 };
@@ -77,7 +78,7 @@ fn random_handle(rng: &mut SyncRng) -> PushHandle {
 }
 
 /// Seals `seal` for `bind` with a fresh handle.
-fn sealed_push(
+pub(crate) fn sealed_push(
     seal: &PushSeal,
     bind: PushBind,
     rng: &mut SyncRng,
@@ -129,6 +130,7 @@ impl SyncEngine {
         })?;
         let id = mailbox_id(&read_key);
         let handle = push.as_ref().map(|push| push.handle);
+        let seal = mailbox.push.as_ref().map(stamp_of).transpose()?;
         let request = ApiRequest::create_mailbox(&MailboxSpec {
             mailbox_id: id,
             time_to_live: mailbox.lifetime,
@@ -145,6 +147,7 @@ impl SyncEngine {
             purpose: mailbox.purpose,
             state: MailboxState::Pooled,
             push: handle,
+            seal,
             expires_at: expiry(self.now(), mailbox.lifetime)?,
         };
         blocking(&self.database, move |session| {
@@ -297,10 +300,24 @@ impl SyncEngine {
         seal: &PushSeal,
         lifetime: TimeToLive,
     ) -> Result<Subscription, SyncError> {
+        let subscription = self.seal_subscription(None, seal, lifetime)?;
+        self.note_issued(subscription.push.handle, stamp_of(seal)?);
+        Ok(subscription)
+    }
+
+    /// A subscription under `id` (or a random new one), sealed fresh with a fresh handle.
+    pub(crate) fn seal_subscription(
+        &self,
+        id: Option<SubscriptionId>,
+        seal: &PushSeal,
+        lifetime: TimeToLive,
+    ) -> Result<Subscription, SyncError> {
         self.with_rng(|rng| {
-            let mut bytes = [0_u8; SubscriptionId::LENGTH];
-            rng.fill_bytes(&mut bytes);
-            let id = SubscriptionId::from_bytes(bytes);
+            let id = id.unwrap_or_else(|| {
+                let mut bytes = [0_u8; SubscriptionId::LENGTH];
+                rng.fill_bytes(&mut bytes);
+                SubscriptionId::from_bytes(bytes)
+            });
             let push = sealed_push(seal, push_bind_for_subscription(&id), rng)?;
             Ok(Subscription {
                 id,
@@ -310,9 +327,19 @@ impl SyncEngine {
         })
     }
 
+    /// Remembers what a subscription handed out in this process was sealed with, until it is
+    /// recorded ([`SyncEngine::remember_subscription`]).
+    pub(crate) fn note_issued(&self, handle: PushHandle, seal: SealStamp) {
+        self.issued
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(handle, seal);
+    }
+
     /// Records this device's subscription in `group` once the server holds it (after the
     /// group was created or the commit adding it was accepted), so a push carrying its
-    /// handle can be matched to the group.
+    /// handle can be matched to the group. Its seal is recorded if it was sealed in this
+    /// process; otherwise it counts as stale and is sealed again by a later maintenance step.
     ///
     /// # Errors
     ///
@@ -322,11 +349,17 @@ impl SyncEngine {
         group: &GroupId,
         subscription: &Subscription,
     ) -> Result<(), SyncError> {
+        let seal = self
+            .issued
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&subscription.push.handle);
         let stored = StoredSubscription {
             group: *group,
             id: subscription.id,
             handle: subscription.push.handle,
             expires_at: expiry(self.now(), subscription.time_to_live)?,
+            seal,
         };
         blocking(&self.database, move |session| {
             Ok(session.subscriptions().put(&stored)?)

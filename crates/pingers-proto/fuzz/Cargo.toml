@@ -259,6 +259,20 @@ doc = false
 bench = false
 
 [[bin]]
+name = "mailbox_push"
+path = "fuzz_targets/mailbox_push.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "scheduled_push_relay_config"
+path = "fuzz_targets/scheduled_push_relay_config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "privacy_pass_issue_request"
 path = "fuzz_targets/privacy_pass_issue_request.rs"
 test = false

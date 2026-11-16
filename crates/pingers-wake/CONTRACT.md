@@ -85,6 +85,17 @@ pingers-meetup-session and the shell.
 
 - pingers-geo: store the Inside confirmation time in `PresenceSnapshot` (review wave 1); the
   restart rule above then becomes a second line of defence.
-- pingers-sync: the mailbox pool behind `take_mailbox` and `refill_mailbox_pool`, the previous
+- pingers-sync: the mailbox pool behind `take_mailbox` and `maintain_push_registrations` (renamed
+  from `refill_mailbox_pool` on 2026-11-14: the one registration a wake makes may also renew a
+  stale sealed push), the previous
   lease's revoke key for `replaces`, and a sealed Meetup subscription for knocks (sent as
-  `None` today). Clock skew from `server_time` (F.1) is not handled here yet.
+  `None`: a knocker that joins gets its own from the client's maintenance step at the end of the
+  joining wake). Clock skew from `server_time` (F.1) is not handled here yet.
+
+## Push priority (added 2026-11-14, v1-push)
+
+- **`PriorityWindow`**, **`PushPriority`**, **`PriorityChange`**: the last 20 high-priority pushes
+  and which came downgraded by FCM; 3 of them downgraded raises `Notice::PushDowngraded` (client)
+  and marks wake-ups downgraded until the window clears.
+- The pipeline's last network step is **`ServerPort::maintain_push_registrations`** (was
+  `refill_mailbox_pool`), step **`WakeStep::PushRegistration`** (was `MailboxPool`).

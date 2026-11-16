@@ -122,15 +122,6 @@ class PlatformUnitTest {
     }
 
     @Test
-    fun downgradesAreCounted() {
-        context.getSharedPreferences(Push.PREFS, Context.MODE_PRIVATE).edit().clear().commit()
-        assertEquals(false, Push.recordPriority(context, sentHigh = true, deliveredHigh = true))
-        assertEquals(true, Push.recordPriority(context, sentHigh = true, deliveredHigh = false))
-        assertEquals(false, Push.recordPriority(context, sentHigh = false, deliveredHigh = false))
-        assertEquals(Push.DowngradeCount(sentHigh = 2, downgraded = 1), Push.downgradeCount(context))
-    }
-
-    @Test
     fun scheduledWakeRunsTheCore() {
         WorkManagerTestInitHelper.initializeTestWorkManager(
             context,
@@ -145,17 +136,55 @@ class PlatformUnitTest {
     }
 
     @Test
-    fun pushPostsWhatTheCoreReturns() {
-        val replying = RecordingSink(CoreNotification(7, "Climbing", "Ana is at the wall", alert = true))
-        PlatformHost.sinkProvider = { replying }
+    fun aDistributorThatIsGoneTakesTheEndpointWithItAtTheNextStart() {
+        context.getSharedPreferences(Push.PREFS, Context.MODE_PRIVATE).edit().clear().commit()
+        Push.setEndpoint(context, "http://10.0.2.2:8099/upAbc")
+        assertEquals(PushPlatform.UNIFIED_PUSH, sink.await<RecordingSink.Tokens>()!!.tokens!!.platform)
+        // No distributor is installed under Robolectric: as after an uninstall.
+        Push.renew(context)
+        assertNull(Push.tokens(context))
+        assertNull(sink.await<RecordingSink.Tokens>()!!.tokens)
+    }
+
+    @Test
+    fun aPushReachesTheCoreWithItsFcmPriority() {
+        val priority = FcmPriority(sentHigh = true, deliveredHigh = false)
+        Push.wake(PushPlatform.FCM, """{"v":1,"h":"0000000000000000"}""".toByteArray(), priority)
+        val pushed = sink.await<RecordingSink.Pushed>()!!
+        assertEquals("""{"v":1,"h":"0000000000000000"}""", pushed.payload)
+        assertEquals(priority, pushed.priority)
+    }
+
+    @Test
+    fun theRelayBodyGivesItsHandleWhetherItCameByUnifiedPushOrFcm() {
+        val handle = byteArrayOf(1, 2, 3, 4, 5, 6, 7, -1)
+        // The push relay writes the handle as 16 lowercase hex digits (pingers-push-relay).
+        assertArrayEquals(handle, PushBody.handle("""{"v":1,"h":"01020304050607ff"}""".toByteArray()))
+        val fromFcm = PushBody.fromFcmData(mapOf("v" to "1", "h" to "01020304050607ff"))
+        assertArrayEquals(handle, PushBody.handle(fromFcm))
+        assertArrayEquals(handle, PushBody.handle("""{"v":1,"h":"01020304050607FF"}""".toByteArray()))
+        for (body in listOf(
+            """{"v":2,"h":"01020304050607ff"}""",
+            """{"v":1,"h":"010203040506"}""",
+            """{"v":1,"h":"01020304050607zz"}""",
+            """{"v":1,"h":"AQIDBAUGBwg="}""",
+            """{"v":1}""",
+            "not json",
+        )) {
+            assertNull(body, PushBody.handle(body.toByteArray()))
+        }
+        assertNull(PushBody.handle(PushBody.fromFcmData(emptyMap())))
+    }
+
+    @Test
+    fun coreNotificationsGoToTheAlertsChannelAndReplaceByTheirId() {
         shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
-        Push.wake(context, PushPlatform.UNIFIED_PUSH, """{"v":1,"h":"AAAAAAAAAAA="}""".toByteArray(), downgraded = false)
-        assertEquals("""{"v":1,"h":"AAAAAAAAAAA="}""", replying.await<RecordingSink.Pushed>()!!.payload)
+        Notifications.post(context, CoreNotification(7, "Ben · The wall", "Coffee after?", NotificationKind.CHAT_MESSAGE))
+        Notifications.post(context, CoreNotification(7, "Chloé · The wall", "Yes please", NotificationKind.CHAT_MESSAGE))
         val manager = shadowOf(context.getSystemService(NotificationManager::class.java))
-        // The post happens on the push executor just after the core call.
-        val deadline = System.currentTimeMillis() + 5_000
-        while (manager.allNotifications.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(20)
+        assertEquals(1, manager.allNotifications.size)
         val posted = manager.getNotification(7)
         assertEquals(Notifications.CHANNEL_ALERTS, posted.channelId)
+        assertEquals("Chloé · The wall", shadowOf(posted).contentTitle.toString())
     }
 }

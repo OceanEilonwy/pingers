@@ -124,6 +124,63 @@ impl PushRelayPrivateKey {
     }
 }
 
+/// Which relay key and push token a sealed push was made from, as a 16-byte fingerprint the
+/// device keeps beside each mailbox and subscription it registered (design B.4.9): when the
+/// token changes or the relay key rotates, the fingerprint changes, and the device knows which
+/// registrations to seal again. Never sent anywhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PushSealFingerprint([u8; 16]);
+
+impl PushSealFingerprint {
+    /// Byte length.
+    pub const LENGTH: usize = 16;
+
+    /// Wraps stored bytes.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    /// The bytes, for storage.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
+    }
+}
+
+/// `SHA-256("pingers/v1/push-seal-id" || key_id || relay public key || padded plaintext with
+/// class Standard and not_after 0)[..16]`: the platform and token under one relay key. The
+/// class and `not_after` are left out, since they follow from the purpose and the time.
+///
+/// # Errors
+///
+/// [`CryptoError::Encoding`] if the token does not fit a sealed push.
+pub fn push_seal_fingerprint(
+    relay_key: &PushRelayPublicKey,
+    platform: pingers_proto::PushPlatform,
+    token: &pingers_proto::PushToken,
+) -> Result<PushSealFingerprint, CryptoError> {
+    let canonical = PushTokenPlaintext {
+        platform,
+        class: pingers_proto::PushClass::Standard,
+        token: token.clone(),
+        not_after: pingers_time::UnixSeconds::EPOCH,
+    }
+    .encode_padded()
+    .map_err(CryptoError::Encoding)?;
+    let digest = Sha256::new()
+        .chain_update(labels::PUSH_SEAL_ID)
+        .chain_update([relay_key.key_id()])
+        .chain_update(relay_key.public_key())
+        .chain_update(canonical)
+        .finalize();
+    let mut fingerprint = [0; 16];
+    for (target, source) in fingerprint.iter_mut().zip(digest.iter()) {
+        *target = *source;
+    }
+    Ok(PushSealFingerprint(fingerprint))
+}
+
 /// Seals a push token to the relay: `HPKE.Seal(pk, info = "pingers/v1/push" || bind ||
 /// key_id, padded plaintext)`, giving exactly 320 bytes; `key_id` is `relay_key.key_id()`. Fresh randomness every time, so two blobs
 /// for the same token never look alike.
@@ -231,4 +288,70 @@ pub fn open_push_token(
 ) -> Result<PushTokenPlaintext, CryptoError> {
     let padded = open_push_padded(relay_key, token)?;
     PushTokenPlaintext::decode_padded(&padded).map_err(CryptoError::Encoding)
+}
+
+#[cfg(test)]
+mod fingerprint_tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use pingers_proto::{PushPlatform, PushToken};
+
+    use super::*;
+
+    fn token(text: &str) -> PushToken {
+        PushToken::from_bytes(text.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn the_fingerprint_is_the_labelled_hash_of_the_key_and_the_canonical_plaintext()
+    -> Result<(), CryptoError> {
+        let key = PushRelayPublicKey::new(3, [7; 32]);
+        let fingerprint = push_seal_fingerprint(&key, PushPlatform::UnifiedPush, &token("e"))?;
+        let canonical = PushTokenPlaintext {
+            platform: PushPlatform::UnifiedPush,
+            class: pingers_proto::PushClass::Standard,
+            token: token("e"),
+            not_after: pingers_time::UnixSeconds::EPOCH,
+        }
+        .encode_padded()
+        .map_err(CryptoError::Encoding)?;
+        let digest = Sha256::new()
+            .chain_update(b"pingers/v1/push-seal-id")
+            .chain_update([3])
+            .chain_update([7; 32])
+            .chain_update(canonical)
+            .finalize();
+        assert_eq!(
+            fingerprint.as_bytes().as_slice(),
+            digest.get(..16).unwrap_or_default()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_new_token_platform_or_relay_key_changes_the_fingerprint() -> Result<(), CryptoError> {
+        let key = PushRelayPublicKey::new(3, [7; 32]);
+        let base = push_seal_fingerprint(&key, PushPlatform::UnifiedPush, &token("e"))?;
+        assert_eq!(
+            push_seal_fingerprint(&key, PushPlatform::UnifiedPush, &token("e"))?,
+            base
+        );
+        for other in [
+            push_seal_fingerprint(&key, PushPlatform::UnifiedPush, &token("f"))?,
+            push_seal_fingerprint(&key, PushPlatform::Fcm, &token("e"))?,
+            push_seal_fingerprint(
+                &PushRelayPublicKey::new(4, [7; 32]),
+                PushPlatform::UnifiedPush,
+                &token("e"),
+            )?,
+            push_seal_fingerprint(
+                &PushRelayPublicKey::new(3, [8; 32]),
+                PushPlatform::UnifiedPush,
+                &token("e"),
+            )?,
+        ] {
+            assert_ne!(other, base);
+        }
+        Ok(())
+    }
 }

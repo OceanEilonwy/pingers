@@ -27,6 +27,9 @@ pub(crate) enum Route {
     /// `GET /v1/push-relays/{relay id}/config`: a listed push relay's key config, fetched
     /// from the relay so devices can ask for it through the OHTTP relay (design B.12).
     PushRelayConfig,
+    /// `GET /v1/push-relays/{relay id}/config/next`: the key that relay publishes next and its
+    /// activation time, fetched the same way, so devices pre-seal for a rotation (design B.4.9).
+    PushRelayNextConfig,
     /// `POST /v1/board/sync`.
     BoardSync,
     /// `GET /v1/board/page?c=`.
@@ -41,6 +44,8 @@ pub(crate) enum Route {
     ReadMailbox,
     /// `DELETE /v1/mailboxes/{id}`.
     DeleteMailbox,
+    /// `PUT /v1/mailboxes/{id}/push`: replaces the sealed push (Cap: the read key).
+    MailboxPush,
     /// `POST /v1/groups`.
     CreateGroup,
     /// `POST /v1/groups/{id}/commit`.
@@ -108,9 +113,11 @@ impl Route {
     pub(crate) const fn class(self) -> Class {
         match self {
             // The parameters and key configs are needed before a client can do anything else.
-            Self::Params | Self::OhttpConfig | Self::PrivacyPassKeys | Self::PushRelayConfig => {
-                Class::Public
-            }
+            Self::Params
+            | Self::OhttpConfig
+            | Self::PrivacyPassKeys
+            | Self::PushRelayConfig
+            | Self::PushRelayNextConfig => Class::Public,
             Self::CreateAccount
             | Self::Auth
             | Self::DeleteAccount
@@ -127,6 +134,7 @@ impl Route {
             | Self::PostToMailbox
             | Self::ReadMailbox
             | Self::DeleteMailbox
+            | Self::MailboxPush
             | Self::CreateGroup
             | Self::Commit
             | Self::PutSubscription
@@ -186,11 +194,15 @@ pub(crate) fn resolve(method: &str, path: &str) -> Resolved {
         ["pp", "issue"] => by_method(method, &[("POST", Route::PrivacyPassIssue)]),
         ["pp", "keys"] => by_method(method, &[("GET", Route::PrivacyPassKeys)]),
         ["push-relays", _, "config"] => by_method(method, &[("GET", Route::PushRelayConfig)]),
+        ["push-relays", _, "config", "next"] => {
+            by_method(method, &[("GET", Route::PushRelayNextConfig)])
+        }
         ["board", "sync"] => by_method(method, &[("POST", Route::BoardSync)]),
         ["board", "page"] => by_method(method, &[("GET", Route::BoardPage)]),
         ["board", "lease", _] => by_method(method, &[("DELETE", Route::BoardRevokeLease)]),
         ["mailboxes"] => by_method(method, &[("POST", Route::CreateMailbox)]),
         ["mailboxes", _] => by_method(method, &[("DELETE", Route::DeleteMailbox)]),
+        ["mailboxes", _, "push"] => by_method(method, &[("PUT", Route::MailboxPush)]),
         ["mailboxes", _, "msgs"] => by_method(
             method,
             &[("POST", Route::PostToMailbox), ("GET", Route::ReadMailbox)],

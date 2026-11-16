@@ -5,6 +5,7 @@ use pingers_gate::SuppressReason;
 use pingers_meetup::LocationVisibility;
 use pingers_screens::device::WakeupsSummary;
 use pingers_screens::settings::{Privacy, YourName};
+use pingers_screens::snapshot::{PushDelivery, PushDowngrade};
 
 use crate::Language;
 
@@ -78,6 +79,9 @@ pub struct PrivacyText {
     pub wakeups: String,
     /// "On · through ntfy".
     pub wakeups_summary: String,
+    /// Why wake-ups reach this phone late or not at all, under the delivery row; `None` when
+    /// they arrive as they should, or when "No wake-up pushes" is on (its own row says so).
+    pub push_delivery: Option<String>,
     /// The link to Security details.
     pub security_link: String,
 }
@@ -119,8 +123,40 @@ pub fn privacy(language: Language, view: &Privacy, wakeups: &WakeupsSummary) -> 
         delivery_heading: "Delivery".into(),
         wakeups: crate::wakeups::TITLE.into(),
         wakeups_summary: crate::wakeups::summary(language, wakeups),
+        push_delivery: match view.push_delivery {
+            PushDelivery::Full | PushDelivery::Downgraded(PushDowngrade::WakePushesOff) => None,
+            PushDelivery::Downgraded(reason) => Some(push_downgrade(language, reason)),
+        },
         security_link: crate::security::TITLE.into(),
     }
+}
+
+/// Why wake-up pushes are downgraded, and what the user can do, in one line.
+#[must_use]
+pub fn push_downgrade(language: Language, reason: PushDowngrade) -> String {
+    let Language::English = language;
+    match reason {
+        PushDowngrade::WakePushesOff => {
+            "Wake-up pushes are off. Meetups can take up to an hour to start."
+        }
+        PushDowngrade::NoPushToken => {
+            "Nothing can wake Pingers: this phone has no push service. Install a UnifiedPush \
+             distributor such as ntfy, or turn on Keep Pingers running."
+        }
+        PushDowngrade::NoPushRelay => {
+            "This build has no push relay its server lists, so nothing can wake Pingers. \
+             Meetups start when Pingers next wakes by itself."
+        }
+        PushDowngrade::RelayKeyMismatch => {
+            "The push relay's key doesn't match the one this app trusts, so Pingers isn't \
+             registering for wake-ups. Update the app or check the relay in Advanced."
+        }
+        PushDowngrade::PriorityLowered => {
+            "Android has been holding back Pingers' wake-ups, so meetups may start late. Turn on \
+             Keep Pingers running if it keeps happening."
+        }
+    }
+    .into()
 }
 
 /// A Party the name changes in, in words.
@@ -298,6 +334,51 @@ mod tests {
                 "Resumes after you leave the zone."
             ]
         );
+    }
+
+    #[test]
+    fn a_downgrade_is_said_under_the_delivery_row_unless_pushes_are_off_or_fine()
+    -> Result<(), FixtureError> {
+        let mut snapshot = fixtures::snapshot()?;
+        assert_eq!(
+            privacy(EN, &screen(&snapshot), &wakeups()?).push_delivery,
+            None
+        );
+        snapshot.push_delivery = PushDelivery::Downgraded(PushDowngrade::WakePushesOff);
+        assert_eq!(
+            privacy(EN, &screen(&snapshot), &wakeups()?).push_delivery,
+            None
+        );
+        snapshot.push_delivery = PushDelivery::Downgraded(PushDowngrade::PriorityLowered);
+        assert_eq!(
+            privacy(EN, &screen(&snapshot), &wakeups()?).push_delivery,
+            Some(push_downgrade(EN, PushDowngrade::PriorityLowered))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn every_push_downgrade_has_its_own_words() {
+        let said: Vec<String> = [
+            PushDowngrade::WakePushesOff,
+            PushDowngrade::NoPushToken,
+            PushDowngrade::NoPushRelay,
+            PushDowngrade::RelayKeyMismatch,
+            PushDowngrade::PriorityLowered,
+        ]
+        .into_iter()
+        .map(|reason| push_downgrade(EN, reason))
+        .collect();
+        for (index, text) in said.iter().enumerate() {
+            assert!(text.ends_with('.'), "{text}");
+            assert!(
+                !said
+                    .iter()
+                    .skip(index.saturating_add(1))
+                    .any(|other| other == text)
+            );
+        }
+        assert!(push_downgrade(EN, PushDowngrade::NoPushToken).contains("ntfy"));
     }
 
     #[test]

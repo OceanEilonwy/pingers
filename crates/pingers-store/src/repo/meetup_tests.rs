@@ -562,6 +562,7 @@ fn ending_a_meetup_forgets_its_subscription() -> Result<(), TestError> {
             id: pingers_proto::SubscriptionId::from_bytes([fill; 16]),
             handle: pingers_proto::PushHandle::from_bytes([fill; 8]),
             expires_at: UnixSeconds::new(9_000),
+            seal: None,
         })?;
     }
     session.meetups().end(&ended.group)?;

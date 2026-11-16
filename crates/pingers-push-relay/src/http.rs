@@ -3,9 +3,10 @@
 //!
 //! - `GET /v1/config`: [`PushRelayConfig`] as CBOR (`application/cbor`), no auth, cacheable.
 //!   503 if no key is active.
-//! - `GET /v1/config/next`: the same for the key scheduled to activate next, so members and
-//!   build-time pin sets can take up its hash before it is published (two-slot rotation). 404
-//!   if none is scheduled.
+//! - `GET /v1/config/next`: [`ScheduledPushRelayConfig`]: the config of the key scheduled to
+//!   activate next and its activation time, so members and build-time pin sets can take up its
+//!   hash before it is published, and devices switch to it on time (two-slot rotation). 404 if
+//!   none is scheduled.
 //! - `POST /v1/push`: `Authorization: Bearer <server credential>`, body [`PushRequest`] as CBOR.
 //!   Answers 202, 400, 401, 410 (delete the blob), 422, 429, 500, 501, 502 or 504, with no
 //!   body.
@@ -18,6 +19,7 @@
 //!
 //! [`PushRelayConfig`]: pingers_proto::PushRelayConfig
 //! [`PushRequest`]: pingers_proto::PushRequest
+//! [`ScheduledPushRelayConfig`]: pingers_proto::ScheduledPushRelayConfig
 
 use std::sync::Arc;
 
@@ -28,7 +30,7 @@ use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, WWW_AUTHENT
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use pingers_proto::{PushPlatform, PushRelayConfig, PushRelayKeyId, WireEncode as _};
+use pingers_proto::{PushPlatform, PushRelayKeyId, WireEncode as _};
 use pingers_time::{Clock, UnixSeconds};
 
 use crate::delivery::PushSender;
@@ -73,7 +75,7 @@ async fn config<O: TokenOpener, S: PushSender, C: Clock>(
     State(relay): State<Arc<Relay<O, S, C>>>,
 ) -> Response {
     match relay.published_config() {
-        Some(config) => config_response(&config),
+        Some(config) => cbor_response(config.encode()),
         None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
@@ -82,7 +84,7 @@ async fn next_config<O: TokenOpener, S: PushSender, C: Clock>(
     State(relay): State<Arc<Relay<O, S, C>>>,
 ) -> Response {
     match relay.next_config() {
-        Some(config) => config_response(&config),
+        Some(config) => cbor_response(config.encode()),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -121,8 +123,9 @@ fn platform_name(platform: PushPlatform) -> Option<&'static str> {
     }
 }
 
-fn config_response(config: &PushRelayConfig) -> Response {
-    match config.encode() {
+/// A config body, cacheable for an hour: a rotation is announced long before it happens.
+fn cbor_response(encoded: Result<Vec<u8>, pingers_proto::ProtoError>) -> Response {
+    match encoded {
         Ok(body) => (
             [
                 (CACHE_CONTROL, "public, max-age=3600"),

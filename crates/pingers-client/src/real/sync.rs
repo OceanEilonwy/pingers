@@ -21,19 +21,21 @@ use pingers_parties::{LeaveRequest, Outbound, OutgoingCommit, PartiesError, Part
 use pingers_presence::{MailboxPurpose, OutgoingKnock};
 use pingers_proto::{
     BoardCursor, BoardPage, Epoch, GroupId, MailboxId, Padded, SecretText, SequenceNumber,
-    SizeClass, TimeToLive, WelcomeBytes,
+    SizeClass, WelcomeBytes,
 };
 use pingers_store::{MailboxPurpose as StoredPurpose, WakePushes as StoredPushes};
 use pingers_sync::{
     CodeSource, Committed, CredentialChoice, Delivered, GroupCall, GroupError, GroupLifetime,
-    GroupStart, NewLease, PoolRefill, PoolTarget, Sending, SyncEngine, SyncError, WakeBudget,
+    GroupStart, NewLease, Sending, SyncEngine, SyncError, WakeBudget,
 };
 use pingers_time::{Bucket, UnixSeconds};
-use pingers_wake::PortError;
 use pingers_wake::ports::{LeaseUpload, ServerPort};
+use pingers_wake::{PortError, PriorityChange, PushPriority};
 
 use super::Backend;
 use super::party_log::{self, PartyLog};
+use super::records::{self, Key};
+use super::registrations::priority_window;
 use crate::ports::{ServerSection, SyncPort};
 use crate::snapshot::{RelayStatus, WakePushes};
 use crate::{ClientError, Fallback, Notice, PushTokens, Unavailable};
@@ -49,8 +51,8 @@ const KEEP_FOR: Duration = Duration::from_hours(1);
 
 /// How many knock mailboxes the pool keeps, and for how long each is registered: a lease is
 /// an hour, so a day covers every lease started while it is pooled.
-const KNOCK_POOL: u32 = 4;
-const MAILBOX_LIFETIME: Duration = Duration::from_hours(24);
+pub(super) const KNOCK_POOL: u32 = 4;
+pub(super) const MAILBOX_LIFETIME: Duration = Duration::from_hours(24);
 /// Rounds of one flush: a request sent in one round can queue another (a settled commit frees
 /// a waiting profile), which the next round sends.
 const FLUSH_ROUNDS: usize = 3;
@@ -60,15 +62,15 @@ const FLUSH_ROUNDS: usize = 3;
 const REPLY_POOL: u32 = 3;
 
 /// One step of the pool refill order: a purpose, and the size to fill its pool to.
-struct PoolStep {
-    purpose: StoredPurpose,
-    size: u32,
+pub(super) struct PoolStep {
+    pub(super) purpose: StoredPurpose,
+    pub(super) size: u32,
 }
 
 /// The order pools are refilled in, one registration per wake: a first knock mailbox (so
 /// this device's records can be knocked on), a first reply mailbox (so it can knock), then
 /// both to their full size.
-const POOL_ORDER: [PoolStep; 4] = [
+pub(super) const POOL_ORDER: [PoolStep; 4] = [
     PoolStep {
         purpose: StoredPurpose::Knock,
         size: 1,
@@ -641,27 +643,11 @@ impl ServerPort for Net {
             .flatten()
     }
 
-    /// At most one registration per wake (design E.2), for the first pool short of its
-    /// target in [`POOL_ORDER`].
-    async fn refill_mailbox_pool(&self) -> Result<(), PortError> {
-        let engine = self.engine().map_err(|_none| PortError::Unavailable)?;
-        let lifetime =
-            TimeToLive::new(MAILBOX_LIFETIME).map_err(|_never| PortError::Unavailable)?;
-        for PoolStep { purpose, size } in POOL_ORDER {
-            let target = PoolTarget {
-                purpose,
-                size,
-                lifetime,
-            };
-            match self
-                .server(engine.refill_mailbox_pool(&target, WakeBudget::UNLIMITED))
-                .await?
-            {
-                PoolRefill::Full { .. } => {}
-                PoolRefill::Registered { .. } | PoolRefill::NotSent(_) => break,
-            }
-        }
-        Ok(())
+    async fn maintain_push_registrations(&self) -> Result<(), PortError> {
+        self.maintain_push_registrations()
+            .await
+            .map(drop)
+            .map_err(|error| port_error(&error))
     }
 }
 
@@ -670,9 +656,11 @@ pub(crate) struct Sync(pub(crate) Arc<Net>);
 
 #[async_trait]
 impl SyncPort for Sync {
-    /// New mailboxes and subscriptions are sealed with the new tokens from now on; with pushes
-    /// off nothing is sealed. Mailboxes and subscriptions already registered keep their old
-    /// seal until they expire or are renewed.
+    /// New mailboxes and subscriptions are sealed with the new tokens from now on, and the
+    /// registrations already made are sealed again, one now and one at each wake after
+    /// (pingers-sync's maintenance), so the server cannot group them. With pushes off nothing
+    /// is sealed. Without a token nothing new is sealed and the old seals stay: the relay
+    /// answers 410 for a dead token, and the server then drops that blob itself.
     async fn push_tokens_changed(&self, tokens: Option<PushTokens>) -> Result<(), ClientError> {
         let setting = self
             .0
@@ -686,7 +674,10 @@ impl SyncPort for Sync {
                 self.0.clear_wake_push();
                 Ok(())
             }
-            (StoredPushes::Enabled, Some(tokens)) => self.0.seal_wake_push(&tokens).await,
+            (StoredPushes::Enabled, Some(tokens)) => {
+                self.0.seal_wake_push(&tokens).await?;
+                self.0.maintain_now().await
+            }
         }
     }
 
@@ -706,7 +697,8 @@ impl SyncPort for Sync {
                     .store(|session, _clock, _rng| {
                         Ok(session.settings().set_wake_pushes(StoredPushes::Enabled)?)
                     })
-                    .await
+                    .await?;
+                self.0.maintain_now().await
             }
             WakePushes::NoWakePushes => {
                 self.0.clear_wake_push();
@@ -715,7 +707,8 @@ impl SyncPort for Sync {
                     .store(|session, _clock, _rng| {
                         Ok(session.settings().set_wake_pushes(StoredPushes::Disabled)?)
                     })
-                    .await
+                    .await?;
+                self.0.maintain_now().await
             }
         }
     }
@@ -757,6 +750,30 @@ impl SyncPort for Sync {
         }
     }
 
+    async fn report_push_priority(
+        &self,
+        original: PushPriority,
+        delivered: PushPriority,
+    ) -> Result<Option<Notice>, ClientError> {
+        let change = self
+            .0
+            .backend
+            .store(move |session, _clock, _rng| {
+                let mut window = priority_window(session)?;
+                let change = window.record(original, delivered);
+                records::write(session, &Key::PushPriority, |writer| {
+                    writer.u32(window.downgraded_bits());
+                    writer.byte(window.seen());
+                })?;
+                Ok(change)
+            })
+            .await?;
+        Ok(match change {
+            PriorityChange::BecameDowngraded => Some(Notice::PushDowngraded),
+            PriorityChange::Unchanged | PriorityChange::Recovered => None,
+        })
+    }
+
     /// Privacy Pass for everything is a fallback while the main app cannot prove (design B.4.8:
     /// the leaf not yet live, the prover not passed or too slow, proofs turned off).
     async fn section(&self) -> Result<ServerSection, ClientError> {
@@ -770,11 +787,13 @@ impl SyncPort for Sync {
                 Ok(_) | Err(_) => {}
             }
         }
+        let push_delivery = self.0.push_delivery().await?;
         Ok(ServerSection {
             fallbacks,
             relay: *self.0.relay.lock().unwrap_or_else(PoisonError::into_inner),
             map_host,
             operators: self.0.operators(),
+            push_delivery,
         })
     }
 }

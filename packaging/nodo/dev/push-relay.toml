@@ -1,6 +1,7 @@
 # Tier-1 local stack: pingers-push-relay with the shape of packaging/nodo's push-relay.toml.in
-# and TEST KEYS ONLY. UnifiedPush may reach a local ntfy; no FCM (no tool handles the real
-# service account). Run from the repository root:
+# and TEST KEYS ONLY. UnifiedPush may reach a local ntfy. No FCM here: `cargo xtask local-stack
+# --fcm-service-account <key.json> --fcm-project <id>` adds an [fcm] table to its own
+# copy. Run from the repository root:
 #   cargo run --release -p pingers-push-relay -- packaging/nodo/dev/push-relay.toml
 listen = "127.0.0.1:9472"
 operator = "Local test"

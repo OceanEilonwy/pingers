@@ -16,6 +16,10 @@ anyhow = { workspace = true }
 pingers-crypto = { workspace = true }
 pingers-ohttp = { workspace = true }
 pingers-proto = { workspace = true }
+# e2e-emulators --flavour gms: the FCM step seals a token as the core does.
+pingers-time = { workspace = true }
+getrandom = { workspace = true }
+rand_core = { workspace = true }
 hex = { workspace = true }
 toml = { workspace = true }
 zeroize = { workspace = true }

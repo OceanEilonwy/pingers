@@ -11,15 +11,20 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use pingers_client::ports::PartyDraft;
-use pingers_client::snapshot::{Name, PartyColour, PostQuantum, RelayStatus};
+use pingers_client::snapshot::{Name, PartyColour, PostQuantum, RelayStatus, WakePushes};
 use pingers_client::{Client, ClientConfig, ClientError, Crates, Instance, Outside, Trust};
+use pingers_crypto::{PushRelayPublicKey, PushSealFingerprint, push_seal_fingerprint};
 use pingers_ohttp::BinaryRequest;
 use pingers_parties::PartyLifecycle;
-use pingers_proto::{GroupMessages, InvitePayload, SecretText, ServerId, WireDecode as _};
+use pingers_proto::{
+    GroupMessages, InvitePayload, PushPlatform, PushToken, SecretText, ServerId, WireDecode as _,
+};
 use pingers_store::{AccountRegistration, Database, DatabaseKey, MailboxPurpose, Session};
 use pingers_sync::{ApiRequest, GroupSigner};
-use pingers_testkit::{FakePlatform, HarnessConfig, InProcessHarness, RecordingEvents};
-use pingers_time::{Clock as _, ManualClock};
+use pingers_testkit::{
+    FakePlatform, HarnessConfig, InProcessHarness, PushRegistration, RecordingEvents, TEST_START,
+};
+use pingers_time::{Clock as _, ManualClock, UnixSeconds};
 use pingers_transport::{
     KeyPin, OhttpConfig, OhttpTransport, PrivacyClass, Relay, TlsRoots, Transport as _,
 };
@@ -47,6 +52,10 @@ enum TestError {
     Snapshot(#[from] pingers_client::snapshot::SnapshotError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Crypto(#[from] pingers_crypto::CryptoError),
+    #[error(transparent)]
+    Records(#[from] pingers_mls::StorageError),
     #[error("setup: {0}")]
     Setup(&'static str),
 }
@@ -102,6 +111,30 @@ async fn open(
     build_code: Option<&str>,
 ) -> Result<Client, TestError> {
     let platform = FakePlatform::new(clock.clone());
+    let build = Build {
+        code: build_code,
+        platform,
+    };
+    open_on(harness, clock, database, build).await
+}
+
+/// The build's registration code and the platform (whose push registration a test sets).
+struct Build<'code> {
+    code: Option<&'code str>,
+    platform: FakePlatform,
+}
+
+/// As [`open`], with `build`.
+async fn open_on(
+    harness: &InProcessHarness,
+    clock: &ManualClock,
+    database: PathBuf,
+    build: Build<'_>,
+) -> Result<Client, TestError> {
+    let Build {
+        code: build_code,
+        platform,
+    } = build;
     platform
         .secure_store_put("pingers.database-key", &KEY)
         .map_err(|_locked| TestError::Setup("secure store"))?;
@@ -267,6 +300,7 @@ async fn a_fresh_client_registers_gets_tokens_creates_a_party_and_a_mailbox()
         purpose: MailboxPurpose::Invite,
         state: pingers_store::MailboxState::Pooled,
         push: None,
+        seal: None,
         expires_at: clock
             .now()
             .checked_add(std::time::Duration::from_hours(48))
@@ -325,6 +359,181 @@ async fn an_invite_links_registration_code_registers_the_joiner() -> Result<(), 
     ));
     // The day's 300 tokens, less the reply mailbox's registration and the join request.
     assert_eq!(session.privacy_pass_tokens().count()?, 298);
+    Ok(())
+}
+
+fn harness_key(bytes: Option<&Vec<u8>>, key_id: u8) -> Result<PushRelayPublicKey, TestError> {
+    let public: [u8; 32] = bytes
+        .ok_or(TestError::Setup("no relay key"))?
+        .as_slice()
+        .try_into()
+        .map_err(|_| TestError::Setup("relay key length"))?;
+    Ok(PushRelayPublicKey::new(key_id, public))
+}
+
+fn token(text: &str) -> PushRegistration {
+    PushRegistration {
+        platform: PushPlatform::UnifiedPush,
+        token: PushToken::from_bytes(text.as_bytes().to_vec()),
+    }
+}
+
+fn fingerprint(key: &PushRelayPublicKey, text: &str) -> Result<PushSealFingerprint, TestError> {
+    Ok(push_seal_fingerprint(
+        key,
+        PushPlatform::UnifiedPush,
+        &PushToken::from_bytes(text.as_bytes().to_vec()),
+    )?)
+}
+
+/// What the Party subscription and every live mailbox were last sealed with.
+fn seals(path: &std::path::Path, now: UnixSeconds) -> Result<Vec<PushSealFingerprint>, TestError> {
+    let database = Database::open(path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+    let session = database.session()?;
+    let mut seals = Vec::new();
+    for subscription in session.subscriptions().all()? {
+        seals.push(
+            subscription
+                .seal
+                .ok_or(TestError::Setup("unsealed"))?
+                .fingerprint,
+        );
+    }
+    for mailbox in session.mailboxes().live(now)? {
+        seals.push(
+            mailbox
+                .seal
+                .ok_or(TestError::Setup("unsealed"))?
+                .fingerprint,
+        );
+    }
+    Ok(seals)
+}
+
+/// One maintenance step per call: the platform reports its registration again.
+async fn steps(client: &Client, count: usize) -> Result<(), TestError> {
+    for _ in 0..count {
+        tokio::time::timeout(STEP, client.push_tokens_changed())
+            .await
+            .map_err(|_elapsed| TestError::Setup("the step did not finish"))??;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_token_and_a_relay_rotation_reach_every_registration() -> Result<(), TestError> {
+    let rotation = TEST_START
+        .checked_add(std::time::Duration::from_hours(48))
+        .ok_or(TestError::Setup("time"))?;
+    let config = HarnessConfig {
+        registration_codes: vec![CODE.to_owned()],
+        push_relay_next_key_at: Some(rotation),
+        ..HarnessConfig::default()
+    };
+    let clock = config.clock.clone();
+    let harness = InProcessHarness::start(&config)?;
+    let old_key = harness_key(Some(&harness.endpoints().push_relay_key), 1)?;
+    let new_key = harness_key(harness.endpoints().push_relay_next_key.as_ref(), 2)?;
+    let dir = TestDir::new()?;
+    let path = dir.0.join("pingers.db");
+    let platform = FakePlatform::new(clock.clone());
+    platform.set_push_registration(Some(token("https://up.invalid/a")));
+    let build = Build {
+        code: Some(CODE),
+        platform: platform.clone(),
+    };
+    let client = open_on(&harness, &clock, path.clone(), build).await?;
+    client.set_wake_pushes(WakePushes::On).await?;
+    tokio::time::timeout(
+        STEP,
+        client.create_party(PartyDraft {
+            name: Name::new("Climbing")?,
+            my_name: Name::new("Ana")?,
+            colour: PartyColour::Blue,
+            post_quantum: PostQuantum::Off,
+        }),
+    )
+    .await
+    .map_err(|_elapsed| TestError::Setup("creating the Party did not finish"))??;
+    // The creator's own subscription went in with the group; one more step fills the pool.
+    steps(&client, 1).await?;
+    let first = fingerprint(&old_key, "https://up.invalid/a")?;
+    assert_eq!(seals(&path, clock.now())?, vec![first, first]);
+    // A build without pins took the published key and the announced next one as its pins.
+    let database = Database::open(&path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+    let pins =
+        pingers_mls::MlsStorage::read(&database.session()?, b"pingers-client/v1/push-relay-pin")?
+            .map(|pins| pins.len());
+    drop(database);
+    assert_eq!(pins, Some(64));
+
+    // A new token: the empty reply pool is filled first (a knock needs a reply mailbox now),
+    // sealed with it; then the subscription and the knock mailbox are sealed again, one step
+    // each.
+    platform.set_push_registration(Some(token("https://up.invalid/b")));
+    steps(&client, 1).await?;
+    let renewed = fingerprint(&old_key, "https://up.invalid/b")?;
+    let count =
+        |seals: &[PushSealFingerprint]| seals.iter().filter(|seal| **seal == renewed).count();
+    assert_eq!(
+        count(&seals(&path, clock.now())?),
+        1,
+        "one registration per step"
+    );
+    steps(&client, 1).await?;
+    assert_eq!(
+        count(&seals(&path, clock.now())?),
+        2,
+        "one registration per step"
+    );
+    steps(&client, 1).await?;
+    assert_eq!(seals(&path, clock.now())?, vec![renewed; 3]);
+
+    // After the rotation the same token is sealed to the new key, again one step each.
+    clock.advance(std::time::Duration::from_hours(49));
+    steps(&client, 3).await?;
+    let rotated = fingerprint(&new_key, "https://up.invalid/b")?;
+    let after = seals(&path, clock.now())?;
+    assert!(!after.is_empty());
+    assert!(after.iter().all(|seal| *seal == rotated), "{after:?}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn with_wake_pushes_off_new_mailboxes_carry_no_push() -> Result<(), TestError> {
+    let config = HarnessConfig {
+        registration_codes: vec![CODE.to_owned()],
+        ..HarnessConfig::default()
+    };
+    let clock = config.clock.clone();
+    let harness = InProcessHarness::start(&config)?;
+    let dir = TestDir::new()?;
+    let path = dir.0.join("pingers.db");
+    let platform = FakePlatform::new(clock.clone());
+    platform.set_push_registration(Some(token("https://up.invalid/a")));
+    let build = Build {
+        code: Some(CODE),
+        platform,
+    };
+    let client = open_on(&harness, &clock, path.clone(), build).await?;
+    client.set_wake_pushes(WakePushes::On).await?;
+    tokio::time::timeout(
+        STEP,
+        client.create_party(PartyDraft {
+            name: Name::new("Climbing")?,
+            my_name: Name::new("Ana")?,
+            colour: PartyColour::Blue,
+            post_quantum: PostQuantum::Off,
+        }),
+    )
+    .await
+    .map_err(|_elapsed| TestError::Setup("creating the Party did not finish"))??;
+    // Turning them off makes one step: the empty pool comes first, and gets no push.
+    client.set_wake_pushes(WakePushes::NoWakePushes).await?;
+    let database = Database::open(&path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+    let mailboxes = database.session()?.mailboxes().live(clock.now())?;
+    assert_eq!(mailboxes.len(), 1);
+    assert!(mailboxes.iter().all(|mailbox| mailbox.push.is_none()));
     Ok(())
 }
 

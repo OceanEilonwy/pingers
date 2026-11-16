@@ -463,6 +463,9 @@ A **group subscription** is the same `SealedPush` without a message queue: the g
 - State: its key pair, the push-provider credentials, one credential per Pingers server, and in-memory rate counters per server and per token hash. No database. No logs by default.
 - Each Pingers server authenticates with a server credential issued by the relay operator, and is rate-limited, so one server cannot use the relay to flood devices or probe tokens.
 - Key config is published at `GET /v1/config` on the relay and **pinned** the same way as the OHTTP key (B.12): official builds carry the publisher's relay key; members also pin its hash in the Party's encrypted state; a mismatch raises `Notice::RelayKeyMismatch` and the device stops registering push tokens until it is resolved.
+- **Key rotation** (decided 2026-11-14, v1-push). The relay announces the key it will publish next at `GET /v1/config/next`, with its activation time (`ScheduledPushRelayConfig`), and keeps opening blobs sealed to the old key for 30 days after the new one activates (`PUSH_RELAY_KEY_OVERLAP`, the longest a token lives). Devices fetch both through the OHTTP relay (the server passes them on at `GET /v1/push-relays/{id}/config` and `.../config/next`) once a day and check both hashes against the pins: official builds pin both slots; a build without pins pins the first key it sees and adds each announced next key, so it follows the rotation from the key it first trusted. A device seals to the next key from an hour after its activation, never before (the relay opens it only from then); a token sealed to the old key while a successor is scheduled ends at the old key's retirement. Every registration is then sealed again to the new key within the overlap (below), so a scheduled rotation misses no wake. A next key the pins do not allow is not sealed to; once it is published the device raises `Notice::RelayKeyMismatch` as for any unpinned key.
+- **Keeping registrations current** (decided 2026-11-14, v1-push). The device keeps, beside each mailbox and subscription, a fingerprint of the relay key and push token its seal was made from and the seal's `not_after` (device-local, never sent). A registration is stale when the platform's token changed, the relay key rotated, wake-up pushes were switched on or off, a group the device is in has no subscription, or its seal (for a subscription, the subscription itself) runs out within three days and renewing would gain time. Each wake makes **one** push registration, as the pool refill always did, so the server cannot group a device's registrations by timing: the most urgent stale registration is sealed again in place (`PUT /v1/mailboxes/{id}/push`, authorised by the read key; `PUT /v1/groups/{id}/subs/{sub_id}` under the same id), or with none stale one mailbox is registered for the pool (an empty pool comes first: a lease needs a knock mailbox now). A token change or a settings change also makes one step at once. With "No wake-up pushes" turned on, the steps delete the subscriptions and clear every mailbox's push; turned off again, they put them back. When the token, the relay key or the setting cannot be had in a wake, no seal is touched. Sealing in place keeps every invite link, board record and member record that names the mailbox or subscription; the cost is that a push relay that logs can link a device's old and new token through the unchanged bind, which it could only do when the platform rotates the token.
+- **Who has a subscription.** The creator of a Party or a Meetup puts its own subscription into the new group; a member who joins a Meetup gets one from the first maintenance step of the wake it joined in. A push for a Meetup subscription has that Meetup read its log before the wake ends, so a message sent while its live channel was down is there when the notification is written.
 - The relay URL and key are part of server configuration (`Params.push_relays`) and can be overridden per device.
 - If the relay is unreachable the server queues nothing: the knock waits in the mailbox and is found on the owner's next wake, as with pushes turned off.
 
@@ -658,7 +661,7 @@ Pushes are sent by the push relay, not the Pingers server (B.4.9). Payloads are 
 - Both are limited to about 30 seconds and about 24 MB. Neither proves; tokens are pre-fetched by the app. If the token store is empty the extension stops, and the knock is handled at the main app's next wake.
 - Entitlements: `com.apple.developer.location.push` is needed for the default knock path (fallbacks in B.4.9). `com.apple.developer.usernotifications.filtering` is optional.
 
-**Android.** One `FirebaseMessagingService` (or UnifiedPush receiver) handles all pushes and calls the same core entry points. High priority for knocks and alerts, normal for `Quiet`. Priority downgrades are monitored (B.4.9).
+**Android.** One `FirebaseMessagingService` (or UnifiedPush receiver) handles all pushes and calls the same core entry points. High priority for knocks and alerts, normal for `Quiet`. Priority downgrades are monitored (B.4.9). What a push leads to is found by comparing the core's state before and after the wake it starts: each new Meetup, chat message from another member, location request and opened invite becomes a notification the core words (`Events::notify`, decided 2026-11-14) and the app posts from the same handler, so it is shown within FCM's window and with no screen open; a `Quiet` push, a declined knock or a roster change shows nothing. A chat message is not posted while the app is on screen. The snapshot says when wake-ups are downgraded (pushes off, no push service, no push relay, relay key not pinned, FCM lowering priority), and Privacy shows why under the push service row.
 
 **"No wake-up pushes" setting.** The device seals no token anywhere. It reads its knock mailboxes and group logs whenever the main app wakes by itself (B.4.4). Inside a Meetup the app is running and holds the live stream, so chat still arrives at once.
 
@@ -862,8 +865,9 @@ exclusion_zone  (zone_id, name, geometry)                 -- local only
 mls_*           (OpenMLS StorageProvider tables, both Party and Meetup groups)
 presence        (spot_id, state /*Outside|Candidate|Inside|Suppressed*/, since, last_fix_at)
 lease           (lease_id, b0, revoke_key, records /*per slot: r, spot_id or NULL for a dummy, knock mailbox id*/)
-mailbox         (mailbox_id, read_key, purpose /*knock|reply|invite*/, state /*pooled|in_use*/, has_push, handle, expires_at)
-subscription    (group_id, sub_id, handle, expires_at)                -- my sealed push subscription in each group
+mailbox         (mailbox_id, read_key, purpose /*knock|reply|invite*/, state /*pooled|in_use*/, has_push, handle, expires_at,
+                 seal /*fingerprint of relay key + token*/, sealed_until)
+subscription    (group_id, sub_id, handle, expires_at, seal, sealed_until)   -- my sealed push subscription in each group
 push_relay      (relay_id, url, key_config, key_config_hash, operator, source /*server|override*/)
 knock_out       (spot_id, matched_r, sent_at, state /*sent|answered|expired*/, reply_mailbox)  -- drives UnansweredKnock
 board_seen      (b0, segment_sha256)                                 -- for the equivocation check; 4 rows
@@ -929,6 +933,8 @@ POST /v1/accounts          RegisterReq  { sig_pk: [u8;32], proof: Sig, reg_code:
 POST /v1/auth              AuthReq      { account_id, nonce_sig: Sig }                             -> { bearer, server_time }
 DELETE /v1/accounts/me
 GET  /v1/ohttp/config                                                      -> KeyConfig
+GET  /v1/push-relays/{relay_id}/config      (no auth; through the relay) -> RelayConfig, as that listed push relay publishes it
+GET  /v1/push-relays/{relay_id}/config/next (no auth; through the relay) -> ScheduledPushRelayConfig, or 404 if none is scheduled
 
 // --- membership tree ---
 POST /v1/rln/leaf          (Acct) { id_commitment: [u8;32] }              -> { idx, live_from_root_epoch }
@@ -965,6 +971,7 @@ POST /v1/mailboxes/{id}/msgs (Anon, scope Mailbox)  body: bytes (padded to 1, 4,
                            // stores the message; if the mailbox has a sealed push, forwards it to the relay
 GET  /v1/mailboxes/{id}/msgs?after=seq (Cap: read_key)   -> { msgs: Vec<(u64, Bytes)> }
 DELETE /v1/mailboxes/{id}  (Cap: read_key)
+PUT  /v1/mailboxes/{id}/push (Cap: read_key) MailboxPush { push: Option<SealedPush> }   -> 204   // the device's token or the relay key changed, or the seal runs out (B.4.9)
 
 // --- groups: MLS delivery service for Party and Meetup groups alike ---
 POST /v1/groups?lifetime=meetup|party (Anon, scope Group) CreateGroup { group_id: [u8;32], auth_pk: [u8;32], subs: Vec<Subscription>, state: Option<Bytes> }
@@ -1018,6 +1025,7 @@ Welcome messages travel as mailbox posts. Invites reuse mailboxes (below). There
 GET  /v1/config            (no auth, cacheable; fetched by devices through the OHTTP relay)
                            -> RelayConfig { key_id: u8, kem: X25519, kdf: HkdfSha256, aead: Aes128Gcm, public_key: [u8;32],
                                             platforms: Vec<Apns|ApnsLocation|Fcm|UnifiedPush>, max_ttl_s: u32, operator: String }
+GET  /v1/config/next       (no auth, cacheable) -> ScheduledPushRelayConfig { config: RelayConfig, activates_at }   // the next key; 404 if none is scheduled
 POST /v1/push              (Authorization: Bearer <server credential>)
                            PushReq { key_id: u8, blob: [u8;320], bind: [u8;32], urgency: Alert|Quiet, handle: [u8;8] }
                            -> 202 Accepted
@@ -1077,6 +1085,8 @@ pub trait Events: Send + Sync {
     fn notice(&self, n: Notice);                                     // UnansweredKnock, BoardEquivocation, ClockSkew, DndUnavailable,
                                                                      // RelayKeyMismatch, BoardTooLarge, PushDowngraded, FallbackActive { kind, reason }
     fn privacy_status_changed(&self, s: PrivacyStatus);              // feeds the "What your server sees" screen
+    fn notify(&self, n: CoreNotification);                           // what a wake led to, worded on the phone: Meetup started, chat,
+                                                                     // location request, join request (B.7); the app posts it
 }
 
 #[derive(uniffi::Object)]
@@ -1086,7 +1096,7 @@ impl Core {
     #[uniffi::constructor]
     pub fn open(db_path: String, platform: Arc<dyn Platform>, events: Arc<dyn Events>) -> Result<Arc<Self>, CoreError>;
     pub async fn register(&self, server_url: String, reg_code: Option<String>) -> Result<(), CoreError>;
-    pub async fn push_tokens_changed(&self) -> Result<(), CoreError>;   // re-seal for new mailboxes and renew group subscriptions
+    pub async fn push_tokens_changed(&self) -> Result<(), CoreError>;   // re-seal: new registrations at once, existing ones one per wake (B.4.9)
     pub async fn set_transport(&self, cfg: TransportConfig) -> Result<(), CoreError>;  // Ohttp { relay_urls } (non-empty); see B.12
     // The core picks proofs, relays and the knock route by itself and falls back by the triggers in B.4.8, B.4.9 and B.12.
     // The shell reports capabilities and displays the result.
@@ -1128,7 +1138,7 @@ impl Core {
     pub async fn on_dnd_changed(&self);
     pub async fn on_push(&self, handle: Vec<u8>) -> PushOutcome;        // Alert or Quiet: read that mailbox or group; tells the NSE what to show
     pub async fn on_knock_push(&self, handle: Vec<u8>, fix: Option<Fix>) -> KnockOutcome;  // location push (iOS extension) or FCM knock
-    pub fn report_push_priority(&self, original: PushPriority, delivered: PushPriority);  // Android downgrade monitor
+    pub async fn report_push_priority(&self, original: PushPriority, delivered: PushPriority);  // Android downgrade monitor: 3 of the last 20 high-priority pushes downgraded raises PushDowngraded
     pub async fn on_wake(&self);                     // BGTask, WorkManager, significant change
     pub fn on_foreground(&self, fg: bool);
 
@@ -1170,7 +1180,7 @@ OS event (geofence enter/exit, significant change, visit, push, timer)
   -> build lease (real records for Inside spots, dummies otherwise), board sync: post, then download
   -> trial-match the downloaded records against Inside spots; knock on matches
   -> read own knock and reply mailboxes that have something (always, when wake-up pushes are off): knocks, Welcomes, liveness check, reply
-  -> refill the mailbox pool (at most one registration per wake)
+  -> one push registration (at most one per wake): renew a stale sealed push, else refill the mailbox pool
   -> set_location_mode(), schedule_wake()
 ```
 
@@ -1230,7 +1240,7 @@ CPU for matching is negligible. The cost is radio time: a 384 KB download adds r
 |---|---|---|
 | Membership proof | Estimated 0.15 to 1 s of one core per proof, about 35 a day, main app only | A few joules each; small next to the radio. Proving key of a few MB shipped in the app. |
 | Privacy Pass batch | One request a day | Tokens are spent by the extensions |
-| Mailbox pool refill | One small request per mailbox, at most one per wake | Kept separate so the server cannot group them |
+| Push registration (pool refill or renewing a stale seal) | One small request, at most one per wake | Kept separate so the server cannot group them; a token change or key rotation is spread over the following wakes |
 | "No wake-up pushes" setting | No push wakes at all | Saves the few wakes a day that knocks cost; pays in latency (minutes to an hour) |
 | Meetup live channel (chunked OHTTP) | One long-lived exchange; 20 s keep-alive chunk | Comparable to the old direct stream; one extra relay hop |
 | Leaf-list sync | 320 KB once at 10,000 devices, then deltas | |

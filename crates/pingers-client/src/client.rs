@@ -181,5 +181,6 @@ pub(crate) async fn assemble(crates: &Crates) -> Result<ClientSnapshot, ClientEr
         relay: server.relay,
         map_host: server.map_host,
         operators: server.operators,
+        push_delivery: server.push_delivery,
     })
 }

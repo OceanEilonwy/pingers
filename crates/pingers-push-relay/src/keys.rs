@@ -15,8 +15,9 @@ use pingers_time::UnixSeconds;
 use crate::error::ConfigError;
 
 /// How long a replaced key keeps opening blobs: the longest a sealed token lives (30 days,
-/// design B.4.9), so every blob sealed before the rotation can still be used.
-pub const KEY_OVERLAP: Duration = Duration::from_hours(30 * 24);
+/// design B.4.9), so every blob sealed before the rotation can still be used. Devices rely on
+/// it to re-seal in time, so it is the protocol's constant.
+pub const KEY_OVERLAP: Duration = pingers_proto::PUSH_RELAY_KEY_OVERLAP;
 
 /// When a key may be used.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

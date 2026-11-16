@@ -536,5 +536,6 @@ pub fn snapshot() -> Result<ClientSnapshot, FixtureError> {
         relay: RelayStatus::Reachable,
         map_host: None,
         operators: None,
+        push_delivery: pingers_client::snapshot::PushDelivery::Full,
     })
 }

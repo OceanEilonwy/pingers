@@ -17,6 +17,8 @@ pub(super) fn files() -> Result<Vec<VectorFile>> {
         knock()?,
         push_request()?,
         push_relay_config()?,
+        scheduled_push_relay_config()?,
+        mailbox_push()?,
         privacy_pass_issue_request()?,
         privacy_pass_issue_response()?,
     ])
@@ -327,6 +329,105 @@ fn push_relay_config() -> Result<VectorFile> {
                 "short-key-config",
                 object! { "encoding": hex(&refused(&prefix(&standard(1), 40)?, 2, 3600)) },
                 error("WrongLength"),
+            ),
+        ],
+    )
+}
+
+fn scheduled_push_relay_config() -> Result<VectorFile> {
+    let public_key = ramp(0x60, 32);
+    let standard = |key_id: u8| key_config(key_id, &public_key, AES_128_GCM);
+    let config = |key_id: u8, platforms: Vec<u8>, ttl: u64, operator: &str| {
+        array([
+            bytes(&standard(key_id)),
+            platforms,
+            uint(ttl),
+            text(operator),
+        ])
+    };
+    let placeholder = || config(1, array([uint(2)]), 3600, "Ünïcode Relay");
+    proto_file(
+        "scheduled-push-relay-config-encoding",
+        "GET /v1/config/next body (push relay API) as canonical CBOR: [config (as in push-relay-config-encoding), activates at (Unix seconds)] (design B.4.9, C.1a, D)",
+        vec![
+            case(
+                "next-key-both-platforms",
+                object! {
+                    "key_id": 2,
+                    "public_key": hex(&public_key),
+                    "platforms": "fcm,unifiedpush",
+                    "max_ttl_seconds": 2_592_000,
+                    "operator": "Example Relay Ltd",
+                    "activates_at": 1_790_000_000,
+                },
+                object! {
+                    "key_config": hex(&standard(2)),
+                    "encoding": hex(&versioned(array([
+                        config(2, array([uint(1), uint(2)]), 2_592_000, "Example Relay Ltd"),
+                        uint(1_790_000_000),
+                    ]))),
+                },
+            ),
+            case(
+                "far-future-placeholder",
+                object! {
+                    "key_id": 1,
+                    "public_key": hex(&public_key),
+                    "platforms": "unifiedpush",
+                    "max_ttl_seconds": 3600,
+                    "operator": "Ünïcode Relay",
+                    "activates_at": 4_102_444_800_i64,
+                },
+                object! {
+                    "key_config": hex(&standard(1)),
+                    "encoding": hex(&versioned(array([placeholder(), uint(4_102_444_800)]))),
+                },
+            ),
+            case(
+                "missing-activation",
+                object! { "encoding": hex(&versioned(array([placeholder()]))) },
+                error("Cbor"),
+            ),
+        ],
+    )
+}
+
+fn mailbox_push() -> Result<VectorFile> {
+    let (blob, handle) = (push_blob(), push_handle());
+    proto_file(
+        "mailbox-push-encoding",
+        "PUT /v1/mailboxes/{id}/push body as canonical CBOR: [sealed push or null], the mailbox's new sealed push (design B.4.9, D)",
+        vec![
+            case(
+                "listed-relay-quiet",
+                object! {
+                    "relay_id": 2,
+                    "relay_url": "",
+                    "key_config_hash": "",
+                    "key_id": 1,
+                    "blob": hex(&blob),
+                    "urgency": "quiet",
+                    "handle": hex(&handle),
+                },
+                object! { "encoding": hex(&versioned(array([listed_sealed_push()]))) },
+            ),
+            case(
+                "no-push",
+                object! {
+                    "relay_id": "",
+                    "relay_url": "",
+                    "key_config_hash": "",
+                    "key_id": "",
+                    "blob": "",
+                    "urgency": "",
+                    "handle": "",
+                },
+                object! { "encoding": hex(&versioned(array([NULL.to_vec()]))) },
+            ),
+            case(
+                "two-elements",
+                object! { "encoding": hex(&versioned(array([NULL.to_vec(), NULL.to_vec()]))) },
+                error("Cbor"),
             ),
         ],
     )
