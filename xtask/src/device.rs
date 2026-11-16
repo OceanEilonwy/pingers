@@ -85,10 +85,11 @@ impl Device {
     ///
     /// # Errors
     ///
-    /// When the dump fails three times (it does while the screen is animating).
+    /// When the dump fails ten times in a row (it does while the screen is animating, and for
+    /// a while on a loaded machine).
     pub(crate) fn screen(&self) -> Result<Screen> {
         let mut last = None;
-        for _attempt in 0..3 {
+        for _attempt in 0..10 {
             match self.adb(&["exec-out", "uiautomator", "dump", "/dev/tty"]) {
                 Ok(output) => {
                     let text = String::from_utf8_lossy(&output.stdout);
