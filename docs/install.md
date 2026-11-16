@@ -66,6 +66,14 @@ Android 12 and later Obtainium can install updates without asking each time.
 Versions only move forward: every release has a larger version number than the one before, so
 Android always accepts it as an update.
 
+## Your first phone on your own appliance
+
+If you run the Pingers server on your own monokulo-nodo appliance, install Pingers as above,
+then open the appliance's Setup page (in nodo-tui: Apps, pingers, Setup) and scan its
+first-phone QR code with your phone's camera. Pingers opens on "Set up Pingers on this phone" and
+makes your account with the server's registration code; everyone else joins through your invite
+links. docs/deploy-nodo.md has the whole setup.
+
 ## Switching between gms and foss
 
 The two are separate apps, and neither updates the other. To switch, add the other version to

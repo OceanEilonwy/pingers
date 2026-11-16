@@ -4,10 +4,17 @@ This is the runbook for running the four Pingers services on a monokulo-nodo app
 packages contain, every key and secret, how the sites are exposed, how the signed package feed
 is built and published, how to test locally, and the bring-up steps.
 
+**In short:** install the one app `pingers` from the Pingers feed, answer two questions (your
+domain and the Firebase key file) and give the device passphrase. Every key and code makes
+itself on the appliance, the services are wired to each other, and the app's **Setup** page
+(Apps, pingers, Setup, behind the device passphrase, any time) lists what is left to do by hand
+with your own values filled in: section 6.
+
 **Host names.** Every host name below is a placeholder under `example.org`. The real ones are
-deployment values: they live in the appliance's nodo settings and in the repository's CI
-variables (`PINGERS_SERVER_HOST`, `PINGERS_OHTTP_RELAY`, `PINGERS_PUSH_RELAY`,
-`PINGERS_MAP_HOST`), never in Pingers source.
+deployment values: the appliance derives them from the domain the owner gives at install (each
+can be changed in pingers-server's settings), and the repository's CI variables
+(`PINGERS_SERVER_HOST`, `PINGERS_OHTTP_RELAY`, `PINGERS_PUSH_RELAY`, `PINGERS_MAP_HOST`) carry
+them into app builds; never Pingers source.
 
 | Placeholder | Service |
 |---|---|
@@ -17,15 +24,24 @@ variables (`PINGERS_SERVER_HOST`, `PINGERS_OHTTP_RELAY`, `PINGERS_PUSH_RELAY`,
 | `maps.example.org` | pingers-map-host |
 
 `cargo test -p xtask --test nodo_packaging` checks the packaging against nodo's own parsers
-(manifests, settings, rendering) and parses the rendered server, push relay and map host configs,
-and their dev configs, with those services' own parsers.
+(manifests with the bundle and owner page, settings, rendering) and parses the rendered server,
+push relay, map host and setup page configs, and their dev configs, with their own parsers.
 
-## 1. The four apps
+## 1. The apps
 
-nodo runs one service per package, so there are four nodo apps. One xbps recipe,
-`packaging/nodo/srcpkgs/pingers-server/template`, builds all four from one `cargo build`: the
-main package `pingers-server` and the subpackages `pingers-push-relay`, `pingers-ohttp-relay`
-and `pingers-map-host` (symlinks beside it, as in void-packages).
+nodo runs one service per package, so there are four nodo apps for the four services, and a
+fifth, `pingers`, which the owner installs: it is a nodo **bundle** that installs the other four
+with it, and it serves the owner's **Setup** page (a nodo owner page). One xbps recipe,
+`packaging/nodo/srcpkgs/pingers-server/template`, builds all five from one `cargo build`: the
+main package `pingers-server` and the subpackages `pingers-push-relay`, `pingers-ohttp-relay`,
+`pingers-map-host` and `pingers` (symlinks beside it, as in void-packages).
+
+The bundle and the owner page need monokulo-nodo's bundles and owner pages (nodo PR
+"bundles-and-owner-pages"): `[bundle]` in `pingers`'s manifest names the members, installed in
+this order, each before whatever references it (push relay, map host, server, relay), the two
+grants the owner approves with the install, the two settings it asks for, and the member whose
+data may go on the data drive (the map host). `[owner_page]` names the page on its loopback
+port.
 
 Each app installs under `/opt/nodo/apps/<id>/`:
 
@@ -52,6 +68,7 @@ All listeners are on loopback:
 | 9472 | pingers-push-relay (HTTP/1.1) | Caddy, for `push.example.org`; pingers-server |
 | 9473 | pingers-ohttp-relay (h2c) | Caddy, for `ohttp.example.org` |
 | 9474 | pingers-map-host (HTTP/1.1; `POST /ohttp` is its own OHTTP gateway) | Caddy, for `maps.example.org`; pingers-server (map downloads through the relay) |
+| 9475 | pingers, the setup page (HTTP/1.1, only `GET /owner`) | nodo's helper, for the owner; not a web site |
 
 ```
 phone ──TLS 1.3, X25519MLKEM768──▶ [router :443] ──▶ nodo Caddy (ACME certificates)
@@ -68,10 +85,16 @@ Firewall, from the manifests and the references between settings: pingers-server
 outbound access at all and reaches only 9472, by referencing the push relay's `server-url`, and
 9474, by referencing the map host's `gateway-url`.
 pingers-ohttp-relay reaches only 9471, by referencing the server's `gateway-url`. Caddy reaches
-only the web upstreams, so it cannot reach 9471. Only pingers-push-relay has
-`outbound = "internet"`. nodo refuses dependency cycles, and the references run one way:
-`pingers-ohttp-relay → pingers-server → pingers-push-relay` and `pingers-server →
-pingers-map-host`, so the map host is installed before the server.
+only the web upstreams, so it cannot reach 9471 or 9475. pingers (the setup page) reaches 9471
+(the gateway's two key configs, by referencing `gateway-key-config-url`), 9472 (the push
+relay's published and next keys, `server-url`) and 9474 (the map catalog, `gateway-url`), and
+has `outbound = "internet"` for its checks of the four public names from the appliance; it
+holds no private key. pingers-push-relay is the only service with `outbound = "internet"`.
+nodo refuses dependency cycles, and the references run one way: `pingers-ohttp-relay →
+pingers-server → pingers-push-relay`, `pingers-server → pingers-map-host`, and `pingers` → all
+four, so the bundle installs push relay, map host, server, relay, then `pingers`. The owner's
+domain is a setting of the push relay, the root of the references, so the server and the setup
+page derive their addresses from it without a cycle.
 
 ### 1.1 Settings and secrets
 
@@ -83,28 +106,32 @@ config with the gateway keys and the registration code stays inside the volume)
 
 | Setting | Type | Default | Fills |
 |---|---|---|---|
-| `server_id` | url, required | | `server_id`, such as `https://pingers.example.org`. The server's identity: changing it makes a new server |
+| `server_id` | url, required, public (`server-id`) | `https://pingers.$(pingers-push-relay.domain)` | `server_id`. The server's identity: changing it makes a new server |
 | `operator` | string, required | `$(pingers-push-relay.operator)` | `server_operator` |
-| `ohttp_relay_url` | url, required | | `ohttp_relay_urls`, such as `https://ohttp.example.org/ohttp` |
-| `map_host` | url, required | | `map_host`, such as `https://maps.example.org`. Map downloads through the relay are forwarded to this device's map host on loopback (`map_host_gateway`, from pingers-map-host's `gateway-url`) |
+| `ohttp_relay_url` | url, required, public (`ohttp-relay-url`) | `https://ohttp.$(pingers-push-relay.domain)/ohttp` | `ohttp_relay_urls` |
+| `map_host` | url, required, public (`map-host`) | `https://maps.$(pingers-push-relay.domain)` | `map_host`. Map downloads through the relay are forwarded to this device's map host on loopback (`map_host_gateway`, from pingers-map-host's `gateway-url`) |
 | `logging` | enum `off`/`counts` | `off` | `logging` |
 | `registration_code` | **secret**, generated (16 bytes, hex); 16 to 128 of `A-Z a-z 0-9 - _` if set by hand | | `registration_codes`: only a device presenting it can make an account (design B.1, section 1.3) |
 | `ohttp_key_a`, `ohttp_key_b` | **secret**, generated (32 bytes, hex) | | `[[ohttp.keys]] secret` |
 | `ohttp_key_a_id`, `ohttp_key_b_id` | int 1 to 255 | 1, 2 | `[[ohttp.keys]] key_id` |
 | `ohttp_served_key_id` | int 1 to 255 | 1 | `[ohttp] served_key_id` |
-| `push_relay_public_url` | url, required | | `[[push_relays]] public_url`, such as `https://push.example.org` |
-| `push_relay_key_config_hash` | string, a pin (43 base64url characters), required | | `[[push_relays]] key_config_hash` |
-| `gateway_url`, `gateway_key_config_url` | url, public endpoints | `http://127.0.0.1:9471/...` | read by pingers-ohttp-relay |
+| `push_relay_public_url` | url, required, public (`push-relay-public-url`) | `https://push.$(pingers-push-relay.domain)` | `[[push_relays]] public_url` |
+| `gateway_url`, `gateway_key_config_url` | url, public endpoints | `http://127.0.0.1:9471/...` | read by pingers-ohttp-relay; pingers reads the key configs at `gateway-key-config-url` and its `/next` |
 
-It also reads `pingers-push-relay.server_credential` (a sealed secret of the push relay) once the
-owner approves the grant, and the push relay's public `server-url` and `operator`.
+`push_relay_key_config_hash` is retired: `[[push_relays]] key_config_from_relay = true` makes
+the server ask the push relay for its published key on loopback (`GET /v1/config`, at start and
+every 5 minutes) and list that key's hash in `/v1/params`, so nothing is copied and a rotation
+needs no change here. The server also reads `pingers-push-relay.server_credential` (a sealed
+secret of the push relay) through the grant the owner approves with the bundle, and the push
+relay's public `server-url` and `operator`.
 
 **pingers-push-relay** (`push-relay.toml.in`; no volume, sealed secrets keep the rendered config
 in memory)
 
 | Setting | Type | Default | Fills |
 |---|---|---|---|
-| `operator` | string, required, public | | `operator` |
+| `domain` | string, required, public, **asked at install** | | nothing in this file: the domain the four sites are named under, such as `example.org`; pingers-server's addresses and both operators default from it |
+| `operator` | string, required, public | `$(pingers-push-relay.domain)` | `operator` |
 | `logging` | enum | `off` | `logging` |
 | `hash_key` | **secret**, generated | | `hash_key` |
 | `key_a`, `key_b` | **secret**, generated | | `[[keys]] private_key` |
@@ -112,9 +139,8 @@ in memory)
 | `key_a_activated_at`, `key_b_activated_at` | int, Unix seconds | 0, 4102444800 | `[[keys]] activated_at` (B is held in reserve) |
 | `key_a_retired_at`, `key_b_retired_at` | int, 0 = not scheduled | 0 | `[[keys]] retired_at` |
 | `server_credential` | **secret**, generated | | `[[servers]] credential`; also read by pingers-server |
-| `fcm_project_id` | string, required | | `[fcm] project_id` |
-| `fcm_service_account` | **secret**, required, pasted by the owner | | `[fcm] service_account_json` |
-| `server_url` | url, public endpoint | `http://127.0.0.1:9472` | read by pingers-server |
+| `fcm_service_account` | **secret**, required, **asked at install**: pasted by the owner | | `[fcm] service_account_json`; the relay takes the Firebase project from its `project_id` (`fcm_project_id` is retired) |
+| `server_url` | url, public endpoint | `http://127.0.0.1:9472` | read by pingers-server and pingers |
 
 **pingers-ohttp-relay** (`relay.toml.in`; no storage, no secrets): `response_timeout_seconds`
 (int 5 to 300, default 30). The gateway addresses come from pingers-server.
@@ -124,25 +150,56 @@ in memory)
 `logging`, and `gateway_url` (default `http://127.0.0.1:9474`, published to pingers-server as
 `gateway-url`: where it forwards map downloads made through the relay; leave it).
 
+**pingers** (`setup.toml.in`; no storage; its one secret keeps the rendered config in memory):
+`registration_code` (**secret**, defaults to `$(pingers-server.registration_code)`, read
+through the grant approved with the bundle), `github_repository` (default
+`OceanEilonwy/pingers`: where the setup page says the app builds' variables go) and
+`release_tag` (default `v1.0.0-rc.1`: the tag it suggests). Everything else it shows comes
+from the four services: their public addresses, the gateway's served and next key configs
+(`GET /v1/ohttp/config` and `/v1/ohttp/config/next` on the gateway listener), the push relay's
+published and next keys (`GET /v1/config`, `/v1/config/next`) and the map catalog, all on
+loopback. The binary is `crates/pingers-setup`, named `pingers`.
+
+### 1.2 The Setup page
+
+Apps, pingers, **Setup** in nodo-tui asks for the device passphrase and shows the page; it can
+be opened again at any time and is fetched afresh each time (`r` refreshes). It is the ordered
+checklist of section 6, each step with its values from this appliance and, where the appliance
+can tell, done or not: nodo fills in each site's DNS record, DNS check, certificate and
+reachability, the services' health, the domain provider and the newest backup; pingers adds
+its own checks through the public names (a TLS handshake that offers only X25519MLKEM768
+against Mozilla's roots, HTTP/2 for the server and the relay, the expected answers, `404` for
+`POST /ohttp` and `POST /v1/push`, and that the relay and the push relay hand out this
+appliance's keys). Values have a Copy button (the terminal's clipboard, OSC 52) and stay
+visible as plain text. The page shows the registration code; only the owner, with the device
+passphrase, opens it.
+
 ### 1.3 Registration code
 
 Without a registration code a Pingers server lets anyone who finds it make an account. The
 package generates one on install (`registration_code`, sealed), so it never runs open. How it
 reaches phones:
 
-- **The first phone** (the owner's) presents it at its first start. Until the app has a screen
-  for it (it needs a design first), that is a debug build made with
-  `PINGERS_DEV_REGISTRATION_CODE=<code>` (or `-PpingersDevRegistrationCode=<code>`); release
-  builds ignore the variable. Read the code over the owner's SSH from the rendered config,
-  `registration_codes` in `/run/nodo/volumes/pingers-server/config/server.toml`.
+- **The first phone** (the owner's) gets it from the **first-phone QR code** on the Setup page
+  (section 1.2). The code is the link `https://<server_id>/j#s1.<payload>`, in the same family
+  as invite links: the payload (pingers-proto's `SetupPayload`) carries the server, the code and
+  both pin sets the appliance computed from its own keys, served key first. The owner scans it
+  with the phone's camera; App Links (or the `/j` landing page) open the app on a confirm step,
+  "Set up Pingers on this phone", and the app registers with the code. The app first checks the
+  link: it must name the server the build was made for, and its served pins must be among the
+  build's pins (a build without pins instead checks the gateway key it meets against the link
+  before sending the code, and takes the link's push relay pins as its own). Release builds
+  accept it. A debug build made with `PINGERS_DEV_REGISTRATION_CODE=<code>` still works for
+  tests.
 - **Everyone else** gets it in the invite link: a phone that registered with a code puts it in
   every invite it makes, and the friend's phone presents it when it opens the link. So the code
   travels as far as invite links do; it is a bearer capability like the link itself.
 - **A refused code** (wrong, or reset since) is not tried again until another one is offered
-  (a new invite link, or another build), so a phone never retries a 403 in a loop.
+  (a new invite or setup link, or another build), so a phone never retries a 403 in a loop.
 
-To stop new accounts from old invite links, Reset `registration_code` in nodo-tui, and give the
-new code to phones that should keep inviting (today: a new debug build). Phones that already
+To stop new accounts from old invite links, Reset `registration_code` in nodo-tui (Apps,
+pingers-server, Settings); the Setup page then shows a new first-phone code for phones that
+should keep inviting. Phones that already
 have an account are not affected: accounts live in `quota_db`
 (`/var/lib/apps/pingers-server/quota.sqlite`, on the encrypted volume), and a registered phone
 proves its key without any code. A restart keeps every account and every bearer: a bearer is
@@ -151,7 +208,7 @@ database holds only each account's public key, when it registered, and a digest 
 (never a usable bearer). The code only gates new accounts, which the server also limits to
 `signups_per_hour` (default 60) whatever the code.
 
-### 1.2 Keys and rotation
+### 1.4 Keys and rotation
 
 No key is made off the device: every 32-byte private key is a generated secret (any 32 random
 bytes are a valid X25519 key). The FCM service account is the only secret a person handles, and
@@ -161,19 +218,24 @@ Both HPKE key sets (the OHTTP gateway's and the push relay's) have two slots, an
 the hashes of both, so the app never meets an unpinned key:
 
 1. At install, slots A and B are generated. A is served (`ohttp_served_key_id = 1`; the push
-   relay's B activates in 2100). Put both pins in CI: `PINGERS_GATEWAY_KEY_PINS` and
-   `PINGERS_PUSH_RELAY_KEY_PINS` (section 6, step 9). A pin is the unpadded base64url SHA-256 of
-   a key config, 43 characters; the push relay also publishes its next key at
-   `GET /v1/config/next`.
+   relay's B activates in 2100). Put both pins in CI: the Setup page shows the two lines,
+   `PINGERS_GATEWAY_KEY_PINS` and `PINGERS_PUSH_RELAY_KEY_PINS`, read from the running services
+   (section 6, step 7). A pin is the unpadded base64url SHA-256 of a key config, 43 characters;
+   the gateway serves its other slot's config at `GET /v1/ohttp/config/next` on its own
+   listener, and the push relay publishes its next key at `GET /v1/config/next`.
 2. Yearly, serve B: set `ohttp_served_key_id = 2`; for the push relay set `key_b_activated_at` to
    now and `key_a_retired_at` to at least 30 days later. Every configured key keeps opening
-   requests meanwhile. Update `push_relay_key_config_hash` in pingers-server.
-3. Once no supported app build pins A only, `Reset` slot A (nodo generates a new one) and ship
-   the next app release with the pins of B and the new A.
+   requests meanwhile. pingers-server lists the push relay's new key by itself within 5
+   minutes (`key_config_from_relay`); nothing to copy.
+3. Once no supported app build pins A only, `Reset` slot A (nodo generates a new one); for the
+   push relay also set `key_a_activated_at` to the next rotation (a year ahead) and
+   `key_a_retired_at` to 0, so the new A is published as the next key. Then copy the two pin
+   lines from the Setup page into CI again (B and the new A, the served key first) and ship the
+   next app release.
 
 On a suspected compromise, do steps 2 and 3 at once.
 
-### 1.4 Invite links and App Links
+### 1.5 Invite links and App Links
 
 An invite link is `https://<server_id>/j#v1.<invite>`. The invite is in the fragment, which
 browsers never send, so the server only ever sees `GET /j`. It answers with a static landing
@@ -371,15 +433,20 @@ tests, `crates/pingers-e2e`, and the push relay's ntfy script.
    of the templates and test keys only:
    `cargo run --release -p pingers-server -- packaging/nodo/dev/server.toml`, and likewise
    `push-relay.toml`, `relay.toml`, `map-host.toml`. Cut the Melbourne CBD test pack into
-   `target/dev-stack/maps` first.
+   `target/dev-stack/maps` first. Then the setup page,
+   `cargo run --release -p pingers-setup -- packaging/nodo/dev/setup.toml`;
+   `curl -s http://127.0.0.1:9475/owner` prints the page as JSON, with the first-phone link of
+   this stack (its public checks have nothing to reach and say so).
 3. `caddy run --config packaging/nodo/dev/caddy.json` puts Caddy in front exactly as nodo-web
    does (N1): h2c and `flush_interval: -1` for the server (9443) and relay (9444), HTTP/1.1
    for the push relay (9445) and map host (9446), `/ohttp`, `/metrics` and `/v1/push` hidden.
 4. Build debug APKs with `PINGERS_SERVER_HOST=https://10.0.2.2:9443`,
    `PINGERS_OHTTP_RELAY=https://10.0.2.2:9444/ohttp`, `PINGERS_PUSH_RELAY=https://10.0.2.2:9445`,
    `PINGERS_MAP_HOST=https://10.0.2.2:9446` and `PINGERS_EXTRA_CA=target/dev-ca/ca.pem` (debug
-   builds only), plus `PINGERS_DEV_REGISTRATION_CODE=dev-registration-code` for the first
-   emulator (the dev server.toml's code; the second joins by invite and needs none).
+   builds only). The first emulator registers through the setup page's first-phone link:
+   `adb -s emulator-5554 shell am start -a android.intent.action.VIEW -d '<link>'` with the
+   link from the page (or build it with `PINGERS_DEV_REGISTRATION_CODE=dev-registration-code`,
+   the dev server.toml's code); the second joins by invite and needs none.
 5. Two emulators (one foss with UnifiedPush through a local ntfy, one gms with Play services
    when FCM is wanted: `cargo xtask local-stack --fcm-service-account <key.json> --fcm-project
    <id>` points the local push relay at a service account key kept outside the repository, read
@@ -389,63 +456,117 @@ tests, `crates/pingers-e2e`, and the push relay's ntfy script.
 
 **Tier 2: the real packages in nodo's x86-kvm VM** (`scripts/dev-vm.sh up` in a nodo checkout
 at 4ad5661 or later): build x86_64 packages, sign a test feed with a throwaway key, copy it into the
-VM as a directory feed, `AddFeed`, then install in dependency order (push relay, map host, server,
-relay). Check the firewall (`_pingers-server` reaches nothing but 9472 and 9474; only
-`_pingers-ohttp-relay` reaches 9471), reboot (services wait for the unlock), and restore a backup
+VM as a directory feed, `AddFeed`, then install `pingers` (the bundle installs the four services,
+asking for a test domain and a throwaway service account key). Open Apps, pingers, Setup and
+check the page. Check the firewall (`_pingers-server` reaches nothing but 9472 and 9474;
+`_pingers-ohttp-relay` reaches only 9471; `_pingers` reaches 9471, 9472 and 9474 on loopback), reboot (services wait for the unlock), and restore a backup
 to a fresh VM and check the gateway key hash is unchanged.
 
 **Tier 3**: the aarch64 packages under emulation (`DEV_BOARD=qemu-virt`), then the device.
 
 ## 6. Bring-up
 
-1. **DNS and router.** Point the four names at the home address. Forward TCP 443 to the
-   appliance (or to the router's proxy, section 2). Porkbun DNS-01 needs no port 80.
-2. **Feed.** In nodo-tui, Feeds, add
+The appliance does the rest itself: every key, the hash key, the server credential and the
+registration code generate themselves at install, the server learns the push relay's key and
+credential without a copy, and the addresses follow from the domain. What is left for the owner
+is this list, which the Setup page (Apps, pingers, Setup; section 1.2) shows in the same order
+with this appliance's values filled in and each step marked done where the appliance can see it.
+`example.org` below stands for your domain.
+
+**Install.**
+
+1. **Feed.** In nodo-tui, Get apps, Sources, add
    `https://github.com/OceanEilonwy/pingers/releases/download/feed`, and accept the key only if
    the fingerprint is `9d:c4:00:6e:53:d8:99:c4:f9:5d:9c:96:b0:e9:1a:07`.
-3. **Push relay.** Install `pingers-push-relay` (the device passphrase is needed, since it has
-   sealed secrets). Set `operator` (truthful: the app shows a same-operator warning, which is
-   correct here) and `fcm_project_id`. The **owner** pastes the service account JSON, on one line,
-   into `fcm_service_account`. Keys, hash key and credential generate themselves.
-4. **Map host.** UseDataDrive on, install, check `max_disk` and `hosted`, rsync the packs (section
-   4). The server references its gateway, so it comes first. Its OHTTP key (`.ohttp-key` in the
-   data directory) makes itself on first start.
-5. **Server.** Install `pingers-server` (creates the 1 GiB encrypted volume) and approve its
-   grant for `pingers-push-relay.server_credential`. Set `server_id`
-   (`https://pingers.example.org`), `ohttp_relay_url` (`https://ohttp.example.org/ohttp`),
-   `map_host`, `push_relay_public_url`, and `push_relay_key_config_hash`: the first pin (slot A,
-   the active key; pins follow `activated_at`) that
-   `/opt/nodo/apps/pingers-push-relay/libexec/pingers-push-relay pins
-   /run/nodo/secrets/pingers-push-relay/config/push-relay.toml` prints over the owner's SSH. Leave
-   `operator` at its default, the push relay's.
-   The registration code generates itself (section 1.3); note it for the first phone.
-6. **Relay.** Install `pingers-ohttp-relay`. Nothing to set.
-7. **Exposure.** Section 2 for each site; wait until the certificate status is valid for all four.
-8. **Smoke tests from outside the LAN:**
-   - `curl -sI https://maps.example.org/catalog.json` gives 200, and
-     `curl -s https://maps.example.org/ohttp-keys | wc -c` prints 41 (the gateway's key config).
-   - `curl -s https://ohttp.example.org/v1/ohttp/config | openssl dgst -sha256 -binary | basenc
-     --base64url | tr -d =` equals the served key's pin from `pingers-server pins
-     /run/nodo/volumes/pingers-server/config/server.toml`.
-   - `curl -s -o /dev/null -w '%{http_code}' -X POST https://pingers.example.org/ohttp` gives
-     404: the gateway is not reachable directly.
-   - `curl -s -o /dev/null -w '%{http_code}' -X POST https://push.example.org/v1/push` gives 404.
-   - The `openssl s_client -groups X25519MLKEM768` check of section 2.1, for each name.
-9. **Pins into CI.** Over the owner's SSH, run `pingers-server pins` and `pingers-push-relay pins`
-   on the rendered configs (paths in steps 5 and 8); each prints one pin per line. Join each
-   pair with a comma into `PINGERS_GATEWAY_KEY_PINS` and `PINGERS_PUSH_RELAY_KEY_PINS`. From
-   outside, `cargo xtask pins --relay https://ohttp.example.org --push https://push.example.org`
-   prints the same two lines from the running services: the served gateway key (fetched through
-   the relay, as the app fetches it) and the push relay's published and next keys. Its gateway
-   pin must be one of the two from `pingers-server pins` (the next slot is not served, so it only
-   comes from there), and each of its push relay pins must be one `pingers-push-relay pins`
-   prints. Then build the release APKs. (`cargo xtask pins <server.toml>
-   <push-relay.toml>` prints both lines from copies of the configs, but those hold the private
-   keys: on nodo, keep them on the device and use the binaries.)
-10. **Two real phones** on mobile data, once with FCM and once with UnifiedPush: the tier-1
-    scenario, including a ten-minute Meetup (streaming through the router).
-11. **Backup.** A USB backup with the device passphrase (so it includes the device key), stored
-    offsite.
+2. **Install `pingers`.** It shows the five apps it installs with their permissions, the two
+   grants (pingers-server reads the push relay's credential; pingers reads the server's
+   registration code), and keeps the map packs on the data drive when there is one. It asks for:
+   - **Your domain**, such as `example.org`. The sites become `pingers.example.org`,
+     `ohttp.example.org`, `push.example.org` and `maps.example.org`, and both operators say
+     `example.org` (the app shows a same-operator warning, which is correct here). Each can be
+     changed later in pingers-server's and pingers-push-relay's settings.
+   - **The Firebase service account**: the **owner** pastes the JSON key file of a service
+     account with only the Firebase Cloud Messaging API Admin role (project `pingers-a6b31`).
+     It is sealed at once; the relay takes the project from the key file.
+   - The **device passphrase**, which sealed secrets and the server's encrypted volume need.
 
-After a power loss the server and push relay stay down until the owner unlocks the appliance:
-no key is ever outside encryption.
+**The Setup page's checklist.**
+
+1. **Connect your domain.** At Porkbun: Account, API Access, create an API key (an API key and a
+   secret key), then the domain's Details, turn on API Access. On the appliance: Web, Domain
+   providers, Add, Porkbun, paste both. nodo then publishes the four A records and keeps them
+   pointed at your public address (dynamic DNS), and gets the certificates through DNS-01, so
+   port 80 need not be forwarded. *Done when* a connected provider holds the domain.
+2. **Put the four sites online.** For pingers-server, pingers-ohttp-relay, pingers-push-relay
+   and pingers-map-host: Apps, the app, Hosting, Internet, pick `example.org` and keep the
+   suggested address part (`pingers`, `ohttp`, `push`, `maps`), check, Put it online. On the
+   confirm screen turn the rate limit **off for `ohttp.example.org`** (phones behind carrier NAT
+   share an address) and keep it on for the others, unless the router terminates TLS (section
+   2.3: then off for all four). The records, which nodo publishes (create them by hand only with
+   a provider nodo cannot drive):
+
+   | Type | Name | Value |
+   |---|---|---|
+   | A | `pingers` | your public address |
+   | A | `ohttp` | your public address |
+   | A | `push` | your public address |
+   | A | `maps` | your public address |
+
+   The page shows the public address nodo found. *Done when* each site is public, its name
+   resolves to the public address and its certificate is issued.
+3. **Forward port 443 to this appliance.** On the router, forward TCP 443 to the appliance's LAN
+   address (the page shows it). If the router runs its own reverse proxy in front: set it to
+   pass TLS through (TCP or SNI forwarding) for the four names, the recommended setup (section
+   2.2); if it can only terminate TLS, section 2.3's three conditions apply (X25519MLKEM768,
+   streaming with HTTP/2 to the appliance and no body buffering, idle timeout over 60 seconds,
+   and the rate limit off for all four). *Done when* nodo's reachability check passes and the
+   appliance's own TLS check of each name, through the public address, gets a valid certificate
+   with X25519MLKEM768 (and HTTP/2 for the server and the relay). Routers that do not loop
+   connections from inside back to the public address make that check say it could not be
+   tried; then check from a phone on mobile data (section 2.1's commands).
+4. **Check the services answer.** *Done when* the five services are running and healthy, the
+   gateway and the push relay answer on the appliance, `https://pingers.example.org/v1/params`
+   and `https://maps.example.org/catalog.json` answer 200, `POST https://pingers.example.org/ohttp`
+   and `POST https://push.example.org/v1/push` answer 404, and the relay and the push relay hand
+   out this appliance's keys. These replace the hand-run curl checks.
+5. **Firebase wake-ups.** Pasted at install. To replace the key: Apps, pingers-push-relay,
+   Settings, Firebase service account; then delete the old key in the Google Cloud console.
+   *Done when* the push relay serves FCM.
+6. **Upload the map packs** (section 4): cut them with `pingers-tiles` from the newest daily
+   build, then `rsync -a --partial --chown=_pingers-map-host:_pingers-map-host ./packs/
+   root@<appliance>:<the map host's data directory>/`; the page shows the command with the
+   appliance's address and the directory filled in. Never `--delete`. *Done when* the map host
+   serves at least one region.
+7. **Copy the hosts and pins into GitHub.** At github.com/OceanEilonwy/pingers: Settings,
+   Secrets and variables, Actions, Variables, New repository variable, for each:
+
+   | Variable | Value |
+   |---|---|
+   | `PINGERS_SERVER_HOST` | `https://pingers.example.org` |
+   | `PINGERS_OHTTP_RELAY` | `https://ohttp.example.org/ohttp` |
+   | `PINGERS_PUSH_RELAY` | `https://push.example.org` |
+   | `PINGERS_MAP_HOST` | `https://maps.example.org` |
+   | `PINGERS_GATEWAY_KEY_PINS` | the gateway's two pins, comma-separated, served key first (from the page) |
+   | `PINGERS_PUSH_RELAY_KEY_PINS` | the push relay's two pins, the same way (from the page) |
+
+   The release workflow also needs its signing secrets in the `release` environment
+   (`PINGERS_KEYSTORE_BASE64`, `PINGERS_KEYSTORE_PASSWORD`, `PINGERS_KEY_ALIAS`,
+   `GOOGLE_SERVICES_JSON`; android/docs/release.md). The appliance cannot see GitHub, so tick it
+   off yourself. From outside, `cargo xtask pins --relay https://ohttp.example.org --push
+   https://push.example.org` cross-checks the served gateway pin and both push relay pins
+   against the running services.
+8. **Make a release.** On the commit to release: `git tag -a v1.0.0-rc.1 -m "Pingers
+   v1.0.0-rc.1"` and `git push origin v1.0.0-rc.1` (the page uses pingers' `release_tag`
+   setting). `release.yml` builds both APKs with the variables and publishes a pre-release;
+   install it with Obtainium, pre-releases on (docs/install.md).
+9. **Set up your first phone.** Scan the page's first-phone QR code with the phone's camera;
+   Pingers opens on "Set up Pingers on this phone" and registers (section 1.3). The page also
+   shows the link and the registration code as text. Then the tier-1 scenario with a second
+   phone, on mobile data, once with FCM and once with UnifiedPush, including a ten-minute
+   Meetup (streaming through the router).
+10. **Make a backup.** System, Backups, to a USB drive, with the device passphrase so it includes
+    the device key; store it offsite. *Done when* a backup with the device key is newer than the
+    install.
+
+After a power loss the server, the push relay and the setup page stay down until the owner
+unlocks the appliance: no key is ever outside encryption.

@@ -50,5 +50,7 @@ url = "$(pingers-push-relay.server-url)"
 public_url = "$(pingers-server.push_relay_public_url)"
 # A sealed secret of pingers-push-relay: the owner approves pingers-server's grant once.
 credential = "$(pingers-push-relay.server_credential)"
-key_config_hash = "$(pingers-server.push_relay_key_config_hash)"
+# The relay's published key is asked of the relay itself, on loopback, and followed through
+# rotations: nothing to copy here.
+key_config_from_relay = true
 operator = "$(pingers-push-relay.operator)"

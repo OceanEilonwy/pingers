@@ -8,7 +8,7 @@
 //!                         [--fcm-service-account <key.json> --fcm-project <id>]
 //! ```
 //!
-//! It builds the four service binaries (release), and on first use in `<dir>` generates every
+//! It builds the four service binaries and the setup page (release), and on first use in `<dir>` generates every
 //! key with the services' own `keygen` subcommands and writes the configurations, derived from
 //! `packaging/nodo/dev/` so they keep the nodo templates' shape. Later runs reuse them, so an
 //! app built against the stack keeps matching its pins; `--fresh` starts over. Then it runs,
@@ -20,6 +20,7 @@
 //! | pingers-push-relay | 127.0.0.1:9472 | `https://10.0.2.2:9445` |
 //! | pingers-ohttp-relay | 127.0.0.1:9473 | `https://10.0.2.2:9444/ohttp` |
 //! | pingers-map-host | 127.0.0.1:9474 | `https://10.0.2.2:9446` |
+//! | pingers (the setup page) | 127.0.0.1:9475 | not at all: `curl http://127.0.0.1:9475/owner` |
 //! | ntfy (UnifiedPush) | 127.0.0.1:8099 | `http://127.0.0.1:8099` through `adb reverse` |
 //! | TLS front | 127.0.0.1:9443 to 9446 | |
 //!
@@ -69,12 +70,14 @@ const FRONT_MAPS: u16 = 9446;
 /// ntfy's port, on loopback here and (through `adb reverse`) on each emulator.
 pub(crate) const NTFY_PORT: u16 = 8099;
 
-/// The four service binaries, in start order.
-const SERVICE_PACKAGES: [&str; 4] = [
+/// The packages of the service binaries, in start order: the four services, then the setup page
+/// (crate pingers-setup, binary `pingers`).
+const SERVICE_PACKAGES: [&str; 5] = [
     "pingers-push-relay",
     "pingers-server",
     "pingers-ohttp-relay",
     "pingers-map-host",
+    "pingers-setup",
 ];
 
 /// What the command line asked for.
@@ -210,6 +213,9 @@ impl Layout {
     fn map_host_config(&self) -> PathBuf {
         self.config().join("map-host.toml")
     }
+    fn setup_config(&self) -> PathBuf {
+        self.config().join("setup.toml")
+    }
     fn caddy_config(&self) -> PathBuf {
         self.config().join("caddy.json")
     }
@@ -326,6 +332,10 @@ pub(crate) fn prepare(workspace: &Path, options: &StackOptions) -> Result<Prepar
     set_fcm(&layout, workspace, options)?;
     fs::copy(dev.join("relay.toml"), layout.relay_config())?;
     fs::write(layout.map_host_config(), map_host_config(&dev, &layout)?)?;
+    write_secret_file(
+        &layout.setup_config(),
+        &setup_config(&dev, &registration_code)?,
+    )?;
     fs::write(layout.caddy_config(), caddy_config(&dev, &layout)?)?;
     fs::write(layout.ntfy_config(), ntfy_config(&layout))?;
     copy_packs(options, &layout)?;
@@ -376,17 +386,12 @@ fn write_keys(dev: &Path, binaries: &Path, layout: &Layout) -> Result<Zeroizing<
     }
     let push_relay = push_relay_config(dev, binaries)?;
     write_secret_file(&layout.push_relay_config(), &push_relay)?;
-    let push_pin = crate::pins::push_relay_pins(&push_relay)?
-        .first()
-        .map(pingers_proto::KeyConfigHash::to_pin)
-        .context("the push relay has no key")?;
     let credential = relay_credential(&push_relay)?;
     let code = keygen(binaries, "pingers-push-relay", &["keygen"])?;
     let server = server_config(
         dev,
         &ServerSecrets {
             binaries,
-            push_pin: &push_pin,
             credential: &credential,
             registration_code: &code,
         },
@@ -450,6 +455,7 @@ pub(crate) fn start(prepared: &Prepared) -> Result<Supervisor> {
             layout.map_host_config(),
             vec![loopback(9474)],
         ),
+        ("pingers", layout.setup_config(), vec![loopback(9475)]),
     ];
     for (name, config, ready) in services {
         supervisor.start(&Service {
@@ -695,13 +701,12 @@ fn relay_credential(push_relay: &str) -> Result<Zeroizing<String>> {
 
 struct ServerSecrets<'values> {
     binaries: &'values Path,
-    push_pin: &'values str,
     credential: &'values str,
     registration_code: &'values str,
 }
 
-/// The dev server configuration with fresh gateway keys, the push relay's credential and
-/// pin, a registration code, and its databases in the stack's data directory.
+/// The dev server configuration with fresh gateway keys, the push relay's credential (its key
+/// the server learns from the relay itself), a registration code, and its databases in the stack's data directory.
 fn server_config(
     dev: &Path,
     secrets: &ServerSecrets<'_>,
@@ -718,7 +723,6 @@ fn server_config(
     }
     for relay in entries_mut(&mut table, "push_relays")? {
         set_secret(relay, "credential", secrets.credential)?;
-        set_secret(relay, "key_config_hash", secrets.push_pin)?;
     }
     Ok(with_header(&table))
 }
@@ -771,6 +775,17 @@ fn read_registration_code(server: &Path) -> Result<Zeroizing<String>> {
         .and_then(Value::as_str)
         .map(|code| Zeroizing::new(code.to_owned()))
         .with_context(|| format!("{} has no registration code", server.display()))
+}
+
+/// The dev setup page configuration with this stack's registration code, so its first-phone link
+/// registers the first emulator here.
+fn setup_config(dev: &Path, registration_code: &str) -> Result<Zeroizing<String>> {
+    let mut table = parse_template(&dev.join("setup.toml"))?;
+    table.insert(
+        "registration_code".to_owned(),
+        Value::String(registration_code.to_owned()),
+    );
+    Ok(with_header(&table))
 }
 
 fn map_host_config(dev: &Path, layout: &Layout) -> Result<String> {

@@ -49,6 +49,8 @@ pingers-push-relay = { path = "../crates/pingers-push-relay" }
 pingers-server = { path = "../crates/pingers-server" }
 # tests/nodo_packaging.rs parses the rendered map host config with the host's own parser.
 pingers-map-host = { path = "../crates/pingers-map-host" }
+# tests/nodo_packaging.rs parses the rendered setup page config with its own parser.
+pingers-setup = { path = "../crates/pingers-setup" }
 # tests/nodo_packaging.rs checks packaging/nodo with nodo's own parsers.
 nodo-manifest = { workspace = true }
 nodo-settings = { workspace = true }

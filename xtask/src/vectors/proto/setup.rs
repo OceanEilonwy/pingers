@@ -56,13 +56,18 @@ fn setup_payload() -> Result<VectorFile> {
         push_relay: vec![ramp(0x80, 32)],
         ..two_pins(&link)
     };
-    let empty_code = Setup { code: "", ..two_pins(&link) };
+    let empty_code = Setup {
+        code: "",
+        ..two_pins(&link)
+    };
     let no_gateway_pins = Setup {
         gateway: Vec::new(),
         ..two_pins(&link)
     };
     let five_pins = Setup {
-        push_relay: (0..5).map(|index| ramp(index * 0x20, 32)).collect(),
+        push_relay: [0x00, 0x20, 0x40, 0x60, 0x80]
+            .map(|start| ramp(start, 32))
+            .to_vec(),
         ..two_pins(&link)
     };
     let short_pin = Setup {
@@ -77,7 +82,11 @@ fn setup_payload() -> Result<VectorFile> {
         "setup-payload-encoding",
         "First-phone setup link payload (https://<server>/j#s1.<base64url(this)>, shown by the owner's appliance as a QR code) as canonical CBOR: [server, registration code (text, 1 to 128 bytes), gateway key pins ([32-byte SHA-256 of the key config], served key first, 1 to 4), push relay key pins (the same, published key first, 1 to 4)]. Inputs give each pin list as the hex of its hashes, concatenated.",
         vec![
-            case("link", link.inputs(), object! { "encoding": hex(&link.encode()) }),
+            case(
+                "link",
+                link.inputs(),
+                object! { "encoding": hex(&link.encode()) },
+            ),
             case(
                 "one-pin-each",
                 one_each.inputs(),

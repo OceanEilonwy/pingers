@@ -11,7 +11,8 @@ map_host = "https://10.0.2.2:9446"
 map_host_gateway = "http://127.0.0.1:9474"
 logging = "counts"
 counts_interval_s = 60
-# A debug app build presents it with PINGERS_DEV_REGISTRATION_CODE (docs/deploy-nodo.md).
+# The first emulator gets it from the dev setup page's link (packaging/nodo/dev/setup.toml), or a
+# debug app build presents it with PINGERS_DEV_REGISTRATION_CODE (docs/deploy-nodo.md).
 registration_codes = ["dev-registration-code"]
 delivery_db = "target/dev-stack/groups.sqlite"
 quota_db = "target/dev-stack/quota.sqlite"
@@ -45,6 +46,6 @@ relay_id = 1
 url = "http://127.0.0.1:9472"
 public_url = "https://10.0.2.2:9445"
 credential = "3333333333333333333333333333333333333333333333333333333333333333"
-# `pingers-push-relay pins packaging/nodo/dev/push-relay.toml` prints the value for these keys.
-key_config_hash = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+# Its published key is asked of the local push relay itself, as on the appliance.
+key_config_from_relay = true
 operator = "Local test"

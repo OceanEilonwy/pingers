@@ -1,8 +1,9 @@
 # Template file for 'pingers-server'
 #
-# The four Pingers services as monokulo-nodo feed apps: pingers-server (this package) and the
-# subpackages pingers-push-relay, pingers-ohttp-relay and pingers-map-host. nodo runs one service
-# per package, so there are four apps; one recipe compiles the shared crates once. Everything
+# The Pingers services as monokulo-nodo feed apps: pingers-server (this package) and the
+# subpackages pingers-push-relay, pingers-ohttp-relay, pingers-map-host and pingers, the bundle
+# the owner installs (it installs the other four and serves the setup page). nodo runs one
+# service per package, so there are five apps; one recipe compiles the shared crates once. Everything
 # lands in /opt/nodo/apps/<id>/ (docs/deploy-nodo.md, "Package layout").
 #
 # This file is a template of the template: `cargo xtask nodo-dist` fills in the version, commit
@@ -102,7 +103,8 @@ do_configure() {
 do_build() {
 	_toolchain_env
 	"${CARGO}" build --release --locked --offline --target "${RUST_TARGET}" \
-		-p pingers-server -p pingers-push-relay -p pingers-ohttp-relay -p pingers-map-host
+		-p pingers-server -p pingers-push-relay -p pingers-ohttp-relay -p pingers-map-host \
+		-p pingers-setup
 }
 
 # Installs one app: the binary in libexec/, the launcher (which keeps the binary's name, so the
@@ -130,6 +132,7 @@ do_install() {
 	_install_app pingers-push-relay
 	_install_app pingers-ohttp-relay
 	_install_app pingers-map-host
+	_install_app pingers
 }
 
 pingers-push-relay_package() {
@@ -153,5 +156,14 @@ pingers-map-host_package() {
 	license="AGPL-3.0-only"
 	pkg_install() {
 		vmove opt/nodo/apps/pingers-map-host
+	}
+}
+
+pingers_package() {
+	# No xbps depends: nodo installs the four services itself, as the manifest's [bundle] says.
+	short_desc="Pingers for monokulo-nodo: installs the four services and shows the setup page"
+	license="AGPL-3.0-only"
+	pkg_install() {
+		vmove opt/nodo/apps/pingers
 	}
 }

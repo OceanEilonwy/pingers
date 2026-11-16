@@ -31,6 +31,6 @@ pushes_per_minute = 600
 allow_insecure_local_endpoints = false
 
 [fcm]
-project_id = "$(pingers-push-relay.fcm_project_id)"
-# The service account's JSON, inline (P8): in memory only, never a file on disk.
+# The service account's JSON, inline (P8): in memory only, never a file on disk. The Firebase
+# project is its project_id.
 service_account_json = "$(pingers-push-relay.fcm_service_account)"

@@ -19,12 +19,22 @@ use nodo_settings::{
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
-/// The four apps: id, config file name, and the dev config that mirrors its template.
-const APPS: [(&str, &str); 4] = [
+/// The five apps: id, config file name, and the dev config that mirrors its template. pingers,
+/// the bundle the owner installs, is last, as in the feed.
+const APPS: [(&str, &str); 5] = [
     ("pingers-server", "server"),
     ("pingers-push-relay", "push-relay"),
     ("pingers-ohttp-relay", "relay"),
     ("pingers-map-host", "map-host"),
+    ("pingers", "setup"),
+];
+
+/// The four services, which are web sites; pingers is not.
+const SERVICES: [&str; 4] = [
+    "pingers-server",
+    "pingers-push-relay",
+    "pingers-ohttp-relay",
+    "pingers-map-host",
 ];
 
 /// A version of the form `cargo xtask nodo-dist` writes.
@@ -84,13 +94,19 @@ fn every_manifest_passes_the_feeds_install_review() -> TestResult {
         assert_eq!(config.name, format!("{name}.toml"));
         assert!(app_dir(id).join(&config.template).is_file());
         assert_eq!(manifest.settings.as_deref(), Some("settings.lua"));
+        let Some(nodo_manifest::HealthCheck::Tcp { port }) = manifest.health else {
+            return Err(format!("{id} has no tcp health check").into());
+        };
+        if id == "pingers" {
+            // The setup page is no web site: only nodo's helper reads it, on loopback.
+            assert!(manifest.web.is_empty());
+            assert_eq!(port, 9475);
+            continue;
+        }
         // Every service listens on loopback only, behind Caddy, and its health check is its
         // own web upstream.
         let web = manifest.web.first().ok_or("no [[web]]")?;
         assert_eq!(manifest.web.len(), 1);
-        let Some(nodo_manifest::HealthCheck::Tcp { port }) = manifest.health else {
-            return Err(format!("{id} has no tcp health check").into());
-        };
         assert_eq!(web.upstream, format!("127.0.0.1:{port}"));
     }
     Ok(())
@@ -98,7 +114,7 @@ fn every_manifest_passes_the_feeds_install_review() -> TestResult {
 
 #[test]
 fn the_http2_only_services_ask_caddy_for_h2c() -> TestResult {
-    for (id, _) in APPS {
+    for id in SERVICES {
         let expected = match id {
             "pingers-server" | "pingers-ohttp-relay" => UpstreamProtocol::H2c,
             _ => UpstreamProtocol::H1,
@@ -114,11 +130,13 @@ fn the_http2_only_services_ask_caddy_for_h2c() -> TestResult {
 }
 
 #[test]
-fn only_the_push_relay_reaches_the_internet() -> TestResult {
+fn only_the_push_relay_and_the_setup_page_reach_the_internet() -> TestResult {
     for (id, _) in APPS {
         let manifest = parse_manifest(&manifest_text(id)?)?;
         let internet = manifest.network.outbound == nodo_manifest::Outbound::Internet;
-        assert_eq!(internet, id == "pingers-push-relay", "{id}");
+        // The setup page checks the public names from the appliance.
+        let expected = id == "pingers-push-relay" || id == "pingers";
+        assert_eq!(internet, expected, "{id}");
     }
     Ok(())
 }
@@ -166,10 +184,6 @@ fn text(value: &str) -> SettingValue {
     SettingValue::Literal(Value::String(value.to_owned()))
 }
 
-fn url(value: &str) -> SettingValue {
-    SettingValue::Literal(Value::Url(value.to_owned()))
-}
-
 fn secret(value: &str) -> SettingValue {
     SettingValue::Literal(Value::Secret(SecretString::new(value)))
 }
@@ -190,21 +204,9 @@ fn service_account_json() -> TestResult<String> {
 }
 
 fn example_values() -> TestResult<BTreeMap<&'static str, BTreeMap<String, SettingValue>>> {
+    // The addresses and the operator all follow from the domain; the keys and the code are
+    // what the device generates.
     let server = BTreeMap::from([
-        ("server_id".to_owned(), url("https://pingers.example.org")),
-        (
-            "ohttp_relay_url".to_owned(),
-            url("https://ohttp.example.org/ohttp"),
-        ),
-        ("map_host".to_owned(), url("https://maps.example.org")),
-        (
-            "push_relay_public_url".to_owned(),
-            url("https://push.example.org"),
-        ),
-        (
-            "push_relay_key_config_hash".to_owned(),
-            text("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
-        ),
         ("ohttp_key_a".to_owned(), secret(&hex('1'))),
         ("ohttp_key_b".to_owned(), secret(&hex('2'))),
         (
@@ -212,9 +214,9 @@ fn example_values() -> TestResult<BTreeMap<&'static str, BTreeMap<String, Settin
             secret("0123456789abcdef0123456789abcdef"),
         ),
     ]);
+    // The two answers the bundle asks for, and the generated keys.
     let push = BTreeMap::from([
-        ("operator".to_owned(), text("Example operator")),
-        ("fcm_project_id".to_owned(), text("example-project")),
+        ("domain".to_owned(), text("example.org")),
         (
             "fcm_service_account".to_owned(),
             secret(&service_account_json()?),
@@ -229,10 +231,26 @@ fn example_values() -> TestResult<BTreeMap<&'static str, BTreeMap<String, Settin
         ("pingers-push-relay", push),
         ("pingers-ohttp-relay", BTreeMap::new()),
         ("pingers-map-host", BTreeMap::new()),
+        ("pingers", BTreeMap::new()),
     ]))
 }
 
-/// All four apps installed together, with the one grant the owner approves.
+/// The bundle's grants, as the pingers manifest declares them.
+fn bundle_grants() -> TestResult<Vec<Grant>> {
+    let manifest = parse_manifest(&manifest_text("pingers")?)?;
+    let bundle = manifest.bundle.ok_or("pingers has no [bundle]")?;
+    Ok(bundle
+        .grants
+        .into_iter()
+        .map(|grant| Grant {
+            consumer: grant.consumer,
+            provider: grant.provider,
+            setting: grant.setting,
+        })
+        .collect())
+}
+
+/// All five apps installed together, with the grants the owner approves with the bundle.
 fn installed() -> TestResult<Installed> {
     let mut values = example_values()?;
     let mut installed = Installed::default();
@@ -246,11 +264,7 @@ fn installed() -> TestResult<Installed> {
             },
         );
     }
-    installed.grants.insert(Grant {
-        consumer: "pingers-server".to_owned(),
-        provider: "pingers-push-relay".to_owned(),
-        setting: "server_credential".to_owned(),
-    });
+    installed.grants.extend(bundle_grants()?);
     Ok(installed)
 }
 
@@ -353,6 +367,27 @@ fn references_open_exactly_the_loopback_ports_of_the_design() -> TestResult {
     );
     assert!(ports("pingers-map-host", "map-host")?.is_empty());
     assert!(ports("pingers-push-relay", "push-relay")?.is_empty());
+    // The setup page reads the gateway's key configs, the push relay's published keys and the
+    // map catalog, on loopback; never the public API.
+    let mut setup = ports("pingers", "setup")?;
+    setup.sort();
+    assert_eq!(
+        setup,
+        vec![
+            (
+                "pingers-map-host".to_owned(),
+                "Port { protocol: Tcp, port: 9474 }".to_owned()
+            ),
+            (
+                "pingers-push-relay".to_owned(),
+                "Port { protocol: Tcp, port: 9472 }".to_owned()
+            ),
+            (
+                "pingers-server".to_owned(),
+                "Port { protocol: Tcp, port: 9471 }".to_owned()
+            ),
+        ]
+    );
     Ok(())
 }
 
@@ -476,9 +511,12 @@ fn the_services_accept_the_rendered_and_dev_configs() -> TestResult {
         assert_eq!(config.ohttp_keys.configs().len(), 2, "{what}");
         // Signups need the operator's code: the packaged server is never open to anyone.
         assert_eq!(config.registration_codes.len(), 1, "{what}");
+        // The push relay's key is learned from the relay itself: nothing pasted.
+        assert!(config.advertised_push_relays.is_empty(), "{what}");
+        assert_eq!(config.learned_push_relays.len(), 1, "{what}");
         assert!(
             config
-                .advertised_push_relays
+                .learned_push_relays
                 .iter()
                 .all(|relay| relay.url.as_str().starts_with("https://")),
             "{what}"
@@ -510,5 +548,216 @@ fn the_services_accept_the_rendered_and_dev_configs() -> TestResult {
         "rendered",
     )?;
     maps(&dev("map-host")?, "dev")?;
+    let setup = |text: &str, what: &str| -> TestResult {
+        pingers_setup::Config::parse(text)
+            .map(drop)
+            .map_err(|error| format!("{what} setup.toml: {error}").into())
+    };
+    setup(&render(&installed, "pingers", "setup")?.text, "rendered")?;
+    setup(&dev("setup")?, "dev")?;
+    Ok(())
+}
+
+#[test]
+fn every_address_follows_from_the_domain() -> TestResult {
+    let installed = installed()?;
+    let server: toml::Table =
+        toml::from_str(&render(&installed, "pingers-server", "server")?.text)?;
+    let field = |name: &str| {
+        server
+            .get(name)
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned)
+    };
+    assert_eq!(
+        field("server_id").as_deref(),
+        Some("https://pingers.example.org")
+    );
+    assert_eq!(
+        field("map_host").as_deref(),
+        Some("https://maps.example.org")
+    );
+    assert_eq!(
+        server.get("ohttp_relay_urls"),
+        Some(&toml::Value::Array(vec![
+            "https://ohttp.example.org/ohttp".into()
+        ]))
+    );
+    let relay = server
+        .get("push_relays")
+        .and_then(toml::Value::as_array)
+        .and_then(|relays| relays.first())
+        .ok_or("no push relay")?;
+    assert_eq!(
+        relay.get("public_url").and_then(toml::Value::as_str),
+        Some("https://push.example.org")
+    );
+    // Both operators default to the domain.
+    assert_eq!(field("server_operator").as_deref(), Some("example.org"));
+    // The setup page gets the same addresses and the server's code.
+    let setup = pingers_setup::Config::parse(&render(&installed, "pingers", "setup")?.text)?;
+    assert_eq!(setup.server_id.as_str(), "https://pingers.example.org");
+    assert_eq!(setup.push_relay_url, "https://push.example.org");
+    assert_eq!(
+        setup.registration_code.expose(),
+        "0123456789abcdef0123456789abcdef"
+    );
+    Ok(())
+}
+
+#[test]
+fn the_relay_takes_its_firebase_project_from_the_pasted_key() -> TestResult {
+    let installed = installed()?;
+    let rendered = render(&installed, "pingers-push-relay", "push-relay")?.text;
+    let table: toml::Table = toml::from_str(&rendered)?;
+    assert!(
+        table
+            .get("fcm")
+            .and_then(|fcm| fcm.get("project_id"))
+            .is_none()
+    );
+    let config = pingers_push_relay::config::RelayConfig::parse(&rendered)?;
+    assert_eq!(
+        config.fcm.map(|fcm| fcm.project_id).as_deref(),
+        Some("example-project")
+    );
+    Ok(())
+}
+
+#[test]
+fn the_bundle_installs_the_services_in_reference_order_and_asks_only_two_things() -> TestResult {
+    let manifest = parse_manifest(&manifest_text("pingers")?)?;
+    let bundle = manifest.bundle.ok_or("pingers has no [bundle]")?;
+    // Each member before whatever references it: the push relay and the map host first, the
+    // server (which references both), then the relay (which references the server).
+    assert_eq!(
+        bundle.members,
+        [
+            "pingers-push-relay",
+            "pingers-map-host",
+            "pingers-server",
+            "pingers-ohttp-relay"
+        ]
+    );
+    let installed = installed()?;
+    for (index, member) in bundle.members.iter().enumerate() {
+        let resolved = installed
+            .resolve(member)
+            .map_err(|errors| format!("{member}: {errors:?}"))?;
+        for dependency in resolved.dependencies {
+            let position = bundle
+                .members
+                .iter()
+                .position(|other| *other == dependency.package)
+                .ok_or("a dependency outside the bundle")?;
+            assert!(
+                position < index,
+                "{member} needs {} first",
+                dependency.package
+            );
+        }
+    }
+    assert_eq!(bundle.data_drive, ["pingers-map-host"]);
+    // Every grant is needed: without any one of them, its consumer does not render.
+    for grant in bundle_grants()? {
+        let mut without = installed.clone();
+        without.grants.remove(&grant);
+        let name = APPS
+            .iter()
+            .find(|(id, _)| *id == grant.consumer)
+            .map(|(_, name)| *name)
+            .ok_or("a grant for an app outside the bundle")?;
+        assert!(
+            render(&without, &grant.consumer, name).is_err(),
+            "{grant:?} is not needed"
+        );
+    }
+    // The owner answers two questions; the device passphrase is nodo's own. Each answer is a
+    // real setting of a member, and the secret one is a secret there.
+    let asked: Vec<(String, String, bool)> = bundle
+        .ask
+        .iter()
+        .map(|ask| (ask.package.clone(), ask.setting.clone(), ask.secret))
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            ("pingers-push-relay".to_owned(), "domain".to_owned(), false),
+            (
+                "pingers-push-relay".to_owned(),
+                "fcm_service_account".to_owned(),
+                true
+            ),
+        ]
+    );
+    for (package, setting, is_secret) in asked {
+        let schema = settings(&package)?;
+        let def = schema
+            .schema()
+            .settings
+            .iter()
+            .find(|def| def.name == setting)
+            .ok_or("an ask for no setting")?;
+        assert_eq!(
+            matches!(def.ty, nodo_settings::SettingType::Secret),
+            is_secret,
+            "{setting}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn the_owner_page_is_the_setup_apps_own_loopback_port() -> TestResult {
+    let manifest = parse_manifest(&manifest_text("pingers")?)?;
+    let page = manifest.owner_page.ok_or("pingers has no [owner_page]")?;
+    assert_eq!(
+        page.url,
+        format!("http://127.0.0.1:9475{}", pingers_setup::OWNER_PATH)
+    );
+    assert!(
+        manifest
+            .network
+            .inbound
+            .iter()
+            .any(|inbound| inbound.port == 9475)
+    );
+    // Its config, holding the code, is rendered into memory: the app has a secret of its own.
+    assert!(
+        settings("pingers")?
+            .schema()
+            .settings
+            .iter()
+            .any(|setting| matches!(setting.ty, nodo_settings::SettingType::Secret))
+    );
+    Ok(())
+}
+
+#[test]
+fn the_domain_is_checked() -> TestResult {
+    let relay = settings("pingers-push-relay")?;
+    for good in ["example.org", "a-b.example.co.uk"] {
+        assert!(
+            relay
+                .validate_value("domain", &Value::String(good.to_owned()))
+                .is_ok(),
+            "{good}"
+        );
+    }
+    for bad in [
+        "Example.org",
+        "example",
+        "-a.org",
+        "a..org",
+        "https://example.org",
+        "example.org/",
+    ] {
+        assert!(
+            relay
+                .validate_value("domain", &Value::String(bad.to_owned()))
+                .is_err(),
+            "{bad}"
+        );
+    }
     Ok(())
 }

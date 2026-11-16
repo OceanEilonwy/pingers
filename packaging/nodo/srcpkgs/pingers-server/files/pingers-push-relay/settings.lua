@@ -13,12 +13,31 @@ return {
   api_version = 1,
   settings = {
     {
+      -- Asked once when the pingers bundle is installed. It lives here because the push relay
+      -- is the root of the references: pingers-server and pingers derive their addresses from
+      -- it without a cycle.
+      name = "domain",
+      type = "string",
+      label = "Your domain",
+      help = "The domain the four Pingers sites are named under, such as example.org: "
+        .. "pingers., ohttp., push. and maps. pingers-server's addresses default to those "
+        .. "names, and can each be changed there.",
+      required = true,
+      public = "domain",
+      validate = function(domain)
+        return nodo.matches(domain, "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"),
+          "must be a domain name in lower case, such as example.org"
+      end,
+    },
+    {
       name = "operator",
       type = "string",
       label = "Operator",
       help = "Who runs this relay, as GET /v1/config declares it (operator). It must be true. "
-        .. "pingers-server uses it as its own operator by default, so both say the same.",
+        .. "By default it is your domain. pingers-server uses it as its own operator by "
+        .. "default, so both say the same.",
       required = true,
+      default = "$(pingers-push-relay.domain)",
       public = "operator",
       validate = function(name)
         return nodo.matches(name, "^\\S(.{0,126}\\S)?$"), "must be 1 to 128 characters without outer spaces"
@@ -128,22 +147,13 @@ return {
       validate = key_hex,
     },
     {
-      name = "fcm_project_id",
-      type = "string",
-      label = "Firebase project ID",
-      help = "The app's Firebase project ID (fcm project_id).",
-      required = true,
-      validate = function(id)
-        return nodo.matches(id, "^[a-z0-9-]{1,63}$"), "must be a Firebase project ID"
-      end,
-    },
-    {
       name = "fcm_service_account",
       type = "secret",
       label = "Firebase service account",
       help = "The JSON key of a service account with only the Firebase Cloud Messaging API "
-        .. "Admin role, on one line (fcm service_account_json). Paste it here yourself; to "
-        .. "rotate, add a new key in the Google Cloud console, paste it, then delete the old one.",
+        .. "Admin role (fcm service_account_json); the relay takes the Firebase project from its "
+        .. "project_id. Paste it here yourself; to rotate, add a new key in the Google Cloud "
+        .. "console, paste it, then delete the old one.",
       required = true,
       validate = function(json)
         return nodo.matches(json, "^[ ]*\\{.*\"private_key\".*\\}[ ]*$"),
@@ -160,4 +170,6 @@ return {
       endpoint = "tcp",
     },
   },
+  -- The Firebase project now comes from the pasted key file's project_id.
+  retired = { "fcm_project_id" },
 }

@@ -25,6 +25,8 @@ return {
         .. "(server_id). It is the server's identity: RLN proofs and account registrations are "
         .. "bound to it, so changing it later makes a new server.",
       required = true,
+      default = "https://pingers.$(pingers-push-relay.domain)",
+      public = "server-id",
       validate = https_origin,
     },
     {
@@ -48,6 +50,8 @@ return {
         .. "https://ohttp.example.org/ohttp: the address pingers-ohttp-relay's site is "
         .. "published at, followed by /ohttp.",
       required = true,
+      default = "https://ohttp.$(pingers-push-relay.domain)/ohttp",
+      public = "ohttp-relay-url",
       validate = function(url)
         return nodo.matches(url, "^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9._~/-]*$"),
           "must be an https:// URL with a path"
@@ -60,6 +64,8 @@ return {
       help = "The map host /v1/params advertises (map_host), such as https://maps.example.org: "
         .. "the address pingers-map-host's site is published at.",
       required = true,
+      default = "https://maps.$(pingers-push-relay.domain)",
+      public = "map-host",
       validate = https_origin,
     },
     {
@@ -92,7 +98,7 @@ return {
       label = "Registration code",
       help = "The code a device must present to make an account here (registration_codes). "
         .. "Created on install, so the server is not open to anyone who finds it. The first "
-        .. "phone needs it once (for now a debug build, docs/deploy-nodo.md); every invite sent "
+        .. "phone gets it from the QR code on the pingers app's Setup page; every invite sent "
         .. "from a phone registered with it carries it, so friends join without typing it. "
         .. "Reset it to stop new accounts from old invite links.",
       required = true,
@@ -159,21 +165,9 @@ return {
       help = "The push relay's public address, such as https://push.example.org: the address "
         .. "pingers-push-relay's site is published at. Devices fetch its key config there.",
       required = true,
+      default = "https://push.$(pingers-push-relay.domain)",
+      public = "push-relay-public-url",
       validate = https_origin,
-    },
-    {
-      -- push_relays.key_config_hash in the pin form (unpadded base64url SHA-256,
-      -- 43 characters): one pin, the served key's.
-      name = "push_relay_key_config_hash",
-      type = "string",
-      label = "Push relay key hash",
-      help = "The pin of the push relay's served key config, 43 base64url characters, from "
-        .. "`pingers-push-relay pins` (push_relays.key_config_hash). /v1/params lists it so "
-        .. "devices can check the relay's key.",
-      required = true,
-      validate = function(hash)
-        return nodo.matches(hash, "^[A-Za-z0-9_-]{43}$"), "must be a pin: 43 base64url characters"
-      end,
     },
     {
       name = "gateway_url",
@@ -195,4 +189,6 @@ return {
       endpoint = "tcp",
     },
   },
+  -- The push relay's key hash is learned from the relay itself (key_config_from_relay).
+  retired = { "push_relay_key_config_hash" },
 }

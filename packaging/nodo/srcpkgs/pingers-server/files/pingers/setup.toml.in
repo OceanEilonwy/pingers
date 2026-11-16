@@ -1,0 +1,19 @@
+# The setup page's configuration, rendered by nodo from the settings of pingers and of the four
+# services it references: change them in nodo-tui, not here. The format is
+# crates/pingers-setup/src/config.rs.
+listen = "127.0.0.1:9475"
+domain = "$(pingers-push-relay.domain)"
+server_id = "$(pingers-server.server-id)"
+ohttp_relay_url = "$(pingers-server.ohttp-relay-url)"
+push_relay_url = "$(pingers-server.push-relay-public-url)"
+map_host = "$(pingers-server.map-host)"
+# The server's code, through the grant approved with the install; a secret of this app too, so
+# this file is rendered into memory only.
+registration_code = "$(pingers.registration_code)"
+# On loopback, through references that open exactly these ports: the gateway's key configs,
+# the push relay's published and next keys, the map host's catalog.
+gateway_key_config = "$(pingers-server.gateway-key-config-url)"
+push_relay = "$(pingers-push-relay.server-url)"
+map_host_local = "$(pingers-map-host.gateway-url)"
+github_repository = "$(pingers.github_repository)"
+release_tag = "$(pingers.release_tag)"

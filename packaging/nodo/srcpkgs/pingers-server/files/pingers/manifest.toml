@@ -1,0 +1,66 @@
+# pingers on monokulo-nodo: the one app the owner installs. Its bundle installs the four
+# services with it, asking only for the domain and the Firebase key file (and the device
+# passphrase), and it serves the owner's setup page: the checklist of what is left to do by
+# hand, the pins for the app builds, and the first phone's QR code.
+# docs/deploy-nodo.md explains every choice here.
+api_version = 1
+id = "pingers"
+version = "@VERSION@"
+# The launcher runs libexec/pingers /etc/apps/pingers/setup.toml.
+exec = ["bin/pingers"]
+settings = "settings.lua"
+stop_timeout_secs = 10
+health = { tcp = { port = 9475 } }
+
+[config]
+template = "setup.toml.in"
+name = "setup.toml"
+
+# No storage. Its one secret, the server's registration code (read through a grant), keeps the
+# rendered config in memory. Internet access for the setup page's checks of the four public
+# names from the appliance (DNS, TLS, the answers); the services themselves it reaches on
+# loopback through references.
+[network]
+outbound = "internet"
+
+# The setup page, for nodo's helper only: not a web site, and no other app references it.
+[[network.inbound]]
+port = 9475
+protocol = "tcp"
+scope = "local"
+
+[owner_page]
+title = "Setup"
+url = "http://127.0.0.1:9475/owner"
+
+[bundle]
+# Installed in this order, each before what references it, then pingers itself.
+members = ["pingers-push-relay", "pingers-map-host", "pingers-server", "pingers-ohttp-relay"]
+# Map packs are large public data: on the data drive when there is one.
+data_drive = ["pingers-map-host"]
+
+# pingers-server pushes with the push relay's credential.
+[[bundle.grants]]
+consumer = "pingers-server"
+provider = "pingers-push-relay"
+setting = "server_credential"
+
+# The setup page shows the registration code and puts it in the first phone's link.
+[[bundle.grants]]
+consumer = "pingers"
+provider = "pingers-server"
+setting = "registration_code"
+
+[[bundle.ask]]
+package = "pingers-push-relay"
+setting = "domain"
+label = "Your domain"
+help = "Such as example.org. The four sites are named under it: pingers., ohttp., push. and maps. (each can be changed later in its app's settings)."
+secret = false
+
+[[bundle.ask]]
+package = "pingers-push-relay"
+setting = "fcm_service_account"
+label = "Firebase service account"
+help = "Paste the service account's JSON key file (one with only the Firebase Cloud Messaging API Admin role). It is sealed on this appliance and never shown again."
+secret = true
