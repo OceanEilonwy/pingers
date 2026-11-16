@@ -828,7 +828,7 @@ fn set_ntfy_server(device: &Device, server: &str) -> Result<()> {
     Ok(())
 }
 
-/// A fresh install with every runtime permission granted (so onboarding has nothing to ask),
+/// A fresh install with every runtime permission granted (so first run only needs its first button),
 /// animations off, the phone away from the Spot, and Home on screen.
 fn install_pingers(device: &Device, apk: &Path) -> Result<()> {
     let _ignored = device.adb(&["uninstall", PACKAGE]);
@@ -845,12 +845,25 @@ fn install_pingers(device: &Device, apk: &Path) -> Result<()> {
     device.shell("logcat -c")?;
     device.geo_fix(AWAY)?;
     device.shell(&format!("am start -W -n {ACTIVITY}"))?;
+    let home = Find::tag("home_new_party").or(Text::Is("New party".into()));
+    // First run opens on the permission steps. Every permission is granted already, so the
+    // first step's button passes over the rest and finishes onboarding (registering
+    // UnifiedPush with ntfy, as a person's first run does).
+    let first_run = Find::text(Text::Is("Allow location".into()));
+    let deadline = Deadline::after(UI);
+    while !deadline.passed() {
+        let screen = device.screen()?;
+        if screen.find(&home).is_some() {
+            break;
+        }
+        if let Some(allow) = screen.find(&first_run) {
+            device.tap(allow)?;
+        }
+        pause(Duration::from_millis(500));
+    }
     device
-        .wait_for(
-            &Find::tag("home_new_party").or(Text::Is("New party".into())),
-            UI,
-        )
-        .context("Home did not appear after launch")?;
+        .wait_for(&home, UI)
+        .context("Home did not appear after launch and first run")?;
     Ok(())
 }
 
