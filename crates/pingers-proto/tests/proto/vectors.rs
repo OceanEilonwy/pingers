@@ -553,7 +553,7 @@ fn setup_payload_vectors() -> Result<(), TestError> {
         bytes_field: "encoding",
         build: |vector| {
             let pins = |field| -> Result<Vec<KeyConfigHash>, TestError> {
-                Ok(vector
+                vector
                     .input_bytes(field)?
                     .chunks(32)
                     .map(|chunk| {
@@ -562,7 +562,7 @@ fn setup_payload_vectors() -> Result<(), TestError> {
                             .map(KeyConfigHash::from_bytes)
                             .map_err(|_length| field_error(vector, field))
                     })
-                    .collect::<Result<_, _>>()?)
+                    .collect::<Result<_, _>>()
             };
             Ok(SetupPayload {
                 server: ServerId::new(text(vector, "server")?)?,
