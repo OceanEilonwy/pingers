@@ -111,8 +111,14 @@ fn live(routes: Routes) -> Result<Output, Box<dyn std::error::Error>> {
 
 /// `cargo xtask pins <server.toml> <push-relay.toml>` for the same keys.
 fn from_files(relay_keys: &[(u8, [u8; 32], u64)]) -> Result<String, Box<dyn std::error::Error>> {
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    let server = directory.join("xtask-pins-live-server.toml");
+    // Tests in this binary run in parallel, so each call writes into its own directory: two
+    // writers of one fixed file name let a reader see a half-written file.
+    static CALL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let call = CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("xtask-pins-live-{}-{call}", std::process::id()));
+    std::fs::create_dir_all(&directory)?;
+    let server = directory.join("server.toml");
     std::fs::write(
         &server,
         format!(
@@ -121,7 +127,7 @@ fn from_files(relay_keys: &[(u8, [u8; 32], u64)]) -> Result<String, Box<dyn std:
             hex::encode(KEY_A)
         ),
     )?;
-    let relay = directory.join(format!("xtask-pins-live-relay-{}.toml", relay_keys.len()));
+    let relay = directory.join("push-relay.toml");
     let mut keys = String::new();
     for (key_id, secret, activated_at) in relay_keys {
         writeln!(

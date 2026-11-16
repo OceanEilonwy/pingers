@@ -14,23 +14,27 @@ use pingers_crypto::{
 };
 use pingers_mls::{CipherSuitePolicy, KeyPackagePurpose, MlsContext, MlsError};
 use pingers_proto::{
-    DisplayName, GroupId, InvitePayload, InvitePost, JoinRequest, KeyPackageBytes, LeafIndex,
-    MailboxId, Padded, PartyId, SealedSnapshot, SecretBytes, SecretText, SequenceNumber,
-    Subscription, SubscriptionId, WelcomeBytes, WireDecode as _, WireEncode as _,
+    DisplayName, GroupId, InvitePayload, InvitePost, JoinRequest, KeyPackageBytes, MailboxId,
+    Padded, PartyId, SealedSnapshot, SecretBytes, SecretText, SequenceNumber, Subscription,
+    WelcomeBytes, WireDecode as _, WireEncode as _,
 };
-use pingers_store::{MailboxPurpose, Member, MemberName, Party, Session, Verification};
+pub use pingers_store::JoinedVia;
+use pingers_store::{
+    InviteState, JoinApproval, MailboxPurpose, Member, MemberName, Party, PartyInvite, PartyJoin,
+    Session, Verification,
+};
 use pingers_time::UnixSeconds;
 use rand_core::CryptoRng;
 use zeroize::Zeroizing;
 
 use crate::codec::{Reader, Writer};
-use crate::invite::{InviteRecord, StoredStatus};
+use crate::invite::status_at;
 use crate::lifecycle::{
     Added, CommitParts, PendingCommit, finish_commit, identity, party_row, seal_operation,
     set_subscription, start_commit, stored_settings,
 };
 use crate::ops::{PartyOperation, Snapshot};
-use crate::records::{self, Key};
+use crate::roster_history;
 use crate::settings::StoredSettings;
 use crate::{
     INVITE_LIFETIME, Ignored, InviteId, InviteLink, InviteStatus, InviteSummary, JoinId, Outbound,
@@ -128,16 +132,6 @@ pub struct WelcomeAccess {
     pub auth: LogAuthKeyPair,
 }
 
-/// How this device came into a Party it joined: who let it in, and the code that was checked
-/// ("Ana let you in"; the Party's security details).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct JoinedVia {
-    /// The inviter's leaf.
-    pub inviter: LeafIndex,
-    /// The code both phones showed.
-    pub code: JoinCode,
-}
-
 /// A Party this device has joined.
 pub struct Joined {
     /// The Party.
@@ -183,17 +177,16 @@ impl PartyLifecycle<'_> {
                 .checked_add(INVITE_LIFETIME)
                 .ok_or(PartiesError::Internal)?
                 .min(mailbox.expires_at);
-            let record = InviteRecord {
-                secret: Zeroizing::new(*secret.expose_bytes()),
+            let id = mailbox.id();
+            session.party_invites().insert(&PartyInvite {
+                mailbox: id,
+                party: *party,
+                secret: InviteSecret::from_bytes(Zeroizing::new(*secret.expose_bytes())),
                 shared_at: now,
                 expires,
-                status: StoredStatus::Open,
+                state: InviteState::Open,
                 read_position: None,
-            };
-            let id = mailbox.id();
-            records::write(session, &Key::Invite(party, &id), &record.encode())?;
-            records::write(session, &Key::InviteIndex(&id), party.as_bytes())?;
-            records::add_to_list(session, &Key::Invites(party), id)?;
+            })?;
             let link = InviteLink::new(&InvitePayload {
                 server: settings.server,
                 invite_mailbox: id,
@@ -217,8 +210,10 @@ impl PartyLifecycle<'_> {
     /// [`PartiesError::UnknownInvite`]; [`PartiesError::Malformed`] if the record is corrupt.
     pub fn invite_status(&self, invite: InviteId) -> Result<InviteStatus, PartiesError> {
         let now = self.clock.now();
-        let party = invite_party(self.session, &invite.mailbox())?;
-        Ok(invite_record(self.session, &party, &invite.mailbox())?.status_at(now))
+        Ok(status_at(
+            &load_invite(self.session, &invite.mailbox())?,
+            now,
+        ))
     }
 
     /// The Party's invites, oldest first.
@@ -228,18 +223,18 @@ impl PartyLifecycle<'_> {
     /// [`PartiesError::Malformed`] if a record is corrupt; [`PartiesError::Store`].
     pub fn invites(&self, party: &PartyId) -> Result<Vec<InviteSummary>, PartiesError> {
         let now = self.clock.now();
-        records::read_mailbox_list(self.session, &Key::Invites(party))?
-            .into_iter()
-            .map(|mailbox| {
-                let record = invite_record(self.session, party, &mailbox)?;
-                Ok(InviteSummary {
-                    invite: InviteId::for_mailbox(mailbox),
-                    shared_at: record.shared_at,
-                    expires: record.expires,
-                    status: record.status_at(now),
-                })
+        Ok(self
+            .session
+            .party_invites()
+            .list(party)?
+            .iter()
+            .map(|record| InviteSummary {
+                invite: InviteId::for_mailbox(record.mailbox),
+                shared_at: record.shared_at,
+                expires: record.expires,
+                status: status_at(record, now),
             })
-            .collect()
+            .collect())
     }
 
     /// Where to resume reading an invite's mailbox: after the last post already handed to
@@ -252,8 +247,7 @@ impl PartyLifecycle<'_> {
         &self,
         invite: InviteId,
     ) -> Result<Option<SequenceNumber>, PartiesError> {
-        let party = invite_party(self.session, &invite.mailbox())?;
-        Ok(invite_record(self.session, &party, &invite.mailbox())?.read_position)
+        Ok(load_invite(self.session, &invite.mailbox())?.read_position)
     }
 
     /// Cancels an invite: no further join requests are accepted, the ones waiting are dropped,
@@ -266,11 +260,10 @@ impl PartyLifecycle<'_> {
     pub fn revoke_invite(&self, invite: InviteId) -> Result<Outbound, PartiesError> {
         self.session.transaction(|session| {
             let mailbox = invite.mailbox();
-            let party = invite_party(session, &mailbox)?;
-            let mut record = invite_record(session, &party, &mailbox)?;
-            record.status = StoredStatus::Revoked;
-            records::write(session, &Key::Invite(&party, &mailbox), &record.encode())?;
-            drop_approvals_of(session, &party, &mailbox)?;
+            let mut record = load_invite(session, &mailbox)?;
+            record.state = InviteState::Revoked;
+            session.party_invites().update(&record)?;
+            session.join_approvals().delete_for_invite(&mailbox)?;
             Ok(Outbound::DeleteMailbox { mailbox })
         })
     }
@@ -295,8 +288,8 @@ impl PartyLifecycle<'_> {
         let now = self.clock.now();
         self.session.transaction(|session| {
             let mailbox = invite.mailbox();
-            let party = invite_party(session, &mailbox)?;
-            let mut record = invite_record(session, &party, &mailbox)?;
+            let mut record = load_invite(session, &mailbox)?;
+            let party = record.party;
             if record
                 .read_position
                 .is_some_and(|read| sequence.get() <= read.get())
@@ -304,9 +297,9 @@ impl PartyLifecycle<'_> {
                 return Ok(JoinRequestOutcome::Ignored(Ignored::AlreadySeen));
             }
             record.read_position = Some(sequence);
-            records::write(session, &Key::Invite(&party, &mailbox), &record.encode())?;
-            let secret = InviteSecret::from_bytes(Zeroizing::new(*record.secret));
-            let Some(post) = open_post(&secret, post) else {
+            session.party_invites().update(&record)?;
+            let secret = &record.secret;
+            let Some(post) = open_post(secret, post) else {
                 return Ok(JoinRequestOutcome::Ignored(Ignored::Unreadable));
             };
             let request = match post {
@@ -315,7 +308,7 @@ impl PartyLifecycle<'_> {
                 }
                 InvitePost::Join(request) => *request,
             };
-            match record.status_at(now) {
+            match status_at(&record, now) {
                 InviteStatus::Open => {}
                 InviteStatus::Used => return Ok(JoinRequestOutcome::Refused(Refusal::AlreadyUsed)),
                 InviteStatus::Expired => return Ok(JoinRequestOutcome::Refused(Refusal::Expired)),
@@ -332,7 +325,7 @@ impl PartyLifecycle<'_> {
                 join: JoinId::new(request.reply_mailbox),
                 invite,
                 name: request.display_name.clone(),
-                code: join_code(&secret, key_packages(&request))?,
+                code: join_code(secret, key_packages(&request))?,
                 asked_at: now,
             };
             store_approval(
@@ -355,12 +348,11 @@ impl PartyLifecycle<'_> {
     /// [`PartiesError::Malformed`] if a record is corrupt; [`PartiesError::Crypto`];
     /// [`PartiesError::Store`].
     pub fn pending_joins(&self, party: &PartyId) -> Result<Vec<PendingJoin>, PartiesError> {
-        records::read_mailbox_list(self.session, &Key::Approvals(party))?
+        self.session
+            .join_approvals()
+            .list(party)?
             .into_iter()
-            .map(|reply| {
-                let approval = load_approval(self.session, party, &reply)?;
-                pending_join(self.session, party, approval)
-            })
+            .map(|approval| pending_join(self.session, approval))
             .collect()
     }
 
@@ -384,16 +376,16 @@ impl PartyLifecycle<'_> {
             let reply = join.reply_mailbox();
             let approval = load_approval(session, party, &reply)?;
             let invite = approval.invite;
-            let mut record = invite_record(session, party, &invite)?;
-            match (record.status_at(now), record.status) {
+            let mut record = load_invite(session, &invite)?;
+            match (status_at(&record, now), record.state) {
                 // A rejected commit puts its request back while the invite stays used by it.
                 (InviteStatus::Open, _) => {}
-                (InviteStatus::Used, StoredStatus::Used(admitted)) if admitted == reply => {}
+                (InviteStatus::Used, InviteState::Used { admitted }) if admitted == reply => {}
                 _ => return Err(PartiesError::InviteExpired),
             }
-            record.status = StoredStatus::Used(reply);
-            records::write(session, &Key::Invite(party, &invite), &record.encode())?;
-            drop_approvals_of(session, party, &invite)?;
+            record.state = InviteState::Used { admitted: reply };
+            session.party_invites().update(&record)?;
+            session.join_approvals().delete_for_invite(&invite)?;
             let commit = admit(session, party, approval, rng)?;
             Ok(Admission {
                 commit,
@@ -412,7 +404,7 @@ impl PartyLifecycle<'_> {
         self.session.transaction(|session| {
             let reply = join.reply_mailbox();
             load_approval(session, party, &reply)?;
-            drop_approval(session, party, &reply)
+            Ok(session.join_approvals().delete(party, &reply)?)
         })
     }
 
@@ -478,15 +470,15 @@ impl PartyLifecycle<'_> {
             let quantum_resistant = request.quantum_resistant_key_package.clone();
             let post = InvitePost::Join(Box::new(request));
             let sealed = seal_join_request(&secret, &post.encode()?, rng)?;
-            let joining = Joining {
+            session.party_joins().put(&PartyJoin {
+                reply: reply_mailbox,
                 payload: payload.clone(),
                 name: details.display_name,
                 subscription,
                 key_package,
                 quantum_resistant,
                 asked_at: now,
-            };
-            records::write(session, &Key::Joining(&reply_mailbox), &joining.encode()?)?;
+            })?;
             Ok(PreparedJoin {
                 join: JoinId::new(reply_mailbox),
                 code,
@@ -507,7 +499,7 @@ impl PartyLifecycle<'_> {
         let joining = load_joining(self.session, join)?;
         Ok(AskedJoin {
             join,
-            code: joining.code()?,
+            code: joining_code(&joining)?,
             asked_at: joining.asked_at,
         })
     }
@@ -533,7 +525,7 @@ impl PartyLifecycle<'_> {
             if let Some(key_package) = &joining.quantum_resistant {
                 MlsContext::new(session, &identity.signing_key).delete_key_package(key_package)?;
             }
-            records::delete(session, &Key::Joining(&reply))?;
+            session.party_joins().delete(&reply)?;
             let secret =
                 InviteSecret::from_bytes(Zeroizing::new(*joining.payload.invite_secret.expose()));
             let post = InvitePost::Withdraw {
@@ -565,8 +557,7 @@ impl PartyLifecycle<'_> {
     ) -> Result<WelcomeAccess, PartiesError> {
         let mut access = None;
         let outcome = self.session.transaction(|session| {
-            records::read(session, &Key::Joining(&join.reply_mailbox()))?
-                .ok_or(PartiesError::UnknownJoin)?;
+            load_joining(session, join)?;
             let identity = identity(session)?;
             let context = MlsContext::new(session, &identity.signing_key);
             let welcome = WelcomeBytes::from_bytes(welcome.payload()?.to_vec());
@@ -606,7 +597,7 @@ impl PartyLifecycle<'_> {
         self.session.transaction(|session| {
             let reply = arrived.join.reply_mailbox();
             let joining = load_joining(session, arrived.join)?;
-            let code = joining.code()?;
+            let code = joining_code(&joining)?;
             let identity = identity(session)?;
             let own_key = identity.signing_key.public_key();
             let context = MlsContext::new(session, &identity.signing_key);
@@ -662,6 +653,7 @@ impl PartyLifecycle<'_> {
                         avatar: None,
                         verification: Verification::Unverified,
                     })?;
+                    set_subscription(session, &party, profile.key, profile.subscription)?;
                 }
             }
             for spot in &snapshot.spots {
@@ -670,14 +662,14 @@ impl PartyLifecycle<'_> {
             let settings = StoredSettings {
                 server: joining.payload.server.clone(),
                 relays: RelayChoice::ServerDefault,
-                post_quantum: PostQuantum::Classical,
+                post_quantum: PostQuantum::of_suite(group.suite()?)?,
             };
-            records::write(session, &Key::Settings(&party), &settings.encode()?)?;
-            records::record_roster(session, &party, group.epoch(), &roster)?;
+            settings.write(session, &party)?;
+            roster_history::record_roster(session, &party, group.epoch(), &roster)?;
             set_subscription(session, &party, own_key, joining.subscription)?;
-            records::delete(session, &Key::Joining(&reply))?;
+            session.party_joins().delete(&reply)?;
             let via = JoinedVia { inviter, code };
-            records::write(session, &Key::JoinedVia(&party), &encode_via(via))?;
+            session.joined_via().put(&party, via)?;
             let profile = seal_operation(
                 &mut group,
                 &PartyOperation::Profile {
@@ -701,9 +693,7 @@ impl PartyLifecycle<'_> {
     ///
     /// [`PartiesError::Malformed`]; [`PartiesError::Store`].
     pub fn joined_via(&self, party: &PartyId) -> Result<Option<JoinedVia>, PartiesError> {
-        records::read(self.session, &Key::JoinedVia(party))?
-            .map(|bytes| decode_via(&bytes))
-            .transpose()
+        Ok(self.session.joined_via().get(party)?)
     }
 }
 
@@ -730,10 +720,10 @@ fn withdraw(
     party: &PartyId,
     reply: MailboxId,
 ) -> Result<JoinRequestOutcome, PartiesError> {
-    if records::read(session, &Key::Approval(party, &reply))?.is_none() {
+    if session.join_approvals().get(party, &reply)?.is_none() {
         return Ok(JoinRequestOutcome::Ignored(Ignored::NotPending));
     }
-    drop_approval(session, party, &reply)?;
+    session.join_approvals().delete(party, &reply)?;
     Ok(JoinRequestOutcome::Withdrawn(JoinId::new(reply)))
 }
 
@@ -779,48 +769,31 @@ fn admit(
     )
 }
 
-fn invite_party(session: &Session, mailbox: &MailboxId) -> Result<PartyId, PartiesError> {
-    let bytes =
-        records::read(session, &Key::InviteIndex(mailbox))?.ok_or(PartiesError::UnknownInvite)?;
-    let mut reader = Reader::new(&bytes, "invite index");
-    let party = PartyId::from_bytes(reader.fixed()?);
-    reader.end()?;
-    Ok(party)
-}
-
-fn invite_record(
-    session: &Session,
-    party: &PartyId,
-    mailbox: &MailboxId,
-) -> Result<InviteRecord, PartiesError> {
-    let bytes =
-        records::read(session, &Key::Invite(party, mailbox))?.ok_or(PartiesError::UnknownInvite)?;
-    InviteRecord::decode(&bytes)
+fn load_invite(session: &Session, mailbox: &MailboxId) -> Result<PartyInvite, PartiesError> {
+    session
+        .party_invites()
+        .get(mailbox)?
+        .ok_or(PartiesError::UnknownInvite)
 }
 
 /// A join request, the invite it came through and when it was read.
-pub(crate) struct Approval {
-    pub(crate) invite: MailboxId,
-    pub(crate) asked_at: UnixSeconds,
-    pub(crate) request: JoinRequest,
+pub(crate) type Approval = JoinApproval;
+
+/// An approval's encoding inside this crate's in-flight commit record.
+pub(crate) fn encode_approval(approval: &Approval) -> Result<Vec<u8>, PartiesError> {
+    let mut writer = Writer::new();
+    writer.fixed(approval.invite.as_bytes());
+    writer.u64(approval.asked_at.get());
+    writer.variable(&approval.request.encode()?)?;
+    Ok(writer.finish())
 }
 
-impl Approval {
-    pub(crate) fn encode(&self) -> Result<Vec<u8>, PartiesError> {
-        let mut writer = Writer::new();
-        writer.fixed(self.invite.as_bytes());
-        writer.u64(self.asked_at.get());
-        writer.variable(&self.request.encode()?)?;
-        Ok(writer.finish())
-    }
-
-    pub(crate) fn read(reader: &mut Reader<'_>) -> Result<Self, PartiesError> {
-        Ok(Self {
-            invite: MailboxId::from_bytes(reader.fixed()?),
-            asked_at: UnixSeconds::new(reader.u64()?),
-            request: JoinRequest::decode(reader.variable()?)?,
-        })
-    }
+pub(crate) fn read_approval(reader: &mut Reader<'_>) -> Result<Approval, PartiesError> {
+    Ok(Approval {
+        invite: MailboxId::from_bytes(reader.fixed()?),
+        asked_at: UnixSeconds::new(reader.u64()?),
+        request: JoinRequest::decode(reader.variable()?)?,
+    })
 }
 
 /// Files a join request for approval, by the joiner's reply mailbox. A second request with
@@ -830,9 +803,7 @@ pub(crate) fn store_approval(
     party: &PartyId,
     approval: &Approval,
 ) -> Result<(), PartiesError> {
-    let reply = approval.request.reply_mailbox;
-    records::write(session, &Key::Approval(party, &reply), &approval.encode()?)?;
-    records::add_to_list(session, &Key::Approvals(party), reply)
+    Ok(session.join_approvals().put(party, approval)?)
 }
 
 fn load_approval(
@@ -840,146 +811,40 @@ fn load_approval(
     party: &PartyId,
     reply: &MailboxId,
 ) -> Result<Approval, PartiesError> {
-    let bytes =
-        records::read(session, &Key::Approval(party, reply))?.ok_or(PartiesError::UnknownJoin)?;
-    let mut reader = Reader::new(&bytes, "join approval");
-    let approval = Approval::read(&mut reader)?;
-    reader.end()?;
-    Ok(approval)
+    session
+        .join_approvals()
+        .get(party, reply)?
+        .ok_or(PartiesError::UnknownJoin)
 }
 
 /// A stored request as the inviter's screen shows it, with its code.
-fn pending_join(
-    session: &Session,
-    party: &PartyId,
-    approval: Approval,
-) -> Result<PendingJoin, PartiesError> {
-    let record = invite_record(session, party, &approval.invite)?;
-    let secret = InviteSecret::from_bytes(Zeroizing::new(*record.secret));
+fn pending_join(session: &Session, approval: Approval) -> Result<PendingJoin, PartiesError> {
+    let record = load_invite(session, &approval.invite)?;
     Ok(PendingJoin {
         join: JoinId::new(approval.request.reply_mailbox),
         invite: InviteId::for_mailbox(approval.invite),
-        code: join_code(&secret, key_packages(&approval.request))?,
+        code: join_code(&record.secret, key_packages(&approval.request))?,
         name: approval.request.display_name,
         asked_at: approval.asked_at,
     })
 }
 
-fn drop_approval(
-    session: &Session,
-    party: &PartyId,
-    reply: &MailboxId,
-) -> Result<(), PartiesError> {
-    records::delete(session, &Key::Approval(party, reply))?;
-    records::remove_from_list(session, &Key::Approvals(party), reply)
+fn load_joining(session: &Session, join: JoinId) -> Result<PartyJoin, PartiesError> {
+    session
+        .party_joins()
+        .get(&join.reply_mailbox())?
+        .ok_or(PartiesError::UnknownJoin)
 }
 
-/// Drops the waiting requests that came through `invite`.
-fn drop_approvals_of(
-    session: &Session,
-    party: &PartyId,
-    invite: &MailboxId,
-) -> Result<(), PartiesError> {
-    for reply in records::read_mailbox_list(session, &Key::Approvals(party))? {
-        if load_approval(session, party, &reply)?.invite == *invite {
-            drop_approval(session, party, &reply)?;
-        }
-    }
-    Ok(())
-}
-
-fn encode_via(via: JoinedVia) -> Vec<u8> {
-    let mut writer = Writer::new();
-    writer.u32(via.inviter.get());
-    writer.u64(via.code.value());
-    writer.finish()
-}
-
-fn decode_via(bytes: &[u8]) -> Result<JoinedVia, PartiesError> {
-    let mut reader = Reader::new(bytes, "joined via");
-    let inviter = LeafIndex::new(reader.u32()?);
-    let code = JoinCode::from_value(reader.u64()?).ok_or_else(|| reader.malformed())?;
-    reader.end()?;
-    Ok(JoinedVia { inviter, code })
-}
-
-/// A join this device started and is waiting to complete.
-struct Joining {
-    payload: InvitePayload,
-    name: DisplayName,
-    subscription: Option<SubscriptionId>,
-    key_package: KeyPackageBytes,
-    quantum_resistant: Option<KeyPackageBytes>,
-    asked_at: UnixSeconds,
-}
-
-fn load_joining(session: &Session, join: JoinId) -> Result<Joining, PartiesError> {
-    Joining::decode(
-        &records::read(session, &Key::Joining(&join.reply_mailbox()))?
-            .ok_or(PartiesError::UnknownJoin)?,
-    )
-}
-
-impl Joining {
-    fn code(&self) -> Result<JoinCode, PartiesError> {
-        let secret = InviteSecret::from_bytes(Zeroizing::new(*self.payload.invite_secret.expose()));
-        let key_packages = JoinKeyPackages {
-            classical: self.key_package.as_bytes(),
-            quantum_resistant: self
-                .quantum_resistant
-                .as_ref()
-                .map(KeyPackageBytes::as_bytes),
-        };
-        Ok(join_code(&secret, key_packages)?)
-    }
-
-    fn encode(&self) -> Result<Zeroizing<Vec<u8>>, PartiesError> {
-        let mut writer = Writer::new();
-        writer.variable(&Zeroizing::new(self.payload.encode()?))?;
-        writer.variable(self.name.as_str().as_bytes())?;
-        match self.subscription {
-            None => writer.byte(0),
-            Some(subscription) => {
-                writer.byte(1);
-                writer.fixed(subscription.as_bytes());
-            }
-        }
-        writer.variable(self.key_package.as_bytes())?;
-        match &self.quantum_resistant {
-            None => writer.byte(0),
-            Some(key_package) => {
-                writer.byte(1);
-                writer.variable(key_package.as_bytes())?;
-            }
-        }
-        writer.u64(self.asked_at.get());
-        Ok(Zeroizing::new(writer.finish()))
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self, PartiesError> {
-        let mut reader = Reader::new(bytes, "join record");
-        let payload = InvitePayload::decode(reader.variable()?)?;
-        let name = DisplayName::new(reader.text()?)?;
-        let subscription = match reader.byte()? {
-            0 => None,
-            1 => Some(SubscriptionId::from_bytes(reader.fixed()?)),
-            _ => return Err(reader.malformed()),
-        };
-        let key_package = KeyPackageBytes::from_bytes(reader.variable()?.to_vec());
-        let quantum_resistant = match reader.byte()? {
-            0 => None,
-            1 => Some(KeyPackageBytes::from_bytes(reader.variable()?.to_vec())),
-            _ => return Err(reader.malformed()),
-        };
-        let asked_at = UnixSeconds::new(reader.u64()?);
-        reader.end()?;
-        Ok(Self {
-            payload,
-            name,
-            subscription,
-            key_package,
-            quantum_resistant,
-            asked_at,
-        })
-    }
+/// The join code of a join this device started.
+fn joining_code(joining: &PartyJoin) -> Result<JoinCode, PartiesError> {
+    let secret = InviteSecret::from_bytes(Zeroizing::new(*joining.payload.invite_secret.expose()));
+    let key_packages = JoinKeyPackages {
+        classical: joining.key_package.as_bytes(),
+        quantum_resistant: joining
+            .quantum_resistant
+            .as_ref()
+            .map(KeyPackageBytes::as_bytes),
+    };
+    Ok(join_code(&secret, key_packages)?)
 }

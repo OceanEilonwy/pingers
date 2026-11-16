@@ -13,6 +13,9 @@ yanked = "deny"
 # unmatched), and no upgrade available today removes it. openmls_rust_crypto 0.6.0 (latest)
 # still pins hpke-rs 0.7 and hpke-rs-rust-crypto 0.7 although 0.8 exists; rln 3.1.0 (latest)
 # still pins arkworks 0.5 although 0.6 exists; uniffi 0.32.2 is the latest uniffi.
+# RUSTSEC-2026-0329, -0330 and -0331 (libcrux-hmac-drbg 0.0.1, libcrux-kem 0.0.9, pinned under
+# openmls_libcrux_crypto 0.4 for pingers-mls feature x-wing) are not ignored: the upstream fixes
+# are backported into vendor/libcrux-* at the pinned versions ([patch.crates-io], PINGERS.md).
 ignore = [
   { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 timing issues: via p256 in hpke-rs-rust-crypto 0.7 (openmls_rust_crypto 0.6, which has no release on 0.8). pingers-mls runs only suite 0x0003 (and 0x004D with x-wing), and parse_key_package refuses any other suite before OpenMLS verifies a signature, so no P-256 code runs; the inputs would be public anyway." },
   # rln entries, re-checked with pingers-anon implemented. sled cannot be removed:

@@ -74,6 +74,25 @@ impl PartyLog {
         self.group
     }
 
+    /// Queues this device's changed profile if one waited for a commit and the log has
+    /// settled (call after a pull or a commit, not between log entries: the profile must be
+    /// sealed for the epoch the log ends at). A Party this device was removed from has none.
+    pub(crate) fn publish_waiting_profile(&mut self) -> Result<(), ClientError> {
+        let session = self.session()?;
+        let clock = Arc::clone(&self.outside.clock);
+        let mut rng = (self.outside.rng)();
+        match PartyLifecycle::new(&session, clock.as_ref())
+            .publish_waiting_profile(&self.party, &mut rng)
+        {
+            Ok(outbound) => {
+                self.outbound.extend(outbound);
+                Ok(())
+            }
+            Err(PartiesError::UnknownParty) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     fn session(&self) -> Result<Session, ClientError> {
         Ok(self.database.session()?)
     }

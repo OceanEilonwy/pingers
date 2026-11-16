@@ -1,0 +1,28 @@
+{
+  "name": "crypto/safety-number",
+  "description": "Safety number (design B.1): per key h = SHA-512(\"pingers/v1/safety-number\" || pk), then h = SHA-512(h || pk) 5199 more times; six big-endian 40-bit slices of h[..30], each modulo 10^5 as five digits; the bytewise smaller key's 30 digits first. Also the inviter fingerprint SHA-256(pk)[..8] of first_key. Expected values computed independently with openssl (not the Rust code).",
+  "vectors": [
+    {
+      "name": "repeated-byte-keys",
+      "inputs": {
+        "first_key": "0101010101010101010101010101010101010101010101010101010101010101",
+        "second_key": "0202020202020202020202020202020202020202020202020202020202020202"
+      },
+      "expected": {
+        "digits": "423927466200792920355488364269542176726964090520345960610379",
+        "first_fingerprint": "72cd6e8422c407fb"
+      }
+    },
+    {
+      "name": "rfc8032-keys-larger-first",
+      "inputs": {
+        "first_key": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+        "second_key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
+      },
+      "expected": {
+        "digits": "770966311091376587787225071201442526507659226316636398881528",
+        "first_fingerprint": "21fe31dfa154a261"
+      }
+    }
+  ]
+}

@@ -12,17 +12,17 @@ use pingers_proto::{
     Padded, PartyId, SizeClass, Subscription, SubscriptionId, Urgency,
 };
 use pingers_store::{
-    Identity, LocationVisibility, Member, MemberName, Party, PartyName, Session, Verification,
+    Identity, InviteState, LocationVisibility, Member, MemberName, Party, PartyName, Session,
+    Verification,
 };
 use pingers_time::Clock;
 use rand_core::CryptoRng;
 
 use crate::codec::{Reader, Writer};
-use crate::invite::{InviteRecord, StoredStatus};
-use crate::joining::Approval;
+use crate::joining::{Approval, encode_approval, read_approval};
 use crate::ops::{PartyOperation, Profile, Snapshot, spot_wins};
-use crate::records::{self, Key};
 use crate::roster::{Myself, RosterMember, RosterView};
+use crate::roster_history;
 use crate::settings::StoredSettings;
 use crate::{
     Outbound, OutgoingCommit, PartiesError, PartySettings, RelayChoice, SafetyCode, WelcomeDelivery,
@@ -132,7 +132,7 @@ impl PendingCommit {
         match self {
             Self::Add(approval) => {
                 writer.byte(0);
-                writer.variable(&approval.encode()?)?;
+                writer.variable(&encode_approval(approval)?)?;
             }
             Self::Remove => writer.byte(1),
             Self::Proposals => writer.byte(2),
@@ -146,7 +146,7 @@ impl PendingCommit {
         let pending = match reader.byte()? {
             0 => {
                 let mut inner = Reader::new(reader.variable()?, "pending join");
-                let approval = Approval::read(&mut inner)?;
+                let approval = read_approval(&mut inner)?;
                 inner.end()?;
                 Self::Add(Box::new(approval))
             }
@@ -210,8 +210,8 @@ impl<'session> PartyLifecycle<'session> {
                 relays: new.settings.relays,
                 post_quantum: new.settings.post_quantum,
             };
-            records::write(session, &Key::Settings(&party_id), &stored.encode()?)?;
-            records::record_roster(session, &party_id, group.epoch(), &group.roster())?;
+            stored.write(session, &party_id)?;
+            roster_history::record_roster(session, &party_id, group.epoch(), &group.roster())?;
             if let Some(subscription) = &new.subscription {
                 set_subscription(session, &party_id, own_key, Some(subscription.id))?;
             }
@@ -254,7 +254,7 @@ impl<'session> PartyLifecycle<'session> {
         self.session.transaction(|session| {
             let mut stored = stored_settings(session, party)?;
             stored.relays = relays;
-            records::write(session, &Key::Settings(party), &stored.encode()?)
+            stored.write(session, party)
         })
     }
 
@@ -298,11 +298,11 @@ impl<'session> PartyLifecycle<'session> {
     /// [`PartiesError::UnknownParty`]; [`PartiesError::Malformed`] if a record is corrupt.
     pub fn roster_view(&self, party: &PartyId) -> Result<RosterView, PartiesError> {
         party_row(self.session, party)?;
-        let epochs = records::epochs(self.session, party)?;
+        let epochs = roster_history::epochs(self.session, party)?;
         let current = *epochs.first().ok_or(PartiesError::Internal)?;
         let mut rosters = Vec::new();
         for epoch in epochs {
-            if let Some(roster) = records::roster_at(self.session, party, epoch)? {
+            if let Some(roster) = roster_history::roster_at(self.session, party, epoch)? {
                 rosters.push((epoch, roster));
             }
         }
@@ -489,6 +489,18 @@ impl<'session> PartyLifecycle<'session> {
                     group.commit_pending_proposals(rng)?
                 }
             };
+            // Leavers' self-removes: their subscriptions go with the commit (design D), in case
+            // a leaver could not delete its own, and their profiles leave the snapshot.
+            let roster = group.roster();
+            let leavers: Vec<AccountPublicKey> = group
+                .pending_removals()
+                .into_iter()
+                .filter_map(|leaf| roster.signature_key(leaf).copied())
+                .collect();
+            let mut removed = Vec::new();
+            for key in &leavers {
+                removed.extend(subscription_of(session, party, key)?);
+            }
             finish_commit(
                 session,
                 &group,
@@ -497,9 +509,9 @@ impl<'session> PartyLifecycle<'session> {
                     epoch,
                     commit,
                     pending,
-                    excluded: &[],
+                    excluded: &leavers,
                     added: None,
-                    removed: Vec::new(),
+                    removed,
                 },
                 rng,
             )
@@ -522,6 +534,8 @@ impl<'session> PartyLifecycle<'session> {
             let summary = group.merge_pending_commit()?;
             let added_profile = match &pending {
                 PendingCommit::Add(approval) => Some(AddedProfile {
+                    key: pingers_mls::inspect_key_package(&approval.request.key_package)?
+                        .signature_key,
                     name: MemberName::new(approval.request.display_name.as_str().to_owned())?,
                     subscription: approval
                         .request
@@ -695,15 +709,14 @@ pub(crate) fn stored_settings(
     session: &Session,
     party: &PartyId,
 ) -> Result<StoredSettings, PartiesError> {
-    let bytes = records::read(session, &Key::Settings(party))?.ok_or(PartiesError::UnknownParty)?;
-    StoredSettings::decode(&bytes)
+    StoredSettings::read(session, party)?.ok_or(PartiesError::UnknownParty)
 }
 
 pub(crate) fn current_roster(session: &Session, party: &PartyId) -> Result<Roster, PartiesError> {
-    let epoch = *records::epochs(session, party)?
+    let epoch = *roster_history::epochs(session, party)?
         .first()
         .ok_or(PartiesError::Internal)?;
-    records::roster_at(session, party, epoch)?.ok_or(PartiesError::Internal)
+    roster_history::roster_at(session, party, epoch)?.ok_or(PartiesError::Internal)
 }
 
 /// The Party's state for a new member, leaving out the profiles of `excluded` keys (members
@@ -714,6 +727,7 @@ pub(crate) fn snapshot(
     excluded: &[AccountPublicKey],
 ) -> Result<Snapshot, PartiesError> {
     let row = party_row(session, party)?;
+    let subscriptions = session.member_subscriptions().list(party)?;
     let profiles = session
         .members()
         .list(party)?
@@ -721,6 +735,10 @@ pub(crate) fn snapshot(
         .filter(|member| !excluded.contains(&member.signature_key))
         .map(|member| Profile {
             key: member.signature_key,
+            subscription: subscriptions
+                .iter()
+                .find(|entry| entry.key == member.signature_key)
+                .map(|entry| entry.subscription),
             name: member.name,
         })
         .collect();
@@ -757,17 +775,19 @@ pub(crate) fn start_commit(
     party: &PartyId,
 ) -> Result<(Party, Identity), PartiesError> {
     let row = party_row(session, party)?;
-    if records::read(session, &Key::PendingCommit(party))?.is_some() {
+    if session.pending_commits().get(party)?.is_some() {
         return Err(PartiesError::CommitInFlight);
     }
     Ok((row, identity(session)?))
 }
 
 fn take_pending(session: &Session, party: &PartyId) -> Result<PendingCommit, PartiesError> {
-    let bytes =
-        records::read(session, &Key::PendingCommit(party))?.ok_or(PartiesError::NoPendingCommit)?;
+    let bytes = session
+        .pending_commits()
+        .get(party)?
+        .ok_or(PartiesError::NoPendingCommit)?;
     let pending = PendingCommit::decode(&bytes)?;
-    records::delete(session, &Key::PendingCommit(party))?;
+    session.pending_commits().delete(party)?;
     Ok(pending)
 }
 
@@ -792,11 +812,9 @@ pub(crate) fn finish_commit(
     rng: &mut impl CryptoRng,
 ) -> Result<OutgoingCommit, PartiesError> {
     let row = parts.row;
-    records::write(
-        session,
-        &Key::PendingCommit(&row.id),
-        &parts.pending.encode()?,
-    )?;
+    session
+        .pending_commits()
+        .put(&row.id, &parts.pending.encode()?)?;
     let snapshot = snapshot(session, &row.id, parts.excluded)?;
     let state = seal_state_snapshot(&group.pending_state_key()?, &snapshot.encode()?, rng)?;
     let (subscriptions_added, welcome) = match (parts.added, parts.commit.welcome) {
@@ -833,7 +851,10 @@ pub(crate) struct Added {
     pub(crate) reply: MailboxId,
 }
 
+/// The added member's profile from their join request; `key` is their KeyPackage's signature
+/// key, so the name goes to the leaf that key holds.
 struct AddedProfile {
+    key: AccountPublicKey,
     name: MemberName,
     subscription: Option<SubscriptionId>,
 }
@@ -868,7 +889,10 @@ fn apply_roster_change(
     }
     if let Some(profile) = added_profile {
         for leaf in &summary.added {
-            if let Some(key) = roster.signature_key(*leaf) {
+            if let Some(key) = roster
+                .signature_key(*leaf)
+                .filter(|key| **key == profile.key)
+            {
                 session.members().put(&Member {
                     party: row.id,
                     leaf: *leaf,
@@ -881,7 +905,7 @@ fn apply_roster_change(
             }
         }
     }
-    records::record_roster(session, &row.id, summary.epoch, roster)?;
+    roster_history::record_roster(session, &row.id, summary.epoch, roster)?;
     Ok(CommitApplied {
         party: row.id,
         epoch: summary.epoch,
@@ -948,7 +972,7 @@ pub(crate) fn apply_operation(
             if !wins {
                 return Ok(Incoming::Superseded { party: row.id });
             }
-            session.spots().put(&spot)?;
+            put_spot(session, &spot)?;
             Ok(Incoming::SpotChanged {
                 party: row.id,
                 spot: spot.id,
@@ -957,7 +981,7 @@ pub(crate) fn apply_operation(
     }
 }
 
-/// Deletes a Party with its MLS group and records; returns requests deleting the invite
+/// Deletes a Party with its MLS group and rows; returns requests deleting the invite
 /// mailboxes still open on the server (a used or cancelled invite's mailbox went already).
 fn delete_party(
     session: &Session,
@@ -965,46 +989,26 @@ fn delete_party(
     row: &Party,
 ) -> Result<Vec<Outbound>, PartiesError> {
     let mut outbound = Vec::new();
-    for mailbox in records::read_mailbox_list(session, &Key::Invites(&row.id))? {
-        let bytes = records::read(session, &Key::Invite(&row.id, &mailbox))?
-            .ok_or(PartiesError::UnknownInvite)?;
-        if InviteRecord::decode(&bytes)?.status == StoredStatus::Open {
-            outbound.push(Outbound::DeleteMailbox { mailbox });
+    for invite in session.party_invites().list(&row.id)? {
+        if invite.state == InviteState::Open {
+            outbound.push(Outbound::DeleteMailbox {
+                mailbox: invite.mailbox,
+            });
         }
     }
     context.delete_group(&row.group)?;
-    records::delete_party(session, &row.id)?;
     session.parties().delete(&row.id)?;
     Ok(outbound)
 }
 
 // --- members' subscriptions ---
 
-fn subscriptions(
-    session: &Session,
-    party: &PartyId,
-) -> Result<Vec<(AccountPublicKey, SubscriptionId)>, PartiesError> {
-    let Some(bytes) = records::read(session, &Key::Subscriptions(party))? else {
-        return Ok(Vec::new());
-    };
-    let mut reader = Reader::new(&bytes, "subscriptions");
-    let mut entries = Vec::new();
-    for _ in 0..reader.count()? {
-        entries.push((reader.key()?, SubscriptionId::from_bytes(reader.fixed()?)));
-    }
-    reader.end()?;
-    Ok(entries)
-}
-
 pub(crate) fn subscription_of(
     session: &Session,
     party: &PartyId,
     key: &AccountPublicKey,
 ) -> Result<Option<SubscriptionId>, PartiesError> {
-    Ok(subscriptions(session, party)?
-        .into_iter()
-        .find(|(member, _)| member == key)
-        .map(|(_, subscription)| subscription))
+    Ok(session.member_subscriptions().get(party, key)?)
 }
 
 /// Sets (or with `None`, forgets) a member's subscription.
@@ -1014,16 +1018,17 @@ pub(crate) fn set_subscription(
     key: AccountPublicKey,
     subscription: Option<SubscriptionId>,
 ) -> Result<(), PartiesError> {
-    let mut entries = subscriptions(session, party)?;
-    entries.retain(|(member, _)| *member != key);
-    if let Some(subscription) = subscription {
-        entries.push((key, subscription));
+    Ok(session
+        .member_subscriptions()
+        .set(party, &key, subscription)?)
+}
+
+/// Stores a Spot; a tombstone also drops the Spot's presence state, so a deleted Spot leaves
+/// nothing about this device's whereabouts behind.
+pub(crate) fn put_spot(session: &Session, spot: &pingers_store::Spot) -> Result<(), PartiesError> {
+    session.spots().put(spot)?;
+    if spot.status == pingers_store::SpotStatus::Deleted {
+        session.presence().clear(&spot.id)?;
     }
-    let mut writer = Writer::new();
-    writer.count(entries.len())?;
-    for (member, subscription) in &entries {
-        writer.key(member);
-        writer.fixed(subscription.as_bytes());
-    }
-    records::write(session, &Key::Subscriptions(party), &writer.finish())
+    Ok(())
 }

@@ -88,6 +88,24 @@
 //!   proof reads one row instead of rebuilding the tree; `pp_allowance` the server's daily token
 //!   limit and what was issued today, so a refill never exceeds it; `prover_self_test` the last
 //!   self-test and the parameters it tested.
+//! - **pingers-parties' per-Party state** (schema version 6), which it kept as key-value rows
+//!   before: `party_config` and `party_relay` (server, suite, relays in order),
+//!   `roster_epoch` and `roster_entry` (rosters of recent epochs, pruned by the caller with
+//!   [`Rosters::retain_newest`]), `member_subscription` (members' Party group subscription
+//!   ids, for `subscriptions_removed`), `pending_commit` (the in-flight commit as opaque bytes
+//!   pingers-parties encodes) and `profile_waiting`. Every row cascades with its Party. Spot
+//!   tombstones drop their presence row with [`Presence::clear`].
+//! - **pingers-parties' invites and joins** (schema version 7), key-value rows before join flow A
+//!   settled: `party_invite` (the link's secret, times, state and read position; cascades with
+//!   its Party), `join_approval` (requests waiting for the inviter, as pingers-proto
+//!   `JoinRequest`s, in arrival order; cascade with their invite), `party_join` (a join this
+//!   device asked for, with the link and the key packages it sent; no Party row exists yet) and
+//!   `joined_via` (who let this device in, and the join code).
+//! - **What each sealed push was sealed with** (schema version 8): `mailbox` and
+//!   `subscription` gain `seal` (pingers-crypto's fingerprint of the relay key and push token)
+//!   and `sealed_until` (the `not_after` sealed in), so pingers-sync seals a push again when the
+//!   token changes, the relay key rotates or `not_after` comes near. Rows from before version 8
+//!   have neither and are sealed again.
 //! - **Unsigned values past `i64::MAX`** are refused ([`StoreError::OutOfRange`]), never
 //!   wrapped.
 //!
@@ -136,6 +154,14 @@ pub use repo::meetup::{
 pub use repo::party::{
     AlwaysAllow, Identities, Identity, LocationVisibility, Member, Members, Parties, Party,
     Verification,
+};
+pub use repo::party_join::{
+    InviteState, JoinApproval, JoinApprovals, JoinedVia, JoinedVias, PartyInvite, PartyInvites,
+    PartyJoin, PartyJoins,
+};
+pub use repo::party_state::{
+    MemberSubscription, MemberSubscriptions, PartyConfig, PartyConfigs, PartySuite, PendingCommits,
+    ProfilesWaiting, RelayList, Rosters,
 };
 pub use repo::prover::{
     PATH_LENGTH, ProverSelfTests, ProverVerdict, RlnTreeStates, SelfTestRecord, StoredPath,

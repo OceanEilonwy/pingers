@@ -1229,9 +1229,9 @@ fn per_party_settings_are_kept_and_changed() -> Result<(), TestError> {
 }
 
 #[test]
+#[cfg(not(feature = "x-wing"))]
 fn a_quantum_resistant_party_refuses_a_request_without_an_x_wing_key_package()
 -> Result<(), TestError> {
-    use crate::records::{Key, write};
     use crate::settings::StoredSettings;
 
     let mut rng = rng(16);
@@ -1248,7 +1248,7 @@ fn a_quantum_resistant_party_refuses_a_request_without_an_x_wing_key_package()
         relays: RelayChoice::ServerDefault,
         post_quantum: PostQuantum::QuantumResistant,
     };
-    write(&alice.session, &Key::Settings(&party), &quantum.encode()?)?;
+    quantum.write(&alice.session, &party)?;
     assert_eq!(
         receive(&alice, created.invite, 1, &posted)?,
         JoinRequestOutcome::Refused(Refusal::NoQuantumResistantKeyPackage)
@@ -1258,6 +1258,7 @@ fn a_quantum_resistant_party_refuses_a_request_without_an_x_wing_key_package()
 }
 
 #[test]
+#[cfg(not(feature = "x-wing"))]
 fn quantum_resistant_party_needs_the_x_wing_build() -> Result<(), TestError> {
     let mut rng = rng(11);
     let alice = Device::new(1)?;
@@ -1353,21 +1354,16 @@ fn creator_keeps_its_subscription_when_members_join() -> Result<(), TestError> {
 
 #[test]
 fn leaving_one_party_keeps_the_others_records() -> Result<(), TestError> {
-    use crate::records::{Key, read};
-
     let mut rng = rng(14);
     let alice = Device::new(1)?;
     let first = create_party(&alice, &mut rng)?.party;
     let second = create_party(&alice, &mut rng)?.party;
     assert_ne!(first, second);
     alice.parties().leave_party(&first, &mut rng)?;
-    for key in [
-        Key::Settings(&first),
-        Key::Epochs(&first),
-        Key::Subscriptions(&first),
-    ] {
-        assert!(read(&alice.session, &key)?.is_none());
-    }
+    let session = &alice.session;
+    assert!(session.party_configs().get(&first)?.is_none());
+    assert!(session.rosters().epochs(&first)?.is_empty());
+    assert!(session.member_subscriptions().list(&first)?.is_empty());
     assert_eq!(alice.parties().settings(&second)?.server.as_str(), SERVER);
     assert_eq!(
         alice.parties().roster_view(&second)?.current_epoch(),
@@ -1485,5 +1481,386 @@ fn operations_that_misattribute_spots_or_profiles_are_refused() -> Result<(), Te
     };
     apply_operation(session, &row, someone_else, profile()?)?;
     assert_eq!(verification()?, Some(Verification::Unverified));
+    Ok(())
+}
+
+// --- profile changes and subscriptions on removal ---
+
+fn sent(publication: crate::ProfilePublication) -> Result<MlsMessageBytes, TestError> {
+    match publication {
+        crate::ProfilePublication::Send(outbound) => group_message(*outbound),
+        crate::ProfilePublication::Waiting => Err(TestError::Unexpected("expected a profile")),
+    }
+}
+
+fn renamed(name: &str) -> Result<crate::ProfileChange, TestError> {
+    Ok(crate::ProfileChange::Name(MemberName::new(name.into())?))
+}
+
+#[test]
+fn a_changed_name_reaches_the_other_member_with_the_subscription() -> Result<(), TestError> {
+    let TwoMembers {
+        alice,
+        bob,
+        party,
+        group,
+        alice_subscription,
+        mut rng,
+        ..
+    } = two_members()?;
+    let message = sent(
+        alice
+            .parties()
+            .update_profile(&party, renamed("Ali")?, &mut rng)?,
+    )?;
+    // Shown on this device at once, nothing left waiting.
+    assert_eq!(names(&alice.parties(), &party)?, ["Ali", "Bob"]);
+    assert!(!alice.parties().profile_waiting(&party)?);
+    assert!(
+        alice
+            .parties()
+            .publish_waiting_profile(&party, &mut rng)?
+            .is_none()
+    );
+    let incoming = bob.parties().process_group_message(&group, &message)?;
+    assert!(matches!(incoming, Incoming::ProfileUpdated { leaf, .. } if leaf == LEAF_ALICE));
+    assert_eq!(names(&bob.parties(), &party)?, ["Ali", "Bob"]);
+    // The profile still names Alice's subscription, so Bob can drop it.
+    let commit = bob.parties().remove_member(&party, LEAF_ALICE, &mut rng)?;
+    assert_eq!(
+        commit.request.subscriptions_removed,
+        vec![alice_subscription]
+    );
+    Ok(())
+}
+
+#[test]
+fn a_profile_change_waits_for_this_devices_commit() -> Result<(), TestError> {
+    let TwoMembers {
+        alice,
+        bob,
+        party,
+        group,
+        mut rng,
+        ..
+    } = two_members()?;
+    let update = alice.parties().self_update(&party, &mut rng)?;
+    assert!(matches!(
+        alice
+            .parties()
+            .update_profile(&party, renamed("Ali")?, &mut rng)?,
+        crate::ProfilePublication::Waiting
+    ));
+    assert_eq!(names(&alice.parties(), &party)?, ["Ali", "Bob"]);
+    assert!(alice.parties().profile_waiting(&party)?);
+    assert!(
+        alice
+            .parties()
+            .publish_waiting_profile(&party, &mut rng)?
+            .is_none()
+    );
+    alice.parties().commit_accepted(&party)?;
+    let Some(outbound) = alice.parties().publish_waiting_profile(&party, &mut rng)? else {
+        return Err(TestError::Unexpected("expected the waiting profile"));
+    };
+    assert!(!alice.parties().profile_waiting(&party)?);
+    bob.parties()
+        .process_group_message(&group, &update.request.commit)?;
+    bob.parties()
+        .process_group_message(&group, &group_message(outbound)?)?;
+    assert_eq!(names(&bob.parties(), &party)?, ["Ali", "Bob"]);
+    Ok(())
+}
+
+#[test]
+fn a_profile_change_waits_for_a_leavers_proposal_to_be_committed() -> Result<(), TestError> {
+    let TwoMembers {
+        alice,
+        bob,
+        party,
+        group,
+        mut rng,
+        ..
+    } = two_members()?;
+    // Alice leaves; Bob holds her proposal and cannot send in this epoch.
+    let outbound = alice.parties().leave_party(&party, &mut rng)?;
+    let Some(Outbound::Leave(leave)) = outbound.into_iter().next() else {
+        return Err(TestError::Unexpected("expected a leave request"));
+    };
+    bob.parties()
+        .process_group_message(&group, &leave.proposal.body)?;
+    assert!(matches!(
+        bob.parties()
+            .update_profile(&party, renamed("Robert")?, &mut rng)?,
+        crate::ProfilePublication::Waiting
+    ));
+    assert!(
+        bob.parties()
+            .publish_waiting_profile(&party, &mut rng)?
+            .is_none()
+    );
+    bob.parties().commit_pending_proposals(&party, &mut rng)?;
+    bob.parties().commit_accepted(&party)?;
+    assert!(
+        bob.parties()
+            .publish_waiting_profile(&party, &mut rng)?
+            .is_some()
+    );
+    assert!(!bob.parties().profile_waiting(&party)?);
+    Ok(())
+}
+
+#[test]
+fn a_replaced_subscription_is_the_one_a_remover_drops() -> Result<(), TestError> {
+    let TwoMembers {
+        alice,
+        bob,
+        party,
+        group,
+        mut rng,
+        ..
+    } = two_members()?;
+    let replacement = SubscriptionId::from_bytes([0x55; 16]);
+    let message = sent(bob.parties().update_profile(
+        &party,
+        crate::ProfileChange::Subscription(Some(replacement)),
+        &mut rng,
+    )?)?;
+    alice.parties().process_group_message(&group, &message)?;
+    let commit = alice.parties().remove_member(&party, LEAF_BOB, &mut rng)?;
+    assert_eq!(commit.request.subscriptions_removed, vec![replacement]);
+    // Turning wake-up pushes off drops it: nothing to remove then.
+    alice.parties().commit_rejected(&party)?;
+    let message = sent(bob.parties().update_profile(
+        &party,
+        crate::ProfileChange::Subscription(None),
+        &mut rng,
+    )?)?;
+    alice.parties().process_group_message(&group, &message)?;
+    let commit = alice.parties().remove_member(&party, LEAF_BOB, &mut rng)?;
+    assert!(commit.request.subscriptions_removed.is_empty());
+    Ok(())
+}
+
+#[test]
+fn a_later_member_drops_a_removed_members_subscription() -> Result<(), TestError> {
+    let TwoMembers {
+        alice,
+        bob,
+        party,
+        group,
+        bob_subscription,
+        mut rng,
+        ..
+    } = two_members()?;
+    let carol = Device::new(3)?;
+    let created = invite(&alice, &party, &mut rng)?;
+    let posted = post_join(&carol, created.link.as_str(), &mut rng)?;
+    let add = {
+        asked(&alice, created.invite, 1, &posted)?;
+        let_in(&alice, &party, &posted, &mut rng)?
+    };
+    alice.parties().commit_accepted(&party)?;
+    bob.parties()
+        .process_group_message(&group, &add.request.commit)?;
+    carol
+        .parties()
+        .accept_welcome(&arrived(&posted, &add)?, &mut rng)?;
+    // Carol learned Bob's subscription from the snapshot alone.
+    let commit = carol.parties().remove_member(&party, LEAF_BOB, &mut rng)?;
+    assert_eq!(commit.request.subscriptions_removed, vec![bob_subscription]);
+    Ok(())
+}
+
+#[test]
+fn committing_a_leave_drops_the_leavers_subscription() -> Result<(), TestError> {
+    let TwoMembers {
+        alice,
+        bob,
+        party,
+        group,
+        bob_subscription,
+        mut rng,
+        ..
+    } = two_members()?;
+    let outbound = bob.parties().leave_party(&party, &mut rng)?;
+    let Some(Outbound::Leave(leave)) = outbound.into_iter().next() else {
+        return Err(TestError::Unexpected("expected a leave request"));
+    };
+    alice
+        .parties()
+        .process_group_message(&group, &leave.proposal.body)?;
+    let commit = alice.parties().commit_pending_proposals(&party, &mut rng)?;
+    assert_eq!(commit.request.subscriptions_removed, vec![bob_subscription]);
+    // A self-update removes nobody.
+    alice.parties().commit_accepted(&party)?;
+    let update = alice.parties().self_update(&party, &mut rng)?;
+    assert!(update.request.subscriptions_removed.is_empty());
+    Ok(())
+}
+
+// --- quantum-resistant Parties (feature x-wing) ---
+
+#[cfg(feature = "x-wing")]
+fn quantum_resistant_party(device: &Device, rng: &mut ChaCha20Rng) -> Result<PartyId, TestError> {
+    Ok(device
+        .parties()
+        .create_party(
+            new_party(
+                PartySettings {
+                    post_quantum: PostQuantum::QuantumResistant,
+                    ..settings()?
+                },
+                Some(subscription(device.fill())?),
+            )?,
+            rng,
+        )?
+        .party)
+}
+
+#[test]
+#[cfg(feature = "x-wing")]
+fn quantum_resistant_party_runs_the_x_wing_suite() -> Result<(), TestError> {
+    let mut rng = rng(21);
+    let alice = Device::new(1)?;
+    let party = quantum_resistant_party(&alice, &mut rng)?;
+    assert_eq!(
+        alice.parties().settings(&party)?.post_quantum,
+        PostQuantum::QuantumResistant
+    );
+    let row = alice
+        .session
+        .parties()
+        .get(&party)?
+        .ok_or(TestError::Unexpected("no Party row"))?;
+    let identity = alice
+        .session
+        .identity()
+        .load()?
+        .ok_or(TestError::Unexpected("no account"))?;
+    let group = pingers_mls::MlsContext::new(&alice.session, &identity.signing_key)
+        .party_group(&row.group)?;
+    assert_eq!(
+        group.suite()?,
+        pingers_mls::CipherSuitePolicy::QuantumResistant
+    );
+    drop(group);
+    // Party operations and commits work in the X-Wing group.
+    alice
+        .parties()
+        .create_spot(&party, new_spot("Pub", circle(150.0)?)?, &mut rng)?;
+    alice.parties().self_update(&party, &mut rng)?;
+    alice.parties().commit_accepted(&party)?;
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "x-wing")]
+fn a_joiner_enters_a_quantum_resistant_party_with_its_x_wing_key_package() -> Result<(), TestError>
+{
+    let mut rng = rng(22);
+    let alice = Device::new(1)?;
+    let bob = Device::new(2)?;
+    let party = quantum_resistant_party(&alice, &mut rng)?;
+    let created = invite(&alice, &party, &mut rng)?;
+    let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
+    asked(&alice, created.invite, 1, &posted)?;
+    let commit = let_in(&alice, &party, &posted, &mut rng)?;
+    alice.parties().commit_accepted(&party)?;
+    let joined = bob
+        .parties()
+        .accept_welcome(&arrived(&posted, &commit)?, &mut rng)?;
+    // The joiner takes the suite from the group it joined, and both see both.
+    assert_eq!(
+        bob.parties().settings(&joined.party)?.post_quantum,
+        PostQuantum::QuantumResistant
+    );
+    assert_eq!(names(&bob.parties(), &party)?, ["Alice", "Bob"]);
+    assert_eq!(names(&alice.parties(), &party)?, ["Alice", "Bob"]);
+    Ok(())
+}
+
+#[test]
+fn a_deleted_spot_drops_its_presence_state_on_every_device() -> Result<(), TestError> {
+    let TwoMembers {
+        alice,
+        bob,
+        party,
+        group,
+        mut rng,
+        ..
+    } = two_members()?;
+    let created =
+        alice
+            .parties()
+            .create_spot(&party, new_spot("Pub", circle(150.0)?)?, &mut rng)?;
+    bob.parties()
+        .process_group_message(&group, &group_message(created.outbound)?)?;
+    let inside = pingers_geo::PresenceSnapshot {
+        state: pingers_geo::PresenceState::Inside,
+        since: NOW,
+        last_fix_at: None,
+        confirmed_at: None,
+    };
+    for device in [&alice, &bob] {
+        device.session.presence().save(&created.spot, &inside)?;
+    }
+    // An edit keeps the presence state; only a tombstone drops it.
+    let edited = alice.parties().edit_spot(
+        &party,
+        SpotEdit {
+            spot: created.spot,
+            name: Some(SpotName::new("Pub upstairs".into())?),
+            shape: None,
+        },
+        &mut rng,
+    )?;
+    bob.parties()
+        .process_group_message(&group, &group_message(edited.outbound)?)?;
+    for device in [&alice, &bob] {
+        assert!(device.session.presence().load(&created.spot)?.is_some());
+    }
+    let deleted = alice
+        .parties()
+        .delete_spot(&party, &created.spot, &mut rng)?;
+    assert_eq!(alice.session.presence().load(&created.spot)?, None);
+    assert!(bob.session.presence().load(&created.spot)?.is_some());
+    bob.parties()
+        .process_group_message(&group, &group_message(deleted.outbound)?)?;
+    assert_eq!(bob.session.presence().load(&created.spot)?, None);
+    Ok(())
+}
+
+#[test]
+fn the_inviter_names_the_added_leaf_before_the_joiners_profile_arrives() -> Result<(), TestError> {
+    let mut rng = rng(23);
+    let alice = Device::new(1)?;
+    let bob = Device::new(2)?;
+    let party = create_party(&alice, &mut rng)?.party;
+    let created = invite(&alice, &party, &mut rng)?;
+    let posted = post_join(&bob, created.link.as_str(), &mut rng)?;
+    asked(&alice, created.invite, 1, &posted)?;
+    let_in(&alice, &party, &posted, &mut rng)?;
+    alice.parties().commit_accepted(&party)?;
+    // From the join request, matched to the leaf by the KeyPackage's signature key.
+    assert_eq!(names(&alice.parties(), &party)?, ["Alice", "Bob"]);
+    Ok(())
+}
+
+#[test]
+fn leaving_one_party_keeps_the_other_partys_invites() -> Result<(), TestError> {
+    let mut rng = rng(24);
+    let alice = Device::new(1)?;
+    let first = create_party(&alice, &mut rng)?.party;
+    let second = create_party(&alice, &mut rng)?.party;
+    let gone = invite(&alice, &first, &mut rng)?;
+    let kept = invite(&alice, &second, &mut rng)?;
+    alice.parties().leave_party(&first, &mut rng)?;
+    assert!(alice.parties().invite_status(gone.invite).is_err());
+    assert_eq!(
+        alice.parties().invite_status(kept.invite)?,
+        InviteStatus::Open
+    );
+    assert_eq!(alice.parties().invites(&second)?.len(), 1);
     Ok(())
 }

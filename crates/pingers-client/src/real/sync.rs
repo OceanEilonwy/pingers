@@ -55,6 +55,9 @@ const KEEP_FOR: Duration = Duration::from_hours(1);
 /// an hour, so a day covers every lease started while it is pooled.
 pub(super) const KNOCK_POOL: u32 = 4;
 pub(super) const MAILBOX_LIFETIME: Duration = Duration::from_hours(24);
+/// Rounds of one flush: a request sent in one round can queue another (a settled commit frees
+/// a waiting profile), which the next round sends.
+const FLUSH_ROUNDS: usize = 3;
 
 /// What a client with an instance talks through: the engine, and the build's registration
 /// code for the first registration.
@@ -251,33 +254,41 @@ impl Net {
     }
 
     /// Sends every waiting request. One that could not be sent now stays for the next flush;
-    /// one the server refused is dropped. Returns whether a Party changed (a merged commit).
+    /// one the server refused is dropped.
     ///
     /// # Errors
     ///
     /// A storage failure; network failures only keep the request.
-    pub(crate) async fn flush(&self) -> Result<bool, ClientError> {
+    pub(crate) async fn flush(&self) -> Result<(), ClientError> {
         if self.engine.is_none() {
-            return Ok(false);
+            return Ok(());
         }
         self.ready().await?;
-        let waiting = std::mem::take(&mut *self.outbox());
-        let mut changed = false;
-        let mut kept = Vec::new();
-        for outbound in waiting {
-            match self.send(outbound).await {
-                Ok(Sent::Done { changed: party }) => changed |= party,
-                Ok(Sent::Later(outbound)) => kept.push(*outbound),
-                Err(error @ (ClientError::Store(_) | ClientError::Records(_))) => {
-                    self.push(kept);
-                    return Err(error);
+        // Sending can queue more (a commit that settles frees a profile that waited for it);
+        // what a round queued goes out in the next one, for a few rounds.
+        for _ in 0..FLUSH_ROUNDS {
+            let waiting = std::mem::take(&mut *self.outbox());
+            let mut kept = Vec::new();
+            let mut sent = false;
+            for outbound in waiting {
+                match self.send(outbound).await {
+                    Ok(Sent::Done) => sent = true,
+                    Ok(Sent::Later(outbound)) => kept.push(*outbound),
+                    Err(error @ (ClientError::Store(_) | ClientError::Records(_))) => {
+                        self.push(kept);
+                        return Err(error);
+                    }
+                    // Refused, or not ours to retry (a commit pingers-parties dropped).
+                    Err(_) => {}
                 }
-                // Refused, or not ours to retry (a commit pingers-parties dropped).
-                Err(_) => {}
+            }
+            let queued_more = !self.outbox().is_empty();
+            self.push(kept);
+            if !(sent && queued_more) {
+                break;
             }
         }
-        self.push(kept);
-        Ok(changed)
+        Ok(())
     }
 
     #[expect(
@@ -314,11 +325,11 @@ impl Net {
                 .await
                 .map(|()| true),
             Outbound::Leave(leave) => self.leave(engine, leave).await,
-            _ => return Ok(Sent::Done { changed: false }),
+            _ => return Ok(Sent::Done),
         };
         self.observe(&result);
         match result {
-            Ok(true) => Ok(Sent::Done { changed: false }),
+            Ok(true) => Ok(Sent::Done),
             Ok(false)
             | Err(
                 SyncError::NoRelay { .. }
@@ -365,7 +376,9 @@ impl Net {
         let result = engine
             .commit(&log.group(), &mut log, WakeBudget::UNLIMITED)
             .await;
+        let published = log.publish_waiting_profile();
         self.push(std::mem::take(&mut log.outbound));
+        published?;
         match result {
             Ok(Committed::Accepted(_)) => {
                 if let Some(welcome) = log.accepted.take().and_then(|commit| commit.welcome) {
@@ -375,7 +388,7 @@ impl Net {
                     self.observe(&posted);
                     let _: Delivered<SequenceNumber> = posted?;
                 }
-                Ok(Sent::Done { changed: true })
+                Ok(Sent::Done)
             }
             Err(GroupError::Owner(error)) => Err(error),
             Err(GroupError::Sync(error)) => {
@@ -392,11 +405,11 @@ impl Net {
                     Some(commit) if transient => {
                         Ok(Sent::Later(Box::new(Outbound::Commit(commit))))
                     }
-                    _ => Ok(Sent::Done { changed: false }),
+                    _ => Ok(Sent::Done),
                 }
             }
             // Nothing left to commit, or the conflicts ran out: pingers-parties dropped it.
-            Ok(Committed::NothingToCommit) | Err(_) => Ok(Sent::Done { changed: true }),
+            Ok(Committed::NothingToCommit) | Err(_) => Ok(Sent::Done),
         }
     }
 
@@ -427,7 +440,9 @@ impl Net {
             let result = engine
                 .pull_group(&log.group(), &mut log, WakeBudget::UNLIMITED)
                 .await;
+            let published = log.publish_waiting_profile();
             self.push(std::mem::take(&mut log.outbound));
+            published?;
             changed |= log.changed;
             match result {
                 Ok(_) => {}
@@ -447,7 +462,9 @@ impl Net {
 
 /// What sending one request came to.
 enum Sent {
-    Done { changed: bool },
+    /// Sent, refused for good, or dropped by pingers-parties: nothing to retry.
+    Done,
+    /// Not sent now; it goes back in the outbox.
     Later(Box<Outbound>),
 }
 
@@ -527,10 +544,10 @@ impl ServerPort for Net {
         {
             return Err(port_error(&error));
         }
-        self.pull_all()
-            .await
-            .map(drop)
-            .map_err(|error| port_error(&error))
+        self.pull_all().await.map_err(|error| port_error(&error))?;
+        // What the log asked for (a leaver's proposal to commit, a profile that waited for a
+        // commit) goes out now rather than on the next wake.
+        self.flush().await.map_err(|error| port_error(&error))
     }
 
     async fn upload_lease(&self, upload: LeaseUpload) -> Result<Option<BoardPage>, PortError> {

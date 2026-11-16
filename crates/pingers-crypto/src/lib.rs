@@ -44,6 +44,7 @@ mod primitives;
 mod rln;
 #[cfg(feature = "rs256")]
 mod rs256;
+mod safety;
 mod secret;
 #[cfg(test)]
 mod test_support;
@@ -89,3 +90,4 @@ pub use presence::{
 pub use rln::{RlnPreimageHash, rln_external_nullifier_hash, rln_request_hash};
 #[cfg(feature = "rs256")]
 pub use rs256::{Rs256Key, sign_compact_jws_rs256};
+pub use safety::{SAFETY_NUMBER_DIGITS, SafetyNumber, inviter_fingerprint, safety_number};

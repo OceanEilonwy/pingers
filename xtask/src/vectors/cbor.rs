@@ -80,6 +80,11 @@ pub(crate) fn array_of(items: Vec<Vec<u8>>) -> Vec<u8> {
     encoding
 }
 
+/// An eight-byte float (`0xfb`), never shortened: Spot geometry round-trips bit for bit.
+pub(crate) fn double(value: f64) -> Vec<u8> {
+    [vec![0xfb], value.to_be_bytes().to_vec()].concat()
+}
+
 /// `value` encoded, or null when absent.
 pub(crate) fn optional<T>(value: Option<T>, encode: impl FnOnce(T) -> Vec<u8>) -> Vec<u8> {
     value.map_or_else(|| NULL.to_vec(), encode)

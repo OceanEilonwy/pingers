@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! A small fixed-layout byte codec for this crate's local records and Party operations.
-//!
-//! Interim: the Party state operations and the state snapshot are wire values and belong in
-//! pingers-proto (style guide §12); the crate's CONTRACT.md asks for them there. Until they
-//! exist, this module is the single place their bytes are written and read. Integers are
-//! big-endian; variable-length fields carry a `be32` length.
+//! A small fixed-layout byte codec for what this crate keeps opaquely (the in-flight commit) and
+//! for reading its old key-value records, which never leave the device. Wire values
+//! (Party operations, the state snapshot) are pingers-proto's. Integers are big-endian;
+//! variable-length fields carry a `be32` length.
 
 use pingers_crypto::AccountPublicKey;
-use pingers_geo::{Circle, Coordinate, Fence, Meters, Polygon};
 
 use crate::PartiesError;
 
@@ -51,31 +48,10 @@ impl Writer {
         Ok(())
     }
 
+    /// Only tests write keys now (old-format records for `legacy`).
+    #[cfg(test)]
     pub(crate) fn key(&mut self, key: &AccountPublicKey) {
         self.fixed(key.as_bytes());
-    }
-
-    pub(crate) fn fence(&mut self, fence: &Fence) -> Result<(), PartiesError> {
-        match fence {
-            Fence::Circle(circle) => {
-                self.byte(0);
-                self.coordinate(circle.center());
-                self.u64(circle.radius().get().to_bits());
-            }
-            Fence::Polygon(polygon) => {
-                self.byte(1);
-                self.count(polygon.vertices().len())?;
-                for vertex in polygon.vertices() {
-                    self.coordinate(*vertex);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn coordinate(&mut self, coordinate: Coordinate) {
-        self.u64(coordinate.latitude().to_bits());
-        self.u64(coordinate.longitude().to_bits());
     }
 }
 
@@ -145,74 +121,17 @@ impl<'bytes> Reader<'bytes> {
     pub(crate) fn key(&mut self) -> Result<AccountPublicKey, PartiesError> {
         self.fixed().map(AccountPublicKey::from_bytes)
     }
-
-    /// A fence, re-validated through pingers-geo's constructors (a polygon from another member
-    /// is checked exactly as one drawn on this device).
-    pub(crate) fn fence(&mut self) -> Result<Fence, PartiesError> {
-        match self.byte()? {
-            0 => {
-                let center = self.coordinate()?;
-                let radius = Meters::new(f64::from_bits(self.u64()?))?;
-                Ok(Fence::Circle(Circle::new(center, radius)?))
-            }
-            1 => {
-                let count = self.count()?;
-                // Bounded by the bytes present, so a hostile count cannot allocate much.
-                let mut vertices = Vec::with_capacity(count.min(self.rest.len()));
-                for _ in 0..count {
-                    vertices.push(self.coordinate()?);
-                }
-                Ok(Fence::Polygon(Polygon::new(vertices)?))
-            }
-            _ => Err(self.malformed()),
-        }
-    }
-
-    fn coordinate(&mut self) -> Result<Coordinate, PartiesError> {
-        let latitude = f64::from_bits(self.u64()?);
-        let longitude = f64::from_bits(self.u64()?);
-        Ok(Coordinate::new(latitude, longitude)?)
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
-
     use super::*;
-    use crate::test_support::TestError;
-
-    #[test]
-    fn fences_round_trip_and_reject_trailing_bytes() -> Result<(), TestError> {
-        let polygon = Fence::Polygon(Polygon::new(vec![
-            Coordinate::new(51.5, -0.1)?,
-            Coordinate::new(51.501, -0.1)?,
-            Coordinate::new(51.501, -0.098)?,
-        ])?);
-        let circle = Fence::Circle(Circle::new(
-            Coordinate::new(1.0, 2.0)?,
-            Meters::new(150.0)?,
-        )?);
-        for fence in [polygon, circle] {
-            let mut writer = Writer::new();
-            writer.fence(&fence)?;
-            let bytes = writer.finish();
-            let mut reader = Reader::new(&bytes, "test");
-            assert_eq!(reader.fence()?, fence);
-            reader.end()?;
-            let mut longer = bytes.clone();
-            longer.push(0);
-            let mut reader = Reader::new(&longer, "test");
-            reader.fence()?;
-            assert!(reader.end().is_err());
-        }
-        Ok(())
-    }
 
     #[test]
     fn short_and_unknown_input_is_malformed() {
-        assert!(Reader::new(&[2], "test").fence().is_err());
         assert!(Reader::new(&[0, 0, 0, 5, 1], "test").variable().is_err());
         assert!(Reader::new(&[0, 0, 0], "test").u32().is_err());
+        assert!(Reader::new(&[1], "test").end().is_err());
+        assert!(Reader::new(&[], "test").end().is_ok());
     }
 }
