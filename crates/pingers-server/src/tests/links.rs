@@ -76,10 +76,14 @@ async fn the_landing_page_is_static_strict_and_names_no_invite() -> TestResult {
     assert!(script.contains("window.location.hash"));
     assert!(script.contains("\"pingers://join#\""));
     // Invites and the owner's setup link (#s1.) both go to the app.
-    assert!(script.contains("#[vs]1"));
+    assert!(script.contains("([vs]1\\."));
     // On Android, an intent URL naming the app, falling back to the install page.
     assert!(script.contains("intent://join#Intent;scheme=pingers;package="));
     assert!(script.contains("S.browser_fallback_url="));
+    // A build that is not installed falls back to this page with the next build's number in
+    // the fragment (nothing fetched), the last to the install page.
+    assert!(script.contains("\"#\" + (index + 2) + \".\" + invite"));
+    assert!(script.contains("\"hashchange\""));
     // It makes no request of any kind: no fetch, no XHR, no beacon, no reload of this page,
     // and it uses the fragment only to hand it on.
     for request in [
