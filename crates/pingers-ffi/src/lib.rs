@@ -74,6 +74,14 @@ pub fn core_version() -> String {
     env!("CARGO_PKG_VERSION").to_owned()
 }
 
+/// What a locked phone shows of a notification the app writes itself (the co-presence alert):
+/// "New activity in a Party", as for the core's own notifications.
+#[uniffi::export]
+#[must_use]
+pub fn notification_lock_screen() -> String {
+    pingers_words::notifications::lock_screen(views::LANGUAGE)
+}
+
 /// A 15-minute bucket (pingers-time) as plain numbers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct BucketWindow {

@@ -10,6 +10,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import org.pingers.app.data.CoPresenceAlert
+import org.pingers.app.platform.Notifications
 
 /**
  * The co-presence alert as a real notification. In the finished app the push
@@ -36,10 +37,11 @@ object CoPresenceNotifier {
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL, context.getString(R.string.channel_meetups), NotificationManager.IMPORTANCE_HIGH).apply {
                 description = context.getString(R.string.channel_meetups_description)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PRIVATE
             },
         )
         val text = context.getString(R.string.alert_body, Words.names(context, alert.others), alert.spotName)
-        val n = NotificationCompat.Builder(context, CHANNEL)
+        val builder = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_pingers)
             .setColor(ContextCompat.getColor(context, R.color.blue))
             .setContentTitle(alert.partyName)
@@ -51,7 +53,8 @@ object CoPresenceNotifier {
             .setContentIntent(NotificationActions.pendingIntent(context, NotificationAction.OPEN_MEETUP, 1))
             .addAction(0, context.getString(R.string.alert_open), NotificationActions.pendingIntent(context, NotificationAction.OPEN_MEETUP, 1))
             .addAction(0, context.getString(R.string.alert_hide), NotificationActions.pendingIntent(context, NotificationAction.HIDE_ME, 2))
-            .build()
+        // A locked phone shows only "New activity in a Party", in the core's words.
+        val n = Notifications.lockScreen(context, builder, CHANNEL, uniffi.pingers.notificationLockScreen()).build()
         try {
             NotificationManagerCompat.from(context).notify(ID, n)
         } catch (_: SecurityException) {

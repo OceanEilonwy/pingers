@@ -233,12 +233,36 @@ class PlatformUnitTest {
     @Test
     fun coreNotificationsGoToTheAlertsChannelAndReplaceByTheirId() {
         shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
-        Notifications.post(context, CoreNotification(7, "Ben · The wall", "Coffee after?", NotificationKind.CHAT_MESSAGE))
-        Notifications.post(context, CoreNotification(7, "Chloé · The wall", "Yes please", NotificationKind.CHAT_MESSAGE))
+        Notifications.post(context, CoreNotification(7, "Ben · The wall", "Coffee after?", NotificationKind.CHAT_MESSAGE, null))
+        Notifications.post(context, CoreNotification(7, "Chloé · The wall", "Yes please", NotificationKind.CHAT_MESSAGE, null))
         val manager = shadowOf(context.getSystemService(NotificationManager::class.java))
         assertEquals(1, manager.allNotifications.size)
         val posted = manager.getNotification(7)
         assertEquals(Notifications.CHANNEL_ALERTS, posted.channelId)
         assertEquals("Chloé · The wall", shadowOf(posted).contentTitle.toString())
+    }
+
+    @Test
+    fun aLockedScreenShowsOnlyTheGenericWordsOrNothing() {
+        shadowOf(context).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        Notifications.post(context, CoreNotification(8, "Climbing crew", "Ben is at the wall too. Say hi?", NotificationKind.MEETUP_STARTED, "New activity in a Party"))
+        Notifications.post(context, CoreNotification(9, "Ben · The wall", "Coffee after?", NotificationKind.CHAT_MESSAGE, null))
+        Notifications.letIn(context, "Ana let you in", "Climbing crew", "New activity in a Party")
+        val manager = shadowOf(context.getSystemService(NotificationManager::class.java))
+        for (id in listOf(8, Notifications.LET_IN_ID)) {
+            val posted = manager.getNotification(id)
+            assertEquals(android.app.Notification.VISIBILITY_PRIVATE, posted.visibility)
+            assertEquals("New activity in a Party", shadowOf(posted.publicVersion).contentTitle.toString())
+            assertNull(shadowOf(posted.publicVersion).contentText)
+        }
+        val chat = manager.getNotification(9)
+        assertEquals(android.app.Notification.VISIBILITY_SECRET, chat.visibility)
+        assertNull(chat.publicVersion)
+        val running = Notifications.running(context, true)
+        assertEquals(android.app.Notification.VISIBILITY_PRIVATE, running.visibility)
+        assertEquals("Pingers is running", shadowOf(running.publicVersion).contentTitle.toString())
+        for (channel in listOf(Notifications.CHANNEL_ALERTS, Notifications.CHANNEL_QUIET, Notifications.CHANNEL_RUNNING)) {
+            assertEquals(android.app.Notification.VISIBILITY_PRIVATE, context.getSystemService(NotificationManager::class.java).getNotificationChannel(channel).lockscreenVisibility)
+        }
     }
 }

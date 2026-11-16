@@ -38,6 +38,9 @@ pub struct CoreNotification {
     pub title: String,
     /// The text.
     pub body: String,
+    /// What a locked phone shows instead, the same for every notification ("New activity in a
+    /// Party"), or `None` to show nothing there at all (chat messages and location asks).
+    pub lock_screen: Option<String>,
     /// The Meetup to open, for Meetup kinds.
     pub meetup: Option<MeetupId>,
     /// The Party to open, for a join request.
@@ -67,6 +70,7 @@ impl From<&Notification> for CoreNotification {
             kind,
             title: text.title,
             body: text.body,
+            lock_screen: text.lock_screen,
             meetup: meetup.map(Into::into),
             party: party.map(Into::into),
         }

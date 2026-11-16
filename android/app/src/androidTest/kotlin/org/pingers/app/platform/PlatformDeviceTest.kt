@@ -141,7 +141,7 @@ class PlatformDeviceTest {
     @Test
     fun aNotificationTheCoreWroteIsPostedAndOpensTheMeetup() {
         val manager = context.getSystemService(android.app.NotificationManager::class.java)
-        Notifications.post(context, CoreNotification(42, "Climbing crew", "Ben is at the wall too. Say hi?", NotificationKind.MEETUP_STARTED))
+        Notifications.post(context, CoreNotification(42, "Climbing crew", "Ben is at the wall too. Say hi?", NotificationKind.MEETUP_STARTED, "New activity in a Party"))
         assertTrue(waitFor(5) { manager.activeNotifications.any { it.id == 42 } })
         val posted = manager.activeNotifications.first { it.id == 42 }
         assertEquals(Notifications.CHANNEL_ALERTS, posted.notification.channelId)

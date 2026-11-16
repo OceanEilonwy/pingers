@@ -261,6 +261,7 @@ object CoreHost {
             uniffi.pingers.NotificationKind.CHAT_MESSAGE -> NotificationKind.CHAT_MESSAGE
             uniffi.pingers.NotificationKind.LOCATION_REQUEST -> NotificationKind.LOCATION_REQUEST
         },
+        lockScreen = lockScreen,
     )
 
     /**
@@ -273,7 +274,7 @@ object CoreHost {
         Thread {
             blocking("letIn notification") { c ->
                 c.snapshot().use { s ->
-                    s.letIn()?.let { Notifications.letIn(app, it.notificationTitle, it.notificationBody) }
+                    s.letIn()?.let { Notifications.letIn(app, it.notificationTitle, it.notificationBody, it.notificationLockScreen) }
                 }
             }
         }.start()

@@ -37,6 +37,8 @@ data class CoreNotification(
     val title: String,
     val body: String,
     val kind: NotificationKind,
+    /** What a locked phone shows instead ("New activity in a Party"), or null to show nothing there at all. */
+    val lockScreen: String?,
 )
 
 /** The priority FCM sent a message with and the one it delivered it at (`RemoteMessage.getOriginalPriority()` and `getPriority()`). */

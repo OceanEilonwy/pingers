@@ -1109,6 +1109,8 @@ pub struct LetInView {
     pub notification_title: String,
     /// "Climbing crew".
     pub notification_body: String,
+    /// What a locked phone shows of that notification: "New activity in a Party".
+    pub notification_lock_screen: String,
 }
 
 impl From<screens::invite::LetIn> for LetInView {
@@ -1128,6 +1130,7 @@ impl From<screens::invite::LetIn> for LetInView {
             leave: text.leave,
             notification_title: text.notification_title,
             notification_body: text.notification_body,
+            notification_lock_screen: pingers_words::notifications::lock_screen(LANGUAGE),
         }
     }
 }

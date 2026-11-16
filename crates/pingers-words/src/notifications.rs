@@ -7,6 +7,14 @@ use pingers_screens::notifications::Notification;
 
 use crate::Language;
 
+/// What a locked phone shows of any Pingers notification that may show there at all: it names
+/// no Party, person, Spot or message.
+#[must_use]
+pub fn lock_screen(language: Language) -> String {
+    let Language::English = language;
+    "New activity in a Party".into()
+}
+
 /// A notification, in words.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NotificationText {
@@ -14,6 +22,9 @@ pub struct NotificationText {
     pub title: String,
     /// The text.
     pub body: String,
+    /// What a locked phone shows instead ([`lock_screen`]), or `None` to show nothing there at
+    /// all: a chat message or a location ask is not even announced on a locked screen.
+    pub lock_screen: Option<String>,
 }
 
 /// A notification, in words.
@@ -26,6 +37,7 @@ pub fn notification(language: Language, notification: &Notification) -> Notifica
             NotificationText {
                 title: text.title,
                 body: text.body,
+                lock_screen: Some(lock_screen(language)),
             }
         }
         Notification::JoinRequest {
@@ -36,6 +48,7 @@ pub fn notification(language: Language, notification: &Notification) -> Notifica
                 "{} opened your invite. Compare the code on both phones, then let them in.",
                 name.as_str()
             ),
+            lock_screen: Some(lock_screen(language)),
         },
         Notification::ChatMessage {
             spot_name,
@@ -45,17 +58,20 @@ pub fn notification(language: Language, notification: &Notification) -> Notifica
         } => NotificationText {
             title: format!("{} · {}", author.as_str(), spot_name.as_str()),
             body: body.as_str().to_owned(),
+            lock_screen: None,
         },
         Notification::LocationRequest {
             spot_name, from, ..
         } => NotificationText {
             title: spot_name.as_str().to_owned(),
             body: format!("{} asks to see where you are.", from.as_str()),
+            lock_screen: None,
         },
         // Notification may grow (non_exhaustive); a new kind gets words here.
         _ => NotificationText {
             title: "Pingers".into(),
             body: String::new(),
+            lock_screen: Some(lock_screen(language)),
         },
     }
 }
@@ -102,6 +118,16 @@ mod tests {
                 .map(|text| (text.title.as_str(), text.body.as_str()))
                 .collect::<Vec<_>>(),
             expected
+        );
+        // Chat and location asks are not announced on a locked screen; the others say only
+        // that something happened.
+        let generic = Some(lock_screen(EN));
+        assert_eq!(generic.as_deref(), Some("New activity in a Party"));
+        assert_eq!(
+            text.iter()
+                .map(|text| text.lock_screen.clone())
+                .collect::<Vec<_>>(),
+            [generic.clone(), None, None, None, generic]
         );
         Ok(())
     }
