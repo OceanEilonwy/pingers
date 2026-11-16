@@ -256,9 +256,11 @@ pub struct InstanceConfig {
     /// The push relay, `https://...`, if push is set up.
     pub push_relay: Option<String>,
     /// `PINGERS_GATEWAY_KEY_PINS`: the gateway key config hashes, base64url SHA-256,
-    /// comma-separated (the key served now and the next one). `None` pins on first use.
+    /// comma-separated (the key served now and the next one). `None` (a development build) pins
+    /// nothing: the server is reached only once a setup link or invite has recorded its pins.
     pub gateway_key_pins: Option<String>,
-    /// `PINGERS_PUSH_RELAY_KEY_PINS`, in the same form. `None` pins on first use.
+    /// `PINGERS_PUSH_RELAY_KEY_PINS`, in the same form. `None` pins nothing: no push token is
+    /// sealed until an invite or setup link brings push relay pins.
     pub push_relay_key_pins: Option<String>,
     /// `PINGERS_EXTRA_CA`: a PEM bundle trusted instead of Mozilla's roots, for a local test
     /// stack. The app passes it only in debug builds; release builds pass `None`.

@@ -222,9 +222,11 @@ android {
         // served now and the next one (two-slot rotation), base64url SHA-256, comma-separated,
         // as `cargo xtask pins` prints them. CI sets PINGERS_GATEWAY_KEY_PINS and
         // PINGERS_PUSH_RELAY_KEY_PINS (or pass -PpingersGatewayKeyPins=...,
-        // -PpingersPushRelayKeyPins=...). With pins set, the core never pins on first use;
-        // unset (a local build), it does. A malformed pin fails the build here rather than the
-        // app at start.
+        // -PpingersPushRelayKeyPins=...). The core never pins on first use: unset (a local
+        // development build), the built-in server is reached only once a setup link or invite
+        // has recorded its pins, and no push token is sealed. `cargo xtask release-android`
+        // refuses to build a release without them. A malformed pin fails the build here rather
+        // than the app at start.
         fun pins(property: String, variable: String) {
             val value = providers.gradleProperty(property)
                 .orElse(providers.environmentVariable(variable))

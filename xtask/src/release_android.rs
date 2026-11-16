@@ -6,9 +6,10 @@
 //! `PINGERS_KEYSTORE_PATH`, `PINGERS_KEYSTORE_PASSWORD` and `PINGERS_KEY_ALIAS` for the upload
 //! key, the deployment hosts (`PINGERS_SERVER_HOST`, `PINGERS_OHTTP_RELAY`,
 //! `PINGERS_PUSH_RELAY`, `PINGERS_MAP_HOST`) and `PINGERS_GOOGLE_SERVICES_JSON` for the gms
-//! flavour. Gradle reads them itself; this only checks that the key is there, warns about hosts
-//! left at their `.invalid` defaults, runs `assemble<Flavour>Release` and
-//! `bundle<Flavour>Release`, and then checks that every APK and AAB is signed by the keystore's
+//! flavour, and the key pins (`PINGERS_GATEWAY_KEY_PINS`, `PINGERS_PUSH_RELAY_KEY_PINS`), which a
+//! release must have. Gradle reads them itself; this only checks that the key and the pins are
+//! there, warns about hosts left at their `.invalid` defaults, runs `assemble<Flavour>Release`
+//! and `bundle<Flavour>Release`, and then checks that every APK and AAB is signed by the keystore's
 //! certificate and nothing else. The password is never read into this process.
 //!
 //! Without `--flavour`, foss is always built and gms only when `PINGERS_GOOGLE_SERVICES_JSON` is
@@ -40,8 +41,10 @@ const HOST_VARIABLES: [&str; 4] = [
     "PINGERS_MAP_HOST",
 ];
 
-/// Build-time key pins (app/build.gradle.kts); unset, the app pins on first use, which an
-/// official build must not (proposal decision 7).
+/// Build-time key pins (app/build.gradle.kts), all required for a release. A build without them
+/// pins nothing on first use: it reaches its built-in server only after a setup link or invite
+/// has recorded that server's gateway pins, and seals no push token without push relay pins.
+/// That is a development build, never an official one (proposal decision 7).
 const PIN_VARIABLES: [&str; 2] = ["PINGERS_GATEWAY_KEY_PINS", "PINGERS_PUSH_RELAY_KEY_PINS"];
 
 /// Where the gms flavour finds Firebase's configuration.
@@ -261,11 +264,8 @@ pub(crate) fn run(root: &Path, options: &ReleaseOptions) -> Result<Outcome> {
             "release-android: warning: {host} is unset; the app gets its .invalid default"
         )?;
     }
-    for pins in &environment.unset_pins {
-        writeln!(
-            stdout,
-            "release-android: warning: {pins} is unset; the app pins that key on first use"
-        )?;
+    if !pins_configured(&environment, &mut stdout)? {
+        return Ok(Outcome::Failed);
     }
     let flavours = choose_flavours(
         &options.flavours,
@@ -353,6 +353,23 @@ impl Outcome {
             Self::Failed
         }
     }
+}
+
+/// Whether every build-time key pin is set; otherwise says which are not and why a release
+/// needs them.
+fn pins_configured(environment: &Environment, out: &mut impl io::Write) -> Result<bool> {
+    if environment.unset_pins.is_empty() {
+        return Ok(true);
+    }
+    writeln!(
+        out,
+        "release-android: the key pins are not configured; unset: {}\n\
+         release-android: a build without them pins nothing: it reaches no server until a setup \
+         link or invite brings pins, and gets no push token; set {} (android/docs/release.md)",
+        environment.unset_pins.join(", "),
+        PIN_VARIABLES.join(", ")
+    )?;
+    Ok(false)
 }
 
 /// The upload key from the environment, or `None` after saying what is missing.
@@ -767,6 +784,29 @@ mod tests {
         assert!(!said.contains(
             "unset: PINGERS_KEYSTORE_PATH, PINGERS_KEYSTORE_PASSWORD, PINGERS_KEY_ALIAS"
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn a_release_without_key_pins_is_refused() -> Result<()> {
+        let mut environment = Environment {
+            keystore: None,
+            alias: None,
+            password_set: PasswordState::Unset,
+            google_services_set: GoogleServices::Absent,
+            unset_hosts: Vec::new(),
+            unset_pins: vec![PIN_VARIABLES[1]],
+            java_home: None,
+            android_home: None,
+        };
+        let mut out = Vec::new();
+        assert!(!pins_configured(&environment, &mut out)?);
+        let said = String::from_utf8(out)?;
+        assert!(said.contains("unset: PINGERS_PUSH_RELAY_KEY_PINS\n"));
+        environment.unset_pins.clear();
+        let mut out = Vec::new();
+        assert!(pins_configured(&environment, &mut out)?);
+        assert!(out.is_empty());
         Ok(())
     }
 }

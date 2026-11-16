@@ -126,7 +126,7 @@ fn link(
     Ok(SetupPayload::from_link(&link.to_link()?)?)
 }
 
-/// The build's pins: `None` pins on first use.
+/// The build's pins: `None` pins nothing (a development build).
 struct BuildPins {
     gateway: Option<KeyPins>,
     push_relay: Option<KeyPins>,

@@ -38,9 +38,11 @@ pub struct Instance {
     /// The push relay's origin, for sealed push registration: the server must list it in
     /// `/v1/params`.
     pub push_relay: Option<String>,
-    /// The gateway key config hashes allowed, or `None` to pin on first use.
+    /// The gateway key config hashes allowed. `None` (a development build) pins nothing: the
+    /// server gets no link until a setup link or invite has recorded its pins.
     pub gateway_pins: Option<KeyPins>,
-    /// The push relay key config hashes allowed, or `None` to pin on first use.
+    /// The push relay key config hashes allowed. `None` pins nothing: no push token is sealed
+    /// until a setup link or invite brings pins for the server's push relay.
     pub push_relay_pins: Option<KeyPins>,
     /// Which certificate authorities HTTPS trusts.
     pub trust: Trust,

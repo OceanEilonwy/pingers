@@ -118,8 +118,9 @@ object CoreHost {
 
     /**
      * The instance from the build configuration (see app/build.gradle.kts). Blank pins mean a
-     * build without them: the core pins nothing on first use, so such a build reaches no server
-     * until it has pins, and its push relay gets no token. The test CA is passed in debug builds
+     * development build without them (a release cannot be built so): the core pins nothing on
+     * first use, so such a build reaches its server only once a setup link or invite has
+     * recorded that server's pins, and its push relay gets no token. The test CA is passed in debug builds
      * only; a release build's EXTRA_CA is always empty as well. So is the first owner's
      * registration code (DEV_REGISTRATION_CODE).
      */

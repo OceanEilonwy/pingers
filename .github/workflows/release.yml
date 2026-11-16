@@ -29,7 +29,9 @@
 #   PINGERS_GATEWAY_KEY_PINS, PINGERS_PUSH_RELAY_KEY_PINS
 #                              the gateway's and push relay's key config hashes (base64url
 #                              SHA-256, comma-separated: the served key and the next one), as
-#                              `cargo xtask pins` prints them. Unset, the app pins on first use.
+#                              `cargo xtask pins` prints them. Required: release-android fails
+#                              without them (an unpinned build pins nothing and reaches no server
+#                              until a setup link or invite brings pins).
 # Every name is described in android/docs/release.md.
 #
 # The key is in the same job as Gradle, so Gradle plugins and build dependencies run where the
