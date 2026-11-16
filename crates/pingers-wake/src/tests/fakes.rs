@@ -15,7 +15,8 @@ use pingers_presence::{
 };
 use pingers_proto::{
     BoardCursor, BoardPage, Epoch, GroupId, KeyPackageBytes, LeafIndex, Lease, MailboxId, PartyId,
-    ReadBoard, Record, SegmentInfo,
+    PushHandle, PushRelayKeyId, ReadBoard, Record, RelayId, RelayRef, SealedPush, SealedPushBlob,
+    SegmentInfo, Subscription, SubscriptionId, TimeToLive, Urgency,
 };
 use pingers_testkit::{FakePlatform, Geofence};
 use pingers_time::{Bucket, ManualClock};
@@ -23,8 +24,8 @@ use zeroize::Zeroizing;
 
 use crate::PortError;
 use crate::ports::{
-    DevicePort, FixQuality, LeaseUpload, LocationMode, MeetupAdmission, MeetupPort, OsRegion,
-    PartyInfo, PartyView, RegionId, ReplyPost, ServerPort,
+    DevicePort, FixQuality, KnockKeyPackage, LeaseUpload, LocationMode, MeetupAdmission,
+    MeetupPort, OsRegion, PartyInfo, PartyView, RegionId, ReplyPost, ServerPort,
 };
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -426,10 +427,6 @@ impl PartyView for FakeParties {
     fn signing_key(&self) -> &AccountSigningKey {
         &self.signing_key
     }
-
-    fn key_package(&self, _party: PartyId) -> Result<KeyPackageBytes, PortError> {
-        Ok(KeyPackageBytes::from_bytes(vec![0x4b; 200]))
-    }
 }
 
 /// What a fake pingers-meetup-session keeps of an admission: the PSK is copied out so tests
@@ -447,6 +444,7 @@ pub(crate) struct Admitted {
 pub(crate) struct Replied {
     pub(crate) key: MeetupKeyId,
     pub(crate) psk: [u8; 32],
+    pub(crate) reply_mailbox: MailboxId,
     pub(crate) post: Vec<u8>,
 }
 
@@ -455,6 +453,8 @@ struct MeetupsInner {
     meetups: Vec<(SpotRef, GroupId)>,
     admitted: Vec<Admitted>,
     welcomes: Vec<Replied>,
+    /// The reply mailboxes key packages were made for, in order.
+    knock_keys: Vec<MailboxId>,
     leave_calls: usize,
     left: Vec<SpotRef>,
 }
@@ -478,6 +478,11 @@ impl FakeMeetups {
         lock(&self.inner).welcomes.clone()
     }
 
+    /// The reply mailboxes knock key packages were made for.
+    pub(crate) fn knock_keys(&self) -> Vec<MailboxId> {
+        lock(&self.inner).knock_keys.clone()
+    }
+
     /// The Spots whose Meetup this device left one by one.
     pub(crate) fn left(&self) -> Vec<SpotRef> {
         lock(&self.inner).left.clone()
@@ -488,6 +493,23 @@ impl FakeMeetups {
     }
 }
 
+/// The Meetup subscription the fake hands out for a knock answered in `reply_mailbox`.
+pub(crate) fn knock_subscription(reply_mailbox: MailboxId) -> Option<Subscription> {
+    let fill = reply_mailbox.as_bytes().first().copied().unwrap_or(0);
+    let time_to_live = TimeToLive::new(Duration::from_hours(24)).ok()?;
+    Some(Subscription {
+        id: SubscriptionId::from_bytes([fill; 16]),
+        push: SealedPush {
+            relay: RelayRef::Listed(RelayId::new(1)),
+            key_id: PushRelayKeyId::new(1),
+            blob: SealedPushBlob::from_bytes([fill; 320]),
+            urgency: Urgency::Alert,
+            handle: PushHandle::from_bytes([fill; 8]),
+        },
+        time_to_live,
+    })
+}
+
 impl MeetupPort for FakeMeetups {
     fn current_meetup(&self, spot: SpotRef) -> Option<GroupId> {
         lock(&self.inner)
@@ -495,6 +517,18 @@ impl MeetupPort for FakeMeetups {
             .iter()
             .find(|(at, _group)| *at == spot)
             .map(|(_at, group)| *group)
+    }
+
+    fn knock_key_package(
+        &self,
+        _party: PartyId,
+        reply_mailbox: MailboxId,
+    ) -> impl Future<Output = Result<KnockKeyPackage, PortError>> + Send {
+        lock(&self.inner).knock_keys.push(reply_mailbox);
+        ready(Ok(KnockKeyPackage {
+            key_package: KeyPackageBytes::from_bytes(vec![0x4b; 200]),
+            subscription: knock_subscription(reply_mailbox),
+        }))
     }
 
     fn admit(
@@ -514,6 +548,7 @@ impl MeetupPort for FakeMeetups {
         lock(&self.inner).welcomes.push(Replied {
             key: reply.key.id(),
             psk: *reply.key.psk().expose_bytes(),
+            reply_mailbox: reply.reply_mailbox,
             post: reply.post,
         });
         ready(Ok(()))

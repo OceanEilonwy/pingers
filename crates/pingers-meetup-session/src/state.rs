@@ -13,7 +13,7 @@ use pingers_meetup::{
 use pingers_mls::{MlsError, ProcessedMessage, SelfRemoval};
 use pingers_proto::{
     CommitRequest, Epoch, GroupId, KeyPackageBytes, LeafIndex, MlsMessageBytes, PartyId,
-    Subscription, Urgency, WelcomeBytes,
+    Subscription, SubscriptionId, Urgency, WelcomeBytes,
 };
 use pingers_store::{Session, StoredChat};
 use pingers_time::UnixSeconds;
@@ -232,18 +232,23 @@ impl Core {
         leaf: LeafIndex,
     ) -> Result<PendingCommit, SessionError> {
         let mut handle = local.mls().meetup_group(&self.group)?;
+        let removed = subscriptions_of(&handle, &[leaf]);
         let commit = handle.remove_member(leaf, &mut self.rng)?;
-        pending(&handle, commit, Vec::new())
+        pending(&handle, commit, Subscriptions::removed(removed))
     }
 
-    /// Commits the stored proposals (a leaver's self-remove).
+    /// Commits the stored proposals (a leaver's self-remove), dropping the leavers'
+    /// subscriptions on the server with it.
     pub(crate) fn commit_proposals(
         &mut self,
         local: Local<'_>,
     ) -> Result<PendingCommit, SessionError> {
         let mut handle = local.mls().meetup_group(&self.group)?;
         let commit = handle.commit_pending_proposals(&mut self.rng)?;
-        pending(&handle, commit, Vec::new())
+        // As for a Party: the pending commit names the leavers, still in the tree until it
+        // merges, so their subscriptions can be read from their leaves.
+        let removed = subscriptions_of(&handle, &handle.pending_removals());
+        pending(&handle, commit, Subscriptions::removed(removed))
     }
 
     /// Commits adding a newcomer, checked against the current Party roster.
@@ -259,11 +264,11 @@ impl Core {
             &roster,
             &mut self.rng,
         )?;
-        pending(
-            &handle,
-            commit,
-            newcomer.subscription.iter().cloned().collect(),
-        )
+        let added = Subscriptions {
+            added: newcomer.subscription.iter().cloned().collect(),
+            removed: Vec::new(),
+        };
+        pending(&handle, commit, added)
     }
 
     /// The server accepted this device's commit: merge it and tell the state machine.
@@ -304,7 +309,7 @@ impl Core {
                     signature_key: member.signature_key,
                     access,
                     holds_own_key: self.meetup.shares_with(member.leaf),
-                    request_pending_until: self.meetup.pending_request(member.leaf, self.now),
+                    request_pending: self.meetup.pending_request(member.leaf, self.now),
                     position: match access {
                         ExactLocation::Shared { .. } => self.positions.get(&member.leaf).copied(),
                         ExactLocation::Private => None,
@@ -319,6 +324,8 @@ impl Core {
             visibility: self.meetup.visibility(),
             channel,
             meet_point: self.meetup.meet_point().cloned(),
+            meet_point_set_by: self.meetup.meet_point_set_by(),
+            requests: self.meetup.incoming_requests(self.now),
             peers,
         }
     }
@@ -433,11 +440,36 @@ pub struct AddMember {
     pub subscription: Option<Subscription>,
 }
 
+/// The subscriptions a commit adds to the group and removes from it on the server.
+struct Subscriptions {
+    added: Vec<Subscription>,
+    removed: Vec<SubscriptionId>,
+}
+
+impl Subscriptions {
+    const fn removed(removed: Vec<SubscriptionId>) -> Self {
+        Self {
+            added: Vec::new(),
+            removed,
+        }
+    }
+}
+
+/// The subscription ids, from their leaves, of the members at `leaves` that have one.
+fn subscriptions_of(handle: &MeetupGroup<'_>, leaves: &[LeafIndex]) -> Vec<SubscriptionId> {
+    handle
+        .member_subscriptions()
+        .into_iter()
+        .filter(|member| leaves.contains(&member.leaf))
+        .map(|member| member.subscription)
+        .collect()
+}
+
 /// The commit request for a pending commit on `handle`.
 fn pending(
     handle: &MeetupGroup<'_>,
     commit: pingers_mls::Commit,
-    subscriptions_added: Vec<Subscription>,
+    subscriptions: Subscriptions,
 ) -> Result<PendingCommit, SessionError> {
     Ok(PendingCommit {
         request: CommitRequest {
@@ -445,8 +477,8 @@ fn pending(
             commit: commit.commit,
             next_auth_key: handle.pending_log_auth_key_pair()?.public_key(),
             state: None,
-            subscriptions_added,
-            subscriptions_removed: Vec::new(),
+            subscriptions_added: subscriptions.added,
+            subscriptions_removed: subscriptions.removed,
             wake: Urgency::Quiet,
         },
         welcome: commit.welcome,

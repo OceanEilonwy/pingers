@@ -16,7 +16,7 @@ use pingers_presence::{
 };
 use pingers_proto::{
     BoardCursor, BoardPage, Epoch, GroupId, KeyPackageBytes, LeafIndex, Lease, MailboxId, PartyId,
-    ReadBoard, SizeClass, SpotId,
+    ReadBoard, SizeClass, SpotId, Subscription,
 };
 use pingers_time::Bucket;
 
@@ -124,13 +124,6 @@ pub trait PartyView: Send + Sync {
 
     /// This device's account key, which signs knocks.
     fn signing_key(&self) -> &AccountSigningKey;
-
-    /// A fresh Meetup `KeyPackage` for a knock in this Party.
-    ///
-    /// # Errors
-    ///
-    /// [`PortError::Unavailable`] if MLS state cannot produce one.
-    fn key_package(&self, party: PartyId) -> Result<KeyPackageBytes, PortError>;
 }
 
 /// A lease to upload with `POST /v1/board/sync`. pingers-sync keeps the revoke key, so the next
@@ -208,14 +201,39 @@ pub struct ReplyPost {
     /// `PSK_meet(b)` and its id for the record the knock answered: the Spot, the epoch the
     /// knock was sent under, and the record's start bucket.
     pub key: MeetupKey,
+    /// The knock's reply mailbox the post was read from: it names the knock, so the grant
+    /// secret kept by [`MeetupPort::knock_key_package`] can be found.
+    pub reply_mailbox: MailboxId,
     /// The post.
     pub post: Vec<u8>,
+}
+
+/// What a knock carries for the Meetup it may lead to (design B.5, B.6.1, B.4.9).
+pub struct KnockKeyPackage {
+    /// A fresh Meetup KeyPackage with this device's grant key in its leaf extension.
+    pub key_package: KeyPackageBytes,
+    /// The sealed subscription the poster adds to the Meetup, or `None` with wake-up pushes
+    /// off.
+    pub subscription: Option<Subscription>,
 }
 
 /// Live Meetups (pingers-meetup-session).
 pub trait MeetupPort: Send + Sync {
     /// The Meetup this device is in at `spot`, if any.
     fn current_meetup(&self, spot: SpotRef) -> Option<GroupId>;
+
+    /// What a knock in `party` answered in `reply_mailbox` carries. The grant secret of the
+    /// KeyPackage (and the subscription) are kept, under the reply mailbox, until the Welcome
+    /// arrives there ([`MeetupPort::welcome`]) or no Welcome can come.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::Unavailable`] if MLS state or the store cannot produce one.
+    fn knock_key_package(
+        &self,
+        party: PartyId,
+        reply_mailbox: MailboxId,
+    ) -> impl Future<Output = Result<KnockKeyPackage, PortError>> + Send;
 
     /// Admits an accepted knocker.
     fn admit(

@@ -14,7 +14,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use pingers_gate::{FocusState, GateDecision, LocationSharing, PauseState};
 use pingers_geo::{Fence, Fix};
-use pingers_meetup::{LocationAnswer, LocationVisibility, MeetPointDraft};
+use pingers_meetup::{ExactLocation, LocationAnswer, LocationVisibility, MeetPointDraft};
 use pingers_proto::{
     ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, PartyId, PushHandle,
     SecretText, SetupPayload, SpotId,
@@ -253,6 +253,33 @@ pub enum ClientEvent {
     MeetupStarted(GroupId),
     /// [`Events::meetup_updated`](crate::Events::meetup_updated).
     MeetupUpdated(GroupId),
+    /// [`Events::meetup_message`](crate::Events::meetup_message).
+    MeetupMessage(GroupId),
+    /// [`Events::peer_location`](crate::Events::peer_location).
+    PeerLocation {
+        /// The Meetup.
+        meetup: GroupId,
+        /// The peer whose position updated.
+        peer: LeafIndex,
+    },
+    /// [`Events::location_request`](crate::Events::location_request).
+    LocationRequest {
+        /// The Meetup.
+        meetup: GroupId,
+        /// Who asks.
+        from: LeafIndex,
+        /// The request, for the answer.
+        request: LocationRequestId,
+    },
+    /// [`Events::location_access_changed`](crate::Events::location_access_changed).
+    LocationAccessChanged {
+        /// The Meetup.
+        meetup: GroupId,
+        /// The peer.
+        peer: LeafIndex,
+        /// Whether this device can see it now.
+        access: ExactLocation,
+    },
     /// [`Events::meetup_ended`](crate::Events::meetup_ended).
     MeetupEnded(GroupId),
     /// [`Events::notice`](crate::Events::notice).
@@ -458,6 +485,12 @@ pub trait MeetupsPort: Send + Sync {
     async fn leave_meetup(&self, meetup: GroupId) -> Result<(), ClientError>;
     /// The live Meetups.
     async fn section(&self) -> Result<MeetupsSection, ClientError>;
+    /// What the live Meetups raise on their own (a message, a position, a request, a member
+    /// joining, the end), for the client to republish the snapshot and tell the shell. The
+    /// receiver is handed out once; `None` after that, and for ports with nothing to raise.
+    fn take_events(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<ClientEvent>> {
+        None
+    }
 }
 
 /// How map hosts are reached: the "Download maps through privacy relay" setting (design B.12).

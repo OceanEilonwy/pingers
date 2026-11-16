@@ -100,12 +100,18 @@ pub(crate) struct Device {
     pub(crate) key: AccountPublicKey,
     pub(crate) runtime: Runtime,
     // Field order: the database closes before its directory is removed.
-    _directory: TestDir,
+    directory: TestDir,
 }
 
 impl Device {
     pub(crate) fn database(&self) -> &Arc<Database> {
         &self.runtime.database
+    }
+
+    /// Overwrites the store's file, as a failing disk would: every later session fails.
+    pub(crate) fn break_store(&self) -> Result<(), TestError> {
+        std::fs::write(self.directory.path.join("store.db"), [0_u8; 4096])?;
+        Ok(())
     }
 
     /// The store's view of the Meetup: whether anything of it is left.
@@ -167,6 +173,8 @@ pub(crate) struct World {
     pub(crate) party: PartyId,
     pub(crate) spot: SpotId,
     pub(crate) devices: Vec<Device>,
+    /// The board segments each device says it saw; by default all saw the same one.
+    pub(crate) boards: std::sync::Mutex<Vec<Vec<pingers_proto::SeenSegment>>>,
 }
 
 const NAMES: [&str; 3] = ["Alice", "Bob", "Chloé"];
@@ -223,12 +231,11 @@ impl World {
                 key: key.public_key(),
                 runtime: Runtime {
                     database: Arc::new(database),
-                    transport: Arc::<FakeNetwork>::clone(&network),
                     network,
                     clock: Arc::new(clock.clone()),
                     timer: Arc::new(clock.clone()),
                 },
-                _directory: directory,
+                directory,
             });
         }
         Ok(Self {
@@ -236,6 +243,7 @@ impl World {
             server,
             party,
             spot: SpotId::from_bytes([0x33; 16]),
+            boards: std::sync::Mutex::new(vec![common_board(); count]),
             devices,
         })
     }
@@ -268,13 +276,35 @@ impl World {
         key_for(&self.status(), record_start()?)
     }
 
+    /// The board segments device `index` says it saw.
+    pub(crate) fn board_of(&self, index: usize) -> Vec<pingers_proto::SeenSegment> {
+        self.boards
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(index)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Device `index` says it saw `board`.
+    pub(crate) fn sees(&self, index: usize, board: Vec<pingers_proto::SeenSegment>) {
+        if let Some(slot) = self
+            .boards
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(index)
+        {
+            *slot = board;
+        }
+    }
+
     /// Alice creates the Meetup with Bob, and Bob joins it; both channels are open.
     pub(crate) async fn meetup_of_two(&self) -> Result<[Live; 2], TestError> {
         let alice = self.device(0)?;
         let bob = self.device(1)?;
         let knock = knock_key_package(
             bob.database(),
-            CipherSuitePolicy::Classical,
+            knocking(1),
             Box::new(pingers_testkit::seeded_rng(2)),
         )
         .await?;
@@ -285,7 +315,8 @@ impl World {
                 group: GROUP,
                 knocker: knock.key_package,
                 subscriptions: Vec::new(),
-                own_subscription: None,
+                own_subscription: Some(subscription_of(0)),
+                board_seen: self.board_of(0),
                 suite: CipherSuitePolicy::Classical,
             },
             Box::new(pingers_testkit::seeded_rng(1)),
@@ -327,7 +358,8 @@ impl World {
                 key,
                 welcome,
                 grant_key,
-                own_subscription: None,
+                own_subscription: Some(subscription_of(index)),
+                board_seen: self.board_of(index),
             },
             Box::new(pingers_testkit::seeded_rng(
                 u64::try_from(index).unwrap_or(0).saturating_add(10),
@@ -339,6 +371,20 @@ impl World {
             events: joined.events,
         })
     }
+}
+
+/// What device `index` knocks with: the classical suite and its own subscription.
+pub(crate) fn knocking(index: usize) -> crate::Knocking {
+    crate::Knocking {
+        suite: CipherSuitePolicy::Classical,
+        subscription: Some(subscription_of(index)),
+    }
+}
+
+/// Device `index`'s own subscription in the Meetup.
+pub(crate) fn subscription_of(index: usize) -> pingers_proto::SubscriptionId {
+    let fill = 0xa0_u8.saturating_add(u8::try_from(index).unwrap_or(0));
+    pingers_proto::SubscriptionId::from_bytes([fill; 16])
 }
 
 /// What a joiner got back for its knock: the Welcome, and the grant secret of the KeyPackage
@@ -425,4 +471,12 @@ impl Live {
         }
         events
     }
+}
+
+/// The one closed board segment every device saw unless a test says otherwise.
+pub(crate) fn common_board() -> Vec<pingers_proto::SeenSegment> {
+    vec![pingers_proto::SeenSegment {
+        start: Bucket::containing(START),
+        hash: pingers_proto::SegmentHash::from_bytes([0x5e; 32]),
+    }]
 }

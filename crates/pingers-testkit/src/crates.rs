@@ -123,6 +123,10 @@ struct State {
     server: ServerSection,
     meetups: MeetupsSection,
     section_reads: usize,
+    /// Where [`FakeCrates::raise`] sends the Meetup events the client forwards.
+    raised: tokio::sync::mpsc::UnboundedSender<ClientEvent>,
+    /// Handed to the client once, by `take_events`.
+    raised_receiver: Option<tokio::sync::mpsc::UnboundedReceiver<ClientEvent>>,
     priority_notice: Option<pingers_client::Notice>,
     setup_check: SetupCheck,
     setup_outcome: SetupOutcome,
@@ -164,6 +168,7 @@ impl FakeCrates {
             wake_pushes: WakePushes::On,
             hide_trail: HideTrail::On,
         };
+        let (raised_sender, raised_receiver) = tokio::sync::mpsc::unbounded_channel();
         let state = State {
             calls: Vec::new(),
             failing: None,
@@ -184,6 +189,8 @@ impl FakeCrates {
             },
             meetups: MeetupsSection::default(),
             section_reads: 0,
+            raised: raised_sender,
+            raised_receiver: Some(raised_receiver),
             priority_notice: None,
             setup_check: SetupCheck::Ready {
                 server: Host::new(Self::SETUP_SERVER)?,
@@ -263,6 +270,12 @@ impl FakeCrates {
     /// pingers-meetup-session's section from now on.
     pub fn set_meetups(&self, section: MeetupsSection) {
         self.lock().meetups = section;
+    }
+
+    /// Raises `event` as a live Meetup would on its own: the client republishes the snapshot
+    /// and tells the shell.
+    pub fn raise(&self, event: ClientEvent) {
+        let _sent = self.lock().raised.send(event);
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -598,6 +611,10 @@ impl MeetupsPort for FakeCrates {
 
     async fn section(&self) -> Result<MeetupsSection, ClientError> {
         self.section(CrateName::Meetups, |state| state.meetups.clone())
+    }
+
+    fn take_events(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<ClientEvent>> {
+        self.lock().raised_receiver.take()
     }
 }
 

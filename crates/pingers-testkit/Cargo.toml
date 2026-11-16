@@ -24,6 +24,7 @@ client = [
   "dep:pingers-wake",
   "dep:async-trait",
   "dep:pingers-map-downloads",
+  "dep:tokio",
 ]
 # `InProcessHarness::start` runs pingers-server, an OHTTP relay and pingers-push-relay on
 # ephemeral ports. Off by default so crates that only need the fake platform do not compile

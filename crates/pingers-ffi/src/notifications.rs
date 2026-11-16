@@ -3,7 +3,11 @@
 //! snapshot before a wake and the one after, worded by pingers-words, and the matching
 //! events. Conversion only.
 
-use pingers_screens::notifications::{Changes, Notification};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+
+use pingers_client::Client;
+use pingers_client::snapshot::ClientSnapshot;
+use pingers_screens::notifications::{Changes, Notification, changes};
 
 use crate::callbacks::Events;
 use crate::ids::{MeetupId, PartyId};
@@ -92,6 +96,68 @@ pub(crate) fn tell(events: &dyn Events, changes: &Changes) {
             _ => {}
         }
         events.notify(notification.into());
+    }
+}
+
+/// Where the latest published snapshot is read.
+type SnapshotSource = Box<dyn Fn() -> Arc<ClientSnapshot> + Send + Sync>;
+
+/// The snapshot the app was last told about, shared by wakes and the live Meetups, so a change
+/// is notified once whichever reported it first. A live Meetup's message arrives on its channel
+/// while the app is in the background and the server, seeing the channel, sends no push: the
+/// phone notifies it itself, as it does for what a wake brings.
+pub(crate) struct Notifier {
+    events: Arc<dyn Events>,
+    told: Mutex<Option<Arc<ClientSnapshot>>>,
+    source: OnceLock<SnapshotSource>,
+}
+
+impl Notifier {
+    pub(crate) fn new(events: Arc<dyn Events>) -> Arc<Self> {
+        Arc::new(Self {
+            events,
+            told: Mutex::new(None),
+            source: OnceLock::new(),
+        })
+    }
+
+    /// Starts from the client's current snapshot: what it shows at launch is not news.
+    pub(crate) fn follow(&self, client: &Client) {
+        let snapshots = client.subscribe();
+        let _set = self
+            .source
+            .set(Box::new(move || Arc::clone(&snapshots.borrow())));
+        *self.lock() = Some(client.snapshot());
+    }
+
+    /// After a wake: the events and notifications for everything since the app was last told.
+    pub(crate) fn wake_ended(&self, now: &Arc<ClientSnapshot>) {
+        if let Some(changes) = self.since(now) {
+            tell(self.events.as_ref(), &changes);
+        }
+    }
+
+    /// A live Meetup raised an event (which pingers-client passes on itself): the notifications
+    /// for what it brought.
+    pub(crate) fn live_event(&self) {
+        let Some(source) = self.source.get() else {
+            return;
+        };
+        if let Some(changes) = self.since(&source()) {
+            for notification in &changes.notifications {
+                self.events.notify(notification.into());
+            }
+        }
+    }
+
+    /// What changed between the snapshot last told and `now`, which becomes the last told.
+    fn since(&self, now: &Arc<ClientSnapshot>) -> Option<Changes> {
+        let before = self.lock().replace(Arc::clone(now))?;
+        Some(changes(&before, now))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Arc<ClientSnapshot>>> {
+        self.told.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 

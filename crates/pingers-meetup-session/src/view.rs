@@ -6,7 +6,7 @@ use core::time::Duration;
 use pingers_crypto::AccountPublicKey;
 use pingers_meetup::{
     CadenceMode, CompassReading, CompassTarget, ExactLocation, LocationVisibility, Observer,
-    PeerLocation, TargetPosition, compass, coordinate_from_wire,
+    PeerLocation, PendingAsk, PendingRequest, TargetPosition, compass, coordinate_from_wire,
 };
 use pingers_proto::{GroupId, LeafIndex, MeetPoint};
 use pingers_time::UnixSeconds;
@@ -33,8 +33,8 @@ pub struct PeerView {
     pub access: ExactLocation,
     /// Whether it holds this device's current location key ("Stop sharing").
     pub holds_own_key: bool,
-    /// When this device's request to see it lapses, while one is pending ("Request sent").
-    pub request_pending_until: Option<UnixSeconds>,
+    /// This device's request to see it, while one is pending ("Request sent").
+    pub request_pending: Option<PendingAsk>,
     /// Its latest decrypted position; only while its key is held.
     pub position: Option<PeerLocation>,
 }
@@ -64,6 +64,10 @@ pub struct MeetupView {
     pub channel: ChannelState,
     /// The current meet point.
     pub meet_point: Option<MeetPoint>,
+    /// Who set it, while there is one.
+    pub meet_point_set_by: Option<LeafIndex>,
+    /// Other members' requests to see this device, waiting on an answer.
+    pub requests: Vec<PendingRequest>,
     /// The other members, in leaf order.
     pub peers: Vec<PeerView>,
 }

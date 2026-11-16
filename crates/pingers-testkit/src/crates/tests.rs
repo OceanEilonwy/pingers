@@ -487,6 +487,26 @@ fn clones_share_one_state() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn raised_events_reach_the_one_receiver_handed_out() -> TestResult {
+    let fakes = FakeCrates::new()?;
+    let mut events = fakes.take_events().ok_or(TestError::Pending)?;
+    // The client takes the receiver once; a second ask gets nothing.
+    assert!(fakes.take_events().is_none());
+    fakes.raise(ClientEvent::MeetupMessage(MEETUP));
+    fakes.raise(ClientEvent::MeetupEnded(MEETUP));
+    assert_eq!(
+        events.try_recv().ok(),
+        Some(ClientEvent::MeetupMessage(MEETUP))
+    );
+    assert_eq!(
+        events.try_recv().ok(),
+        Some(ClientEvent::MeetupEnded(MEETUP))
+    );
+    assert!(events.try_recv().is_err());
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_priority_report_is_recorded_and_answers_the_notice_set() -> Result<(), FakeCratesError> {
     let fakes = FakeCrates::new()?;

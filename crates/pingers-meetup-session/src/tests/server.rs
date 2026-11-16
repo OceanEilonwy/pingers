@@ -5,12 +5,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use pingers_crypto::LogAuthKeyPair;
-use pingers_ohttp::{BinaryRequest, BinaryResponse};
 use pingers_proto::{
     AppMessage, CommitRequest, CommitResponse, ContentType, CreateGroup, Delivery, Epoch, GroupId,
     GroupLogEntry, LiveFrame, SequenceNumber, SubscriptionId, WireDecode as _, WireEncode as _,
 };
-use pingers_transport::{DuplexStream, PrivacyClass, Transport, TransportError, TransportKind};
+use pingers_transport::{DuplexStream, TransportError};
 use tokio::sync::{mpsc, watch};
 
 use crate::{GroupNetwork, NetworkError};
@@ -57,6 +56,8 @@ struct State {
     refused_commits: usize,
     uplinks: Vec<Uplink>,
     deleted: Vec<GroupId>,
+    /// Subscriptions accepted commits removed, in order.
+    removed_by_commits: Vec<SubscriptionId>,
     /// Every byte string a device sent the server, as it arrived: requests, paths and frames.
     seen: Vec<Vec<u8>>,
 }
@@ -280,6 +281,10 @@ impl FakeServer {
         })
     }
 
+    pub(crate) fn removed_by_commits(&self) -> Vec<SubscriptionId> {
+        self.lock().removed_by_commits.clone()
+    }
+
     pub(crate) fn deleted(&self) -> Vec<GroupId> {
         self.lock().deleted.clone()
     }
@@ -403,6 +408,9 @@ impl GroupNetwork for FakeNetwork {
         }
         log.head = log.head.saturating_add(1);
         let sequence = SequenceNumber::new(u64::try_from(log.entries.len()).unwrap_or(0));
+        state
+            .removed_by_commits
+            .extend(request.subscriptions_removed.iter().copied());
         let frame = LiveFrame {
             epoch: request.epoch,
             body: request.commit,
@@ -483,59 +491,29 @@ impl GroupNetwork for FakeNetwork {
         Ok(())
     }
 
-    fn live_head(
+    async fn open_live(
         &self,
         group: &GroupId,
         _auth: &LogAuthKeyPair,
         _subscription: Option<SubscriptionId>,
-    ) -> Result<BinaryRequest, NetworkError> {
+    ) -> Result<Box<dyn DuplexStream>, NetworkError> {
         self.server.saw(hex_id(group).into_bytes());
-        Ok(BinaryRequest {
-            method: "POST".into(),
-            path: format!("/v1/groups/{}/live", hex_id(group)),
-            headers: Vec::new(),
-            body: Vec::new(),
-        })
-    }
-}
-
-fn hex_id(group: &GroupId) -> String {
-    hex::encode(group.as_bytes())
-}
-
-#[async_trait::async_trait]
-impl Transport for FakeNetwork {
-    async fn request(
-        &self,
-        _class: PrivacyClass,
-        _request: BinaryRequest,
-    ) -> Result<BinaryResponse, TransportError> {
-        Err(TransportError::ClassNotAllowed)
-    }
-
-    async fn stream(
-        &self,
-        request: BinaryRequest,
-    ) -> Result<Box<dyn DuplexStream>, TransportError> {
         let mut state = self.server.lock();
         if state.refuse_streams {
             state.refused.push(self.member);
             drop(state);
             self.server.touch();
-            return Err(TransportError::Connection);
+            return Err(NetworkError::Unavailable);
         }
-        let group = state
-            .groups
-            .keys()
-            .find(|group| request.path.contains(&hex_id(group)))
-            .copied()
-            .ok_or(TransportError::Status { status: 404 })?;
+        if !state.groups.contains_key(group) {
+            return Err(NetworkError::Rejected);
+        }
         let id = state.next_channel;
         state.next_channel = id.saturating_add(1);
         let (downlink, receiver) = mpsc::unbounded_channel();
         state.channels.push(Channel {
             id,
-            group,
+            group: *group,
             member: self.member,
             downlink,
             forwarded: 0,
@@ -549,10 +527,10 @@ impl Transport for FakeNetwork {
             receiver,
         }))
     }
+}
 
-    fn kind(&self) -> TransportKind {
-        TransportKind::Ohttp
-    }
+fn hex_id(group: &GroupId) -> String {
+    hex::encode(group.as_bytes())
 }
 
 /// One live channel.

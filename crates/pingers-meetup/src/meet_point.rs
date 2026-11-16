@@ -63,6 +63,14 @@ impl MeetPointRegister {
         }
     }
 
+    /// Who set the current meet point: the member whose write won (for a late joiner, the
+    /// member whose snapshot brought it). `None` when there is none.
+    #[must_use]
+    pub fn set_by(&self) -> Option<LeafIndex> {
+        self.current()?;
+        self.current.as_ref().map(|written| written.sender)
+    }
+
     /// The highest Lamport value seen, for stamping this member's next write.
     #[must_use]
     pub fn lamport(&self) -> Lamport {
@@ -181,5 +189,30 @@ mod tests {
             MeetPointUpdate::Applied
         );
         assert_eq!(register.current(), None);
+        assert_eq!(register.set_by(), None);
+    }
+
+    #[test]
+    #[expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+    fn the_winning_writer_set_the_meet_point() -> Result<(), pingers_proto::ProtoError> {
+        let mut register = MeetPointRegister::new();
+        assert_eq!(register.set_by(), None);
+        let fixed = MeetPoint::Fixed {
+            position: pingers_proto::E7Coordinate::new(515_000_000, -1_000_000)?,
+            label: None,
+            lamport: Lamport::new(3),
+        };
+        assert_eq!(
+            register.apply(LeafIndex::new(4), fixed),
+            MeetPointUpdate::Applied
+        );
+        assert_eq!(register.set_by(), Some(LeafIndex::new(4)));
+        // A losing write does not change who set it.
+        assert_eq!(
+            register.apply(LeafIndex::new(2), at_member(2, 1)),
+            MeetPointUpdate::Ignored
+        );
+        assert_eq!(register.set_by(), Some(LeafIndex::new(4)));
+        Ok(())
     }
 }

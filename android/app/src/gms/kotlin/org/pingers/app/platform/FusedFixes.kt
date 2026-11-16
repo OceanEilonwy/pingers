@@ -2,6 +2,7 @@ package org.pingers.app.platform
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.os.Handler
 import android.os.HandlerThread
 import com.google.android.gms.location.CurrentLocationRequest
 import com.google.android.gms.location.FusedLocationProviderClient
@@ -21,6 +22,7 @@ import java.util.concurrent.Executors
 class FusedFixes(private val context: Context, private val sink: () -> CoreSink) : FixSource {
     private val client: FusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(context)
     private val thread = HandlerThread("pingers-location").apply { start() }
+    private val handler = Handler(thread.looper)
     private val executor = Executors.newSingleThreadExecutor()
     private var continuous: LocationCallback? = null
 
@@ -30,15 +32,28 @@ class FusedFixes(private val context: Context, private val sink: () -> CoreSink)
             sink().onFix(null)
             return
         }
-        val request = CurrentLocationRequest.Builder()
-            .setPriority(quality.priority())
-            .setDurationMillis(timeoutMillis.coerceAtLeast(1))
-            .setMaxUpdateAgeMillis(if (quality == FixQuality.HIGH) 0 else ContinuousRequest.MAX_CACHED_AGE_MILLIS)
-            .build()
-        client.getCurrentLocation(request, CancellationTokenSource().token)
+        FixChain(
+            attempts = fixAttempts(quality, timeoutMillis),
+            schedule = { delay, action -> handler.postDelayed(action, delay) },
+            start = ::current,
             // Off the main thread: the core may take a while with a fix.
-            .addOnSuccessListener(executor) { location -> sink().onFix(location?.toFix()) }
-            .addOnFailureListener(executor) { sink().onFix(null) }
+            answer = { fix -> executor.execute { sink().onFix(fix) } },
+        ).run()
+    }
+
+    /** One try through Fused Location; returns what cancels it. */
+    @SuppressLint("MissingPermission") // The caller checked.
+    private fun current(attempt: FixAttempt, result: (Fix?) -> Unit): () -> Unit {
+        val request = CurrentLocationRequest.Builder()
+            .setPriority(attempt.quality.priority())
+            .setDurationMillis(attempt.timeoutMillis.coerceAtLeast(1))
+            .setMaxUpdateAgeMillis(if (attempt.quality == FixQuality.HIGH) 0 else ContinuousRequest.MAX_CACHED_AGE_MILLIS)
+            .build()
+        val cancel = CancellationTokenSource()
+        client.getCurrentLocation(request, cancel.token)
+            .addOnSuccessListener(executor) { location -> result(location?.toFix()) }
+            .addOnFailureListener(executor) { result(null) }
+        return { cancel.cancel() }
     }
 
     @SuppressLint("MissingPermission") // Checked first.

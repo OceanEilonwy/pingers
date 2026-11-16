@@ -67,6 +67,7 @@ fn quantum_resistant_meetup_carries_x_wing_grant_keys() -> TestResult {
     let first_member = b.context().create_key_package(
         KeyPackagePurpose::Meetup {
             grant_key: &grant_b,
+            subscription: None,
         },
         CipherSuitePolicy::QuantumResistant,
         &mut rng,
@@ -82,6 +83,7 @@ fn quantum_resistant_meetup_carries_x_wing_grant_keys() -> TestResult {
             party_roster: &party,
             first_member: &first_member,
             own_grant_key: &grant_a,
+            own_subscription: None,
             suite: CipherSuitePolicy::QuantumResistant,
         },
         &mut rng,

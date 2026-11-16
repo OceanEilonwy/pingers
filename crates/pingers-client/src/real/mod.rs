@@ -17,8 +17,11 @@
 //! - `network`: the instance settings, and the router and engine built from them.
 //! - `records`: the client's own records in the store's key-value table.
 
+mod board_seen;
 mod join;
 mod maps;
+mod meetup_network;
+mod meetup_watch;
 mod meetups;
 mod network;
 mod parties;
@@ -138,6 +141,7 @@ impl Crates {
         let meetups = Arc::new(meetups::Meetups::new(
             Arc::clone(&backend),
             Arc::clone(&net),
+            Arc::clone(&platform),
         ));
         let roots = instance.map_or(Trust::Mozilla, |instance| instance.trust.clone());
         let maps = Arc::new(maps::Maps::new(

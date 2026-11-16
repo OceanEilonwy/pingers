@@ -130,7 +130,7 @@ async fn the_live_channel_goes_only_through_the_relay() -> TestResult {
     let live = || {
         ApiRequest::live(
             &GroupId::from_bytes([4; 32]),
-            &SubscriptionId::from_bytes([5; 16]),
+            Some(&SubscriptionId::from_bytes([5; 16])),
             &signer,
         )
     };

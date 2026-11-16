@@ -106,6 +106,10 @@
 //!   and `sealed_until` (the `not_after` sealed in), so pingers-sync seals a push again when the
 //!   token changes, the relay key rotates or `not_after` comes near. Rows from before version 8
 //!   have neither and are sealed again.
+//! - **A knock's grant secret waits in `knock_key`** (schema version 9), keyed by the knock's
+//!   reply mailbox, with the Meetup subscription the knock carried: the Welcome arrives in
+//!   that mailbox, and joining takes the row ([`KnockKeys`]). Rows of unanswered knocks are
+//!   deleted once no Welcome can come; leaving the Party cascades. Not in design C.2.
 //! - **Unsigned values past `i64::MAX`** are refused ([`StoreError::OutOfRange`]), never
 //!   wrapped.
 //!
@@ -143,6 +147,7 @@ pub use repo::board::{
     BoardSeen, KnockState, KnocksOut, LeaseSlot, Leases, OutgoingKnock, SEEN_SEGMENTS_KEPT,
     StoredLease,
 };
+pub use repo::knock::{KnockKey, KnockKeys};
 pub use repo::mailbox::{
     Mailbox, MailboxPurpose, MailboxState, Mailboxes, SealStamp, StoredSubscription, Subscriptions,
 };

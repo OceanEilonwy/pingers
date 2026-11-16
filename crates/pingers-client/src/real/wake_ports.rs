@@ -12,10 +12,9 @@ use pingers_geo::Fix;
 use pingers_mls::MlsContext;
 use pingers_parties::{PartiesError, PartyLifecycle, PostQuantum, RosterView};
 use pingers_presence::{EpochState, EpochTransition, RosterLookup as _, SpotRef};
-use pingers_proto::{Epoch, KeyPackageBytes, LeafIndex, PartyId, SizeClass, SpotId};
+use pingers_proto::{Epoch, LeafIndex, PartyId, SizeClass, SpotId};
 use pingers_store::Session;
 use pingers_time::{Clock, MonotonicTime, Sleep, Timer, UnixSeconds};
-use pingers_wake::PortError;
 use pingers_wake::ports::{
     DevicePort, FixQuality as WakeFixQuality, LocationMode as WakeLocationMode, OsRegion,
     PartyInfo, PartyView, RegionId, SpotInfo,
@@ -33,14 +32,17 @@ pub(crate) struct Device {
     platform: Arc<dyn Platform>,
     /// "Pause during Focus" is off: the gate sees Focus as off.
     ignore_focus: bool,
+    /// The latest fix the shell delivered, while it is fresh enough to answer a request.
+    fresh: Option<Fix>,
     outcome: Mutex<WakeOutcome>,
 }
 
 impl Device {
-    pub(crate) fn new(platform: Arc<dyn Platform>, ignore_focus: bool) -> Self {
+    pub(crate) fn new(platform: Arc<dyn Platform>, ignore_focus: bool, fresh: Option<Fix>) -> Self {
         Self {
             platform,
             ignore_focus,
+            fresh,
             outcome: Mutex::new(WakeOutcome::default()),
         }
     }
@@ -66,13 +68,17 @@ impl DevicePort for Device {
         }
     }
 
-    /// The platform delivers fixes through `Client::on_location`, which runs the next wake, so
-    /// this wake asks for one and goes on without it.
+    /// The platform delivers fixes through `Client::on_location`, which runs the next wake. A
+    /// fix delivered within `FIX_MAX_AGE` answers at once (the liveness check of a knock read
+    /// right after a fix); otherwise this wake asks for one and goes on without it.
     fn request_fix(
         &self,
         quality: WakeFixQuality,
         timeout: Duration,
     ) -> impl Future<Output = Option<Fix>> + Send {
+        if let Some(fix) = self.fresh {
+            return ready(Some(fix));
+        }
         self.record(|outcome| {
             outcome.fix = Some(FixRequest {
                 quality: fix_quality(quality),
@@ -257,13 +263,6 @@ impl PartyView for Lens {
 
     fn signing_key(&self) -> &AccountSigningKey {
         &self.signing_key
-    }
-
-    /// WAITING(contracts): pingers-meetup-session's `knock_key_package` is async and returns
-    /// the grant key the later `join` needs, while this port is synchronous and drops it. A
-    /// knock follows a board match, which needs pingers-sync, so nothing reaches this yet.
-    fn key_package(&self, _party: PartyId) -> Result<KeyPackageBytes, PortError> {
-        Err(PortError::Unavailable)
     }
 }
 

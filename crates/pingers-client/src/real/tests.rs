@@ -124,7 +124,11 @@ fn wake(store: &Store) -> Wake {
     Wake::new(
         Arc::clone(&store.backend),
         Arc::new(Quiet),
-        Arc::new(Meetups::new(Arc::clone(&store.backend), offline(store))),
+        Arc::new(Meetups::new(
+            Arc::clone(&store.backend),
+            offline(store),
+            Arc::new(Quiet),
+        )),
         offline(store),
     )
 }
@@ -732,10 +736,13 @@ async fn an_admission_the_client_cannot_carry_out_is_reported() -> TestResult {
     use pingers_wake::ports::{MeetupAdmission, MeetupPort as _};
 
     let store = store()?;
-    let meetups = Meetups::new(Arc::clone(&store.backend), offline(&store));
+    let meetups = Meetups::new(Arc::clone(&store.backend), offline(&store), Arc::new(Quiet));
     let key_package = knock_key_package(
         &store.backend.database,
-        CipherSuitePolicy::Classical,
+        pingers_meetup_session::Knocking {
+            suite: CipherSuitePolicy::Classical,
+            subscription: None,
+        },
         Box::new(ChaCha20Rng::seed_from_u64(4)),
     )
     .await?
@@ -774,6 +781,75 @@ async fn an_admission_the_client_cannot_carry_out_is_reported() -> TestResult {
             .await;
         assert_eq!(outcome, Err(PortError::Unavailable));
     }
+    Ok(())
+}
+
+/// Closed board segments read in a wake are kept for a Meetup's first message; open ones,
+/// whose hash is not final, are not.
+#[tokio::test]
+async fn closed_board_segments_read_are_kept() -> TestResult {
+    use pingers_proto::{BoardPage, SegmentHash, SegmentInfo};
+
+    let store = store()?;
+    let net = offline(&store);
+    let closed = SegmentInfo {
+        start: Bucket::containing(store.clock.now()),
+        record_count: 0,
+        closed_hash: Some(SegmentHash::from_bytes([3; 32])),
+    };
+    let open = SegmentInfo {
+        start: Bucket::containing(UnixSeconds::new(1_800_003_600)),
+        record_count: 0,
+        closed_hash: None,
+    };
+    let page = BoardPage {
+        segments: vec![closed, open],
+        records: Vec::new(),
+        next: None,
+    };
+    net.saw_board(&page).await;
+    let kept = session(&store, |session| Ok(session.board_seen().list()?)).await?;
+    assert_eq!(
+        kept,
+        vec![pingers_proto::SeenSegment {
+            start: closed.start,
+            hash: SegmentHash::from_bytes([3; 32]),
+        }]
+    );
+    Ok(())
+}
+
+/// A Meetup a killed process left in the store cannot be resumed: the first read after
+/// launch deletes it, keys and all.
+#[tokio::test]
+async fn meetups_a_killed_process_left_are_deleted_at_launch() -> TestResult {
+    use crate::ports::MeetupsPort as _;
+
+    let store = store()?;
+    session(&store, |session| {
+        let party = PartyId::from_bytes([4; 16]);
+        session.parties().insert(&pingers_store::Party {
+            id: party,
+            group: pingers_proto::GroupId::from_bytes([4; 32]),
+            name: pingers_store::PartyName::new("Crew".to_owned())?,
+            own_leaf: LeafIndex::new(0),
+            created_at: UnixSeconds::new(1_000),
+            location_visibility: None,
+        })?;
+        session.meetups().start(&pingers_store::Meetup {
+            group: pingers_proto::GroupId::from_bytes([5; 32]),
+            party,
+            spot: SpotId::from_bytes([6; 16]),
+            started_at: UnixSeconds::new(2_000),
+            grant_key: pingers_crypto::GrantSecretKey::from_bytes(Zeroizing::new([7; 32])),
+        })?;
+        Ok(())
+    })
+    .await?;
+    let meetups = Meetups::new(Arc::clone(&store.backend), offline(&store), Arc::new(Quiet));
+    assert!(meetups.section().await?.meetups.is_empty());
+    let left = session(&store, |session| Ok(session.meetups().list()?.len())).await?;
+    assert_eq!(left, 0);
     Ok(())
 }
 

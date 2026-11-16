@@ -7,10 +7,9 @@ use pingers_meetup::{
     AllowListChoice, AskBack, CadenceMode, ExactLocation, GrantScope, LocationAnswer,
     MeetPointDraft, MeetupAction, MeetupEvent,
 };
-use pingers_mls::CipherSuitePolicy;
 use pingers_proto::{ChatBody, Delivery, LeafIndex, MeetPoint};
 
-use super::{GROUP, Leftovers, TestError, TestResult, World, fix};
+use super::{GROUP, Leftovers, TestError, TestResult, World, fix, subscription_of};
 use crate::{
     AddMember, ChannelState, Ended, MAX_RECONNECT_DELAY, MeetupScreen, NETWORK_TIMEOUT,
     SessionError, knock_key_package,
@@ -86,11 +85,13 @@ async fn members_exchange_frames_then_leaving_deletes_everything() -> TestResult
     // Alice's next background frame carries her fix; Bob's view shows it and its age.
     let fix_taken = world.now();
     world.clock.advance(Duration::from_secs(60));
-    let view = bob
-        .view_until("Alice's position", |view| {
-            view.peer(ALICE).is_some_and(|peer| peer.position.is_some())
-        })
-        .await?;
+    bob.event(
+        "Alice's position",
+        |event| matches!(event, MeetupEvent::PeerLocation(location) if location.leaf == ALICE),
+    )
+    .await?;
+    // The event follows the view that shows it, so the shell reads the position it announces.
+    let view = bob.handle.view().borrow().clone();
     assert_eq!(
         view.position_age(ALICE, world.now()),
         Some(world.now().saturating_duration_since(fix_taken))
@@ -122,6 +123,8 @@ async fn members_exchange_frames_then_leaving_deletes_everything() -> TestResult
         .await?;
     assert_eq!(world.server.commits(&GROUP), 2);
     assert!(world.server.deleted().is_empty());
+    // Bob's commit of her proposal drops her subscription, read from her leaf.
+    assert_eq!(world.server.removed_by_commits(), vec![subscription_of(0)]);
 
     // Bob, alone, leaves last: the group goes on the server and on his phone.
     assert_eq!(bob.handle.leave().await?, Ended::Left);
@@ -187,12 +190,10 @@ async fn a_dropped_channel_reopens_and_catches_up_from_the_log() -> TestResult {
     let world = World::new(2)?;
     let [mut alice, bob] = world.meetup_of_two().await?;
     assert_eq!(world.server.opened("Alice"), 1);
-    // Board hashes are ephemeral: on the channel while it is up.
-    let before = world.server.uplinks("Alice", Delivery::Ephemeral);
-    alice.handle.board_seen(Vec::new()).await?;
+    // Her board hashes, ephemeral, went on the channel once it was up.
     world
         .server
-        .until_uplinks("Alice", Delivery::Ephemeral, before.saturating_add(1))
+        .until_uplinks("Alice", Delivery::Ephemeral, 1)
         .await?;
 
     // The exchange drops and the relay refuses the first attempts.
@@ -205,16 +206,22 @@ async fn a_dropped_channel_reopens_and_catches_up_from_the_log() -> TestResult {
         .await?;
     // It is retried at once, then after a backoff.
     world.server.until_refused("Alice", 1).await?;
-    // No retry before the backoff, and an ephemeral frame is dropped, not posted.
-    alice.handle.board_seen(Vec::new()).await?;
+    // No retry before the backoff, however often her task goes round: each command it
+    // answers is one more turn of its loop.
+    for _turn in 0..2 {
+        alice.handle.own_fix(fix(world.now())?).await?;
+    }
     assert_eq!(world.server.refused("Alice"), 1);
-    assert_eq!(world.server.ephemeral_posts(), 0);
     // Meanwhile Bob writes: it reaches only the group log.
     bob.handle.act(chat("Where are you?")?).await?;
+    // A minute passes: her location frame, ephemeral, is dropped rather than posted (checked
+    // at the end), and the retry after the 1 s backoff is refused too.
+    world.clock.advance(Duration::from_secs(60));
+    world.server.until_refused("Alice", 2).await?;
 
-    // The relay is back; the next attempt (after a 1 s backoff) succeeds and the log is read.
+    // The relay is back; the next attempt (after a 2 s backoff) succeeds and the log is read.
     world.server.refuse_streams(false);
-    world.clock.advance(Duration::from_secs(1));
+    world.clock.advance(Duration::from_secs(2));
     world.server.until_opened("Alice", 2).await?;
     alice.connected().await?;
     alice
@@ -232,6 +239,28 @@ async fn a_dropped_channel_reopens_and_catches_up_from_the_log() -> TestResult {
         .server
         .until_uplinks("Alice", Delivery::Ephemeral, before.saturating_add(1))
         .await?;
+    // Nothing ephemeral ever went to the group log.
+    assert_eq!(world.server.ephemeral_posts(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn members_who_saw_different_boards_are_told() -> TestResult {
+    let world = World::new(2)?;
+    // Bob saw the same segment with another hash: one of them was shown a forged board.
+    let mut forged = super::common_board();
+    if let Some(segment) = forged.first_mut() {
+        segment.hash = pingers_proto::SegmentHash::from_bytes([0x0f; 32]);
+    }
+    world.sees(1, forged);
+    let [mut alice, mut bob] = world.meetup_of_two().await?;
+    for member in [&mut alice, &mut bob] {
+        member
+            .event("the board equivocation", |event| {
+                *event == MeetupEvent::BoardEquivocation
+            })
+            .await?;
+    }
     Ok(())
 }
 
@@ -262,6 +291,8 @@ async fn a_silent_member_is_removed() -> TestResult {
         .await?;
     assert!(view.peer(BOB).is_none());
     assert_eq!(world.server.commits(&GROUP), 2);
+    // The silent member never deleted its subscription; the removal drops it.
+    assert_eq!(world.server.removed_by_commits(), vec![subscription_of(1)]);
 
     // Alone for 30 minutes: the Meetup ends, on the server too.
     world.clock.advance(Duration::from_mins(31));
@@ -376,11 +407,14 @@ async fn a_late_joiner_gets_the_snapshot_but_no_history() -> TestResult {
         matches!(event, MeetupEvent::Chat { .. })
     })
     .await?;
+    let alice_leaf = alice.handle.view().borrow().own_leaf;
+    let bob_set_by = bob.handle.view().borrow().meet_point_set_by;
+    assert_eq!(bob_set_by, Some(alice_leaf));
 
     // Chloé knocks; Alice adds her and hands back the Welcome.
     let knock = knock_key_package(
         world.device(2)?.database(),
-        CipherSuitePolicy::Classical,
+        super::knocking(2),
         Box::new(pingers_testkit::seeded_rng(3)),
     )
     .await?;
@@ -403,6 +437,8 @@ async fn a_late_joiner_gets_the_snapshot_but_no_history() -> TestResult {
         Some(MeetPoint::Fixed { .. })
     ));
     assert_eq!(chloe_view.meet_point, alice_point);
+    // The snapshot came from Alice, the lowest leaf.
+    assert_eq!(chloe_view.meet_point_set_by, Some(alice_leaf));
     assert_eq!(chloe_view.peers.len(), 2);
     // The whole log was read before the snapshot applied: no earlier chat came with it.
     let events = chloe.drain();
@@ -433,6 +469,25 @@ async fn a_network_call_that_hangs_times_out() -> TestResult {
     // The Meetup carries on.
     world.server.hang_posts(false);
     alice.handle.act(chat("Now?")?).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_store_that_fails_stops_the_meetup() -> TestResult {
+    let world = World::new(2)?;
+    let [alice, _bob] = world.meetup_of_two().await?;
+    world.device(0)?.break_store()?;
+    // Whatever reaches the store next (Bob's frames, or this action) fails on it, and the
+    // task stops: its state can no longer be trusted. The action fails either way.
+    let acted = alice.handle.act(chat("Lost")?).await;
+    assert!(matches!(
+        acted,
+        Err(SessionError::Store(_) | SessionError::Ended)
+    ));
+    let finished = tokio::time::timeout(super::PATIENCE, alice.handle.finished())
+        .await
+        .map_err(|_elapsed| TestError::Timeout("the Meetup to stop"))?;
+    assert!(matches!(finished, Err(SessionError::Store(_))));
     Ok(())
 }
 

@@ -3807,7 +3807,6 @@ dependencies = [
  "pingers-geo",
  "pingers-meetup",
  "pingers-mls",
- "pingers-ohttp",
  "pingers-presence",
  "pingers-proto",
  "pingers-store",

@@ -30,7 +30,8 @@ pub use adapter::group_storage_prefix;
 pub use group::{
     CipherSuitePolicy, Commit, CommitSummary, CreatedMeetup, Group, KeyPackageInfo,
     KeyPackagePurpose, Meetup, MeetupCreation, MeetupPskBinding, MeetupPskId, MemberGrantKey,
-    MlsContext, MlsError, Party, ProcessedMessage, SelfRemoval, inspect_key_package,
+    MemberSubscription, MlsContext, MlsError, Party, ProcessedMessage, SelfRemoval,
+    inspect_key_package,
 };
 pub use roster::{Roster, RosterEntry};
 pub use storage::{MlsStorage, StorageError};
