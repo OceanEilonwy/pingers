@@ -761,3 +761,43 @@ fn the_domain_is_checked() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn the_setup_page_passes_nodos_own_owner_page_check() -> TestResult {
+    use pingers_setup::checks::{Check, Facts, PushRelayFacts, State};
+    let installed = installed()?;
+    let config = pingers_setup::Config::parse(&render(&installed, "pingers", "setup")?.text)?;
+    let pins = |byte: u8| {
+        vec![
+            pingers_proto::KeyConfigHash::from_bytes([byte; 32]),
+            pingers_proto::KeyConfigHash::from_bytes([byte.wrapping_add(1); 32]),
+        ]
+    };
+    // Every check failing with the longest detail, and the services up (so the QR code is
+    // there); then the services down.
+    let failing: Vec<Check> = (0..10)
+        .map(|_| Check::new("A check", State::Failed, "d".repeat(4000)))
+        .collect();
+    let up = Facts {
+        gateway_pins: Ok(pins(1)),
+        push_relay: Ok(PushRelayFacts {
+            pins: pins(3),
+            fcm: true,
+        }),
+        map_regions: Ok(1),
+        public: failing.clone(),
+    };
+    let down = Facts {
+        gateway_pins: Err("pingers-server's gateway is not answering".to_owned()),
+        push_relay: Err("pingers-push-relay is not answering".to_owned()),
+        map_regions: Err("pingers-map-host is not answering".to_owned()),
+        public: failing,
+    };
+    for facts in [up, down] {
+        let json = serde_json::to_string(&pingers_setup::page::build(&config, &facts))?;
+        assert!(json.len() <= nodo_manifest::owner_page::MAX_BODY_BYTES);
+        let page: nodo_manifest::owner_page::PageDoc = serde_json::from_str(&json)?;
+        page.check()?;
+    }
+    Ok(())
+}

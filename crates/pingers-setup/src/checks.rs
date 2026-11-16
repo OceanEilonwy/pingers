@@ -54,12 +54,28 @@ pub struct Check {
     pub detail: Option<String>,
 }
 
+/// The longest detail nodo's owner page takes, in characters.
+pub const MAX_DETAIL_CHARS: usize = 512;
+
 impl Check {
-    fn new(label: impl Into<String>, state: State, detail: impl Into<String>) -> Self {
+    /// A check; its detail is cut to [`MAX_DETAIL_CHARS`] (an error message can be long).
+    #[must_use]
+    pub fn new(label: impl Into<String>, state: State, detail: impl Into<String>) -> Self {
+        let detail: String = detail.into();
+        let detail = if detail.chars().count() > MAX_DETAIL_CHARS {
+            let mut cut: String = detail
+                .chars()
+                .take(MAX_DETAIL_CHARS.saturating_sub(1))
+                .collect();
+            cut.push('\u{2026}');
+            cut
+        } else {
+            detail
+        };
         Self {
             label: label.into(),
             state,
-            detail: Some(detail.into()).filter(|detail| !detail.is_empty()),
+            detail: Some(detail).filter(|detail| !detail.is_empty()),
         }
     }
 }

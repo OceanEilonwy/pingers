@@ -151,8 +151,8 @@ toml = "1.2.1"
 # is checked). Pinned to the monokulo-nodo commit with bundles and owner pages (branch
 # bundles-and-owner-pages, on top of N1 and N2 from #12); once that PR is merged, the merge
 # commit, the same one feed.yml's NODO_REV builds with.
-nodo-manifest = { git = "https://github.com/OceanEilonwy/monokulo-nodo", rev = "8c63f5ea335aeaaf55add636108dea5c935d4d4d" }
-nodo-settings = { git = "https://github.com/OceanEilonwy/monokulo-nodo", rev = "8c63f5ea335aeaaf55add636108dea5c935d4d4d" }
+nodo-manifest = { git = "https://github.com/OceanEilonwy/monokulo-nodo", rev = "226610d83fa8ce34a8033d827bad7854c8f42e78" }
+nodo-settings = { git = "https://github.com/OceanEilonwy/monokulo-nodo", rev = "226610d83fa8ce34a8033d827bad7854c8f42e78" }
 
 # Same-layer dependencies, checked by `cargo xtask layers`. The architecture puts pingers-time
 # in L0 beside the crates that need its types, so L0 has an internal order:

@@ -3106,7 +3106,7 @@ dependencies = [
 [[package]]
 name = "nodo-manifest"
 version = "0.1.0"
-source = "git+https://github.com/OceanEilonwy/monokulo-nodo?rev=8c63f5ea335aeaaf55add636108dea5c935d4d4d#8c63f5ea335aeaaf55add636108dea5c935d4d4d"
+source = "git+https://github.com/OceanEilonwy/monokulo-nodo?rev=226610d83fa8ce34a8033d827bad7854c8f42e78#226610d83fa8ce34a8033d827bad7854c8f42e78"
 dependencies = [
  "serde",
  "thiserror",
@@ -3116,7 +3116,7 @@ dependencies = [
 [[package]]
 name = "nodo-settings"
 version = "0.1.0"
-source = "git+https://github.com/OceanEilonwy/monokulo-nodo?rev=8c63f5ea335aeaaf55add636108dea5c935d4d4d#8c63f5ea335aeaaf55add636108dea5c935d4d4d"
+source = "git+https://github.com/OceanEilonwy/monokulo-nodo?rev=226610d83fa8ce34a8033d827bad7854c8f42e78#226610d83fa8ce34a8033d827bad7854c8f42e78"
 dependencies = [
  "libc",
  "mlua",

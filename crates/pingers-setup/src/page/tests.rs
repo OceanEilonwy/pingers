@@ -244,3 +244,15 @@ fn the_json_is_nodos_owner_page_format() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn a_long_detail_is_cut_to_nodos_limit() {
+    let long = crate::checks::Check::new("TLS", State::Failed, "x".repeat(2000));
+    let detail = long.detail.unwrap_or_default();
+    assert_eq!(detail.chars().count(), crate::checks::MAX_DETAIL_CHARS);
+    assert!(detail.ends_with('\u{2026}'));
+    let short = crate::checks::Check::new("TLS", State::Ok, "");
+    assert_eq!(short.detail, None);
+    let exact = crate::checks::Check::new("TLS", State::Ok, "y".repeat(512));
+    assert_eq!(exact.detail.map(|detail| detail.len()), Some(512));
+}
