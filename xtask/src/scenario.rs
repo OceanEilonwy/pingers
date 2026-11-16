@@ -893,6 +893,15 @@ fn play(
                 &Find::tag("location_allow").or(Text::Is("Allow".into())),
                 NETWORK,
             )?;
+            // A's answer asks to see B too ("Ask to see Ben too" is on by default), and B's
+            // phone opens that request over the Meetup: B puts it off to look.
+            let asked_back =
+                Find::text(Text::Contains("wants to see exactly where you are".into()));
+            if scene.b.wait_for(&asked_back, UI).is_ok() {
+                scene
+                    .b
+                    .tap_when(&Find::text(Text::Is("Not now".into())), UI)?;
+            }
             scene.b.wait_for(
                 &Find::text(Text::Contains("sharing with you".into()))
                     .or(Text::Is("Sharing with you".into())),
