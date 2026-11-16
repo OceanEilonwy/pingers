@@ -62,6 +62,9 @@ type TestResult = Result<(), TestError>;
 const KEY: [u8; 32] = [8; 32];
 const B_CODE: &str = "b-friends";
 const STEP: Duration = Duration::from_secs(90);
+/// A wake that restocks two servers from empty: each issues a day's allowance (300 tokens) in a
+/// debug build, which takes over a minute on a busy machine. Only a hung wake should hit this.
+const RESTOCK_STEP: Duration = Duration::from_secs(300);
 
 struct TestDir(PathBuf);
 
@@ -544,7 +547,7 @@ async fn a_wake_restocks_each_server_s_tokens() -> TestResult {
     }
     // The next day, when each server issues a fresh allowance of tokens.
     world.clock.advance(std::time::Duration::from_hours(25));
-    tokio::time::timeout(STEP, ana.client.on_wake())
+    tokio::time::timeout(RESTOCK_STEP, ana.client.on_wake())
         .await
         .map_err(|_elapsed| TestError::Setup("the wake did not finish"))??;
     for server in &servers {
