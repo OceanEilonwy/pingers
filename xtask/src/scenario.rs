@@ -872,6 +872,17 @@ fn play(
         let signal = Find::tag("alert_open")
             .or(Text::Is("Open meetup".into()))
             .or(Text::Contains(" here".into()));
+        // Play services' fused provider takes an emulator for a phone that never moves (its
+        // motion sensors are still), so after the Spot editor's fix it keeps answering a
+        // balanced request with that fix, as far away as it was, and never turns GPS on for
+        // the walk in. Location off and on again drops that cached fix.
+        for device in [&scene.a, &scene.b] {
+            device.shell("cmd location set-location-enabled false")?;
+        }
+        pause(Duration::from_secs(2));
+        for device in [&scene.a, &scene.b] {
+            device.shell("cmd location set-location-enabled true")?;
+        }
         let deadline = Deadline::after(PRESENCE);
         let mut round = 0_u32;
         loop {
