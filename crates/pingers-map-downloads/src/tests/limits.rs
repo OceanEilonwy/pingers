@@ -94,14 +94,14 @@ async fn a_host_that_never_finishes_preparing_is_asked_forty_times() -> TestResu
     let reports = Reports::default();
     let timer = InstantTimer::default();
     let offer = ready_offer()?;
-    let outcome = download(&Download {
+    let outcome = bounded(download(&Download {
         fetch: &host,
         timer: &timer,
         offer: &offer,
         directory: directory.path(),
         progress: &reports,
-    })
-    .await;
+    }))
+    .await?;
     assert!(matches!(outcome, Err(MapsError::Preparing { .. })));
     assert_eq!(
         reports

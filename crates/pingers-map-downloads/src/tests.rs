@@ -119,6 +119,10 @@ impl MapFetch for ScriptedHost {
             requests.push(format!("{path} {}", range.clone().unwrap_or_default()));
             requests.len()
         };
+        if made > MOST_REQUESTS {
+            // A download that never stops asking fails here instead of hanging the test.
+            return Err(MapsError::Internal);
+        }
         let due = self
             .change
             .lock()
@@ -306,15 +310,26 @@ async fn run(
 ) -> Result<(RegionManifest, Reports, InstantTimer), MapsError> {
     let reports = Reports::default();
     let timer = InstantTimer::default();
-    let manifest = download(&Download {
+    let manifest = bounded(download(&Download {
         fetch,
         timer: &timer,
         offer,
         directory,
         progress: &reports,
-    })
-    .await?;
+    }))
+    .await??;
     Ok((manifest, reports, timer))
+}
+
+/// More requests than any download in these tests makes; past it the scripted host fails.
+const MOST_REQUESTS: usize = 100_000;
+
+/// Runs `work` for at most a minute (each test takes milliseconds), so a download stuck in a
+/// loop fails instead of hanging.
+async fn bounded<T>(work: impl Future<Output = T>) -> Result<T, MapsError> {
+    tokio::time::timeout(Duration::from_secs(60), work)
+        .await
+        .map_err(|_| MapsError::Internal)
 }
 
 #[tokio::test]

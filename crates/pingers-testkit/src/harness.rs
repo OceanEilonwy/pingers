@@ -375,7 +375,8 @@ pub async fn send_direct(
 pub struct TlsFront {
     address: SocketAddr,
     ca_pem: String,
-    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Dropping it closes the channel, which stops the forwarding task.
+    _stop: tokio::sync::oneshot::Sender<()>,
 }
 
 #[cfg(feature = "harness")]
@@ -408,7 +409,7 @@ impl TlsFront {
         Ok(Self {
             address,
             ca_pem: tls.ca_pem,
-            stop: Some(stop),
+            _stop: stop,
         })
     }
 
@@ -422,15 +423,6 @@ impl TlsFront {
     #[must_use]
     pub fn ca_pem(&self) -> &str {
         &self.ca_pem
-    }
-}
-
-#[cfg(feature = "harness")]
-impl Drop for TlsFront {
-    fn drop(&mut self) {
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
     }
 }
 
