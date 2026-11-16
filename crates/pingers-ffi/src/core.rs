@@ -1146,7 +1146,7 @@ mod tests {
                             AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI";
 
     #[test]
-    fn build_pins_become_pin_sets_and_blank_ones_mean_first_use() -> Result<(), CoreError> {
+    fn build_pins_become_pin_sets_and_blank_ones_mean_none() -> Result<(), CoreError> {
         let pinned = pingers_client::Instance::try_from(InstanceConfig {
             gateway_key_pins: Some(TWO_PINS.into()),
             push_relay_key_pins: Some(" ".into()),
@@ -1164,6 +1164,19 @@ mod tests {
         let unpinned = pingers_client::Instance::try_from(instance())?;
         assert_eq!(unpinned.gateway_pins, None);
         Ok(())
+    }
+
+    /// New party's "This server needs a code" tells a missing code from a refused one.
+    #[test]
+    fn registration_refusals_reach_the_app_as_code_needed_or_refused() {
+        assert!(matches!(
+            CoreError::from(pingers_client::ClientError::RegistrationCodeRequired),
+            CoreError::CodeNeeded { .. }
+        ));
+        assert!(matches!(
+            CoreError::from(pingers_client::ClientError::RegistrationCodeRefused),
+            CoreError::CodeRefused { .. }
+        ));
     }
 
     #[test]
