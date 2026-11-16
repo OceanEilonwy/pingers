@@ -121,7 +121,8 @@ const fn stored_verdict(verdict: SelfTestVerdict) -> ProverVerdict {
 struct SelfTestRun {
     database: Arc<Database>,
     timer: Arc<dyn Timer>,
-    seed: [u8; 32],
+    /// The self-test proof's randomness, zeroed when dropped.
+    seed: zeroize::Zeroizing<[u8; 32]>,
     started: UnixSeconds,
 }
 
@@ -135,7 +136,7 @@ impl SelfTestRun {
             started,
         } = self;
         let report = tokio::task::spawn_blocking(move || {
-            prover_self_test(plan, &*timer, &mut ChaCha20Rng::from_seed(seed))
+            prover_self_test(plan, &*timer, &mut ChaCha20Rng::from_seed(*seed))
         })
         .await
         .map_err(|_| SyncError::Internal)??;
@@ -180,8 +181,8 @@ impl SyncEngine {
     }
 
     fn self_test_run(&self) -> SelfTestRun {
-        let mut seed = [0_u8; 32];
-        self.with_rng(|rng| rng.fill_bytes(&mut seed));
+        let mut seed = zeroize::Zeroizing::new([0_u8; 32]);
+        self.with_rng(|rng| rng.fill_bytes(seed.as_mut_slice()));
         SelfTestRun {
             database: Arc::clone(&self.database),
             timer: Arc::clone(&self.timer),

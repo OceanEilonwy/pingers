@@ -469,10 +469,11 @@ impl SyncEngine {
         let Some(reservation) = reservation else {
             return Ok(None);
         };
-        let mut seed = [0_u8; 32];
-        self.with_rng(|rng| rng.fill_bytes(&mut seed));
+        // The proof's randomness: the seed is zeroed when dropped.
+        let mut seed = zeroize::Zeroizing::new([0_u8; 32]);
+        self.with_rng(|rng| rng.fill_bytes(seed.as_mut_slice()));
         let auth = tokio::task::spawn_blocking(move || {
-            prove_reserved(&reservation, &input, &mut ChaCha20Rng::from_seed(seed))
+            prove_reserved(&reservation, &input, &mut ChaCha20Rng::from_seed(*seed))
         })
         .await
         .map_err(|_| SyncError::Internal)??;
