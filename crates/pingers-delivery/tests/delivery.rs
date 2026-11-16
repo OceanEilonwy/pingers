@@ -1649,6 +1649,58 @@ fn sqlite_store_overwrites_deleted_groups() -> Result<(), TestError> {
     Ok(())
 }
 
+/// A subscription removed by request, by a commit or by expiry leaves no trace of its sealed
+/// push in the database or its write-ahead log.
+#[cfg(feature = "sqlite")]
+#[test]
+fn sqlite_store_overwrites_removed_subscriptions() -> Result<(), TestError> {
+    use pingers_delivery::SqliteDeliveryStore;
+
+    let path = std::env::temp_dir().join(format!(
+        "pingers-delivery-removed-subscriptions-{}.sqlite",
+        std::process::id()
+    ));
+    let wal = path.with_extension("sqlite-wal");
+    let _stale = std::fs::remove_file(&path);
+    let world = World::new(SqliteDeliveryStore::open(&path)?, &[0xA1, 0xA2, 0xC1])?;
+    world
+        .delivery
+        .put_subscription(&world.group, subscription(0xA3, Duration::from_secs(60))?)?;
+    let traces = |tags: &[u8]| -> Vec<String> {
+        let mut found = Vec::new();
+        for file in [&path, &wal] {
+            let bytes = std::fs::read(file).unwrap_or_default();
+            for tag in tags {
+                let blob = [*tag; 320];
+                if bytes.windows(blob.len()).any(|window| window == blob) {
+                    found.push(format!("{tag:#x} in {}", file.display()));
+                }
+            }
+        }
+        found
+    };
+    world
+        .delivery
+        .remove_subscription(&world.group, &sub_id(0xA1))?;
+    assert_eq!(traces(&[0xA1]), Vec::<String>::new());
+    let committed = world.commit_with(CommitRequest {
+        subscriptions_removed: vec![sub_id(0xA2)],
+        ..commit_request(0, Urgency::Quiet)
+    })?;
+    assert!(accepted(committed).is_some());
+    assert_eq!(traces(&[0xA2]), Vec::<String>::new());
+    world.clock.advance(Duration::from_secs(60));
+    assert_eq!(world.delivery.expire_idle()?, vec![]);
+    assert_eq!(traces(&[0xA3]), Vec::<String>::new());
+    // The one that stands is still there.
+    assert!(world.delivery.subscription(&world.group, &sub_id(0xC1))?.is_some());
+    drop(world);
+    for file in [&path, &wal, &path.with_extension("sqlite-shm")] {
+        let _cleanup = std::fs::remove_file(file);
+    }
+    Ok(())
+}
+
 /// A file-backed store keeps everything across a restart.
 #[cfg(feature = "sqlite")]
 #[test]

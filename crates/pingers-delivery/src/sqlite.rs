@@ -96,7 +96,9 @@ impl SqliteDeliveryStore {
     }
 
     /// Copies the write-ahead log into the database and empties it, so deleted rows (already
-    /// overwritten there by `secure_delete`) do not survive in the log file either. A no-op
+    /// overwritten there by `secure_delete`) do not survive in the log file either: after a
+    /// group is deleted or expires, and after a subscription (a sealed push) is removed by
+    /// request, by a commit or by expiry. A no-op
     /// for an in-memory database.
     fn truncate_wal(&self) -> Result<(), DeliveryError> {
         let connection = self.lock()?;
@@ -386,6 +388,15 @@ impl DeliveryStore for SqliteDeliveryStore {
             }
             Ok(CommitWrite::Appended { sequence })
         })
+        .and_then(|written| {
+            // A removed subscription's sealed push is overwritten in the log too.
+            if matches!(written, CommitWrite::Appended { .. })
+                && !commit.subscriptions_removed.is_empty()
+            {
+                self.truncate_wal()?;
+            }
+            Ok(written)
+        })
     }
 
     fn commit_position(
@@ -491,7 +502,8 @@ impl DeliveryStore for SqliteDeliveryStore {
                 ],
             )?;
             Ok(())
-        })
+        })?;
+        self.truncate_wal()
     }
 
     fn live_subscriptions(
@@ -545,14 +557,16 @@ impl DeliveryStore for SqliteDeliveryStore {
                 transaction.execute("DELETE FROM grp WHERE group_id = ?1", [id.as_slice()])?;
                 delete_children(transaction, id)?;
             }
-            transaction.execute("DELETE FROM grp_sub WHERE expires_at <= ?1", [now.get()])?;
-            expired
+            let lapsed =
+                transaction.execute("DELETE FROM grp_sub WHERE expires_at <= ?1", [now.get()])?;
+            let expired = expired
                 .into_iter()
                 .map(group_id_from_column)
-                .collect::<Result<Vec<_>, _>>()
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((expired, lapsed))
         })
-        .and_then(|expired| {
-            if !expired.is_empty() {
+        .and_then(|(expired, lapsed)| {
+            if !expired.is_empty() || lapsed > 0 {
                 self.truncate_wal()?;
             }
             Ok(expired)
