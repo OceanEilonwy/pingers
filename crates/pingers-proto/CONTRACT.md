@@ -181,6 +181,21 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
   targets `invite_payload`, `join_request` and `invite_post`. The files come from `cargo xtask vectors`
   (`xtask/src/vectors/proto/invite.rs`).
 
+### First-phone setup link (added 2026-11-16, v1-setup)
+
+- **`SetupPayload`**, the fragment of the link the owner's appliance shows as a QR code
+  (`https://<server>/j#s1.<base64url(encoding)>`, also `pingers://join#s1.<...>` as the `/j`
+  landing page forwards it): `[server (ServerId text), registration code (SecretText, 1 to 128
+  bytes), gateway key pins ([32-byte KeyConfigHash], served key first, 1 to 4), push relay key
+  pins (the same, published key first, 1 to 4)]`. The pins are the values of the app build's
+  `PINGERS_GATEWAY_KEY_PINS` and `PINGERS_PUSH_RELAY_KEY_PINS`. Unlike invites, the `s1.` prefix
+  and base64url live here (`SetupPayload::to_link`, `from_link`, `is_setup_link`), since the
+  appliance's setup service builds the link and depends on this crate only; pingers-proto
+  already had the base64 dependency for pins. `==` compares the code in constant time and
+  `Debug` hides it.
+- Vector `setup-payload-encoding` (`xtask/src/vectors/proto/setup.rs`); fuzz target
+  `setup_payload`.
+
 ### Privacy Pass keys (added 2026-11-13, wave 3 server)
 
 - **`PrivacyPassKeys`** (`GET /v1/pp/keys`) and **`PrivacyPassKey`** (additive): `[[key...]]`,

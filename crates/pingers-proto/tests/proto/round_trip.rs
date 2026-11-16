@@ -13,7 +13,7 @@ use pingers_proto::{
     MembershipLeafResponse, MembershipLeaves, MessageAccepted, Params, PrivacyPassAllowance,
     PrivacyPassIssueRequest, PrivacyPassIssueResponse, PushRelayConfig, PushRequest,
     PushTokenPlaintext, Record, RegisterRequest, RegisterResponse, RlnAuth,
-    ScheduledPushRelayConfig, Subscription, WireDecode, WireEncode,
+    ScheduledPushRelayConfig, SetupPayload, Subscription, WireDecode, WireEncode,
 };
 use proptest::prelude::*;
 use proptest::sample::Index;
@@ -143,6 +143,7 @@ wire_properties! {
     invite_payload: InvitePayload = strategies::invite_payload();
     join_request: JoinRequest = strategies::join_request();
     invite_post: InvitePost = strategies::invite_post();
+    setup_payload: SetupPayload = strategies::setup_payload();
     privacy_pass_issue_request: PrivacyPassIssueRequest = strategies::privacy_pass_issue_request();
     privacy_pass_issue_response: PrivacyPassIssueResponse =
         strategies::privacy_pass_issue_response();

@@ -33,6 +33,7 @@ mod push;
 mod redacted;
 mod relay;
 mod secret;
+mod setup;
 
 pub use api::{
     AnonymousCredential, AuthRequest, AuthResponse, BoardSyncRequest, BoardSyncResponse,
@@ -85,3 +86,6 @@ pub use relay::{
     ScheduledPushRelayConfig,
 };
 pub use secret::{SecretBytes, SecretText};
+pub use setup::{
+    MAX_REGISTRATION_CODE_BYTES, MAX_SETUP_PINS, SETUP_FRAGMENT_PREFIX, SetupPayload,
+};

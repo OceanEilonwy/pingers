@@ -9,6 +9,7 @@ mod board;
 mod frames;
 mod invite;
 mod party;
+mod setup;
 
 use anyhow::Result;
 
@@ -23,6 +24,7 @@ pub(super) fn files() -> Result<Vec<VectorFile>> {
     files.extend(api::files()?);
     files.extend(invite::files()?);
     files.extend(party::files()?);
+    files.extend(setup::files()?);
     Ok(files)
 }
 

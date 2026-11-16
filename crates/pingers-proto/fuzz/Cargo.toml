@@ -294,6 +294,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "setup_payload"
+path = "fuzz_targets/setup_payload.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "join_request"
 path = "fuzz_targets/join_request.rs"
 test = false

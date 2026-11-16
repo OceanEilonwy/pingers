@@ -17,7 +17,7 @@ use pingers_proto::{
     PushTokenPlaintext, Record, RecordRandomness, RecordTag, RelayId, RelayRef, RelayUrl,
     RevokeCommitment, RlnAuth, RlnScope, ScheduledPushRelayConfig, SealedBeacon,
     SealedLocationFrame, SealedPush, SealedPushBlob, SecretBytes, SecretText, SeenSegment,
-    SegmentHash, SegmentInfo, ServerId, Subscription, SubscriptionId, TimeToLive, Urgency,
+    SegmentHash, SegmentInfo, ServerId, SetupPayload, Subscription, SubscriptionId, TimeToLive, Urgency,
     WireDecode, WireEncode,
 };
 use pingers_testkit::{Vector, VectorError, load_vectors};
@@ -543,6 +543,36 @@ fn invite_payload_vectors() -> Result<(), TestError> {
         },
         encode: InvitePayload::encode,
         decode: InvitePayload::decode,
+    })
+}
+
+#[test]
+fn setup_payload_vectors() -> Result<(), TestError> {
+    check(&Format {
+        file: "setup-payload-encoding",
+        bytes_field: "encoding",
+        build: |vector| {
+            let pins = |field| -> Result<Vec<KeyConfigHash>, TestError> {
+                Ok(vector
+                    .input_bytes(field)?
+                    .chunks(32)
+                    .map(|chunk| {
+                        chunk
+                            .try_into()
+                            .map(KeyConfigHash::from_bytes)
+                            .map_err(|_length| field_error(vector, field))
+                    })
+                    .collect::<Result<_, _>>()?)
+            };
+            Ok(SetupPayload {
+                server: ServerId::new(text(vector, "server")?)?,
+                registration_code: SecretText::new(text(vector, "registration_code")?),
+                gateway_pins: pins("gateway_pins")?,
+                push_relay_pins: pins("push_relay_pins")?,
+            })
+        },
+        encode: SetupPayload::encode,
+        decode: SetupPayload::decode,
     })
 }
 
