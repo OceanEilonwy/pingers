@@ -117,6 +117,12 @@ impl Device {
             if let Some(node) = screen.find(find) {
                 return Ok(node.clone());
             }
+            // On a loaded machine an emulator's System UI (or another app) can stop answering
+            // for a while; the dialog covers what the step waits for, and waiting is all it
+            // needs.
+            if let Some(wait) = screen.not_responding_wait() {
+                self.tap(wait)?;
+            }
             if deadline.passed() {
                 bail!(
                     "{self}: no {find} within {} s; the screen shows: {}",
@@ -338,6 +344,15 @@ impl Screen {
         self.nodes
             .iter()
             .find(|node| !node.bounds.is_empty() && find.matches(node))
+    }
+
+    /// The "Wait" button of an "isn't responding" dialog, if one is on screen.
+    pub(crate) fn not_responding_wait(&self) -> Option<&Node> {
+        self.nodes
+            .iter()
+            .any(|node| !node.bounds.is_empty() && node.text.ends_with("isn't responding"))
+            .then(|| self.find(&Find::text(Text::Is("Wait".into()))))
+            .flatten()
     }
 
     /// The texts and descriptions on screen, for failure messages.
@@ -571,6 +586,19 @@ mod tests {
         assert_eq!(safety_code("482109375512"), None);
         assert_eq!(safety_code("4821 0937 551"), None);
         assert_eq!(safety_code("Code 4821 0937 5512 was checked"), None);
+    }
+
+    #[test]
+    fn a_not_responding_dialog_offers_its_wait_button() -> Result<()> {
+        let dialog = r#"<hierarchy rotation="0"><node index="0" text="System UI isn't responding" resource-id="android:id/alertTitle" class="android.widget.TextView" content-desc="" enabled="true" bounds="[100,1000][1100,1100]" /><node index="1" text="Close app" resource-id="android:id/aerr_close" class="android.widget.Button" content-desc="" enabled="true" bounds="[100,1200][1100,1300]" /><node index="2" text="Wait" resource-id="android:id/aerr_wait" class="android.widget.Button" content-desc="" enabled="true" bounds="[100,1400][1100,1500]" /></hierarchy>"#;
+        let screen = Screen::parse(dialog).context("no hierarchy")?;
+        let wait = screen.not_responding_wait().context("no Wait")?;
+        assert_eq!(wait.resource_id, "android:id/aerr_wait");
+        // A "Wait" elsewhere, with no dialog, is left alone.
+        let plain = Screen::parse(&dialog.replace("System UI isn't responding", "Title"))
+            .context("no hierarchy")?;
+        assert!(plain.not_responding_wait().is_none());
+        Ok(())
     }
 
     #[test]
