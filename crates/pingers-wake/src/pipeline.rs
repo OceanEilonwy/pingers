@@ -105,8 +105,12 @@ pub enum WakeTrigger {
     Fix(Fix),
     /// An OS geofence transition.
     Geofence(GeofenceEvent),
-    /// A scheduled wake (WorkManager) or the app opening.
+    /// A scheduled wake (WorkManager, iOS background refresh).
     Scheduled,
+    /// The app came on screen (design B.4.9: the user opening the app). As a scheduled wake,
+    /// but the Party logs and this device's mailboxes are read whatever the push setting, so
+    /// a change whose push was missed, or never sent, shows once the app is opened.
+    Opened,
     /// A push.
     Push(PushReason),
     /// Focus / DND changed.
@@ -438,7 +442,7 @@ where
         let reads_due = self.settings.mailbox_reads == MailboxReads::EveryWake
             || matches!(
                 self.trigger,
-                WakeTrigger::Push(PushReason::Mailbox | PushReason::Unknown)
+                WakeTrigger::Opened | WakeTrigger::Push(PushReason::Mailbox | PushReason::Unknown)
             );
         let commit_push = self.trigger == WakeTrigger::Push(PushReason::GroupCommit);
         let mut epoch_changed = commit_push | note_epochs(state, &parties);

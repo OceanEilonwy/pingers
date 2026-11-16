@@ -302,8 +302,9 @@ impl SyncEngine {
     }
 
     /// One maintenance step: forgets subscriptions of groups this device has left (no
-    /// request), then makes at most one request. An empty pool is refilled first (a lease
-    /// needs a knock mailbox now); otherwise the most urgent stale registration is sealed
+    /// request), then makes at most one request. A group's missing subscription is put first
+    /// (or, with wake-up pushes off, a subscription removed); then an empty pool is refilled (a
+    /// lease needs a knock mailbox now); otherwise the most urgent stale registration is sealed
     /// again or cleared, and with none stale the pool is topped up. Not queued: what was not
     /// sent stays stale for the next wake.
     ///
@@ -323,9 +324,7 @@ impl SyncEngine {
             .map(|membership| membership.group)
             .collect();
         let (mailboxes, subscriptions) = self.registrations(groups.clone(), now).await?;
-        if self.pooled_mailboxes(maintenance.pool.purpose).await? == 0 {
-            return self.refill(&maintenance.pool, budget).await;
-        }
+        let pool_empty = self.pooled_mailboxes(maintenance.pool.purpose).await? == 0;
         let desired = match maintenance.pushes {
             Pushes::Current => match self.desired()? {
                 Some(desired) => Some(desired),
@@ -339,12 +338,20 @@ impl SyncEngine {
             subscriptions: &subscriptions,
             groups: &groups,
         };
-        let Some(task) = next_task(
+        let task = next_task(
             &rows,
             desired.as_ref().map(|(_, desired)| *desired),
             now,
             maintenance.subscription_lifetime,
-        ) else {
+        );
+        // A group without its subscription (or with one "No wake-up pushes" forbids) comes
+        // even before an empty pool: until it is put, nothing the members do wakes the phone,
+        // and the phone may not wake by itself for a long while to make it.
+        let group_first = matches!(
+            task,
+            Some(Task::AddSubscription(_) | Task::RemoveSubscription(_))
+        );
+        let Some(task) = task.filter(|_| group_first || !pool_empty) else {
             return self.refill(&maintenance.pool, budget).await;
         };
         let step = Step {

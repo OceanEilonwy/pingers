@@ -169,8 +169,10 @@ async fn subscriptions_are_added_resealed_cleared_and_forgotten() -> TestResult 
     device
         .engine
         .set_wake_push(Some(wake_push(&world, "https://push.example/one")?));
-    assert!(matches!(step(&device, &groups).await?, Maintained::Pool(_)));
+    // The group's missing subscription comes even before the empty pool: until it is put,
+    // nothing the members do wakes the phone.
     assert_eq!(step(&device, &groups).await?, Maintained::SubscriptionAdded);
+    assert!(matches!(step(&device, &groups).await?, Maintained::Pool(_)));
     let added = device
         .session()?
         .subscriptions()
