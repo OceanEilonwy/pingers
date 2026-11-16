@@ -294,6 +294,20 @@ doc = false
 bench = false
 
 [[bin]]
+name = "party_operation"
+path = "fuzz_targets/party_operation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "party_snapshot"
+path = "fuzz_targets/party_snapshot.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "privacy_pass_allowance"
 path = "fuzz_targets/privacy_pass_allowance.rs"
 test = false

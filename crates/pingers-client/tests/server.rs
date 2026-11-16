@@ -327,3 +327,59 @@ async fn an_invite_links_registration_code_registers_the_joiner() -> Result<(), 
     assert_eq!(session.privacy_pass_tokens().count()?, 298);
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_display_name_is_published_to_existing_parties() -> Result<(), TestError> {
+    let config = HarnessConfig {
+        registration_codes: vec![CODE.to_owned()],
+        ..HarnessConfig::default()
+    };
+    let clock = config.clock.clone();
+    let harness = InProcessHarness::start(&config)?;
+    let dir = TestDir::new()?;
+    let path = dir.0.join("pingers.db");
+    let client = open(&harness, &clock, path.clone(), Some(CODE)).await?;
+    let party = tokio::time::timeout(
+        STEP,
+        client.create_party(PartyDraft {
+            name: Name::new("Climbing")?,
+            my_name: Name::new("Ana")?,
+            colour: PartyColour::Blue,
+            post_quantum: PostQuantum::Off,
+        }),
+    )
+    .await
+    .map_err(|_elapsed| TestError::Setup("creating the Party did not finish"))??;
+
+    tokio::time::timeout(STEP, client.set_display_name(Name::new("Anna")?))
+        .await
+        .map_err(|_elapsed| TestError::Setup("renaming did not finish"))??;
+
+    // This device's roster shows the new name at once.
+    let shown: Vec<String> = client
+        .snapshot()
+        .parties
+        .iter()
+        .filter(|shown| shown.id == party)
+        .flat_map(|shown| shown.members.iter())
+        .map(|member| member.name.as_str().to_owned())
+        .collect();
+    assert_eq!(shown, ["Anna"]);
+    // The Party's log on the server holds the profile operation for the other members.
+    let database = Database::open(&path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+    let session = database.session()?;
+    let (status, body) = group_log(&harness, &clock, &session, &party).await?;
+    assert_eq!(status, 200);
+    let log = GroupMessages::decode(&body)?;
+    let applications = log
+        .messages
+        .iter()
+        .filter(|entry| entry.content_type == pingers_proto::ContentType::Application)
+        .count();
+    assert_eq!(applications, 1, "one profile operation");
+    assert!(
+        !PartyLifecycle::new(&session, &clock).profile_waiting(&party)?,
+        "nothing left waiting"
+    );
+    Ok(())
+}

@@ -9,6 +9,8 @@ pub(crate) mod mailbox;
 pub(crate) mod meetup;
 pub(crate) mod mls;
 pub(crate) mod party;
+pub(crate) mod party_join;
+pub(crate) mod party_state;
 pub(crate) mod prover;
 pub(crate) mod relay;
 pub(crate) mod spot;

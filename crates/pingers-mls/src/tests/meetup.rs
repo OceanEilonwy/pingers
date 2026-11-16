@@ -626,8 +626,10 @@ fn every_member_reads_the_subscriptions_and_who_a_proposal_removes() -> TestResu
         assert_eq!(group.member_subscriptions(), expected);
         assert!(group.pending_removals().is_empty());
     }
+    // A leaver's self-remove, once committed, names its leaf for the subscription to drop.
     let leave = group_b.propose_leave(&mut rng)?;
     group_c.process(&leave)?;
+    let _commit = group_c.commit_pending_proposals(&mut rng)?;
     assert_eq!(group_c.pending_removals(), vec![LeafIndex::new(1)]);
     Ok(())
 }

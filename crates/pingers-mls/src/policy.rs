@@ -38,13 +38,35 @@ pub enum KindTag {
 }
 
 /// The OpenMLS ciphersuite for a policy (design B.2, B.8).
+#[cfg_attr(
+    feature = "x-wing",
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "without the feature, the quantum-resistant policy fails"
+    )
+)]
 pub(crate) fn ciphersuite(policy: CipherSuitePolicy) -> Result<Ciphersuite, MlsError> {
     match policy {
         CipherSuitePolicy::Classical => {
             Ok(Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519)
         }
+        #[cfg(feature = "x-wing")]
+        CipherSuitePolicy::QuantumResistant => {
+            Ok(Ciphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519)
+        }
+        #[cfg(not(feature = "x-wing"))]
         CipherSuitePolicy::QuantumResistant => Err(MlsError::UnsupportedSuite),
     }
+}
+
+/// The policy a suite belongs to, if this build runs it.
+pub(crate) fn policy_of(suite: Ciphersuite) -> Option<CipherSuitePolicy> {
+    [
+        CipherSuitePolicy::Classical,
+        CipherSuitePolicy::QuantumResistant,
+    ]
+    .into_iter()
+    .find(|policy| ciphersuite(*policy).is_ok_and(|candidate| candidate == suite))
 }
 
 /// Whether a big-endian suite code from the wire is one of the suites this build can run.

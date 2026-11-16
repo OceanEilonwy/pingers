@@ -19,6 +19,118 @@ name = "crates/pingers-geo/src/presence.rs: replace > with >= in SpotPresence::r
 reason = "equivalent (two sites): when the compared times are equal, both branches pick the same UnixSeconds"
 
 [[mutant]]
+name = "crates/pingers-parties/src/link.rs: replace | with ^ in base64url_encode"
+reason = "equivalent (two sites): the shifted fields combined into one sextet never share a set bit, so OR and XOR agree"
+
+[[mutant]]
+name = "crates/pingers-parties/src/link.rs: replace | with ^ in base64url_decode"
+reason = "equivalent (three sites): the shifted sextets combined into one byte never share a set bit, so OR and XOR agree"
+
+[[mutant]]
+name = "crates/pingers-parties/src/ops.rs: replace > with >= in spot_wins"
+reason = "equivalent: the comparison runs only when the two Lamport clocks differ, where > and >= agree"
+
+[[mutant]]
+name = "crates/pingers-proto/src/cbor.rs: replace | with ^ in Writer::head"
+reason = "equivalent (five sites): the major type occupies the top three bits and the additional information the low five, so OR and XOR agree"
+
+[[mutant]]
+name = "crates/pingers-mls/src/provider.rs: replace new_crypto -> Result<Crypto, MlsError> with Ok(Default::default())"
+reason = "equivalent: the crypto backend holds no state the wrapper relies on, so a default-built one behaves the same (CONTRACT, mutation testing)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace StorageAdapter<'storage, S>::remove_from_list -> Result<(), StorageError> with Ok(())"
+reason = "OpenMLS 0.9.2 calls it only through remove_pending_proposal, which the wrapper never uses (CONTRACT, mutation testing)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace != with == in StorageAdapter<'storage, S>::remove_from_list"
+reason = "OpenMLS 0.9.2 calls it only through remove_pending_proposal, which the wrapper never uses (CONTRACT, mutation testing)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::remove_proposal -> Result<(), Self::Error> with Ok(())"
+reason = "OpenMLS 0.9.2 calls it only from remove_pending_proposal, which the wrapper never uses (CONTRACT, mutation testing)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::queued_proposal_refs -> Result<Vec<ProposalRef>, Self::Error> with Ok(vec![])"
+reason = "loading a group reads queued_proposals, not the refs; no wrapper path calls it (CONTRACT, mutation testing)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::append_own_leaf_node -> Result<(), Self::Error> with Ok(())"
+reason = "used only by propose_self_update, which the wrapper never calls (CONTRACT, mutation testing)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::own_leaf_nodes -> Result<Vec<LeafNode>, Self::Error> with Ok(vec![])"
+reason = "used only by propose_self_update, which the wrapper never calls (CONTRACT, mutation testing)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::delete_own_leaf_nodes -> Result<(), Self::Error> with Ok(())"
+reason = "used only by propose_self_update and MlsGroup::delete, which the wrapper never calls (delete_group uses delete_prefix, tested empty)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::write_encryption_key_pair -> Result<(), Self::Error> with Ok(())"
+reason = "used only by propose_self_update, which the wrapper never calls (CONTRACT, mutation testing)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::encryption_key_pair -> Result<Option<HpkeKeyPair>, Self::Error> with Ok(None)"
+reason = "used only by propose_self_update, which the wrapper never calls (CONTRACT, mutation testing)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::delete_encryption_key_pair -> Result<(), Self::Error> with Ok(())"
+reason = "used only by propose_self_update, which the wrapper never calls (CONTRACT, mutation testing)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::write_signature_key_pair -> Result<(), Self::Error> with Ok(())"
+reason = "the signature key store is application-managed; the wrapper signs with the account key and never stores one (CONTRACT)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::signature_key_pair -> Result<Option<SignatureKeyPair>, Self::Error> with Ok(None)"
+reason = "the signature key store is application-managed; the wrapper signs with the account key and never stores one (CONTRACT)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::delete_signature_key_pair -> Result<(), Self::Error> with Ok(())"
+reason = "the signature key store is application-managed; the wrapper signs with the account key and never stores one (CONTRACT)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::delete_group_config -> Result<(), Self::Error> with Ok(())"
+reason = "called only by MlsGroup::delete; delete_group uses delete_prefix, which a test checks leaves storage empty (CONTRACT)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::delete_tree -> Result<(), Self::Error> with Ok(())"
+reason = "called only by MlsGroup::delete; delete_group uses delete_prefix, which a test checks leaves storage empty (CONTRACT)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::delete_confirmation_tag -> Result<(), Self::Error> with Ok(())"
+reason = "called only by MlsGroup::delete; delete_group uses delete_prefix, which a test checks leaves storage empty (CONTRACT)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::delete_group_state -> Result<(), Self::Error> with Ok(())"
+reason = "called only by MlsGroup::delete; delete_group uses delete_prefix, which a test checks leaves storage empty (CONTRACT)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::delete_context -> Result<(), Self::Error> with Ok(())"
+reason = "called only by MlsGroup::delete; delete_group uses delete_prefix, which a test checks leaves storage empty (CONTRACT)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::delete_interim_transcript_hash -> Result<(), Self::Error> with Ok(())"
+reason = "called only by MlsGroup::delete; delete_group uses delete_prefix, which a test checks leaves storage empty (CONTRACT)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::delete_message_secrets -> Result<(), Self::Error> with Ok(())"
+reason = "called only by MlsGroup::delete; delete_group uses delete_prefix, which a test checks leaves storage empty (CONTRACT)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::delete_all_resumption_psk_secrets -> Result<(), Self::Error> with Ok(())"
+reason = "called only by MlsGroup::delete; delete_group uses delete_prefix, which a test checks leaves storage empty (CONTRACT)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::delete_own_leaf_index -> Result<(), Self::Error> with Ok(())"
+reason = "called only by MlsGroup::delete; delete_group uses delete_prefix, which a test checks leaves storage empty (CONTRACT)"
+
+[[mutant]]
+name = "crates/pingers-mls/src/adapter.rs: replace <impl StorageProvider<CURRENT_VERSION> for StorageAdapter<'_, S>>::delete_group_epoch_secrets -> Result<(), Self::Error> with Ok(())"
+reason = "called only by MlsGroup::delete; delete_group uses delete_prefix, which a test checks leaves storage empty (CONTRACT)"
+
+[[mutant]]
 name = "crates/pingers-parties/src/joining.rs: replace match guard admitted == reply with true in PartyLifecycle<'_>::approve_join"
 reason = "defensive and unreachable through the API: letting someone in drops every other request through that invite, and a used invite refuses new ones, so the only request a used invite can still hold is the one it admitted (put back by commit_rejected)"
 
@@ -97,3 +209,7 @@ reason = "equivalent: a key file that exists but cannot be read is then made aga
 [[mutant]]
 name = "crates/pingers-anon/src/circuit.rs: replace ceremony::matches_ceremony -> bool with true"
 reason = "equivalent for every build: the only key compiled in is the ceremony's, so the check is true either way. The comparator it calls (ceremony::matches) is tested with each field altered, and the self-test's handling of a false answer is tested with an injected check."
+
+[[mutant]]
+name = "crates/pingers-client/src/real/sync.rs: replace && with || in Net::flush"
+reason = "equivalent in effect: with || a round that sent something but queued nothing new runs again, which only retries at once the requests it just kept (they went back in the outbox); every request still goes out at most once and the rounds stay bounded by FLUSH_ROUNDS"

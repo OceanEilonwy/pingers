@@ -22,20 +22,21 @@
 //! it. [`RosterView`] implements `pingers_presence::RosterLookup` for knock verification;
 //! its `current_epoch` follows every merged commit.
 //!
-//! The crate's CONTRACT.md lists the decisions and the interim parts that wait on lower
-//! crates.
+//! The crate's CONTRACT.md lists the decisions and what this crate asked of lower crates.
 #![forbid(unsafe_code)]
 
 mod codec;
 mod error;
 mod invite;
 mod joining;
+mod legacy;
 mod lifecycle;
 mod link;
 mod ops;
 mod outbound;
-mod records;
+mod profile;
 mod roster;
+mod roster_history;
 mod safety;
 mod settings;
 mod spots;
@@ -56,6 +57,7 @@ pub use lifecycle::{CommitApplied, CreatedParty, Incoming, NewParty, PartyLifecy
 pub use link::InviteLink;
 pub use outbound::{LeaveRequest, Outbound, OutgoingCommit, WelcomeDelivery};
 pub use pingers_crypto::JoinCode;
+pub use profile::{ProfileChange, ProfilePublication};
 pub use roster::{Myself, RosterMember, RosterView};
 pub use safety::{SafetyCode, inviter_fingerprint};
 pub use settings::{PartySettings, PostQuantum, RelayChoice};

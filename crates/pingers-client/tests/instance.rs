@@ -157,6 +157,7 @@ async fn rig(
         Who {
             seed: 3,
             account: Account::Preset,
+            relay: None,
         },
     )
     .await
@@ -172,10 +173,12 @@ enum Account {
     Register,
 }
 
-/// Which person a rig is: the seed of its random streams, and how it gets an account.
+/// Which person a rig is: the seed of its random streams, how it gets an account, and the
+/// OHTTP relay it uses (`None`: the harness's).
 struct Who {
     seed: u64,
     account: Account,
+    relay: Option<std::net::SocketAddr>,
 }
 
 /// A client whose random streams (and preset account key) come from `seed`, so two rigs are
@@ -186,7 +189,12 @@ async fn rig_as(
     pins: Pins,
     who: Who,
 ) -> Result<Rig, TestError> {
-    let Who { seed, account } = who;
+    let Who {
+        seed,
+        account,
+        relay,
+    } = who;
+    let relay = relay.unwrap_or(harness.endpoints().ohttp_relay);
     let dir = TestDir::new()?;
     let endpoints = harness.endpoints();
     let server = ServerId::new(endpoints.server_id.clone())?;
@@ -208,7 +216,7 @@ async fn rig_as(
     let instance = match account {
         Account::Preset => Instance {
             server,
-            relay: format!("http://{}", endpoints.ohttp_relay),
+            relay: format!("http://{relay}"),
             push_relay: Some(format!("https://{}/", endpoints.push_relay)),
             gateway_pins: Some(pins.gateway),
             push_relay_pins: pins.push_relay,
@@ -217,7 +225,7 @@ async fn rig_as(
         },
         Account::Register => Instance {
             server,
-            relay: format!("http://{}/ohttp", endpoints.ohttp_relay),
+            relay: format!("http://{relay}/ohttp"),
             push_relay: Some(format!("https://{}", endpoints.push_relay)),
             gateway_pins: None,
             push_relay_pins: None,
@@ -483,6 +491,16 @@ async fn person(
     config: &HarnessConfig,
     seed: u64,
 ) -> Result<Rig, TestError> {
+    person_via(harness, config, seed, None).await
+}
+
+/// As [`person`], through the OHTTP relay at `relay` (`None`: the harness's).
+async fn person_via(
+    harness: &InProcessHarness,
+    config: &HarnessConfig,
+    seed: u64,
+    relay: Option<std::net::SocketAddr>,
+) -> Result<Rig, TestError> {
     let rig = rig_as(
         harness,
         config,
@@ -490,6 +508,7 @@ async fn person(
         Who {
             seed,
             account: Account::Register,
+            relay,
         },
     )
     .await?;
@@ -645,6 +664,194 @@ async fn ask_compare_codes_let_in_then_turn_the_next_one_away() -> Result<(), Te
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_name_reaches_the_other_members_screen() -> Result<(), TestError> {
+    use pingers_client::snapshot::Name;
+
+    let config = HarnessConfig::default();
+    let harness = InProcessHarness::start(&config)?;
+    let ana = person(&harness, &config, 6).await?;
+    let ben = person(&harness, &config, 7).await?;
+    let party = climbing_crew(&ana).await?;
+    let_in(&ana, &ben, party).await?;
+    let names = |rig: &Rig| member_names(rig, party);
+    assert_eq!(names(&ben)?, ["Ana", "Ben"]);
+
+    // Ana renames herself: her screen shows it at once, Ben's after his next wake.
+    ana.client.set_display_name(Name::new("Anna")?).await?;
+    assert_eq!(names(&ana)?, ["Anna", "Ben"]);
+    ben.client.on_wake().await?;
+    assert_eq!(names(&ben)?, ["Anna", "Ben"]);
+    // And the other way round.
+    ben.client.set_display_name(Name::new("Benjamin")?).await?;
+    ana.client.on_wake().await?;
+    assert_eq!(names(&ana)?, ["Anna", "Benjamin"]);
+    Ok(())
+}
+
+/// An OHTTP relay in front of the harness gateway that a test takes down and brings back on
+/// the same address, so a client loses the server for a while.
+struct SwitchedRelay {
+    address: std::net::SocketAddr,
+    gateway: std::net::SocketAddr,
+    running: Option<RunningRelay>,
+}
+
+struct RunningRelay {
+    stop: tokio::sync::oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl SwitchedRelay {
+    async fn start(harness: &InProcessHarness) -> Result<Self, TestError> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let mut relay = Self {
+            address: listener.local_addr()?,
+            gateway: harness.endpoints().gateway,
+            running: None,
+        };
+        relay.serve(listener);
+        Ok(relay)
+    }
+
+    fn serve(&mut self, listener: tokio::net::TcpListener) {
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(pingers_testkit::harness::run_ohttp_relay(
+            listener,
+            self.gateway,
+            async {
+                drop(stopped.await);
+            },
+        ));
+        self.running = Some(RunningRelay { stop, task });
+    }
+
+    async fn down(&mut self) {
+        if let Some(running) = self.running.take() {
+            // An error only means the relay has stopped already.
+            let _: Result<(), ()> = running.stop.send(());
+            drop(running.task.await);
+        }
+    }
+
+    async fn up(&mut self) -> Result<(), TestError> {
+        let listener = tokio::net::TcpListener::bind(self.address).await?;
+        self.serve(listener);
+        Ok(())
+    }
+}
+
+/// Ana lets Ben in and renames herself while her server is out of reach: the Add commit waits,
+/// and so does the profile, which must follow the commit. Back online, one flush sends the
+/// commit and then the profile it freed, so Ben joins and sees her new name.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_name_that_waited_for_a_commit_follows_it_in_the_same_flush() -> Result<(), TestError> {
+    use pingers_client::ports::{Foreground, JoinDecision};
+    use pingers_client::snapshot::Name;
+
+    let config = HarnessConfig::default();
+    let harness = InProcessHarness::start(&config)?;
+    let mut relay = SwitchedRelay::start(&harness).await?;
+    let ana = person_via(&harness, &config, 6, Some(relay.address)).await?;
+    let ben = person(&harness, &config, 7).await?;
+    let party = climbing_crew(&ana).await?;
+    let link = ana.client.create_invite(party).await?;
+    ben.client.open_invite(link.url, Name::new("Ben")?).await?;
+    ana.client.on_foreground(Foreground::Visible).await?;
+    let request = ana
+        .client
+        .snapshot()
+        .party(party)?
+        .join_requests
+        .first()
+        .ok_or(TestError::Setup("Ben's request"))?
+        .id;
+
+    relay.down().await;
+    ana.client
+        .decide_join(party, request, JoinDecision::Admit)
+        .await?;
+    ana.client.set_display_name(Name::new("Anna")?).await?;
+    ben.client.on_wake().await?;
+    assert!(
+        ben.client.snapshot().party(party).is_err(),
+        "the Add has not reached the server"
+    );
+
+    // Back online, a second rename's single flush sends the commit, then the profile.
+    relay.up().await?;
+    // Long enough for the relay to finish resting after its failures.
+    config.clock.advance(std::time::Duration::from_secs(600));
+    ana.client.set_display_name(Name::new("Anna B")?).await?;
+    // Ben joins on one wake and reads the Party's log on the next.
+    ben.client.on_wake().await?;
+    ben.client.on_wake().await?;
+    let names: Vec<String> = ben
+        .client
+        .snapshot()
+        .party(party)?
+        .members
+        .iter()
+        .map(|member| member.name.as_str().to_owned())
+        .collect();
+    assert_eq!(names, ["Anna B", "Ben"]);
+    Ok(())
+}
+
+/// Ana invites Ben into `party` and lets him in; Ben's next wake joins.
+async fn let_in(ana: &Rig, ben: &Rig, party: pingers_proto::PartyId) -> Result<(), TestError> {
+    use pingers_client::ports::{Foreground, JoinDecision};
+    use pingers_client::snapshot::Name;
+
+    let link = ana.client.create_invite(party).await?;
+    ben.client.open_invite(link.url, Name::new("Ben")?).await?;
+    ana.client.on_foreground(Foreground::Visible).await?;
+    let request = ana
+        .client
+        .snapshot()
+        .party(party)?
+        .join_requests
+        .first()
+        .ok_or(TestError::Setup("Ben's request"))?
+        .id;
+    ana.client
+        .decide_join(party, request, JoinDecision::Admit)
+        .await?;
+    ben.client.on_wake().await?;
+    Ok(())
+}
+
+/// The names on `rig`'s roster of `party`.
+fn member_names(rig: &Rig, party: pingers_proto::PartyId) -> Result<Vec<String>, TestError> {
+    Ok(rig
+        .client
+        .snapshot()
+        .party(party)?
+        .members
+        .iter()
+        .map(|member| member.name.as_str().to_owned())
+        .collect())
+}
+
+/// Ben leaves: his leave request reaches the server, and Ana's next wake commits his removal
+/// and drops him from her screen.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_member_who_leaves_disappears_from_the_others_screen() -> Result<(), TestError> {
+    let config = HarnessConfig::default();
+    let harness = InProcessHarness::start(&config)?;
+    let ana = person(&harness, &config, 6).await?;
+    let ben = person(&harness, &config, 7).await?;
+    let party = climbing_crew(&ana).await?;
+    let_in(&ana, &ben, party).await?;
+    assert_eq!(member_names(&ana, party)?, ["Ana", "Ben"]);
+
+    ben.client.leave_party(party).await?;
+    assert!(ben.client.snapshot().party(party).is_err());
+    ana.client.on_wake().await?;
+    assert_eq!(member_names(&ana, party)?, ["Ana"]);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_join_without_a_push_token_completes_through_checks_on_screen() -> Result<(), TestError> {
     use pingers_client::ports::JoinDecision;
     use pingers_client::snapshot::{Joining, Name};
@@ -664,6 +871,7 @@ async fn a_join_without_a_push_token_completes_through_checks_on_screen() -> Res
         Who {
             seed: 4,
             account: Account::Register,
+            relay: None,
         },
     )
     .await?;

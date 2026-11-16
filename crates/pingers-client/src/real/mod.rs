@@ -86,13 +86,21 @@ impl Crates {
     ///
     /// # Errors
     ///
-    /// [`ClientError::Transport`] if the instance's relay or server URL is not usable.
+    /// [`ClientError::Transport`] if the instance's relay or server URL is not usable;
+    /// [`ClientError::Store`] or [`ClientError::Parties`] if pingers-parties' old records
+    /// cannot be moved into the store's tables.
     pub fn real(
         database: Database,
         platform: Arc<dyn Platform>,
         outside: Outside,
         instance: Option<&Instance>,
     ) -> Result<Self, ClientError> {
+        // Per-Party state an older build kept as records moves into the store's tables first.
+        {
+            let session = database.session()?;
+            pingers_parties::PartyLifecycle::new(&session, outside.clock.as_ref())
+                .upgrade_records()?;
+        }
         let transport = instance
             .map(|instance| network::router(instance, Arc::clone(&outside.timer), &outside))
             .transpose()?;

@@ -28,9 +28,10 @@ mod tests;
 
 pub use adapter::group_storage_prefix;
 pub use group::{
-    CipherSuitePolicy, Commit, CommitSummary, CreatedMeetup, Group, KeyPackagePurpose, Meetup,
-    MeetupCreation, MeetupPskBinding, MeetupPskId, MemberGrantKey, MemberSubscription, MlsContext,
-    MlsError, Party, ProcessedMessage, SelfRemoval,
+    CipherSuitePolicy, Commit, CommitSummary, CreatedMeetup, Group, KeyPackageInfo,
+    KeyPackagePurpose, Meetup, MeetupCreation, MeetupPskBinding, MeetupPskId, MemberGrantKey,
+    MemberSubscription, MlsContext, MlsError, Party, ProcessedMessage, SelfRemoval,
+    inspect_key_package,
 };
 pub use roster::{Roster, RosterEntry};
 pub use storage::{MlsStorage, StorageError};

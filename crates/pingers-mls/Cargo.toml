@@ -11,9 +11,19 @@ publish.workspace = true
 layer = 1
 
 [features]
-# The X-Wing ciphersuite (0x004D) for "quantum-resistant" Parties (design B.8), via a libcrux
-# provider the implementer adds.
-x-wing = ["pingers-crypto/x-wing"]
+# The X-Wing ciphersuite (0x004D) for "quantum-resistant" Parties (design B.8). The suite is
+# gated behind the OpenMLS crates' PQ-draft feature, and only the libcrux provider implements
+# it, so with this feature libcrux does all MLS crypto (both suites). `openmls`'s own feature
+# is not used: it names its optional SQLite storage, whose rusqlite clashes with the
+# workspace's; `openmls` itself has no PQ-specific code outside its tests.
+x-wing = [
+  "pingers-crypto/x-wing",
+  "dep:openmls_libcrux_crypto",
+  "openmls_libcrux_crypto/draft-ietf-mls-pq-ciphersuites",
+  "openmls_rust_crypto/draft-ietf-mls-pq-ciphersuites",
+  "openmls_basic_credential/draft-ietf-mls-pq-ciphersuites",
+  "openmls_traits/draft-ietf-mls-pq-ciphersuites",
+]
 # An in-memory `MlsStorage` for tests here and in other crates.
 test-util = []
 
@@ -23,6 +33,7 @@ pingers-proto = { workspace = true }
 pingers-time = { workspace = true }
 openmls = { workspace = true }
 openmls_basic_credential = { workspace = true }
+openmls_libcrux_crypto = { workspace = true, optional = true }
 openmls_rust_crypto = { workspace = true }
 openmls_traits = { workspace = true }
 rand_core = { workspace = true }

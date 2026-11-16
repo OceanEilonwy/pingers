@@ -27,6 +27,7 @@ mod key_config;
 mod knock;
 mod meetup;
 mod padding;
+mod party;
 mod privacy_pass;
 mod push;
 mod redacted;
@@ -65,6 +66,10 @@ pub use meetup::{
     SpeedCentimetresPerSecond,
 };
 pub use padding::{Padded, SizeClass};
+pub use party::{
+    FencePoint, MemberKey, MemberProfile, PartyOperation, PartySnapshot, PartyTitle, ProfileUpdate,
+    SpotFence, SpotLife, SpotState, SpotTitle,
+};
 pub use privacy_pass::{
     MAX_TOKENS_PER_ISSUANCE, PrivacyPassAllowance, PrivacyPassIssueRequest,
     PrivacyPassIssueResponse, PrivacyPassKey, PrivacyPassKeys, TokenAllowance,

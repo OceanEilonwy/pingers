@@ -75,7 +75,7 @@ fn grant_key_is_read_back_from_a_leaf() -> TestResult {
     let mut rng = rng(50);
     let device = Device::new(&mut rng);
     let bytes = device.meetup_key_package(&grant_key(9), &mut rng)?;
-    let provider = crate::provider::Provider::new(&device.storage, crate::provider::NoRand);
+    let provider = crate::provider::Provider::new(&device.storage, crate::provider::NoRand)?;
     let key_package = crate::group::parse_key_package(&bytes, &provider)?;
     assert_eq!(leaf_grant_key(key_package.leaf_node()), Some(grant_key(9)));
     let party = device.party_key_package(&mut rng)?;
@@ -126,7 +126,7 @@ fn a_subscription_is_read_back_from_a_leaf_only_when_it_has_one() -> TestResult 
     use crate::tests::{Device, grant_key, rng};
     let mut rng = rng(51);
     let device = Device::new(&mut rng);
-    let provider = crate::provider::Provider::new(&device.storage, crate::provider::NoRand);
+    let provider = crate::provider::Provider::new(&device.storage, crate::provider::NoRand)?;
     let subscription = SubscriptionId::from_bytes([0xa5; 16]);
     let with = device.meetup_key_package_with(&grant_key(9), Some(&subscription), &mut rng)?;
     let with = crate::group::parse_key_package(&with, &provider)?;

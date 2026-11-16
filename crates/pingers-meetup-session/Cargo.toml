@@ -10,6 +10,11 @@ publish.workspace = true
 [package.metadata.pingers]
 layer = 3
 
+[features]
+# The X-Wing suite for quantum-resistant Parties (design B.8), and X-Wing grant keys in their
+# Meetups.
+x-wing = ["pingers-crypto/x-wing", "pingers-mls/x-wing"]
+
 [dependencies]
 pingers-crypto = { workspace = true }
 pingers-geo = { workspace = true }

@@ -23,11 +23,14 @@ path = "src/bin/uniffi-bindgen.rs"
 required-features = ["bindgen"]
 
 [features]
-default = ["wipe-freed"]
+default = ["wipe-freed", "x-wing"]
 bindgen = ["uniffi/cli"]
 # Zero every block of memory as it is freed (src/wiping.rs), as fob-ffi does. Off only to
 # measure what it costs.
 wipe-freed = []
+# Quantum-resistant Parties (design B.8), on in the shipped app: X-Wing groups, and a join
+# request carries an X-Wing key package next to the classical one.
+x-wing = ["pingers-client/x-wing"]
 
 [dependencies]
 hex = { workspace = true }

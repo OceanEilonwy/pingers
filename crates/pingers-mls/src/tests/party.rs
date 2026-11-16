@@ -73,6 +73,7 @@ fn three_members_share_messages_roster_and_exports() -> TestResult {
     assert_eq!(group_b.own_leaf(), LeafIndex::new(1));
     assert_eq!(group_c.own_leaf(), LeafIndex::new(2));
     assert_eq!(group_c.group_id(), group_id(1));
+    assert_eq!(group_c.suite()?, CipherSuitePolicy::Classical);
     let roster = group_c.roster();
     assert_eq!(roster, group_a.roster());
     assert_eq!(roster.entries().len(), 3);
@@ -294,11 +295,14 @@ fn leaver_proposes_and_another_member_commits() -> TestResult {
         group_a.seal_application(&padded(b"wait")?, &mut rng),
         Err(MlsError::CommitPending)
     ));
+    assert!(group_a.pending_removals().is_empty());
     let commit = group_a.commit_pending_proposals(&mut rng)?;
+    assert_eq!(group_a.pending_removals(), vec![LeafIndex::new(1)]);
     assert_eq!(
         group_a.merge_pending_commit()?.removed,
         vec![LeafIndex::new(1)]
     );
+    assert!(group_a.pending_removals().is_empty());
     let summary = commit_summary(group_c.process(&commit.commit)?)?;
     assert_eq!(summary.removed, vec![LeafIndex::new(1)]);
     assert_eq!(group_c.roster(), group_a.roster());
@@ -397,7 +401,7 @@ fn public_message_commit_is_rejected() -> TestResult {
         a.context()
             .create_party_group(group_id(1), CipherSuitePolicy::Classical, &mut rng)?;
     // A client that sends handshakes in the clear (as an external commit would be).
-    let provider = Provider::new(&member.storage, InjectedRand::new(&mut rng));
+    let provider = Provider::new(&member.storage, InjectedRand::new(&mut rng))?;
     let mut plaintext_group = MlsGroup::builder()
         .with_group_id(openmls::prelude::GroupId::from_slice(
             group_id(1).as_bytes(),
@@ -442,7 +446,7 @@ fn proposal_other_than_leaving_is_rejected() -> TestResult {
         ..
     } = party_of_three(&a, &b, &c, &mut rng)?;
     // B proposes to remove C, which Pingers never does with a standalone proposal.
-    let provider = Provider::new(b.storage, InjectedRand::new(&mut rng));
+    let provider = Provider::new(b.storage, InjectedRand::new(&mut rng))?;
     let (proposal, _) = b
         .inner
         .propose_remove_member_by_value(
@@ -671,6 +675,7 @@ fn unknown_leaf_and_unknown_group_are_not_members() -> TestResult {
 }
 
 #[test]
+#[cfg(not(feature = "x-wing"))]
 fn quantum_resistant_suite_needs_the_x_wing_feature() {
     let mut rng = rng(17);
     let a = Device::new(&mut rng);
@@ -828,5 +833,28 @@ fn an_unused_key_package_leaves_no_private_keys_behind() -> TestResult {
     let added = group_a.add_members(&[kept], &mut rng)?;
     b.context().join_party_group(welcome(&added)?)?;
     assert!(b.storage.rows_labelled(&[b"KeyPackage"]).is_empty());
+    Ok(())
+}
+
+#[test]
+fn a_key_package_names_its_signature_key_and_suite_before_any_add() -> TestResult {
+    let mut rng = rng(31);
+    let b = Device::new(&mut rng);
+    let key_package = b.party_key_package(&mut rng)?;
+    let info = crate::inspect_key_package(&key_package)?;
+    assert_eq!(info.signature_key, b.public_key());
+    assert_eq!(info.suite, CipherSuitePolicy::Classical);
+    let mut tampered = key_package.as_bytes().to_vec();
+    if let Some(last) = tampered.last_mut() {
+        *last ^= 0x01;
+    }
+    assert!(matches!(
+        crate::inspect_key_package(&pingers_proto::KeyPackageBytes::from_bytes(tampered)),
+        Err(MlsError::InvalidMessage)
+    ));
+    assert!(matches!(
+        crate::inspect_key_package(&pingers_proto::KeyPackageBytes::from_bytes(vec![0, 1])),
+        Err(MlsError::InvalidMessage)
+    ));
     Ok(())
 }

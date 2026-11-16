@@ -244,8 +244,10 @@ impl Core {
         local: Local<'_>,
     ) -> Result<PendingCommit, SessionError> {
         let mut handle = local.mls().meetup_group(&self.group)?;
-        let removed = subscriptions_of(&handle, &handle.pending_removals());
         let commit = handle.commit_pending_proposals(&mut self.rng)?;
+        // As for a Party: the pending commit names the leavers, still in the tree until it
+        // merges, so their subscriptions can be read from their leaves.
+        let removed = subscriptions_of(&handle, &handle.pending_removals());
         pending(&handle, commit, Subscriptions::removed(removed))
     }
 

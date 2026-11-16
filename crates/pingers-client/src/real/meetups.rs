@@ -37,7 +37,7 @@ use pingers_meetup_session::{
     create, discard_stale, join, knock_key_package,
 };
 use pingers_mls::CipherSuitePolicy;
-use pingers_parties::{PartyLifecycle, PostQuantum};
+use pingers_parties::PartyLifecycle;
 use pingers_presence::{Admission, LEASE_DURATION, MeetupKey, SpotRef};
 use pingers_proto::{
     ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, MeetPoint, Padded,
@@ -413,11 +413,10 @@ impl Meetups {
     async fn suite(&self, party: PartyId) -> Result<CipherSuitePolicy, ClientError> {
         self.backend()
             .store(move |session, clock, _rng| {
-                let settings = PartyLifecycle::new(session, clock).settings(&party)?;
-                Ok(match settings.post_quantum {
-                    PostQuantum::Classical => CipherSuitePolicy::Classical,
-                    PostQuantum::QuantumResistant => CipherSuitePolicy::QuantumResistant,
-                })
+                Ok(PartyLifecycle::new(session, clock)
+                    .settings(&party)?
+                    .post_quantum
+                    .suite())
             })
             .await
     }

@@ -500,6 +500,12 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn the_provider_and_its_tape_error_name_themselves() {
+        assert_eq!(<Provider as HpkeCrypto>::name(), "Pingers(RustCrypto)");
+        assert_eq!(TapeExhausted.to_string(), "HPKE randomness exhausted");
+    }
+
     fn hex(text: &str) -> Vec<u8> {
         (0..text.len())
             .step_by(2)

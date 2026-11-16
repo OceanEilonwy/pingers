@@ -10,6 +10,10 @@ publish.workspace = true
 [package.metadata.pingers]
 layer = 3
 
+[features]
+# The X-Wing suite for quantum-resistant Parties (design B.8).
+x-wing = ["pingers-mls/x-wing"]
+
 [dependencies]
 # Derivations and seals this crate names but does not implement: the join-request seal, state
 # snapshots, account ids (inviter fingerprints and safety codes).

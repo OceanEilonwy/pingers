@@ -3,58 +3,34 @@
 
 use core::fmt;
 
-use pingers_crypto::{AccountPublicKey, account_id};
-use pingers_proto::InviterFingerprint;
+/// The inviter fingerprint (`SHA-256(pk)[..8]`), derived in pingers-crypto.
+pub use pingers_crypto::inviter_fingerprint;
+use pingers_crypto::{AccountPublicKey, SAFETY_NUMBER_DIGITS, safety_number};
 
-/// The 8-byte inviter fingerprint in an invite link: the first 8 bytes of the inviter's
-/// account id (`SHA-256(pk)[..16]`, design B.1). The design names `inviter_fpr[8]` without a
-/// formula; reusing the account id keeps hashing inside pingers-crypto.
-#[must_use]
-pub fn inviter_fingerprint(key: &AccountPublicKey) -> InviterFingerprint {
-    let id = account_id(key);
-    let mut bytes = [0; InviterFingerprint::LENGTH];
-    for (target, source) in bytes.iter_mut().zip(id.as_bytes()) {
-        *target = *source;
-    }
-    InviterFingerprint::from_bytes(bytes)
-}
-
-const DIGITS_PER_KEY: usize = 30;
 const GROUP: usize = 5;
 
 /// A 60-digit safety code over two members' leaf keys (design B.1), shown as twelve groups of
-/// five digits. Both members compute the same code: each key contributes 30 digits, the
-/// smaller key (bytewise) first.
-///
-/// Each key's digits are its account id (`SHA-256(pk)[..16]`, from pingers-crypto) read as a
-/// big-endian integer modulo 10³⁰, so a key contributes about 100 bits. Interim: the crate's
-/// CONTRACT.md asks pingers-crypto for a dedicated, iterated safety-number derivation; when it
-/// exists, only this function's body changes.
+/// five digits. Both members compute the same code: pingers-crypto's `safety_number`, where
+/// each key contributes 30 digits of an iterated, labelled SHA-512 and the smaller key comes
+/// first.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SafetyCode {
-    digits: [u8; 2 * DIGITS_PER_KEY],
+    digits: [u8; SAFETY_NUMBER_DIGITS],
 }
 
 impl SafetyCode {
     /// The code for a pair of keys, in either order.
     #[must_use]
     pub fn between(first: &AccountPublicKey, second: &AccountPublicKey) -> Self {
-        let (low, high) = if first.as_bytes() <= second.as_bytes() {
-            (first, second)
-        } else {
-            (second, first)
-        };
-        let mut digits = [0; 2 * DIGITS_PER_KEY];
-        let (left, right) = digits.split_at_mut(DIGITS_PER_KEY);
-        key_digits(low, left);
-        key_digits(high, right);
-        Self { digits }
+        Self {
+            digits: *safety_number(first, second).digits(),
+        }
     }
 
     /// Parses a code the user typed: 60 digits, with any spaces between them.
     #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
-        let mut digits = [0; 2 * DIGITS_PER_KEY];
+        let mut digits = [0; SAFETY_NUMBER_DIGITS];
         let mut count = 0_usize;
         for character in text.chars().filter(|character| !character.is_whitespace()) {
             let value = character.to_digit(10)?;
@@ -62,16 +38,6 @@ impl SafetyCode {
             count = count.checked_add(1)?;
         }
         (count == digits.len()).then_some(Self { digits })
-    }
-}
-
-/// Writes `key`'s 30 digits, most significant first.
-fn key_digits(key: &AccountPublicKey, out: &mut [u8]) {
-    let mut value = u128::from_be_bytes(*account_id(key).as_bytes());
-    for slot in out.iter_mut().rev() {
-        // `value % 10` is below 10, so the conversion cannot fail.
-        *slot = u8::try_from(value % 10).unwrap_or(0);
-        value /= 10;
     }
 }
 
@@ -116,17 +82,18 @@ mod tests {
     }
 
     #[test]
-    fn code_is_each_account_id_modulo_ten_to_the_thirty() {
+    fn code_shows_the_crypto_safety_number_in_groups_of_five() {
         let code = SafetyCode::between(&key(1), &key(2));
         let shown = code.to_string();
         assert_eq!(shown.len(), 60 + 11);
-        let digits: String = shown.split(' ').collect();
-        let expected = |fill| {
-            let value = u128::from_be_bytes(*account_id(&key(fill)).as_bytes());
-            format!("{:030}", value % 10_u128.pow(30))
-        };
-        assert_eq!(digits, format!("{}{}", expected(1), expected(2)));
         assert!(shown.split(' ').all(|group| group.len() == 5));
+        let digits: String = shown.split(' ').collect();
+        let expected: String = safety_number(&key(1), &key(2))
+            .digits()
+            .iter()
+            .map(|digit| char::from(b'0'.saturating_add(*digit)))
+            .collect();
+        assert_eq!(digits, expected);
     }
 
     #[test]
@@ -142,12 +109,7 @@ mod tests {
     }
 
     #[test]
-    fn fingerprint_is_the_account_id_prefix() {
-        let id = account_id(&key(9));
-        assert_eq!(
-            inviter_fingerprint(&key(9)).as_bytes().as_slice(),
-            id.as_bytes().get(..8).unwrap_or_default()
-        );
+    fn debug_hides_the_code() {
         assert_eq!(
             format!("{:?}", SafetyCode::between(&key(1), &key(1))),
             "SafetyCode(redacted)"
