@@ -162,7 +162,19 @@ struct Device {
 
 impl Device {
     async fn open(world: &World, name: &str, seed: u64) -> Result<Self, TestError> {
-        let dir = TestDir::new(name)?;
+        Self::open_in(world, TestDir::new(name)?, seed).await
+    }
+
+    /// The same phone in a new process: the store stays, nothing held in memory does.
+    async fn reopen(self, world: &World, seed: u64) -> Result<Self, TestError> {
+        let Self {
+            client, _dir: dir, ..
+        } = self;
+        drop(client);
+        Self::open_in(world, dir, seed).await
+    }
+
+    async fn open_in(world: &World, dir: TestDir, seed: u64) -> Result<Self, TestError> {
         let database = dir.0.join("pingers.db");
         let platform = FakePlatform::new(world.clock.clone());
         platform
@@ -669,6 +681,33 @@ async fn leaving_a_party_with_wake_ups_deletes_its_subscription_on_that_server()
         .set_wake_pushes(pingers_client::snapshot::WakePushes::On)
         .await?;
     // A Party made with wake-ups on holds a subscription in its group on B.
+    let choir = ana.create_party(Some(world.b_server()?), "Choir").await?;
+    let before = relayed_answers(world.b()?).await?;
+    ana.client.leave_party(choir).await?;
+    assert_eq!(
+        relayed_answers(world.b()?).await?,
+        before.saturating_add(2),
+        "the leave proposal, then the subscription's deletion, through B's relay"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_process_seals_for_a_server_when_a_party_there_needs_it() -> TestResult {
+    let world = World::start()?;
+    let (ana, _on_a, _on_b) = ana_on_both(&world).await?;
+    let token = || pingers_testkit::PushRegistration {
+        platform: pingers_proto::PushPlatform::UnifiedPush,
+        token: pingers_proto::PushToken::from_bytes(b"https://push.example/up/ana".to_vec()),
+    };
+    ana.platform.set_push_registration(Some(token()));
+    ana.client
+        .set_wake_pushes(pingers_client::snapshot::WakePushes::On)
+        .await?;
+    // The app restarts: wake-ups stay on, but the new process holds no seals yet.
+    let ana = ana.reopen(&world, 300).await?;
+    ana.platform.set_push_registration(Some(token()));
+    // A new Party on B seals the token for B there and then, so its group holds a subscription.
     let choir = ana.create_party(Some(world.b_server()?), "Choir").await?;
     let before = relayed_answers(world.b()?).await?;
     ana.client.leave_party(choir).await?;
