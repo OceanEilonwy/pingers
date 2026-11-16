@@ -114,3 +114,29 @@ pub(crate) fn build(workspace: &Path, options: &StackOptions, flavour: Flavour) 
     }
     Ok(workspace.join(flavour.apk()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Gradle names each flavour stands for, built from its names the way the
+    /// Android plugin builds them (`android/app/build.gradle.kts`: application id
+    /// `org.pingers.app`, foss adds `.foss`, debug adds `.debug`), so a renamed task, APK or
+    /// package shows up here instead of as an emulator run that installs nothing.
+    #[test]
+    fn each_flavour_names_its_gradle_task_apk_and_package() {
+        for (name, gradle_name, flavour, suffix) in [
+            ("foss", "Foss", Flavour::Foss, ".foss"),
+            ("gms", "Gms", Flavour::Gms, ""),
+        ] {
+            assert_eq!(Flavour::parse(name), Some(flavour));
+            assert_eq!(flavour.task(), format!(":app:assemble{gradle_name}Debug"));
+            assert_eq!(
+                flavour.apk(),
+                format!("android/app/build/outputs/apk/{name}/debug/app-{name}-debug.apk")
+            );
+            assert_eq!(flavour.package(), format!("org.pingers.app{suffix}.debug"));
+        }
+        assert_eq!(Flavour::parse("play"), None);
+    }
+}
