@@ -501,3 +501,51 @@ async fn a_priority_report_is_recorded_and_answers_the_notice_set() -> Result<()
     );
     Ok(())
 }
+
+/// A setup link to the fakes' server.
+fn setup_payload() -> Result<SetupPayload, TestError> {
+    let pin = pingers_proto::KeyConfigHash::from_bytes([1; 32]);
+    Ok(SetupPayload {
+        server: pingers_proto::ServerId::new(format!("https://{}", FakeCrates::SETUP_SERVER))?,
+        registration_code: SecretText::new("setup-code-0123456789".into()),
+        gateway_pins: vec![pin],
+        push_relay_pins: vec![pin],
+    })
+}
+
+#[test]
+fn the_setup_link_answers_are_what_was_set_and_calls_are_recorded() -> Result<(), TestError> {
+    let fakes = FakeCrates::new()?;
+    let sync = &fakes.crates().sync;
+    let server = Host::new(FakeCrates::SETUP_SERVER)?;
+    assert_eq!(
+        now(sync.check_setup_link(&setup_payload()?))??,
+        SetupCheck::Ready {
+            server: server.clone()
+        }
+    );
+    assert_eq!(
+        now(sync.use_setup_link(setup_payload()?))??,
+        SetupOutcome::SetUp
+    );
+    fakes.set_setup_check(SetupCheck::Refused);
+    fakes.set_setup_outcome(SetupOutcome::Unreachable {
+        server: server.clone(),
+    });
+    assert_eq!(
+        now(sync.check_setup_link(&setup_payload()?))??,
+        SetupCheck::Refused
+    );
+    assert_eq!(
+        now(sync.use_setup_link(setup_payload()?))??,
+        SetupOutcome::Unreachable { server }
+    );
+    let origin = format!("https://{}", FakeCrates::SETUP_SERVER);
+    let calls = fakes.calls();
+    assert!(calls.contains(&CrateCall::CheckSetupLink(origin.clone())));
+    assert!(calls.contains(&CrateCall::UseSetupLink(
+        origin,
+        "setup-code-0123456789".to_owned()
+    )));
+    Ok(())
+}

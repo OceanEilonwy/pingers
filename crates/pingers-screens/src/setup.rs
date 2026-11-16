@@ -259,6 +259,79 @@ mod tests {
     }
 
     #[test]
+    fn every_check_and_outcome_becomes_its_own_state()
+    -> Result<(), pingers_client::snapshot::SnapshotError> {
+        let server = host("pingers.example")?;
+        let other = host("other.example")?;
+        let checks = [
+            (SetupCheck::AlreadySetUp, SetupLink::AlreadySetUp),
+            (SetupCheck::Refused, SetupLink::Refused),
+            (
+                SetupCheck::OtherServer {
+                    app: server.clone(),
+                    link: other.clone(),
+                },
+                SetupLink::OtherServer {
+                    app: server.clone(),
+                    link: other.clone(),
+                },
+            ),
+            (
+                SetupCheck::BuildKeysDiffer {
+                    server: server.clone(),
+                },
+                SetupLink::BuildKeysDiffer {
+                    server: server.clone(),
+                },
+            ),
+        ];
+        for (check, state) in checks {
+            assert_eq!(SetupLink::checked(check), state);
+        }
+        let outcomes = [
+            (SetupOutcome::SetUp, SetupLink::SetUp),
+            (SetupOutcome::AlreadySetUp, SetupLink::AlreadySetUp),
+            (SetupOutcome::Refused, SetupLink::Refused),
+            (
+                SetupOutcome::OtherServer {
+                    app: server.clone(),
+                    link: other.clone(),
+                },
+                SetupLink::OtherServer {
+                    app: server.clone(),
+                    link: other,
+                },
+            ),
+            (
+                SetupOutcome::BuildKeysDiffer {
+                    server: server.clone(),
+                },
+                SetupLink::BuildKeysDiffer {
+                    server: server.clone(),
+                },
+            ),
+            (
+                SetupOutcome::ServerKeysDiffer {
+                    server: server.clone(),
+                },
+                SetupLink::ServerKeysDiffer {
+                    server: server.clone(),
+                },
+            ),
+            (
+                SetupOutcome::Unreachable {
+                    server: server.clone(),
+                },
+                SetupLink::Unreachable { server },
+            ),
+        ];
+        for (outcome, state) in outcomes {
+            assert_eq!(SetupLink::finished(outcome), state);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn only_an_unreachable_server_offers_to_try_again()
     -> Result<(), pingers_client::snapshot::SnapshotError> {
         let server = host("pingers.example")?;
