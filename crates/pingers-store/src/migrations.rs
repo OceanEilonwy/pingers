@@ -40,6 +40,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 5,
         sql: include_str!("migrations/v5.sql"),
     },
+    Migration {
+        version: 6,
+        sql: include_str!("migrations/v6.sql"),
+    },
 ];
 
 /// The version a fully migrated database has.
@@ -168,6 +172,7 @@ mod tests {
         INSERT INTO rln_tree_leaf (position, value) VALUES (7, zeroblob(32));
         INSERT INTO request_queue (group_id, keep_until, request) VALUES (NULL, 9000, x'06');
         INSERT INTO board_upload (singleton, lease_id, revoke_key) VALUES (1, zeroblob(16), zeroblob(32));
+        INSERT INTO pp_allowance (singleton, daily_limit, day, issued) VALUES (1, 300, 20406, 12);
     ";
 
     #[test]
@@ -177,7 +182,7 @@ mod tests {
         {
             let connection = Connection::open(&path)?;
             connection.execute_batch(&key(1).pragma())?;
-            migrate_to(&connection, 4)?;
+            migrate_to(&connection, 5)?;
             connection.execute_batch(SINGLE_SERVER_DATA)?;
         }
         let database = Database::open(&path, key(1))?;
@@ -219,6 +224,10 @@ mod tests {
         assert_eq!(server.rln_tree().leaves()?.len(), 1);
         assert_eq!(server.request_queue().count()?, 1);
         assert!(server.board_upload().last()?.is_some());
+        assert_eq!(
+            server.token_allowance().load()?.map(|ledger| ledger.issued),
+            Some(12)
+        );
         Ok(())
     }
 
@@ -229,7 +238,7 @@ mod tests {
         {
             let connection = Connection::open(&path)?;
             connection.execute_batch(&key(1).pragma())?;
-            migrate_to(&connection, 4)?;
+            migrate_to(&connection, 5)?;
             connection
                 .execute_batch("INSERT INTO settings (k, v) VALUES ('display_name', x'00');")?;
         }

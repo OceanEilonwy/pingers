@@ -93,9 +93,16 @@ impl Link {
         Ok(params)
     }
 
-    /// Starts with parameters read while the server was looked at.
-    pub(crate) fn learn_params(&self, params: Params) {
+    /// Starts with parameters read while the server was looked at: kept for this process, and
+    /// what they say about credentials handed to the engine (as `SyncEngine::params` does).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Sync`] with a store failure.
+    pub(crate) async fn learn_params(&self, params: Params) -> Result<(), ClientError> {
+        self.engine.apply_params(&params).await?;
         *lock(&self.learned.params) = Some(params);
+        Ok(())
     }
 
     /// The server's parameters if this call is the one that fetched them for this process;

@@ -72,13 +72,26 @@ impl SyncEngine {
         }
     }
 
-    /// The server's parameters (`GET /v1/params`, through the relay). Its clock is observed
-    /// for skew correction.
+    /// The server's parameters (`GET /v1/params`, through the relay), adopted for credentials
+    /// ([`SyncEngine::apply_params`]). Its clock is observed for skew correction.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Status`]; [`SyncError::BadResponse`]; [`SyncError::Store`]; as
+    /// [`SyncEngine::send`].
+    pub async fn params(&self, budget: WakeBudget) -> Result<Params, SyncError> {
+        let params = self.read_params(budget).await?;
+        self.apply_params(&params).await?;
+        Ok(params)
+    }
+
+    /// The server's parameters through the relay, and nothing kept: for a server only being
+    /// looked at, which has no rows in the store yet.
     ///
     /// # Errors
     ///
     /// [`SyncError::Status`]; [`SyncError::BadResponse`]; as [`SyncEngine::send`].
-    pub async fn params(&self, budget: WakeBudget) -> Result<Params, SyncError> {
+    pub async fn read_params(&self, budget: WakeBudget) -> Result<Params, SyncError> {
         let params: Params = self
             .exchange(ApiRequest::params(), budget)
             .await?

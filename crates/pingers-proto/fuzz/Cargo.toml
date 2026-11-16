@@ -292,3 +292,10 @@ path = "fuzz_targets/invite_post.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "privacy_pass_allowance"
+path = "fuzz_targets/privacy_pass_allowance.rs"
+test = false
+doc = false
+bench = false

@@ -6,7 +6,7 @@ use core::time::Duration;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use pingers_anon::{AnonError, IssuerKey, batch_token_count, check_redemption, issue_tokens};
-use pingers_proto::AccountId;
+use pingers_proto::{AccountId, PrivacyPassAllowance, TokenAllowance};
 use pingers_time::{Clock, UnixSeconds};
 use rand_core::CryptoRng;
 
@@ -166,7 +166,10 @@ impl<S: PrivacyPassStore> PrivacyPass<S> {
                 key_id: record.key.key_id(),
                 response,
             }),
-            Allowance::Exceeded => Err(QuotaError::DailyLimit),
+            Allowance::Exceeded { issued } => Err(QuotaError::DailyLimit(PrivacyPassAllowance {
+                remaining: TokenAllowance::new(DAILY_TOKEN_LIMIT.saturating_sub(issued)),
+                resets_at: issuance.day.next().ok_or(QuotaError::TimeOutOfRange)?,
+            })),
         }
     }
 

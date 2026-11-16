@@ -4,17 +4,21 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use pingers_ohttp::{BinaryResponse, OhttpError};
-use pingers_proto::{CommitResponse, MessageAccepted, ServerId, WireDecode};
+use pingers_anon::SelfTestPlan;
+use pingers_ohttp::{BinaryResponse, Header, OhttpError};
+use pingers_proto::{CommitResponse, MessageAccepted, Params, ServerId, WireDecode};
 use pingers_store::{Database, NewQueuedRequest, Pushed, ServerSession};
 use pingers_time::{Clock, Timer, UnixSeconds};
 use pingers_transport::{DuplexStream, PrivacyClass, Transport, TransportError};
+use rand_chacha::ChaCha20Rng;
+use rand_core::SeedableRng as _;
 
 use crate::clock::{ClockOffset, ClockStatus};
 use crate::credential::{
-    Attached, CredentialChoice, CredentialPolicy, ProcessRole, ProofInput, choose_credential,
-    proof_header, prove_request, readiness, token_header,
+    Attached, CredentialChoice, CredentialPolicy, ProcessRole, ProofInput, ProvingState,
+    choose_credential, proof_fits, proof_header, prove_reserved, reserve_proof, token_header,
 };
+use crate::membership::TreeCache;
 use crate::pool::WakePush;
 use crate::queue::QueueCapacity;
 use crate::{
@@ -55,6 +59,9 @@ pub struct SyncSettings {
     pub commit_attempts: CommitAttempts,
     /// How many unsent anonymous requests to keep.
     pub queue_capacity: QueueCapacity,
+    /// The prover self-test to run before proving: the design's ([`SelfTestPlan::DESIGN`]) in
+    /// an app.
+    pub self_test: SelfTestPlan,
 }
 
 /// Why a request was not sent.
@@ -219,9 +226,23 @@ pub struct SyncEngine {
     pub(crate) settings: Mutex<SyncSettings>,
     clock_status: Mutex<ClockStatus>,
     pub(crate) wake_push: Mutex<Option<WakePush>>,
+    /// The membership tree between refreshes (`membership.rs`).
+    pub(crate) tree_cache: Mutex<Option<TreeCache>>,
+    /// The background prover self-test, while one runs (`prover.rs`).
+    pub(crate) self_test: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+impl Drop for SyncEngine {
+    /// The engine owns its background self-test: stop waiting for it. (A proof already on the
+    /// blocking pool finishes; its result is recorded or dropped with the store.)
+    fn drop(&mut self) {
+        if let Some(task) = lock(&self.self_test).take() {
+            task.abort();
+        }
+    }
+}
+
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -243,6 +264,18 @@ pub(crate) async fn blocking<T: Send + 'static>(
     .map_err(|_| SyncError::Internal)?
 }
 
+/// Runs `work` on the blocking pool with a device-wide session: for the few rows no server owns
+/// (the prover self-test, which tests this device's prover).
+pub(crate) async fn device_blocking<T: Send + 'static>(
+    database: &Arc<Database>,
+    work: impl FnOnce(&pingers_store::Session) -> Result<T, SyncError> + Send + 'static,
+) -> Result<T, SyncError> {
+    let database = Arc::clone(database);
+    tokio::task::spawn_blocking(move || work(&database.session()?))
+        .await
+        .map_err(|_| SyncError::Internal)?
+}
+
 impl SyncEngine {
     /// An engine over `parts`.
     #[must_use]
@@ -256,6 +289,8 @@ impl SyncEngine {
             clock_status: Mutex::new(ClockStatus::Unchecked),
             wake_push: Mutex::new(None),
             server: settings.server.clone(),
+            tree_cache: Mutex::new(None),
+            self_test: Mutex::new(None),
             settings: Mutex::new(settings),
         }
     }
@@ -279,6 +314,22 @@ impl SyncEngine {
     /// Replaces the credential policy, after fetching `Params` again or a prover self-test.
     pub fn set_credential_policy(&self, policy: CredentialPolicy) {
         lock(&self.settings).credentials = policy;
+    }
+
+    /// Adopts what the server's parameters say about credentials: which ones it accepts (an
+    /// operator who turns proofs off, design B.4.8 fallback 3) and its daily token limit. Done
+    /// by [`SyncEngine::params`]; parameters read another way (`params_direct`, when a server
+    /// is first looked at) are handed here.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Store`].
+    pub async fn apply_params(&self, params: &Params) -> Result<(), SyncError> {
+        lock(&self.settings)
+            .credentials
+            .accepted
+            .clone_from(&params.anonymous_credentials);
+        self.note_daily_limit(params.privacy_pass_daily_limit).await
     }
 
     pub(crate) fn settings(&self) -> SyncSettings {
@@ -336,53 +387,66 @@ impl SyncEngine {
     /// [`SyncError::NoCredential`] if none is possible; [`SyncError::Store`].
     pub async fn credential_choice(&self) -> Result<CredentialChoice, SyncError> {
         let settings = self.settings();
-        let now = self.now();
-        let readiness = self
-            .blocking(move |session| Ok(readiness(session.rln_identity().load()?.as_ref(), now)))
-            .await?;
-        choose_credential(settings.role, &settings.credentials, readiness)
+        let state = self.proving_state().await?;
+        choose_credential(
+            settings.role,
+            &state.effective(&settings.credentials),
+            state.readiness,
+        )
     }
 
-    /// The credential for `request`, made or taken now.
-    async fn attach(&self, request: &ApiRequest) -> Result<Attached, SyncError> {
+    /// Whether this device could prove now, as far as its identity and tree copy go.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Store`].
+    pub async fn rln_readiness(&self) -> Result<crate::RlnReadiness, SyncError> {
+        Ok(self.proving_state().await?.readiness)
+    }
+
+    async fn proving_state(&self) -> Result<ProvingState, SyncError> {
+        let now = self.now();
+        self.blocking(move |session| ProvingState::load(session, now))
+            .await
+    }
+
+    /// The credential for `request`, made or taken now: a proof when the main app may prove and
+    /// a proof (at the self-test's 95th percentile) still fits the wake, otherwise a token.
+    async fn attach(
+        &self,
+        request: &ApiRequest,
+        budget: WakeBudget,
+    ) -> Result<Attached, SyncError> {
         let Some(scope) = request.route().credential() else {
             return Ok(Attached::Nothing);
         };
         let settings = self.settings();
-        if self.credential_choice().await? == CredentialChoice::MembershipProof {
-            let rng = Arc::clone(&self.rng);
-            let request = request.clone();
-            let bucket = self.now().bucket();
-            let proof = self
-                .blocking(move |session| {
-                    prove_request(
-                        session,
-                        &mut lock(&rng),
-                        &ProofInput {
-                            server: &settings.server,
-                            scope,
-                            bucket,
-                            method: request.method(),
-                            path: request.path(),
-                            body: request.body(),
-                        },
-                    )
-                })
-                .await?;
-            if let Some(auth) = proof {
-                return Ok(Attached::Proof {
-                    header: proof_header(&auth)?,
-                });
+        let state = self.proving_state().await?;
+        let policy = state.effective(&settings.credentials);
+        let choice = choose_credential(settings.role, &policy, state.readiness)?;
+        let fits = state
+            .proof_time()
+            .is_some_and(|proof_time| proof_fits(budget.remaining(&*self.timer), proof_time));
+        if choice == CredentialChoice::MembershipProof && fits {
+            let input = ProofInput {
+                server: settings.server,
+                scope,
+                bucket: self.now().bucket(),
+                method: request.method().to_owned(),
+                path: request.path().to_owned(),
+                body: request.body().to_vec(),
+            };
+            if let Some(header) = self.prove_for(input).await? {
+                return Ok(Attached::Proof { header });
             }
-            // The bucket's message ids are spent: a token may still be accepted.
-            let accepts_tokens = self
-                .settings()
-                .credentials
-                .accepted
-                .contains(&pingers_proto::AnonymousCredential::PrivacyPass);
-            if !accepts_tokens {
-                return Err(SyncError::NoCredential);
-            }
+        }
+        // Proofs are not possible here, the wake has no time for one, or the bucket's message
+        // ids are spent: a token, if the server takes them.
+        if !policy
+            .accepted
+            .contains(&pingers_proto::AnonymousCredential::PrivacyPass)
+        {
+            return Err(SyncError::NoCredential);
         }
         let token = self
             .blocking(|session| Ok(session.privacy_pass_tokens().take()?))
@@ -392,6 +456,27 @@ impl SyncEngine {
             header: token_header(&token),
             token,
         })
+    }
+
+    /// Reserves a message id (persisted first) and proves on the blocking pool, with no store
+    /// session open while proving. `None` if the bucket's message ids are spent or the device
+    /// cannot prove.
+    async fn prove_for(&self, input: ProofInput) -> Result<Option<Header>, SyncError> {
+        let now = self.now();
+        let (reservation, input) = self
+            .blocking(move |session| Ok((reserve_proof(session, &input, now)?, input)))
+            .await?;
+        let Some(reservation) = reservation else {
+            return Ok(None);
+        };
+        let mut seed = [0_u8; 32];
+        self.with_rng(|rng| rng.fill_bytes(&mut seed));
+        let auth = tokio::task::spawn_blocking(move || {
+            prove_reserved(&reservation, &input, &mut ChaCha20Rng::from_seed(seed))
+        })
+        .await
+        .map_err(|_| SyncError::Internal)??;
+        Ok(Some(proof_header(&auth)?))
     }
 
     /// Returns an unspent token to the store: the request carrying it never left the device.
@@ -471,7 +556,7 @@ impl SyncEngine {
         if !budget.allows_request(&*self.timer) {
             return Ok(Attempt::NotSent(request, NotSentReason::BudgetExhausted));
         }
-        let attached = self.attach(&request).await?;
+        let attached = self.attach(&request, budget).await?;
         let binary = request.to_binary(attached.header());
         let sent = self
             .within(budget, self.transport.request(route.class(), binary))

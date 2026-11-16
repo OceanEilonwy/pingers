@@ -30,8 +30,8 @@ use pingers_proto::{
 };
 use pingers_store::{MailboxPurpose as StoredPurpose, WakePushes as StoredPushes};
 use pingers_sync::{
-    ApiRequest, Committed, Delivered, GroupCall, GroupError, GroupLifetime, GroupSigner,
-    GroupStart, NewLease, PoolTarget, Sending, SyncError, WakeBudget,
+    ApiRequest, Committed, CredentialChoice, Delivered, GroupCall, GroupError, GroupLifetime,
+    GroupSigner, GroupStart, NewLease, PoolTarget, Sending, SyncError, WakeBudget,
 };
 use pingers_time::{Bucket, UnixSeconds};
 use pingers_wake::PortError;
@@ -43,7 +43,7 @@ use super::records::{self, Key, corrupt};
 use super::servers::{Link, Servers};
 use crate::ports::{ServerProbe, ServerSection, SyncPort};
 use crate::snapshot::{RelayStatus, WakePushes};
-use crate::{ClientError, Notice, PushTokens, Unavailable};
+use crate::{ClientError, Fallback, Notice, PushTokens, Unavailable};
 
 /// A Party group: kept for months, uploaded at epoch 0 (pingers-parties' new group).
 const PARTY_START: GroupStart = GroupStart {
@@ -826,11 +826,25 @@ impl SyncPort for Sync {
             .await
     }
 
+    /// Privacy Pass for everything is a fallback while the main app cannot prove (design B.4.8:
+    /// the leaf not yet live, the prover not passed or too slow, proofs turned off).
     async fn section(&self) -> Result<ServerSection, ClientError> {
         let map_host = self.0.map_host().await?;
         let built_in = self.0.servers.built_in_link().await.ok();
+        // Privacy Pass for everything is a fallback while the main app cannot prove on the
+        // built-in server (design B.4.8: the leaf not yet live, the prover not passed or too
+        // slow, proofs turned off).
+        let mut fallbacks = Vec::new();
+        if let Some(link) = &built_in {
+            match link.engine.credential_choice().await {
+                Ok(CredentialChoice::PrivacyPass) => fallbacks.push(Fallback::PrivacyPassOnly),
+                Err(SyncError::Store(error)) => return Err(SyncError::Store(error).into()),
+                // Proving, or nothing usable at all (not a fallback to name).
+                Ok(_) | Err(_) => {}
+            }
+        }
         Ok(ServerSection {
-            fallbacks: Vec::new(),
+            fallbacks,
             relay: built_in
                 .as_ref()
                 .map_or(RelayStatus::Unreachable, |link| link.relay_status()),

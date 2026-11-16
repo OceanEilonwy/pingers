@@ -226,6 +226,10 @@ async fn rig_as(
         500_u64.saturating_add(seed.saturating_mul(100_000)),
     ));
     let outside = Outside {
+        prover_self_test: pingers_sync::SelfTestPlan::new(
+            core::num::NonZeroU8::MIN,
+            core::time::Duration::from_millis(1_500),
+        ),
         clock: Arc::new(clock.clone()),
         timer: Arc::new(clock),
         rng: Arc::new(move || {

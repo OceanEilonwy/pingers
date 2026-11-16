@@ -173,7 +173,7 @@ impl Net {
             .remove(server)
             .ok_or(ServerProblem::NotProbed)?;
         let link = self.servers.add(record).await?;
-        link.learn_params(params);
+        link.learn_params(params).await?;
         Ok(())
     }
 
@@ -200,7 +200,7 @@ impl Net {
             other => other?,
         };
         let link = self.servers.add(looked.record).await?;
-        link.learn_params(looked.params);
+        link.learn_params(looked.params).await?;
         Ok(link)
     }
 
@@ -247,7 +247,7 @@ impl Net {
             .gateway_key_hash()
             .ok_or(ServerProblem::RelayUnreachable)?;
         let relayed = engine
-            .params(WakeBudget::UNLIMITED)
+            .read_params(WakeBudget::UNLIMITED)
             .await
             .map_err(|error| problem(&error))?;
         if relay_set(&relayed.ohttp_relays) != relay_set(&advertised.ohttp_relays) {

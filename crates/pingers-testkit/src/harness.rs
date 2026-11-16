@@ -82,6 +82,10 @@ pub struct HarnessConfig {
     /// the server's origin, as pingers-server does by default. Give two harnesses different
     /// names to tell them apart.
     pub operator: Option<String>,
+    /// Whether the server accepts RLN membership proofs (on by default; off is the operator's
+    /// kill switch, design B.4.8 fallback 3).
+    #[cfg(feature = "harness")]
+    pub membership_proofs: pingers_server::MembershipProofs,
 }
 
 impl Default for HarnessConfig {
@@ -94,6 +98,8 @@ impl Default for HarnessConfig {
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
             registration_codes: Vec::new(),
             operator: None,
+            #[cfg(feature = "harness")]
+            membership_proofs: pingers_server::MembershipProofs::On,
         }
     }
 }

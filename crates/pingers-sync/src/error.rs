@@ -101,6 +101,10 @@ pub enum SyncError {
     /// it does not decode (the entry is dropped).
     #[error("a queued request does not encode or decode")]
     QueuedRequest,
+    /// A freshly fetched membership tree does not reproduce the server's latest root: the
+    /// leaf list and the roots disagree. The device keeps using Privacy Pass.
+    #[error("the membership tree does not match the server's root")]
+    TreeMismatch,
     /// A blocking task (SQLCipher or the prover) did not finish.
     #[error("background task failed")]
     Internal,

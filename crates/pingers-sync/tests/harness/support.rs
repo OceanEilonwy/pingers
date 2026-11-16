@@ -31,8 +31,8 @@ use pingers_store::{
     Database, DatabaseKey, ServerRecord, ServerSession, ServerTrust, Session, TokenKeyId,
 };
 use pingers_sync::{
-    CommitAttempts, CredentialPolicy, ProcessRole, ProverStatus, QueueCapacity, SyncEngine,
-    SyncError, SyncParts, SyncSettings, TokenIssuer, TokenStock, WakeBudget,
+    CommitAttempts, CredentialPolicy, ProcessRole, ProverStatus, QueueCapacity, SelfTestPlan,
+    SyncEngine, SyncError, SyncParts, SyncSettings, TokenIssuer, TokenStock, WakeBudget,
 };
 use pingers_testkit::{HarnessConfig, InProcessHarness, TestRng, seeded_rng, send_direct};
 use pingers_time::{Clock as _, ManualClock};
@@ -622,10 +622,17 @@ pub(crate) struct Device {
     /// Names the database file and key, so a restart reopens the same store.
     number: u64,
     role: ProcessRole,
+    stock: TokenStock,
 }
 
 pub(crate) fn bearer() -> SecretText {
     SecretText::new("harness-bearer".to_owned())
+}
+
+/// A self-test of one timed proof: on the manual clock it takes no time, so it passes as soon
+/// as its two proofs are made, and devices prove once their leaf is live.
+pub(crate) fn quick_self_test() -> SelfTestPlan {
+    SelfTestPlan::new(core::num::NonZeroU8::MIN, Duration::from_millis(1_500))
 }
 
 /// Proofs and tokens accepted; the prover enabled. Devices in these tests have no RLN
@@ -766,6 +773,35 @@ impl World {
         role: ProcessRole,
         direct: Option<Arc<Direct>>,
     ) -> Result<Device, TestError> {
+        self.device_stocked(
+            address,
+            DeviceSetup {
+                role,
+                direct,
+                stock: stock()?,
+            },
+        )
+    }
+
+    /// A main-app device through the harness relay that keeps `stock` tokens.
+    pub(crate) fn device_with_stock(&self, stock: TokenStock) -> Result<Device, TestError> {
+        let address = self.harness.endpoints().ohttp_relay.to_string();
+        self.device_stocked(
+            &address,
+            DeviceSetup {
+                role: ProcessRole::MainApp,
+                direct: None,
+                stock,
+            },
+        )
+    }
+
+    fn device_stocked(&self, address: &str, setup: DeviceSetup) -> Result<Device, TestError> {
+        let DeviceSetup {
+            role,
+            direct,
+            stock,
+        } = setup;
         let number = self.next_device.fetch_add(1, Ordering::SeqCst);
         let link = Arc::new(Link {
             relay: self.relay(address)?,
@@ -780,6 +816,7 @@ impl World {
         self.open_device(Boot {
             number,
             role,
+            stock,
             link,
             issuer,
             direct,
@@ -798,6 +835,7 @@ impl World {
             direct,
             number,
             role,
+            stock,
         } = device;
         // Nothing in memory carries over: the engine and the store handle go first.
         drop(engine);
@@ -805,6 +843,7 @@ impl World {
         self.open_device(Boot {
             number,
             role,
+            stock,
             link,
             issuer,
             direct,
@@ -816,6 +855,7 @@ impl World {
         let Boot {
             number,
             role,
+            stock,
             link,
             issuer,
             direct,
@@ -856,9 +896,10 @@ impl World {
                 server: self.server_id.clone(),
                 role,
                 credentials: policy(),
-                token_stock: stock()?,
+                token_stock: stock,
                 commit_attempts: CommitAttempts::default(),
                 queue_capacity: QueueCapacity::default(),
+                self_test: quick_self_test(),
             },
         );
         Ok(Device {
@@ -869,6 +910,7 @@ impl World {
             direct,
             number,
             role,
+            stock,
         })
     }
 }
@@ -886,10 +928,18 @@ impl Scoped {
     }
 }
 
+/// What a new device is made with besides its relay.
+struct DeviceSetup {
+    role: ProcessRole,
+    direct: Option<Arc<Direct>>,
+    stock: TokenStock,
+}
+
 /// What a device is opened with, first or after a restart.
 struct Boot {
     number: u64,
     role: ProcessRole,
+    stock: TokenStock,
     link: Arc<Link>,
     issuer: Arc<Issuer>,
     direct: Option<Arc<Direct>>,

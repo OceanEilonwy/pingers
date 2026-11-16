@@ -76,6 +76,9 @@ pub use harness::{
     CapturedPush, Endpoints, HARNESS_MAP_HOST, HARNESS_PUSH_RELAY_ID, HarnessConfig, HarnessError,
     InProcessHarness, Service,
 };
+/// Whether the harness server accepts membership proofs (`HarnessConfig::membership_proofs`).
+#[cfg(feature = "harness")]
+pub use pingers_server::MembershipProofs;
 pub use pingers_time::ManualClock;
 pub use platform::{
     FakePlatform, FixQuality, FixRequest, Geofence, LocationMode, PushRegistration,

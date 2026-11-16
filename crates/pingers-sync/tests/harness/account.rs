@@ -118,12 +118,11 @@ async fn a_fresh_device_registers_stocks_tokens_and_takes_a_leaf_once() -> TestR
         .engine
         .prepare_credentials(WakeBudget::UNLIMITED)
         .await?;
-    assert_eq!(
-        prepared,
-        Prepared {
-            tokens: Refill::Fetched { added: 5, held: 5 },
-            leaf: LeafStanding::Registered,
-        }
+    assert_eq!(prepared.tokens, Refill::Fetched { added: 5, held: 5 });
+    assert_eq!(prepared.leaf, LeafStanding::Registered);
+    assert!(
+        prepared.membership.is_some(),
+        "the main app fetched the membership tree"
     );
     assert_eq!(
         direct(&device)?.take_seen(),
@@ -157,6 +156,7 @@ async fn a_fresh_device_registers_stocks_tokens_and_takes_a_leaf_once() -> TestR
         Prepared {
             tokens: Refill::Stocked { held: 4 },
             leaf: LeafStanding::Held,
+            membership: None,
         }
     );
     assert!(direct(&device)?.take_seen().is_empty());

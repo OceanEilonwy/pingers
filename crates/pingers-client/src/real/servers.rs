@@ -99,8 +99,9 @@ impl Link {
         }
     }
 
-    /// pingers-sync's `prepare_credentials` on this server, with the build's code on offer:
-    /// the account registered, its leaf, and the token stock. Only a store failure is an
+    /// pingers-sync's `prepare_credentials` on this server, with the build's code on offer and
+    /// the server's parameters read: the account registered, the token stock, the membership
+    /// tree and leaf, and the prover self-test started. Only a store failure is an
     /// error; a network failure or a refusal leaves credentialed requests waiting for a later
     /// call (each command's flush and each wake).
     ///
@@ -129,6 +130,14 @@ impl Link {
             self.engine
                 .offer_registration_code(code.clone(), CodeSource::Build)
                 .await?;
+        }
+        // The server's parameters first (once per process): they say which credentials it
+        // accepts and its daily token limit, which the steps below size themselves by. A
+        // network failure here leaves the defaults; only a store failure is an error.
+        if let Err(error @ (ClientError::Store(_) | ClientError::Records(_))) =
+            self.server_params().await
+        {
+            return Err(error);
         }
         let result = self.engine.prepare_credentials(WakeBudget::UNLIMITED).await;
         self.observe(&result);
