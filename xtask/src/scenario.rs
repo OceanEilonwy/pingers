@@ -481,8 +481,9 @@ fn play(
         )?;
         let field = a.tap_when(&Find::text(Text::Is("Party name".into())).field(), UI)?;
         a.type_text(PARTY)?;
+        // Create waits for the reachability check through the relay, a network call.
         let create = Find::tag("new_party_create").enabled();
-        if let Err(error) = a.tap_when(&create, UI) {
+        if let Err(error) = a.tap_when(&create, NETWORK) {
             bail!(
                 "Create party never became enabled after typing the name into {:?}: {error:#}",
                 field.label()
