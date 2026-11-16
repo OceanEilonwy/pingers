@@ -173,8 +173,8 @@ fn git(root: &Path, arguments: &[&str]) -> Result<String> {
 /// Runs `cargo mutants` on one crate and checks its survivors against the allow-file.
 fn mutate(root: &Path, package: &str, allowed: &Allowed) -> Result<Outcome> {
     let output = root.join("target").join("xtask-mutants").join(package);
-    // cargo-mutants creates `--output` but not its parents; a fresh worktree has neither.
-    fs::create_dir_all(&output).context("creating the mutants output directory")?;
+    // cargo mutants makes `<output>/mutants.out` but not `<output>` itself.
+    fs::create_dir_all(&output)?;
     let output_text = output.to_string_lossy().into_owned();
     let arguments = [
         "mutants",

@@ -8,6 +8,7 @@
 //! hosted = ["oceania", "europe/germany"]   # whole-segment prefixes of region ids
 //! logging = "off"                   # or "counts": aggregate totals every counts_interval_s
 //! counts_interval_s = 3600
+//! ohttp_key_file = "/var/lib/pingers-map-host/ohttp-key"   # optional; default <directory>/.ohttp-key
 //!
 //! [max_zoom]                        # optional; the longest matching prefix wins
 //! "europe/germany" = 13
@@ -25,6 +26,11 @@
 //! systems whose settings have no list type; an empty list or string hosts nothing. The
 //! directory and the region list are read when the host starts ([`crate::serve`]), not when
 //! the file is parsed.
+//!
+//! `ohttp_key_file` holds the OHTTP gateway's private key (32 bytes, hex) that clients fetching
+//! through a relay encapsulate to (`crate::gateway`). The host makes one there on first start
+//! if the file does not exist. A relative path is resolved against the configuration file's
+//! directory.
 
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
@@ -83,6 +89,9 @@ pub struct MapHostConfig {
     pub logging: Logging,
     /// Cache mode, if configured; otherwise the directory is served as it is.
     pub cache: Option<CacheConfig>,
+    /// The OHTTP gateway key file: `ohttp_key_file`, or `.ohttp-key` in the directory (never
+    /// served: the host serves no dotfiles).
+    pub ohttp_key_file: PathBuf,
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -122,6 +131,7 @@ struct FileConfig {
     #[serde(default = "default_counts_interval")]
     counts_interval_s: u64,
     cache: Option<FileCache>,
+    ohttp_key_file: Option<PathBuf>,
 }
 
 /// `hosted`: a TOML array, or one space-separated string.
@@ -232,6 +242,9 @@ impl MapHostConfig {
                 })
             })
             .transpose()?;
+        let ohttp_key_file = file
+            .ohttp_key_file
+            .map_or_else(|| file.directory.join(".ohttp-key"), |path| base.join(path));
         Ok(Self {
             listen: file.listen,
             directory: file.directory,
@@ -239,6 +252,7 @@ impl MapHostConfig {
             allow: AllowList { hosted, max_zoom },
             logging,
             cache,
+            ohttp_key_file,
         })
     }
 }
@@ -304,6 +318,7 @@ mod tests {
                 },
                 logging: Logging::Off,
                 cache: None,
+                ohttp_key_file: PathBuf::from("/srv/pingers-maps/.ohttp-key"),
             })
         );
     }
@@ -311,7 +326,7 @@ mod tests {
     #[test]
     fn full_file_parses() {
         let text = format!(
-            "{MINIMAL}logging = \"counts\"\ncounts_interval_s = 60\n\
+            "{MINIMAL}logging = \"counts\"\ncounts_interval_s = 60\nohttp_key_file = \"keys/map\"\n\
              [max_zoom]\n\"europe/germany\" = 13\n\
              [cache]\nregions = \"regions.toml\"\nupstream = \"https://example.org/p.pmtiles\"\n\
              max_concurrent_extracts = 2\nretry_after_seconds = 10\n"
@@ -326,6 +341,11 @@ mod tests {
         assert_eq!(
             config.as_ref().map(|config| config.allow.max_zoom.len()),
             Ok(1)
+        );
+        assert_eq!(
+            config.as_ref().map(|config| config.ohttp_key_file.clone()),
+            Ok(PathBuf::from("/etc/pingers/keys/map")),
+            "a relative key file is beside the configuration"
         );
         let cache = config.ok().and_then(|config| config.cache);
         assert_eq!(

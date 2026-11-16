@@ -23,6 +23,9 @@ use reqwest::header::{
 };
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
+#[path = "host/gateway.rs"]
+mod gateway;
+
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 /// A directory under the system temporary directory, removed on drop.
@@ -67,6 +70,7 @@ fn config(directory: &Path, hosted: &[&str], max_disk: u64) -> MapHostConfig {
         },
         logging: Logging::Off,
         cache: None,
+        ohttp_key_file: directory.join(".ohttp-key"),
     }
 }
 
@@ -100,7 +104,11 @@ async fn start(
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     tokio::spawn(serve_with(
         config,
-        Outside { cutter, clock },
+        Outside {
+            cutter,
+            clock,
+            rng: Box::new(pingers_testkit::seeded_rng(7)),
+        },
         listener,
         async move {
             let _ = stopped.await;

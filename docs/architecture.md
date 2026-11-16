@@ -48,6 +48,7 @@ pingers/
     pingers-sync/            L3  server sync: group logs, mailboxes, request queue
     pingers-wake/            L3  the background pipeline: one wake, start to finish
     pingers-meetup-session/  L3  a live meetup: channel, members, lifecycle
+    pingers-map-downloads/   L3  region map packs: catalogs, downloads direct or via the relay, install
     pingers-client/          L3  composition root: wires the above, no domain logic
     pingers-screens/         L4  view models
     pingers-words/           L4  all user-facing text
@@ -144,6 +145,7 @@ Licence (decided 2026-11-13): every crate, binary and the Android app is `AGPL-3
 **pingers-transport**: getting bytes to the server.
 - `Transport` trait and the router by privacy class (Anonymous, Identified, Stream); anonymous and stream traffic never goes direct.
 - OHTTP client over HTTP/2 (`hyper` + `rustls` with X25519MLKEM768); chunked live channel with reconnect; split-channel fallback; relay selection and health.
+- `PublicClient`: plain HTTPS `GET`s to a public static host the user chose to reach directly (the map host with "Download maps through privacy relay" off); never the server.
 - Tor and mixnets would be new `Transport` implementations here, nowhere else.
 - Deps: pingers-ohttp, `hyper`, `hyper-util`, `rustls`, `tokio`.
 
@@ -151,7 +153,7 @@ Licence (decided 2026-11-13): every crate, binary and the Android app is `AGPL-3
 - Region lists with hierarchical ids (`continent/country/state`), so large countries split into sub-regions; a host's allow-list and per-region zoom caps.
 - A PMTiles v3 and vector-tile reader, enough to build the place-name search index from the pack's own labels; the manifest and catalog formats the app reads.
 - `pmtiles extract` (and `--dry-run` size estimates) as a child process; the disk budget check.
-- Sync file I/O only; no network of its own (the `pmtiles` tool fetches from the build). Deps: `flate2`, `sha2`, `serde_json`, `toml`.
+- Sync file I/O only; no network of its own (the `pmtiles` tool fetches from the build). Content checksums come from pingers-crypto. Deps: pingers-crypto, `flate2`, `serde_json`, `toml`.
 
 ### L3: stateful logic
 
@@ -182,6 +184,12 @@ Client side:
 - Creates or joins the meetup group; holds the chunked OHTTP live channel; sends location or dummy frames on the cadence; applies consent decisions from pingers-meetup; removes silent members; ends the meetup and deletes its keys and content.
 - Deps: pingers-meetup, pingers-mls, pingers-transport, pingers-store, pingers-presence (only for `MeetupKey`: `PSK_meet` with its id, so the Spot keys never leave pingers-presence).
 
+**pingers-map-downloads**: region map packs for the app (design B.12, "Map host"), so the shell makes no network calls.
+- Fetches `catalog.json` from each host in the chain (user override, the server's map host, the publisher's default) and offers each region from the first host listing it.
+- Downloads a region's index and pack in byte-range pieces, resuming a partial file named after its checksum; checks each against the manifest (pingers-crypto's content checksum) and writes the manifest last; lists and removes installed regions.
+- Two routes: direct HTTPS (pingers-transport's `PublicClient`), or through the relay: each request sealed to the map host's own OHTTP gateway (pingers-ohttp, padded), sent as an anonymous request to the server, which forwards it unopened; the gateway key is pinned on first use through a store the caller provides; request counts are padded to size classes.
+- Deps: pingers-transport, pingers-map-packs, pingers-ohttp, pingers-crypto, pingers-proto, pingers-time, `tokio` (files).
+
 **pingers-client**: the composition root, the only crate pingers-ffi and pingers-screens see.
 - Builds the crates above from a `Platform` (secure store, OS geofences, fixes, DND, wake scheduling) and an `Events` sink, and exposes one async API.
 - **Rule: no domain logic.** Each method delegates to one crate. If a change here needs a domain `if`, it belongs in a named crate instead. Enforced by review and a size budget (target under 500 lines).
@@ -207,13 +215,13 @@ Server side (each crate owns its storage trait, with a SQLite implementation beh
 
 **pingers-ffi**: UniFFI only. It converts types, maps errors, turns async calls into Kotlin `suspend`, and exposes `Platform` and `Events` as callback interfaces. No logic. Feature `wipe-freed` with a zeroing allocator as in fob-ffi.
 
-**pingers-server**: the self-hosted server binary. It routes requests to pingers-board-store, pingers-mailbox, pingers-delivery and pingers-quota and holds no logic of its own (same rule as pingers-client). `axum` over `hyper`, HTTP/2; the gateway accepts `POST /ohttp` only from configured relays (mutual TLS or allow-list); identified endpoints direct; config file; metrics without identifiers.
+**pingers-server**: the self-hosted server binary. It routes requests to pingers-board-store, pingers-mailbox, pingers-delivery and pingers-quota and holds no logic of its own (same rule as pingers-client). `axum` over `hyper`, HTTP/2; the gateway accepts `POST /ohttp` only from configured relays (mutual TLS or allow-list); identified endpoints direct; config file; metrics without identifiers. It forwards sealed map requests (`/v1/maps/ohttp`) to its map host's gateway and nowhere else.
 
 **pingers-push-relay**: the publisher-run push relay. Stateless: HPKE open, check the mailbox binding, send to APNs (`a2`), FCM HTTP v1 (its OAuth assertion signed by pingers-crypto), or a UnifiedPush endpoint; per-token and per-server rate limits; key config endpoints for the published key and the next one with its activation time (two-slot rotation); logging off by default.
 
 **pingers-ohttp-relay**: a small reference relay (forward only, full-duplex streaming, no logs) so relay operators have something to run. Optional if an existing relay is used. Its library (`serve`) is what the binary runs and what testkit's harness and pingers-transport's integration tests run, so tests exercise the relay operators deploy.
 
-**pingers-map-host**: the map host, a separate public static service like the push relay (design B.12, "Map host"). Publisher-hosted by default; operators can run their own and Pingers servers can advertise one (`map_host` in `/v1/params`). Serves region manifests, PMTiles packs and search indexes from a directory: HTTP/2, `Range`, strong ETags from the SHA-256, immutable caching, no cookies, no client addresses, logging off by default (counts and disk use when on). Operators choose what they host with an allow-list of regions and a `max_disk` budget; an optional cache mode cuts allow-listed regions from the upstream Protomaps build on first request and evicts least-recently-served packs. Deps: pingers-map-packs, `axum`, `tokio`, `tokio-util`.
+**pingers-map-host**: the map host, a separate public static service like the push relay (design B.12, "Map host"). Publisher-hosted by default; operators can run their own and Pingers servers can advertise one (`map_host` in `/v1/params`). Serves region manifests, PMTiles packs and search indexes from a directory: HTTP/2, `Range`, strong ETags from the SHA-256, immutable caching, no cookies, no client addresses, logging off by default (counts and disk use when on). Operators choose what they host with an allow-list of regions and a `max_disk` budget; an optional cache mode cuts allow-listed regions from the upstream Protomaps build on first request and evicts least-recently-served packs. Its own OHTTP gateway (`POST /ohttp`, `GET /ohttp-keys`) answers map requests that phones seal to it and the Pingers server forwards unopened, padded to size classes, so relayed downloads hide the region from the server and the phone's address from the host. Deps: pingers-map-packs, pingers-ohttp, pingers-crypto, `axum`, `tokio`, `tokio-util`.
 
 ### Dev
 
@@ -234,7 +242,7 @@ The shell implements `Platform` and draws what pingers-screens publishes. It own
 - a foreground service of type `location` for meetups and the optional "Keep Pingers running"
 - Keystore wrapping of the SQLCipher key
 - the `NotificationManager` interruption filter
-- MapLibre Native with whole-region offline packs: the region picker, downloads with SHA-256 checks, the map host chain (user override, server's host, publisher's default, per region), on-device place search over each pack's index (`android/docs/maps.md`)
+- MapLibre Native rendering of the whole-region packs the core downloads (pingers-map-downloads): the region picker over the core's catalog, progress, and on-device place search over each installed pack's index (`android/docs/maps.md`)
 - the rotation-vector sensor for the compass, and the downgraded-priority counter for FCM
 
 ## 5. Rules that keep the core clean

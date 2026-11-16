@@ -17,6 +17,7 @@
 //! - The SHA-256 preimage hashes of RLN's external nullifier and request digest (B.4.8).
 //! - With the `rs256` feature: RS256 compact JWS for the push relay's FCM service-account
 //!   assertion (RFC 7523), a Google requirement rather than a Pingers primitive.
+//! - Content checksums of public map files (B.12, "Map host").
 //!
 //! Secret types wrap `zeroize::Zeroizing` and implement neither `Debug`, `Display`, `Clone`
 //! nor `Serialize`. MACs and tags are compared with `subtle`, never `==`.
@@ -24,6 +25,7 @@
 #![forbid(unsafe_code)]
 
 mod board;
+mod checksum;
 mod cursor;
 mod error;
 mod group;
@@ -49,6 +51,7 @@ mod test_support;
 mod vector_tests;
 
 pub use board::{RevokeKey, revoke_commitment, revoke_key_matches, segment_hash};
+pub use checksum::{ChecksumError, ContentDigest, ContentHasher, content_digest};
 pub use cursor::{BoardCursorKey, open_board_cursor, seal_board_cursor};
 pub use error::CryptoError;
 pub use group::{

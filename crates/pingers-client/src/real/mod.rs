@@ -18,6 +18,7 @@
 //! - `records`: the client's own records in the store's key-value table.
 
 mod join;
+mod maps;
 mod meetups;
 mod network;
 mod parties;
@@ -128,6 +129,12 @@ impl Crates {
             Arc::clone(&backend),
             Arc::clone(&net),
         ));
+        let roots = instance.map_or(Trust::Mozilla, |instance| instance.trust.clone());
+        let maps = Arc::new(maps::Maps::new(
+            Arc::clone(&backend),
+            Arc::clone(&net),
+            roots.roots()?,
+        )?);
         Ok(Self {
             parties: Arc::new(parties::Parties::new(
                 Arc::clone(&backend),
@@ -141,6 +148,7 @@ impl Crates {
                 net,
             )),
             meetups,
+            maps,
         })
     }
 }

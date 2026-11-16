@@ -47,6 +47,9 @@ pub enum ClientError {
     /// pingers-meetup-session failed.
     #[error("meetup session")]
     MeetupSession(#[from] SessionError),
+    /// pingers-map-downloads failed.
+    #[error("maps")]
+    Maps(#[from] pingers_map_downloads::MapsError),
     /// The call needs a crate or a value that is not wired yet.
     #[error("unavailable")]
     Unavailable(#[from] Unavailable),

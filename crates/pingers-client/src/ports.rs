@@ -27,7 +27,7 @@ use crate::snapshot::{
 };
 use crate::{ClientError, Fallback, FixQuality, LocationMode, Notice, OsRegion, PushTokens};
 
-/// The four L3 crates, built over the opened store.
+/// The L3 crates, built over the opened store.
 #[derive(Clone)]
 pub struct Crates {
     /// pingers-parties.
@@ -38,6 +38,8 @@ pub struct Crates {
     pub wake: Arc<dyn WakePort>,
     /// pingers-meetup-session.
     pub meetups: Arc<dyn MeetupsPort>,
+    /// pingers-map-downloads.
+    pub maps: Arc<dyn MapsPort>,
 }
 
 /// A new Party (New party screen, Advanced).
@@ -376,4 +378,62 @@ pub trait MeetupsPort: Send + Sync {
     async fn leave_meetup(&self, meetup: GroupId) -> Result<(), ClientError>;
     /// The live Meetups.
     async fn section(&self) -> Result<MeetupsSection, ClientError>;
+}
+
+/// How map hosts are reached: the "Download maps through privacy relay" setting (design B.12).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MapRoute {
+    /// Straight to the map host over HTTPS: it sees the device's address.
+    Direct,
+    /// Through the OHTTP relay and the Pingers server to the map host's own gateway.
+    Relay,
+}
+
+/// The map hosts the shell knows of; the core adds the one its server advertises.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapHosts {
+    /// The user's override (Advanced, "Map host").
+    pub user_override: Option<pingers_proto::MapHostUrl>,
+    /// The publisher's default (build configuration).
+    pub publisher: Option<pingers_proto::MapHostUrl>,
+}
+
+/// One region to download.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapDownload {
+    /// The region and the host that offers it, from a catalog.
+    pub offer: pingers_map_downloads::catalog::RegionOffer,
+    /// How to reach the host.
+    pub route: MapRoute,
+    /// The maps directory in the app's files.
+    pub directory: std::path::PathBuf,
+}
+
+/// pingers-map-downloads: region map packs, fetched by the core so the shell makes no network
+/// calls (design E.1).
+#[async_trait]
+pub trait MapsPort: Send + Sync {
+    /// What the hosts in the chain offer: the user's override, the server's map host and the
+    /// publisher's default, each region from the first that lists it.
+    async fn catalog(
+        &self,
+        hosts: MapHosts,
+        route: MapRoute,
+    ) -> Result<pingers_map_downloads::catalog::Catalog, ClientError>;
+    /// Downloads, checks and installs a region, telling `progress` as it goes.
+    async fn download(
+        &self,
+        job: MapDownload,
+        progress: Arc<dyn pingers_map_downloads::install::DownloadProgress>,
+    ) -> Result<pingers_map_downloads::RegionManifest, ClientError>;
+    /// The regions installed in `directory`.
+    async fn installed(
+        &self,
+        directory: std::path::PathBuf,
+    ) -> Result<Vec<pingers_map_downloads::RegionManifest>, ClientError>;
+    /// Removes region `id` from `directory`.
+    async fn delete(&self, directory: std::path::PathBuf, id: String) -> Result<(), ClientError>;
+    /// Forgets the map host gateway key pinned on first use, so relayed downloads trust the
+    /// key the host serves now (the user's answer to "the map host's key changed").
+    async fn forget_key_pin(&self) -> Result<(), ClientError>;
 }

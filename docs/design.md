@@ -88,6 +88,7 @@ Definitions used throughout:
 Other cases:
 
 - **No "no relay" mode** (decided 2026-11-13): anonymous and stream traffic always goes through an OHTTP relay, and the gateway accepts encapsulated requests only from configured relays, so the server never sees a device IP on them.
+- **Map downloads** (B.12, "Map host"): direct downloads never touch the server. With "Download maps through privacy relay" on, the server forwards requests sealed to the map host's own key, so it learns only that an anonymous client downloaded map data of some size class, never which area.
 - **Privacy Pass in place of membership proofs** changes nothing above; the server sees each account's daily token issuance.
 - **Official builds**: the push relay is the app publisher's. The publisher sees wake times for every token on every server that uses the official app.
 
@@ -768,8 +769,23 @@ A `Router` holds one transport per class. Anonymous and stream requests are neve
 **Map host** (decided 2026-11-13). Maps come from a fourth service, separate from the server and the relays: `pingers-map-host`, a public static host of whole region packs (PMTiles extracts of the Protomaps basemap, OpenStreetMap data), each with a place-name search index and a manifest carrying sizes and SHA-256s. The app downloads a pack whole, verifies it, and renders offline with MapLibre Native; "Search a place" runs on the phone over the pack's index. No request ever names the part of the map on screen or a search term.
 
 - **Which host.** Publisher-hosted by default; highest priority first, the app uses a user override (Advanced), then the host the user's Pingers server advertises (`map_host` in `/v1/params`), then the publisher's built-in default. The chain applies per region: if the chosen host does not carry an area, that area alone comes from the next host.
-- **What the map host learns:** the device's IP address and the names of the regions it downloads, and when. If "Download maps through privacy relay" is on, not the IP: the download goes through the OHTTP relay (status: not yet implemented, see `android/docs/maps.md`; with the setting on, the app refuses to download rather than going direct). Never viewports, zoom levels, searches, Parties, Spots or locations.
+- **Who downloads.** The Rust core, never the shell (E.1): it fetches the catalogs, downloads each pack and index in byte-range pieces (resuming after an interruption), checks them against the manifest's SHA-256 (pingers-crypto) and installs them in the app's maps directory, manifest last. The shell renders what is installed and searches the indexes (crates/pingers-map-downloads).
+- **What the map host learns:** the device's IP address and the names of the regions it downloads, and when. If "Download maps through privacy relay" is on, not the IP (below). Never viewports, zoom levels, searches, Parties, Spots or locations.
 - **Fallback hosts** learn the same for the regions they serve, and every host in the chain sees the catalog request (which says only that the address uses Pingers maps). "What your server sees" says so.
+
+**Downloads through the privacy relay** (decided 2026-11-14). The map host runs its own OHTTP gateway, and the Pingers server forwards to it without opening anything:
+
+```
+phone ──OHTTP──▶ relay ──▶ server gateway: POST /v1/maps/ohttp { body: request sealed to the map host's key }
+                                   └──▶ map host: POST /ohttp ──▶ GET /<file>, Range: … (answered as a direct request)
+```
+
+- Each map request (`GET /catalog.json`, `GET /<stem>.json`, or one byte range of a pack or index, with `If-Range`) is sealed to the **map host's** key (RFC 9458), padded to 1 KiB, and sent as an ordinary anonymous request to the server (`POST /v1/maps/ohttp`, class `Anonymous`: through the relay only). The server's gateway opens the outer layer, sees only that route and an opaque body, and forwards the body unchanged to its map host's gateway (`map_host_gateway`, default `map_host`; the one host it advertises, never a host the request names, so it is no open proxy). The map host opens it, answers exactly as it would a direct request, and seals the answer padded to the size the request asks for (`pingers-pad`).
+- The phone fetches the map host's key config the same way (`GET /v1/maps/ohttp-keys`, which the server fetches from `<gateway>/ohttp-keys`) and pins its hash on first use per host (a store record). A different key later stops relayed downloads with "the map host's key changed"; the user may trust the new key. The server could substitute a key only before the first download and only by an active attack.
+- **Sizes.** Every piece is 255 KiB of data and every answer is padded to 256 KiB (catalog pieces included), and each download's number of requests is topped up to the next size class (1, 2, 3, 4, 6, 8, 12, 16, …: at most half again), with extra requests for the pack's first piece that look like any other.
+- **What each sees.** The relay: the phone's address, request times and the size class of each download, not the server's route or any file. The server: that some anonymous client downloaded map data of a size class, never the address and never which file. The map host: which files, from the server's address, never the phone's. Together the relay and the server learn only what the relay alone does about maps; the map host and the relay together (different operators by design) could pair address and region by timing.
+- **Why not the server's own gateway forwarding plain requests.** Then the server would read every region name; and why not the map host behind the user's relay directly: the relay serves one gateway (pingers-ohttp-relay forwards to exactly one), and a second relay per map host would need its own operator and configuration on every phone. Nesting needs nothing new from the relay.
+- **Limits.** Only the host the server advertises can be reached this way; the user's override and the publisher's default are skipped (the picker says so) unless one of them is the server's host. On nodo the map host is on the same device, so the server forwards over loopback and still has no internet access (deploy-nodo.md).
 - **Region size** is the remaining signal: a pack names an area, so smaller packs (a city) say more than larger ones (a state). Operators split large countries into sub-regions to keep downloads small; the app never downloads a pack automatically.
 - **Operators** choose what to host with an allow-list of regions and a disk budget (`max_disk`), and may run a cache mode that cuts allow-listed regions from the upstream Protomaps build on first request. Cutting fetches byte ranges from the upstream build host, which then learns the map host's IP and which regions it cuts, not anything about users.
 
@@ -971,6 +987,11 @@ GET  /v1/groups/{id}/msgs?after=seq (Grp) -> { msgs: Vec<GrpMsg>, head_epoch }
 GET  /v1/groups/{id}/state (Grp) -> { epoch, blob }
 DELETE /v1/groups/{id}     (Grp)
 POST /v1/groups/{id}/live?sub=<sub_id>  (Grp) chunked OHTTP exchange: request and response bodies are streams of Frame { epoch, body, ephemeral }   // privacy class Stream; reached only via POST /ohttp with message/ohttp-chunked-req
+
+// --- map downloads through the privacy relay (Anon, no credential; B.12) ---
+POST /v1/maps/ohttp        body: message/ohttp-req sealed to the map host's own key   -> 200 message/ohttp-res (the map host's answer, unopened)
+                           // forwarded unchanged to POST {map_host_gateway}/ohttp; 404 without a map host, 502 if it does not answer
+GET  /v1/maps/ohttp-keys                                                   -> application/ohttp-keys (fetched from {map_host_gateway}/ohttp-keys; 502 unless it decodes)
 ```
 
 Welcome messages travel as mailbox posts. Invites reuse mailboxes (below). There is deliberately no KeyPackage endpoint, no user lookup endpoint, and no endpoint that takes a raw push token.
@@ -1132,10 +1153,18 @@ impl Core {
     pub async fn revoke_location(&self, id: MeetupId, peer: MemberId) -> Result<(), CoreError>;
     pub fn compass(&self, id: MeetupId, target: CompassTarget) -> Option<Bearing>;  // distance_m, bearing_deg, age_s
     pub async fn leave_meetup(&self, id: MeetupId) -> Result<(), CoreError>;
+
+    // region maps (B.12): the core downloads, checks and installs; the shell draws and searches
+    pub async fn map_catalog(&self, settings: MapSettings) -> Result<MapCatalog, CoreError>;   // { user_override, publisher, through_relay }
+    pub async fn download_map(&self, request: MapDownloadRequest,                              // { offer, settings, directory }
+                              listener: Arc<dyn MapDownloadListener>) -> Result<MapManifest, CoreError>;
+    pub async fn installed_maps(&self, directory: String) -> Result<Vec<MapManifest>, CoreError>;
+    pub async fn delete_map(&self, directory: String, id: String) -> Result<(), CoreError>;
+    pub async fn forget_map_host_key(&self) -> Result<(), CoreError>;  // trust a map host's changed gateway key
 }
 ```
 
-The shells own: permissions UI, OS location APIs, OS geofence registration, DND reads, push registration, map rendering, heading sensor. They hold no keys and make no network calls.
+The shells own: permissions UI, OS location APIs, OS geofence registration, DND reads, push registration, map rendering and on-device place search over installed packs, heading sensor. They hold no keys and make no network calls: map packs are downloaded by the core.
 
 ### E.2 Background pipeline
 

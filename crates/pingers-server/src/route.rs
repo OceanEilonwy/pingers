@@ -64,6 +64,11 @@ pub(crate) enum Route {
     DeleteGroup,
     /// `POST /v1/groups/{id}/live?sub=`: the chunked live channel.
     Live,
+    /// `POST /v1/maps/ohttp`: a map request sealed to the map host's own gateway, forwarded
+    /// there as it is (design B.12, "Downloads through the privacy relay").
+    MapRequest,
+    /// `GET /v1/maps/ohttp-keys`: the map host gateway's key config, fetched from it.
+    MapKeys,
 }
 
 /// Who a route identifies, which decides how it may arrive (design B.12).
@@ -137,7 +142,11 @@ impl Route {
             | Self::PostGroupMessage
             | Self::ReadGroupMessages
             | Self::GroupState
-            | Self::DeleteGroup => Class::Anonymous,
+            | Self::DeleteGroup
+            // Who downloads which map size, and when, is no business of the server's: and a
+            // direct request would make it an open proxy for anyone.
+            | Self::MapRequest
+            | Self::MapKeys => Class::Anonymous,
         }
     }
 }
@@ -217,6 +226,8 @@ pub(crate) fn resolve(method: &str, path: &str) -> Resolved {
         ),
         ["groups", _, "state"] => by_method(method, &[("GET", Route::GroupState)]),
         ["groups", _, "live"] => by_method(method, &[("POST", Route::Live)]),
+        ["maps", "ohttp"] => by_method(method, &[("POST", Route::MapRequest)]),
+        ["maps", "ohttp-keys"] => by_method(method, &[("GET", Route::MapKeys)]),
         _ => Resolved::NotFound,
     }
 }

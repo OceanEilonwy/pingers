@@ -52,5 +52,13 @@ name = "crates/pingers-server/src/http.rs: replace >= with < in IdleWatch::serve
 reason = "caught as a timeout, not missed: every connection is then closed as soon as it opens, and tests that wait on the manual clock for an answer hang until cargo-mutants gives up"
 
 [[mutant]]
+name = "crates/pingers-crypto/src/checksum.rs: replace | with ^ in ContentDigest::from_hex"
+reason = "equivalent: the high nibble is shifted left by four and the low one is below sixteen, so they share no set bits and OR and XOR agree for every input"
+
+[[mutant]]
+name = "crates/pingers-map-host/src/gateway.rs: replace match guard error.kind() == io::ErrorKind::NotFound with true in load_or_create_key"
+reason = "equivalent: a key file that exists but cannot be read is then made again with create_new, which fails because the file exists, so both report OhttpKeyFile and no key is replaced"
+
+[[mutant]]
 name = "crates/pingers-anon/src/circuit.rs: replace ceremony::matches_ceremony -> bool with true"
 reason = "equivalent for every build: the only key compiled in is the ceremony's, so the check is true either way. The comparator it calls (ceremony::matches) is tested with each field altered, and the self-test's handling of a false answer is tested with an injected check."

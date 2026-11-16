@@ -368,6 +368,7 @@ fn write_keys(dev: &Path, binaries: &Path, layout: &Layout) -> Result<Zeroizing<
             "local-stack: reusing the keys in {} (--fresh makes new ones)",
             layout.config().display()
         )?;
+        add_new_template_fields(&dev.join("server.toml"), &layout.server_config())?;
         return read_registration_code(&layout.server_config());
     }
     let push_relay = push_relay_config(dev, binaries)?;
@@ -395,6 +396,26 @@ fn write_keys(dev: &Path, binaries: &Path, layout: &Layout) -> Result<Zeroizing<
         layout.config().display()
     )?;
     Ok(code)
+}
+
+/// Adds to the kept `config` the top-level fields `template` has gained since the keys were
+/// made (such as `map_host_gateway`), so an existing stack keeps its keys and pins and still
+/// runs with today's settings. Fields already there are left as they are.
+fn add_new_template_fields(template: &Path, config: &Path) -> Result<()> {
+    let template = parse_template(template)?;
+    let text = Zeroizing::new(fs::read_to_string(config)?);
+    let mut kept = text.parse::<Table>()?;
+    let mut added = false;
+    for (field, value) in template {
+        if !value.is_table() && !value.is_array() && !kept.contains_key(&field) {
+            kept.insert(field, value);
+            added = true;
+        }
+    }
+    if added {
+        write_secret_file(config, &with_header(&kept))?;
+    }
+    Ok(())
 }
 
 /// Starts every process of a prepared stack.
@@ -870,6 +891,42 @@ mod tests {
 
     fn strings(options: &[&str]) -> Vec<String> {
         options.iter().map(|option| (*option).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_kept_server_config_gains_new_template_fields_and_keeps_its_own() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("pingers-xtask-fields-{}", std::process::id()));
+        fs::create_dir_all(&dir)?;
+        let template = dir.join("template.toml");
+        let config = dir.join("server.toml");
+        fs::write(
+            &template,
+            "map_host = \"https://template\"\nmap_host_gateway = \"http://127.0.0.1:9474\"\n\
+             [ohttp]\nlisten = \"127.0.0.1:1\"\n",
+        )?;
+        fs::write(
+            &config,
+            "map_host = \"https://kept\"\n[ohttp]\nlisten = \"127.0.0.1:2\"\n",
+        )?;
+        add_new_template_fields(&template, &config)?;
+        let merged = fs::read_to_string(&config)?.parse::<Table>()?;
+        assert_eq!(
+            merged.get("map_host").and_then(Value::as_str),
+            Some("https://kept")
+        );
+        assert_eq!(
+            merged.get("map_host_gateway").and_then(Value::as_str),
+            Some("http://127.0.0.1:9474")
+        );
+        assert_eq!(
+            merged
+                .get("ohttp")
+                .and_then(|ohttp| ohttp.get("listen"))
+                .and_then(Value::as_str),
+            Some("127.0.0.1:2")
+        );
+        fs::remove_dir_all(&dir)?;
+        Ok(())
     }
 
     #[test]

@@ -35,7 +35,9 @@ import org.pingers.app.data.Coordinate
 import org.pingers.app.maps.CatalogEntry
 import org.pingers.app.maps.CatalogState
 import org.pingers.app.maps.DownloadState
+import org.pingers.app.maps.FailedHost
 import org.pingers.app.maps.Failure
+import org.pingers.app.maps.HostProblem
 import org.pingers.app.maps.Manifest
 import org.pingers.app.maps.Maps
 import org.pingers.app.maps.RegionOffer
@@ -101,15 +103,13 @@ fun MapRegionsScreen(maps: Maps, around: Coordinate?, nav: Navigator) {
                         }
                     }
                 }
-                if (c.relayUnavailable) {
-                    Text(stringResource(R.string.maps_failed_relay), style = body(14.sp, color = Pc.OrangeText, lineHeight = 1.45f), modifier = Modifier.padding(top = 12.dp))
-                } else if (c.offers.isEmpty()) {
+                if (c.offers.isEmpty() && c.failedHosts.none { it.problem != HostProblem.Unreachable }) {
                     Text(stringResource(R.string.maps_none), style = body(14.sp, color = Pc.Muted, lineHeight = 1.45f), modifier = Modifier.padding(top = 12.dp))
                 }
-                c.failedHosts.forEach { failed ->
-                    Text(stringResource(R.string.maps_host_failed, failed.name), style = body(12.sp, color = Pc.Muted), modifier = Modifier.padding(top = 6.dp))
-                }
+                c.failedHosts.forEach { failed -> HostProblemLine(failed, maps) }
             }
+            CatalogState.NoCore ->
+                Text(stringResource(R.string.maps_no_core), style = body(14.sp, color = Pc.OrangeText, lineHeight = 1.45f), modifier = Modifier.padding(start = 4.dp, top = 20.dp))
         }
         Card(Modifier.padding(top = 20.dp), padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
             Text(words.hostTitle, style = body(15.sp, 600))
@@ -125,9 +125,26 @@ private fun org.pingers.app.maps.MapHostSource.toFfi() = when (this) {
     org.pingers.app.maps.MapHostSource.Publisher -> uniffi.pingers.MapHostSource.PUBLISHER
 }
 
-private fun RegionOffer.bbox() = when (val e = entry) {
-    is CatalogEntry.Ready -> e.manifest.bbox
-    is CatalogEntry.OnDemand -> e.bbox
+private fun RegionOffer.bbox() = (entry as? CatalogEntry.Ready)?.manifest?.bbox
+
+/** Why a host offered nothing; a changed key can be trusted from here. */
+@Composable
+private fun HostProblemLine(failed: FailedHost, maps: Maps) {
+    val text = when (failed.problem) {
+        HostProblem.Unreachable -> stringResource(R.string.maps_host_failed, failed.host.name)
+        HostProblem.NotThroughRelay -> stringResource(R.string.maps_host_not_through_relay, failed.host.name)
+        HostProblem.NoRelayRoute -> stringResource(R.string.maps_host_no_relay_route, failed.host.name)
+        HostProblem.KeyChanged -> stringResource(R.string.maps_host_key_changed, failed.host.name)
+    }
+    val warning = failed.problem != HostProblem.Unreachable
+    Text(
+        text,
+        style = body(if (warning) 14.sp else 12.sp, color = if (warning) Pc.OrangeText else Pc.Muted, lineHeight = 1.4f),
+        modifier = Modifier.padding(top = 6.dp),
+    )
+    if (failed.problem == HostProblem.KeyChanged) {
+        Box(Modifier.padding(top = 8.dp)) { RowButton(stringResource(R.string.maps_trust_new_key), Pc.Ink, outlined = true) { maps.trustNewKey() } }
+    }
 }
 
 private fun Manifest.bytes() = (pack.size + index.size).coerceAtLeast(0).toULong()
@@ -217,7 +234,12 @@ private fun DownloadLine(download: DownloadState?, name: String) {
                 when (download.reason) {
                     Failure.Network -> R.string.maps_failed_network
                     Failure.Checksum -> R.string.maps_failed_checksum
-                    Failure.RelayUnavailable -> R.string.maps_failed_relay
+                    Failure.Preparing -> R.string.maps_failed_preparing
+                    Failure.NotThroughRelay -> R.string.maps_failed_not_through_relay
+                    Failure.NoRelayRoute -> R.string.maps_failed_no_relay_route
+                    Failure.KeyChanged -> R.string.maps_failed_key_changed
+                    Failure.Storage -> R.string.maps_failed_storage
+                    Failure.NoCore -> R.string.maps_no_core
                     Failure.NotOffered -> R.string.maps_failed_not_offered
                 },
             ),

@@ -41,6 +41,8 @@ pingers-delivery = { path = "crates/pingers-delivery" }
 pingers-quota = { path = "crates/pingers-quota" }
 pingers-testkit = { path = "crates/pingers-testkit" }
 pingers-map-packs = { path = "crates/pingers-map-packs" }
+pingers-map-host = { path = "crates/pingers-map-host" }
+pingers-map-downloads = { path = "crates/pingers-map-downloads" }
 
 # Errors and secret hygiene
 thiserror = "2.0.21"
@@ -163,6 +165,7 @@ same-layer = [
   { crate = "pingers-client", dependency = "pingers-sync", reason = "composition root" },
   { crate = "pingers-client", dependency = "pingers-wake", reason = "composition root" },
   { crate = "pingers-client", dependency = "pingers-meetup-session", reason = "composition root" },
+  { crate = "pingers-client", dependency = "pingers-map-downloads", reason = "composition root" },
   # L4: as fob-words reads fob-screens, the words are written from the view models.
   { crate = "pingers-words", dependency = "pingers-screens", reason = "words are written from the view models (architecture §3, L4)" },
 ]
@@ -209,30 +212,93 @@ codegen-units = 1
 strip = true
 
 # Tests and debug builds make real Groth16 proofs (pingers-anon, pingers-sync, pingers-quota,
-# pingers-server). Unoptimised arkworks takes seconds per proof; optimising only the prover's
-# arithmetic keeps the rest of the debug build as it was.
+# pingers-server), and every fresh account fetches a day's 300 Privacy Pass tokens (VOPRF over
+# P-384, pingers-anon and pingers-quota). Unoptimised, or optimised but with debug assertions
+# and overflow checks in their inner loops, these crates take about 6 s per proof and over 10 s
+# of CPU per token batch; a test step then outlasts its hang guard under load. They are built
+# here as in a release build; the rest of the debug build, our own crates included, keeps its
+# checks.
 [profile.dev.package.ark-ff]
 opt-level = 3
+debug-assertions = false
+overflow-checks = false
 [profile.dev.package.ark-ec]
 opt-level = 3
+debug-assertions = false
+overflow-checks = false
 [profile.dev.package.ark-bn254]
 opt-level = 3
+debug-assertions = false
+overflow-checks = false
 [profile.dev.package.ark-groth16]
 opt-level = 3
+debug-assertions = false
+overflow-checks = false
 [profile.dev.package.ark-poly]
 opt-level = 3
+debug-assertions = false
+overflow-checks = false
 [profile.dev.package.ark-relations]
 opt-level = 3
+debug-assertions = false
+overflow-checks = false
 [profile.dev.package.ark-serialize]
 opt-level = 3
+debug-assertions = false
+overflow-checks = false
 [profile.dev.package.ark-std]
 opt-level = 3
+debug-assertions = false
+overflow-checks = false
 [profile.dev.package.rln]
 opt-level = 3
+debug-assertions = false
+overflow-checks = false
 [profile.dev.package.ruint]
 opt-level = 3
+debug-assertions = false
+overflow-checks = false
 [profile.dev.package.num-bigint]
 opt-level = 3
-# The prover's generic code is instantiated here (rln's backend over our hasher).
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.crypto-bigint]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.primefield]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.primeorder]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.p384]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.elliptic-curve]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.voprf]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.ctutils]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.cmov]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+[profile.dev.package.hybrid-array]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+# The prover's and the token code's generics are instantiated here (rln's backend over our
+# hasher, voprf over P-384). Its own checks stay on.
 [profile.dev.package.pingers-anon]
 opt-level = 3

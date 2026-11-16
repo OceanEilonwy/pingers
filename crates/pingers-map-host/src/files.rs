@@ -13,9 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
-// sha2 is used directly, not through pingers-crypto: this is a content checksum of public
-// files for HTTP ETags, not key material or anything secret (style guide §8 is about keys).
-use sha2::{Digest as _, Sha256};
+use pingers_crypto::{ContentHasher, content_digest};
 
 use crate::region::{FileKind, RegionFile, RegionId};
 
@@ -204,7 +202,7 @@ fn not_found_or_io(error: io::Error) -> OpenError {
 
 /// `"<sha256 hex>"` of everything `reader` yields.
 fn quoted_sha256(reader: &mut impl io::Read) -> io::Result<String> {
-    let mut hasher = Sha256::new();
+    let mut hasher = ContentHasher::new();
     let mut buffer = vec![0_u8; 1 << 20];
     loop {
         match reader.read(&mut buffer) {
@@ -214,13 +212,13 @@ fn quoted_sha256(reader: &mut impl io::Read) -> io::Result<String> {
             Err(error) => return Err(error),
         }
     }
-    Ok(quote(&hex::encode(hasher.finalize())))
+    Ok(quote(&hasher.finish().to_hex()))
 }
 
 /// `"<sha256 hex>"` of `bytes`.
 #[must_use]
 pub fn etag_of(bytes: &[u8]) -> String {
-    quote(&hex::encode(Sha256::digest(bytes)))
+    quote(&content_digest(bytes).to_hex())
 }
 
 fn quote(hex: &str) -> String {

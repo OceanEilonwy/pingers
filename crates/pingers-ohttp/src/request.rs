@@ -53,15 +53,47 @@ pub fn encapsulate_request(
     request: &BinaryRequest,
     rng: &mut impl CryptoRng,
 ) -> Result<EncapsulatedRequest, OhttpError> {
-    let encoded = request.encode()?;
+    seal_request(config, &request.encode()?, rng)
+}
+
+/// As [`encapsulate_request`], with the encoded request padded with zeros to exactly
+/// `padded_length` bytes (RFC 9292 §3.8), so its size says nothing about the path or headers.
+///
+/// # Errors
+///
+/// [`OhttpError::LongerThanPadding`] if the encoded request is longer than `padded_length`;
+/// otherwise as [`encapsulate_request`].
+pub fn encapsulate_request_padded(
+    config: &KeyConfig,
+    request: &BinaryRequest,
+    padded_length: usize,
+    rng: &mut impl CryptoRng,
+) -> Result<EncapsulatedRequest, OhttpError> {
+    seal_request(config, &padded(request.encode()?, padded_length)?, rng)
+}
+
+fn seal_request(
+    config: &KeyConfig,
+    encoded: &[u8],
+    rng: &mut impl CryptoRng,
+) -> Result<EncapsulatedRequest, OhttpError> {
     let (message, inner) = config
         .client()?
-        .encapsulate(&encoded, rng)
+        .encapsulate(encoded, rng)
         .map_err(|_| OhttpError::Internal)?;
     Ok(EncapsulatedRequest {
         message,
         response_context: ResponseContext { inner },
     })
+}
+
+/// `encoded` with zeros appended up to `padded_length`.
+fn padded(mut encoded: Vec<u8>, padded_length: usize) -> Result<Vec<u8>, OhttpError> {
+    if encoded.len() > padded_length {
+        return Err(OhttpError::LongerThanPadding);
+    }
+    encoded.resize(padded_length, 0);
+    Ok(encoded)
 }
 
 /// The gateway side: holds the current (and, during rotation, previous) key.
@@ -161,6 +193,25 @@ impl Responder {
         rng: &mut impl CryptoRng,
     ) -> Result<Vec<u8>, OhttpError> {
         let encoded = response.encode()?;
+        self.inner
+            .encapsulate(&encoded, rng)
+            .map_err(|_| OhttpError::Internal)
+    }
+
+    /// As [`Responder::seal`], with the encoded response padded with zeros to exactly
+    /// `padded_length` bytes (RFC 9292 §3.8), so its size says only which size class it is in.
+    ///
+    /// # Errors
+    ///
+    /// [`OhttpError::LongerThanPadding`] if the encoded response is longer than
+    /// `padded_length`; otherwise as [`Responder::seal`].
+    pub fn seal_padded(
+        self,
+        response: &BinaryResponse,
+        padded_length: usize,
+        rng: &mut impl CryptoRng,
+    ) -> Result<Vec<u8>, OhttpError> {
+        let encoded = padded(response.encode()?, padded_length)?;
         self.inner
             .encapsulate(&encoded, rng)
             .map_err(|_| OhttpError::Internal)

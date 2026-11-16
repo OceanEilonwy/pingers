@@ -29,7 +29,8 @@ port = 9471
 protocol = "tcp"
 scope = "local"
 
-# No outbound access: the server reaches only the push relay, on loopback, by reference.
+# No outbound access: the server reaches only the push relay and the map host's gateway, on
+# loopback, by reference.
 
 [[web]]
 name = "api"

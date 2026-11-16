@@ -8,7 +8,7 @@ use pingers_sync::{Delivered, NotSentReason, Route, Sending, SyncError, WakeBudg
 use pingers_time::{Clock as _, UnixSeconds};
 
 use crate::mailbox::knock_mailbox;
-use crate::support::{TestError, TestResult, World, advancing, bearer};
+use crate::support::{TestError, TestResult, World, advancing_once, bearer};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_wake_budget_is_honoured() -> TestResult {
@@ -68,12 +68,21 @@ async fn the_wake_budget_is_honoured() -> TestResult {
     // A request in flight when the budget ends is abandoned at the deadline.
     device.link.set_stalled(true);
     let budget = WakeBudget::from_now(&world.clock, Duration::from_secs(10));
-    let read = advancing(
+    let seen_before = device.link.seen().len();
+    // Time moves only once the request is out, so it is abandoned in flight, not refused
+    // before it starts because a busy machine was slow to get there.
+    let read = advancing_once(
         &world.clock,
         Duration::from_secs(1),
+        || device.link.seen().len() > seen_before,
         device.engine.read_mailbox(&mailbox, None, budget),
     )
     .await?;
+    assert_eq!(
+        device.link.seen().len(),
+        seen_before + 1,
+        "the read was sent"
+    );
     assert!(matches!(
         read,
         Err(SyncError::BudgetExhausted {

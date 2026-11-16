@@ -12,6 +12,10 @@
 //! signups_per_hour = 60            # new accounts the server takes per hour
 //! ohttp_relay_urls = ["https://relay.example/ohttp"]   # advertised in /v1/params
 //! map_host = "https://maps.example"                   # optional, advertised in /v1/params
+//! map_host_gateway = "http://127.0.0.1:9474"          # optional: where map downloads through
+//!                                  # the relay are forwarded (the map host's own OHTTP gateway,
+//!                                  # /ohttp and /ohttp-keys under it): https://, or http:// to a
+//!                                  # loopback address literal only. Default: map_host
 //! delivery_db = "/var/lib/pingers/groups.sqlite"       # optional: without it, in memory
 //! quota_db = "/var/lib/pingers/quota.sqlite"           # optional: accounts, bearer digests,
 //!                                  # the membership tree, issuer keys (without it, in memory)
@@ -162,6 +166,13 @@ pub enum ConfigError {
     /// `map_host` was not an `https://` URL.
     #[error("configuration: map_host must start with https://")]
     MapHostUrl,
+    /// `map_host_gateway` is neither `https://` nor `http://` to a loopback address literal,
+    /// or is given without `map_host`.
+    #[error(
+        "configuration: map_host_gateway must be https://, or http:// to a loopback address, \
+         and needs map_host"
+    )]
+    MapHostGateway,
     /// A push relay's `key_config_hash` is not a pin (43 base64url characters, as
     /// `pingers-push-relay pins` prints), or only one of `key_config_hash` and `operator` is
     /// given.
@@ -349,6 +360,9 @@ pub struct ServerConfig {
     pub advertised_push_relays: Vec<PushRelayInfo>,
     /// The map host advertised in `/v1/params`, if this server names one.
     pub map_host: Option<MapHostUrl>,
+    /// Where map downloads through the relay are forwarded: `map_host_gateway`, or `map_host`
+    /// itself (design B.12). `None` without a map host.
+    pub map_host_gateway: Option<MapHostGateway>,
     /// Extra trust roots for the push relays' TLS certificates, besides the system's.
     pub push_relay_ca: Option<CertificateSource>,
     /// Where group logs, subscriptions and snapshots are kept.
@@ -458,6 +472,7 @@ impl ServerConfig {
             ohttp_relay_urls: Vec::new(),
             advertised_push_relays: Vec::new(),
             map_host: None,
+            map_host_gateway: None,
             push_relay_ca: None,
             delivery_store: Database::Memory,
             quota_store: Database::Memory,
@@ -520,6 +535,7 @@ struct File {
     #[serde(default)]
     ohttp_relay_urls: Vec<String>,
     map_host: Option<String>,
+    map_host_gateway: Option<String>,
     delivery_db: Option<PathBuf>,
     quota_db: Option<PathBuf>,
     push_relay_ca: Option<PathBuf>,
@@ -683,6 +699,10 @@ impl ServerConfig {
             .collect::<Result<Vec<_>, _>>()?;
         let server_id = ServerId::new(file.server_id).map_err(|_| ConfigError::ServerId)?;
         let push = push_relays(file.push_relays)?;
+        let map_host = file
+            .map_host
+            .map(|url| MapHostUrl::new(url).map_err(|_| ConfigError::MapHostUrl))
+            .transpose()?;
         Ok(Self {
             listen: file.listen,
             server_operator: file
@@ -708,10 +728,11 @@ impl ServerConfig {
                 .map(|url| RelayUrl::new(url).map_err(|_| ConfigError::OhttpRelayUrl))
                 .collect::<Result<_, _>>()?,
             advertised_push_relays: push.advertised,
-            map_host: file
-                .map_host
-                .map(|url| MapHostUrl::new(url).map_err(|_| ConfigError::MapHostUrl))
-                .transpose()?,
+            map_host_gateway: MapHostGateway::from_settings(
+                map_host.as_ref().map(MapHostUrl::as_str),
+                file.map_host_gateway,
+            )?,
+            map_host,
             push_relay_ca: file.push_relay_ca.map(CertificateSource::File),
             delivery_store: file.delivery_db.map_or(Database::Memory, Database::File),
             quota_store: file.quota_db.map_or(Database::Memory, Database::File),
@@ -786,6 +807,45 @@ fn gateway_key(mut key: FileKey) -> Result<GatewayKey, ConfigError> {
     key.secret.zeroize();
     decoded.map_err(|_| ConfigError::BadHex)?;
     GatewayKey::from_bytes(key.key_id, secret).map_err(ConfigError::BadKey)
+}
+
+/// Where the server forwards map requests that arrive through the relay: the origin of the
+/// map host's own OHTTP gateway (`POST {origin}/ohttp`, `GET {origin}/ohttp-keys`). The only
+/// place they go: the server is no open proxy (design B.12).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapHostGateway {
+    origin: String,
+}
+
+impl MapHostGateway {
+    /// `map_host_gateway` if set, else `map_host`; `None` without a map host. The gateway
+    /// takes the push relays' rule (`https://`, or `http://` to a loopback address literal),
+    /// since both are services the server itself calls.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::MapHostGateway`] for any other URL, or a gateway without a map host.
+    pub fn from_settings(
+        map_host: Option<&str>,
+        gateway: Option<String>,
+    ) -> Result<Option<Self>, ConfigError> {
+        let origin = match (map_host, gateway) {
+            (None, None) => return Ok(None),
+            (None, Some(_)) => return Err(ConfigError::MapHostGateway),
+            (Some(host), None) => host.to_owned(),
+            (Some(_), Some(gateway)) => gateway,
+        };
+        let checked = PushRelayUrl::new(origin).map_err(|_| ConfigError::MapHostGateway)?;
+        Ok(Some(Self {
+            origin: checked.as_str().trim_end_matches('/').to_owned(),
+        }))
+    }
+
+    /// The gateway's origin, without a trailing slash.
+    #[must_use]
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
 }
 
 #[cfg(test)]

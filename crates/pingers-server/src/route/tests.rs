@@ -4,7 +4,19 @@
 use super::{Channel, Class, Resolved, Route, resolve};
 
 /// Design D, route by route: method, an example path, the route, its class.
-const TABLE: [(&str, &str, Route, Class); 28] = [
+const TABLE: [(&str, &str, Route, Class); 30] = [
+    (
+        "POST",
+        "/v1/maps/ohttp",
+        Route::MapRequest,
+        Class::Anonymous,
+    ),
+    (
+        "GET",
+        "/v1/maps/ohttp-keys",
+        Route::MapKeys,
+        Class::Anonymous,
+    ),
     ("GET", "/v1/params", Route::Params, Class::Public),
     (
         "POST",

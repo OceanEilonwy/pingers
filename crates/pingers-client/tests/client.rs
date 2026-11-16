@@ -683,3 +683,34 @@ async fn a_push_priority_report_raises_the_notice_pingers_sync_returns() -> Resu
     )));
     Ok(())
 }
+
+#[tokio::test]
+async fn map_calls_reach_the_maps_port_and_pass_its_errors_on() -> Result<(), TestError> {
+    use pingers_client::ports::{MapHosts, MapRoute};
+
+    let rig = rig().await?;
+    let hosts = MapHosts {
+        user_override: None,
+        publisher: None,
+    };
+    rig.client
+        .map_catalog(hosts.clone(), MapRoute::Direct)
+        .await?;
+    assert_eq!(
+        rig.fakes.calls().last(),
+        Some(&CrateCall::MapCatalog(hosts, MapRoute::Direct))
+    );
+    rig.client.forget_map_host_key().await?;
+    assert_eq!(rig.fakes.calls().last(), Some(&CrateCall::ForgetMapHostKey));
+    let missing = std::env::temp_dir().join("pingers-client-no-maps-here");
+    assert!(rig.client.installed_maps(missing.clone()).await?.is_empty());
+    rig.client
+        .delete_map(missing, "oceania/none".to_owned())
+        .await?;
+    rig.fakes.set_failing(Some(CrateName::Maps));
+    assert!(matches!(
+        rig.client.forget_map_host_key().await,
+        Err(ClientError::Maps(_))
+    ));
+    Ok(())
+}

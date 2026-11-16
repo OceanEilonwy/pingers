@@ -23,6 +23,9 @@ use crate::geo::{Coordinate, Fence, Fix};
 use crate::ids::{
     InviteId, LocationRequestId, MeetupId, MemberId, MessageId, PartyId, SpotId, ZoneId,
 };
+use crate::maps::{
+    ListenerAdapter, MapCatalog, MapDownloadListener, MapDownloadRequest, MapManifest, MapSettings,
+};
 use crate::snapshot::Snapshot;
 use crate::views::{AnswerDraft, PartyColour, RelayCheck, TimeOfDay, Visibility, ZoneTimes};
 
@@ -38,6 +41,11 @@ impl From<ClientError> for CoreError {
             _ => error.to_string(),
         };
         match error {
+            ClientError::Maps(error) => Self::Map {
+                failure: (&error).into(),
+                reason,
+            },
+
             ClientError::Platform(_)
             | ClientError::NoDatabaseKey
             | ClientError::MalformedDatabaseKey
@@ -787,6 +795,74 @@ impl Core {
         Ok(self.client.leave_meetup((&meetup).try_into()?).await?)
     }
 
+    /// What the map host chain offers: the user's host, the server's and the publisher's,
+    /// directly or through the privacy relay as `settings` say. Hosts that fail are listed
+    /// in the catalog.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Storage`] if the server's map host cannot be read.
+    pub async fn map_catalog(&self, settings: MapSettings) -> Result<MapCatalog, CoreError> {
+        let catalog = self
+            .client
+            .map_catalog(settings.hosts(), settings.route())
+            .await?;
+        Ok((&catalog).into())
+    }
+
+    /// Downloads the request's offer into its directory (the app's maps directory), checks it
+    /// against its manifest and installs it, telling `listener` as it goes. Cancelled with the
+    /// calling coroutine; a later download resumes it.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Invalid`] for an offer that is not a catalog's; [`CoreError::Map`] with
+    /// why the download failed.
+    pub async fn download_map(
+        &self,
+        request: MapDownloadRequest,
+        listener: Arc<dyn MapDownloadListener>,
+    ) -> Result<MapManifest, CoreError> {
+        let job = ports::MapDownload {
+            offer: (&request.offer).try_into()?,
+            route: request.settings.route(),
+            directory: PathBuf::from(request.directory),
+        };
+        let manifest = self
+            .client
+            .download_map(job, Arc::new(ListenerAdapter(listener)))
+            .await?;
+        Ok((&manifest).into())
+    }
+
+    /// The regions installed in `directory`, for the map screens to draw.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Map`] if the directory cannot be read.
+    pub async fn installed_maps(&self, directory: String) -> Result<Vec<MapManifest>, CoreError> {
+        let installed = self.client.installed_maps(PathBuf::from(directory)).await?;
+        Ok(installed.iter().map(Into::into).collect())
+    }
+
+    /// Removes region `id` from `directory`.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Map`] for an id that is not a region's, or a file that cannot be removed.
+    pub async fn delete_map(&self, directory: String, id: String) -> Result<(), CoreError> {
+        Ok(self.client.delete_map(PathBuf::from(directory), id).await?)
+    }
+
+    /// Trusts the map host's current gateway key for relayed downloads, after it changed.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Storage`] if the pin cannot be removed.
+    pub async fn forget_map_host_key(&self) -> Result<(), CoreError> {
+        Ok(self.client.forget_map_host_key().await?)
+    }
+
     /// A fix from the platform.
     ///
     /// # Errors
@@ -1240,6 +1316,104 @@ mod tests {
     }
 
     const PARTY_HEX: &str = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+
+    struct Silent;
+
+    impl crate::MapDownloadListener for Silent {
+        fn downloaded(&self, _done: u64, _total: u64) {}
+        fn preparing(&self, _retry_after_seconds: u64) {}
+    }
+
+    #[tokio::test]
+    async fn map_calls_reach_the_maps_port_with_the_settings_route() -> Result<(), CoreError> {
+        let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
+        let core = open_on("maps", &fakes).await?;
+        let settings = crate::MapSettings {
+            user_override: Some(" https://mine.example ".into()),
+            publisher: Some("http://not-https.example".into()),
+            through_relay: true,
+        };
+        let catalog = core.map_catalog(settings.clone()).await?;
+        assert!(catalog.offers.is_empty());
+        let mine = pingers_proto::MapHostUrl::new("https://mine.example".to_owned())?;
+        assert_eq!(
+            fakes.calls().last(),
+            Some(&CrateCall::MapCatalog(
+                ports::MapHosts {
+                    user_override: Some(mine),
+                    publisher: None,
+                },
+                ports::MapRoute::Relay
+            ))
+        );
+        let offer = crate::MapOffer {
+            entry: crate::MapEntry::OnDemand {
+                id: "oceania/test".into(),
+                name: "Test".into(),
+                group: None,
+            },
+            host: crate::MapHostInfo {
+                url: "https://mine.example".into(),
+                source: crate::MapHostSource::UserOverride,
+            },
+        };
+        let directory = db_path("maps-dir");
+        let failed = core
+            .download_map(
+                crate::MapDownloadRequest {
+                    offer,
+                    settings: crate::MapSettings {
+                        through_relay: false,
+                        ..settings
+                    },
+                    directory: directory.clone(),
+                },
+                Arc::new(Silent),
+            )
+            .await;
+        assert!(matches!(
+            failed,
+            Err(CoreError::Map {
+                failure: crate::MapFailure::NotOffered,
+                ..
+            })
+        ));
+        assert!(matches!(
+            fakes.calls().last(),
+            Some(CrateCall::DownloadMap(job)) if job.route == ports::MapRoute::Direct
+        ));
+        assert!(core.installed_maps(directory.clone()).await?.is_empty());
+        // A region on disk ("abc" as its pack, an empty index: the standard SHA-256 vectors).
+        let dir = std::path::PathBuf::from(&directory);
+        let io = |_: std::io::Error| CoreError::invalid("io");
+        std::fs::create_dir_all(&dir).map_err(io)?;
+        std::fs::write(dir.join("oceania.test.pmtiles"), b"abc").map_err(io)?;
+        std::fs::write(dir.join("oceania.test.places.tsv"), b"").map_err(io)?;
+        std::fs::write(
+            dir.join("oceania.test.json"),
+            r#"{"format":1,"id":"oceania/test","name":"Test","bbox":[1,1,2,2],"max_zoom":10,
+               "build_date":"2026-11-12",
+               "pack":{"file":"oceania.test.pmtiles","size":3,
+                       "sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+               "index":{"file":"oceania.test.places.tsv","size":0,
+                        "sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}"#,
+        )
+        .map_err(io)?;
+        let installed = core.installed_maps(directory.clone()).await?;
+        assert_eq!(
+            installed.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["oceania/test"]
+        );
+        core.delete_map(directory.clone(), "oceania/test".into())
+            .await?;
+        assert!(matches!(
+            core.delete_map(directory, "../x".into()).await,
+            Err(CoreError::Map { .. })
+        ));
+        core.forget_map_host_key().await?;
+        assert_eq!(fakes.calls().last(), Some(&CrateCall::ForgetMapHostKey));
+        Ok(())
+    }
 
     #[tokio::test]
     async fn join_requests_are_decided_and_invites_cancelled_through_the_client()
