@@ -1,7 +1,7 @@
 # Builds the signed release APK and AAB of each flavour and, for a pushed tag `v*`, publishes
 # them as a GitHub Release, which is where Obtainium installs and updates the app from
-# (docs/install.md). Run by hand (Actions > release > Run workflow, naming a tag) it builds and
-# uploads the files as artifacts only, without a release.
+# (docs/install.md). It has no manual trigger: the signing key is used only for a `v*` tag whose
+# commit is on main, and both jobs that come before the key refuse anything else.
 #
 # Jobs:
 #   version  `cargo xtask release-version <tag>`: versionName, versionCode and whether the tag
@@ -39,12 +39,6 @@ name: release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Version to build as, such as v1.0.0-rc.1 (no release is created)"
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -57,8 +51,8 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   NDK_VERSION: 27.0.12077973
-  # The tag the version comes from: the pushed tag, or the one named when run by hand.
-  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+  # The tag the version comes from: always the pushed tag.
+  RELEASE_TAG: ${{ github.ref_name }}
 
 jobs:
   version:
@@ -74,6 +68,23 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      # A v* tag on a commit that is on main, or nothing: a tag pushed on a branch commit never
+      # reaches the signing key. fetch-depth 0 above fetched every branch, so origin/main is here.
+      - name: Refuse unless a v* tag on main
+        run: |
+          if [ "$GITHUB_REF_TYPE" != tag ]; then
+            echo "::error::release runs only for a pushed tag, not $GITHUB_REF"
+            exit 1
+          fi
+          case "$GITHUB_REF_NAME" in
+            v*) ;;
+            *) echo "::error::$GITHUB_REF_NAME is not a v* tag"; exit 1 ;;
+          esac
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main"
+            exit 1
+          fi
 
       - name: Rust toolchain
         run: rustup toolchain install --no-self-update
@@ -96,6 +107,23 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      # A v* tag on a commit that is on main, or nothing: a tag pushed on a branch commit never
+      # reaches the signing key. fetch-depth 0 above fetched every branch, so origin/main is here.
+      - name: Refuse unless a v* tag on main
+        run: |
+          if [ "$GITHUB_REF_TYPE" != tag ]; then
+            echo "::error::release runs only for a pushed tag, not $GITHUB_REF"
+            exit 1
+          fi
+          case "$GITHUB_REF_NAME" in
+            v*) ;;
+            *) echo "::error::$GITHUB_REF_NAME is not a v* tag"; exit 1 ;;
+          esac
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main"
+            exit 1
+          fi
 
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
@@ -196,7 +224,6 @@ jobs:
 
   publish:
     needs: [version, android]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:

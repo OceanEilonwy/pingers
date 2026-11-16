@@ -9,9 +9,11 @@ host. Two workflows use them (`.github/workflows/`):
   set, otherwise it is skipped with a notice.
 - `release.yml`, on a tag `v*`: the signed release APK and AAB of both flavours, published as
   a GitHub Release, which is where users install and update from with Obtainium
-  ([`docs/install.md`](../../docs/install.md)). Run by hand with a tag name, it builds and keeps
-  the files as the run's artifacts without a release. Its build job runs in the `release`
-  environment; only its publish job can write to the repository.
+  ([`docs/install.md`](../../docs/install.md)). It has no manual trigger, and its `version` and
+  build jobs both stop unless the ref is a `v*` tag whose commit is on `main`, before any secret
+  is read. Its build job runs in the `release` environment; only its publish job can write to
+  the repository. The repository settings that back this up (the environment limited to `v*`
+  tags with a required reviewer, and a tag ruleset) are under "Repository settings" below.
 
 ## Publishing a release
 
@@ -99,6 +101,18 @@ The hosts are variables because they ship inside the APK anyway. `release.yml` r
 release`) while it should not appear in logs. Each host can also be passed to Gradle as a
 property (`-PpingersServerHost=`, `-PpingersOhttpRelay=`, `-PpingersPushRelay=`,
 `-PpingersMapHost=`).
+
+## Repository settings
+
+The workflow refuses anything but a `v*` tag on `main`, but a workflow file can be changed on a
+branch, so the signing secrets also need GitHub to refuse. Set once, by the repository owner:
+
+- **Settings > Environments > `release`**: Deployment branches and tags: "Selected branches and
+  tags", with one tag rule `v*` and no branch rule; Required reviewers: the owner (and "Prevent
+  self-review" off if the owner is the only maintainer); "Allow administrators to bypass" off.
+- **Settings > Rules > Rulesets > New tag ruleset**: target tags matching `v*`, enforcement
+  active, rules "Restrict creations", "Restrict updates" and "Restrict deletions", with the
+  owner as the only bypass actor. Only the owner can then push, move or delete a release tag.
 
 ## The upload key
 
