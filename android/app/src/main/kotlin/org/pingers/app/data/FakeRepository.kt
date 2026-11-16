@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import org.pingers.app.R
 import uniffi.pingers.JoinAs
 import uniffi.pingers.ServerChoice
+import uniffi.pingers.SetupLinkState
 
 /**
  * The canvas's example data (Climbing crew meeting at Riverside Park), with just
@@ -442,6 +443,49 @@ class FakeRepository(
     override fun cancelInvite(invitationId: InviteId) = _invite.update { s ->
         s.copy(invitations = s.invitations.filterNot { it.id == invitationId })
     }
+
+    // The first-phone setup link. Open from the start, so `--es screen SetupLink` shows it;
+    // `--es variant setup=<state>` picks the state (android/README.md). "Set up" answers after
+    // a moment, so the progress shows.
+
+    private val fakeServer = "pingers.example.org"
+
+    private fun fakeSetupState(name: String?): SetupLinkState = when (name) {
+        "working" -> SetupLinkState.Working(fakeServer)
+        "done" -> SetupLinkState.SetUp
+        "already" -> SetupLinkState.AlreadySetUp
+        "refused" -> SetupLinkState.Refused
+        "other" -> SetupLinkState.OtherServer(fakeServer, "friends.example")
+        "keys" -> SetupLinkState.BuildKeysDiffer(fakeServer)
+        "server-keys" -> SetupLinkState.ServerKeysDiffer(fakeServer)
+        "offline" -> SetupLinkState.Unreachable(fakeServer)
+        "broken" -> SetupLinkState.Broken
+        else -> SetupLinkState.Confirm(fakeServer)
+    }
+
+    private val setupVariant = variants.firstOrNull { it.startsWith("setup=") }?.removePrefix("setup=")
+
+    private val setupFlow = SetupLinkFlow(
+        scope,
+        check = { fakeSetupState(setupVariant) },
+        use = {
+            delay(1_200)
+            if (setupVariant == "offline") SetupLinkState.Unreachable(fakeServer) else SetupLinkState.SetUp
+        },
+        view = { uniffi.pingers.setupLinkView(it) },
+    )
+
+    override val setupLink: StateFlow<SetupLinkUi> = setupFlow.ui
+
+    init {
+        setupFlow.show("pingers://join#s1.fake")
+    }
+
+    override fun showSetupLink(link: String) = setupFlow.show(link)
+
+    override fun actOnSetupLink() = setupFlow.act()
+
+    override fun closeSetupLink() = setupFlow.close()
 
     // Join flow A. Every state stays filled, so `--es screen <Route>` shows each screen.
 

@@ -32,6 +32,7 @@ import uniffi.pingers.QuietHoursEditorView
 import uniffi.pingers.SafetyCodesView
 import uniffi.pingers.ServerChoice
 import uniffi.pingers.SettingChange
+import uniffi.pingers.SetupLinkState
 import uniffi.pingers.SetupStep
 import uniffi.pingers.SetupView
 import uniffi.pingers.Snapshot
@@ -725,6 +726,37 @@ class CoreRepository(
         val party = invitingParty() ?: return
         call("cancel invite") { it.cancelInvite(party.toFfi(), invitationId.toFfi()) }
     }
+
+    // ------------------------------------------------------------ The first-phone setup link
+
+    /**
+     * The setup link step. It waits for the core to open, since a scanned link may start the
+     * app; a core that does not open closes the step (Home then says why).
+     */
+    private val setupFlow = SetupLinkFlow(
+        scope,
+        check = { link -> setupCall("check setup link") { it.checkSetupLink(link) } },
+        use = { link -> setupCall("use setup link") { it.useSetupLink(link) } },
+        view = { uniffi.pingers.setupLinkView(it) },
+    )
+
+    override val setupLink: StateFlow<SetupLinkUi> = setupFlow.ui
+
+    private suspend fun setupCall(what: String, block: suspend (Core) -> SetupLinkState): SetupLinkState? {
+        val c = CoreHost.core() ?: return null
+        return try {
+            block(c).also { refresh() }
+        } catch (e: CoreException) {
+            Log.w(TAG, "$what: ${e.message}")
+            null
+        }
+    }
+
+    override fun showSetupLink(link: String) = setupFlow.show(link)
+
+    override fun actOnSetupLink() = setupFlow.act()
+
+    override fun closeSetupLink() = setupFlow.close()
 
     // ------------------------------------------------------------ Join flow A, the joiner
 

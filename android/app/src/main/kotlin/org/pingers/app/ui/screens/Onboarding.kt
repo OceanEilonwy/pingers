@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -27,9 +29,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -52,7 +56,10 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.edit
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.first
 import org.pingers.app.data.PingersRepository
+import org.pingers.app.data.SetupLinkUi
 import org.pingers.app.platform.Push
 import org.pingers.app.platform.onboarding.PermissionState
 import org.pingers.app.platform.onboarding.PermissionStep
@@ -65,6 +72,8 @@ import org.pingers.app.ui.components.RowDivider
 import org.pingers.app.ui.theme.Pc
 import org.pingers.app.ui.theme.body
 import org.pingers.app.ui.theme.heading
+import uniffi.pingers.SetupLinkAction
+import uniffi.pingers.SetupLinkState
 import uniffi.pingers.SetupStep
 
 /** Whether first-run setup has been through (each permission granted or put off). */
@@ -237,4 +246,92 @@ private fun Dots(current: Int, count: Int, label: String) {
             )
         }
     }
+}
+
+/**
+ * The first-phone setup link's step: the owner scanned their appliance's setup page with the
+ * phone's camera. It asks before the core makes this phone's account with the link's code,
+ * then shows the progress and what came of it, in first run's layout. Every word comes from
+ * the core (pingers-words through `setupLinkView`). [onDone] runs once the step closes, by its
+ * buttons, Back, or because the core could not check the link; then first run or Home follows.
+ * The link is shown to the repository before the screen opens ([PingersRepository.showSetupLink]).
+ */
+@Composable
+fun SetupLinkScreen(repo: PingersRepository, onDone: () -> Unit) {
+    val ui = repo.setupLink.collectAsStateWithLifecycle().value
+    // Watches the flow itself rather than [ui]: a step that opens and closes between two frames
+    // (a check the core could not make) still ends here.
+    LaunchedEffect(repo) {
+        repo.setupLink.first { it == SetupLinkUi.Closed }
+        onDone()
+    }
+    val shown = ui as? SetupLinkUi.Shown
+    val view = shown?.view
+    val leave = { repo.closeSetupLink() }
+    // Back leaves the step like "Not now", except while the account is being made.
+    BackHandler(enabled = view?.busy != true, onBack = leave)
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Pc.Paper)
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 24.dp),
+    ) {
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(top = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
+        ) {
+            if (shown != null) {
+                val (icon, background, tint) = shown.state.look()
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Tile(icon, background, tint, 56, 18, 28)
+                    Text(
+                        shown.view.heading,
+                        style = heading(28.sp, 700).copy(lineHeight = 32.sp),
+                        modifier = Modifier.semantics { heading() }.testTag(E2eTags.SETUP_LINK_HEADING),
+                    )
+                    Text(shown.view.body, style = body(15.sp, color = Pc.Body, lineHeight = 1.5f))
+                }
+            }
+        }
+        Column(
+            Modifier.padding(top = 12.dp, bottom = 16.dp).heightIn(min = 106.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom),
+        ) {
+            when {
+                view == null || view.busy -> Box(Modifier.fillMaxWidth().height(96.dp), contentAlignment = Alignment.Center) {
+                    // The system's indicator; the heading above says what it waits for.
+                    CircularProgressIndicator(Modifier.size(32.dp).testTag(E2eTags.SETUP_LINK_BUSY), color = Pc.Blue)
+                }
+                else -> {
+                    val primary = view.primary
+                    if (primary != null) {
+                        PillButton(primary, {
+                            when (view.action) {
+                                SetupLinkAction.SET_UP, SetupLinkAction.TRY_AGAIN -> repo.actOnSetupLink()
+                                SetupLinkAction.LEAVE, null -> leave()
+                            }
+                        }, Modifier.testTag(E2eTags.SETUP_LINK_PRIMARY))
+                    }
+                    val notNow = view.notNow
+                    if (notNow != null) {
+                        PillButton(
+                            notNow, leave, Modifier.testTag(E2eTags.SETUP_LINK_NOT_NOW),
+                            background = Color.Transparent, content = Pc.Ink, height = 48.dp,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** The tile above the heading: the question and the wait, done, or something to fix. */
+private fun SetupLinkState.look(): Triple<ImageVector, Color, Color> = when (this) {
+    is SetupLinkState.Confirm, is SetupLinkState.Working -> Triple(PIcons.ShieldCheck, Pc.BlueTint, Pc.BlueDark)
+    SetupLinkState.SetUp, SetupLinkState.AlreadySetUp -> Triple(PIcons.Check, Pc.BlueTint, Pc.BlueDark)
+    is SetupLinkState.Unreachable -> Triple(PIcons.Signal, Pc.OrangeTint, Pc.OrangeText)
+    SetupLinkState.Refused, is SetupLinkState.OtherServer, is SetupLinkState.BuildKeysDiffer,
+    is SetupLinkState.ServerKeysDiffer, SetupLinkState.Broken -> Triple(PIcons.AlertCircle, Pc.OrangeTint, Pc.OrangeText)
 }

@@ -49,6 +49,15 @@ object E2eTags {
     const val SETUP_CONTINUE = "setup_continue"
     /** First run: "Not now". */
     const val SETUP_NOT_NOW = "setup_not_now"
+    // The first-phone setup link's step (the owner scanned their appliance's setup page).
+    /** Setup link: the heading, which names the state ("Set up Pingers on this phone"). */
+    const val SETUP_LINK_HEADING = "setup_link_heading"
+    /** Setup link: the main button ("Set up", "Try again", "Continue", "Close"). */
+    const val SETUP_LINK_PRIMARY = "setup_link_primary"
+    /** Setup link: "Not now". */
+    const val SETUP_LINK_NOT_NOW = "setup_link_not_now"
+    /** Setup link: the progress indicator while the link is checked or the account made. */
+    const val SETUP_LINK_BUSY = "setup_link_busy"
     /** Home: the cog, which opens Settings. */
     const val SETTINGS_OPEN = "settings_open"
     /** Home: the notice's link ("Open date and time settings", "Party settings"). */

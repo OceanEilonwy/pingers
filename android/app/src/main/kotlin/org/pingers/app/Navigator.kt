@@ -48,6 +48,12 @@ enum class Route(val dark: Boolean = false) {
     LeaveParty,
     /** "This server needs a code" (PartyCode, PartyCodeRefused). */
     PartyCode,
+
+    /**
+     * The first-phone setup link's step, from a scanned `https://<server>/j#s1.…` link. Before
+     * first run is through it shows on its own (MainActivity); after, over Home.
+     */
+    SetupLink,
 }
 
 /**

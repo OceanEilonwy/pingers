@@ -80,7 +80,10 @@ one Kotlin caller today.
 | `data/FakeRepository.kt` | The canvas's example data (Climbing crew at Riverside Park), for previews and screenshots. |
 | `data/PolygonEditor.kt` | FakeRepository's Draw area editing model (tap to add, close on the first point, drag, midpoints, select and delete, undo, clear), kept out of the composables. |
 | `Navigator.kt` | `Route` (every canvas screen) and a plain back stack, as in monokulo-fob. |
-| `MainActivity.kt` | Edge-to-edge host, routes, notification and invite-link intents (a link opens Open invite; You're in opens on `Events.let_in` and from its notification). |
+| `MainActivity.kt` | Edge-to-edge host, routes, notification and join-link intents (an invite link opens Open invite; a first-phone setup link, `#s1.`, opens its step, before first run on a fresh install; You're in opens on `Events.let_in` and from its notification). |
+| `InviteLinks.kt` | Tells invite links (`#v1.`) from first-phone setup links (`#s1.`) in each form they reach the app: https `/j`, `pingers://join`, and the landing page's `invite` extra. |
+| `data/SetupLinkFlow.kt` | The setup link step's states: the core checks the link (sending nothing), "Set up" uses it, "Try again" only when tapped. |
+| `ui/screens/Onboarding.kt` | First run, and the first-phone setup link's step in its layout. Their words come from the core. |
 | `ui/screens/Join.kt` | Join flow A: Open invite, Asked to join, You're in, and "Ben asked to join" on the inviter's phone. Their words all come from the core. |
 | `CoPresenceNotifier.kt` | The co-presence alert as a real notification with "Open meetup" and "Hide me here". |
 | `CoreInfo.kt` | The calls into the Rust core so far (`coreVersion`, `currentBucket`), for the Security screen. |
@@ -96,9 +99,10 @@ one Kotlin caller today.
 All copy is in `res/values/strings.xml`, except the join flow's, New party's and Advanced's,
 and every screen of the canvas's section 4 (first run, Settings, Your name, Quiet hours,
 Zone times, Downloaded maps, Wake-ups, Home's notice and wake-ups lines, Privacy, Party
-settings, Safety codes, Leave party, "This server needs a code"), which the core supplies
-(pingers-words through the FFI views). Those section-4 screens take the FFI records as they
-are (`uniffi.pingers.*View`) rather than a `UiState` copy. Fonts are in `res/font` (both SIL OFL).
+settings, Safety codes, Leave party, "This server needs a code", the setup link step), which
+the core supplies (pingers-words through the FFI views). Those section-4 screens take the FFI
+records as they are (`uniffi.pingers.*View`) rather than a `UiState` copy. Fonts are in
+`res/font` (both SIL OFL).
 
 **Reaching every screen.** Most screens link as the canvas does. Some screens only open
 from outside the app: an invite link (`pingers://join#...`), a push, or a request from
@@ -116,9 +120,9 @@ adb shell am start -n org.pingers.app.debug/org.pingers.app.MainActivity --es sc
 
 The section-4 routes are `Setup`, `Settings`, `YourName`, `QuietHours`, `ZoneTimes`,
 `MapRegions` (Downloaded maps), `Wakeups`, `PartySettings`, `SafetyCodes`, `LeaveParty`
-(the sheet over Party settings) and `PartyCode`, plus `Home` and `Privacy`. With
-`--ez fake true` they show the canvas's example (Ben's phone), and debug builds also take
-`--es variant <names>` (comma-separated) to pick a state:
+(the sheet over Party settings), `PartyCode` and `SetupLink` (the first-phone setup link's
+step), plus `Home` and `Privacy`. With `--ez fake true` they show the canvas's example (Ben's
+phone), and debug builds also take `--es variant <names>` (comma-separated) to pick a state:
 
 | Variant | Shows |
 |---|---|
@@ -132,6 +136,7 @@ The section-4 routes are `Setup`, `Settings`, `YourName`, `QuietHours`, `ZoneTim
 | `pending` | Home's "Waiting to be let in" row (HomePendingJoin) |
 | `noname` | Open invite before a name is set, with the name field (JoinA1) |
 | `background`, `notifications` | First run's step 2 or 3 (`--es screen Setup`, real or fake) |
+| `setup=working`, `done`, `already`, `refused`, `other`, `keys`, `server-keys`, `offline`, `broken` | The first-phone setup link's step in that state (`--es screen SetupLink`, fake only); without it, the question, whose "Set up" ends set up after a moment (or offline with `setup=offline`) |
 
 ```sh
 adb shell am start -n org.pingers.app.debug/org.pingers.app.MainActivity --ez fake true --es screen PartySettings --es variant shared
@@ -140,6 +145,14 @@ adb shell am start -n org.pingers.app.debug/org.pingers.app.MainActivity --ez fa
 
 Without `fake` the same routes open on the real core; `variant` then only picks first run's
 step. Downloaded maps always shows this phone's real maps and the map host's catalogue.
+
+A first-phone setup link (what the appliance's setup page shows as a QR code) opens its step on
+the real core, in any of its forms; on a fresh install the step comes before first run:
+
+```sh
+adb shell "am start -a android.intent.action.VIEW -d 'https://10.0.2.2:9443/j#s1.<payload>' org.pingers.app.debug"
+adb shell "am start -a android.intent.action.VIEW -d 'pingers://join' --es invite 's1.<payload>' org.pingers.app.debug"
+```
 
 Screenshots of every screen from a Pixel 9 Pro emulator are in `docs/screenshots/`.
 

@@ -81,6 +81,16 @@ interface PingersRepository {
     /** A first-run step's words. */
     fun setupStep(step: SetupStep): SetupView
 
+    // The first-phone setup link (the owner scanned their appliance's setup page)
+    /** Its step: closed, checking the link, or the step's words. */
+    val setupLink: StateFlow<SetupLinkUi>
+    /** A setup link was opened: the core checks it, sending nothing, and the step asks. */
+    fun showSetupLink(link: String)
+    /** The step's "Set up" or "Try again": the core makes this phone's account with the link's code. */
+    fun actOnSetupLink()
+    /** "Not now", "Continue", "Close" or Back: leaves the step. */
+    fun closeSetupLink()
+
     /** The app came to the front: read the phone's facts again (push app, battery, notifications). */
     fun refreshPhone()
 

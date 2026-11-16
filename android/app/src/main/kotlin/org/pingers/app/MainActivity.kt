@@ -51,6 +51,7 @@ import org.pingers.app.data.CoreRepository
 import org.pingers.app.data.FakeRepository
 import org.pingers.app.data.PartyId
 import org.pingers.app.data.PingersRepository
+import org.pingers.app.data.SetupLinkUi
 import org.pingers.app.platform.Notifications
 import org.pingers.app.ui.screens.AdvancedScreen
 import org.pingers.app.ui.screens.AlertScreen
@@ -70,6 +71,7 @@ import org.pingers.app.ui.screens.MeetupEndedScreen
 import org.pingers.app.ui.screens.MeetupScreen
 import org.pingers.app.ui.screens.NewPartyScreen
 import org.pingers.app.ui.screens.Onboarding
+import org.pingers.app.ui.screens.SetupLinkScreen
 import org.pingers.app.ui.screens.SetupScreen
 import org.pingers.app.ui.screens.SettingsScreen
 import org.pingers.app.ui.screens.YourNameScreen
@@ -98,6 +100,15 @@ class MainActivity : ComponentActivity() {
     /** A notification action or join link waiting for the UI. */
     private var pending by mutableStateOf<Intent?>(null)
 
+    /** Whether first-run setup has been through (each permission granted or put off). */
+    private var onboarded by mutableStateOf(false)
+
+    /**
+     * Whether a setup link opened before first run was through (the owner's first phone, just
+     * installed) has its step showing: it comes before first run. Afterwards App routes them.
+     */
+    private var firstRunSetupLink by mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
@@ -112,15 +123,23 @@ class MainActivity : ComponentActivity() {
         } else {
             CoreRepositories.get(applicationContext).also(::follow)
         }
-        pending = intent
+        // First run: permissions before anything else (not for the fake screenshots).
+        onboarded = fake || Onboarding.done(this)
+        if (savedInstanceState != null && repo.setupLink.value != SetupLinkUi.Closed) {
+            // Recreated while a setup link's step is open (the repository outlives the activity):
+            // show it again as it is, without checking the link again or stopping "Set up".
+            if (onboarded) nav.go(Route.SetupLink) else firstRunSetupLink = true
+        } else {
+            take(intent)
+        }
         setContent {
             PingersTheme {
-                // First run: permissions before anything else (not for the fake screenshots).
-                var onboarded by remember { mutableStateOf(fake || Onboarding.done(this)) }
                 // Test tags as view resource ids, so UI Automator on the host finds them (ui/E2eTags.kt).
                 Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
                     if (onboarded) {
                         App(repo, nav, pending, variant) { pending = null }
+                    } else if (firstRunSetupLink) {
+                        SetupLinkScreen(repo) { firstRunSetupLink = false }
                     } else {
                         SetupScreen(repo) {
                             Onboarding.finish(this@MainActivity)
@@ -132,6 +151,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Keeps [intent] for the UI. Before first run is through, a setup link goes to its step at
+     * once instead (first run follows it); any other link waits for first run to finish.
+     */
+    private fun take(intent: Intent) {
+        val setupLink = if (onboarded) null else setupLinkOf(intent)
+        if (setupLink != null) {
+            repo.showSetupLink(setupLink)
+            firstRunSetupLink = true
+        } else {
+            pending = intent
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         // Push app, battery, notifications: any may have changed in Android's settings meanwhile.
@@ -140,7 +173,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        pending = intent
+        take(intent)
     }
 
     /** Routes the core's events while this activity is started. */
@@ -183,6 +216,14 @@ private const val EXTRA_VARIANT = "variant"
 private fun debuggable(context: android.content.Context) =
     context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
 
+/** The setup link an opened link carries (InviteLinks.setupFromView), or null. */
+private fun setupLinkOf(intent: Intent): String? =
+    if (intent.action == Intent.ACTION_VIEW) {
+        InviteLinks.setupFromView(intent.dataString, intent.getStringExtra(InviteLinks.EXTRA_INVITE))
+    } else {
+        null
+    }
+
 @Composable
 private fun App(repo: PingersRepository, nav: Navigator, pending: Intent?, variant: String?, consumed: () -> Unit) {
     val context = LocalContext.current
@@ -213,6 +254,12 @@ private fun App(repo: PingersRepository, nav: Navigator, pending: Intent?, varia
             intent.getStringExtra(Notifications.EXTRA_OPEN) == Notifications.OPEN_LET_IN -> {
                 Notifications.cancelLetIn(context)
                 nav.reset(Route.LetIn)
+            }
+            // A first-phone setup link (`#s1.`, in the same forms as a join link): its step
+            // checks it with the core, then asks before making this phone's account.
+            setupLinkOf(intent) != null -> {
+                repo.showSetupLink(setupLinkOf(intent).orEmpty())
+                nav.go(Route.SetupLink)
             }
             // A join link (InviteLinks: any server's https link, pingers://join, or the landing
             // page's intent): Open invite remembers it; only "Ask to join" hands it to the core.
@@ -354,6 +401,7 @@ private fun Screen(route: Route, repo: PingersRepository, nav: Navigator, varian
             PartySettingsScreen(repo.partySettings.collectAsStateWithLifecycle().value, repo, nav)
             LeavePartySheet(repo.leaveParty.collectAsStateWithLifecycle().value, repo, nav)
         }
+        Route.SetupLink -> SetupLinkScreen(repo) { nav.reset(Route.Home) }
         Route.PartyCode -> PartyCodeScreen(
             repo.partyCode.collectAsStateWithLifecycle().value,
             repo.registrationCode.collectAsStateWithLifecycle().value,
