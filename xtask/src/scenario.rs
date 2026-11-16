@@ -62,6 +62,8 @@ use crate::wait::{Deadline, pause};
 
 /// The main activity, after the application id.
 const ACTIVITY: &str = "org.pingers.app.MainActivity";
+/// What every invite link has after its server's origin (pingers-parties' `InviteLink`).
+const INVITE_PATH: &str = "/j#v1.";
 /// The ntfy app, the UnifiedPush distributor on the emulators.
 const NTFY_PACKAGE: &str = "io.heckel.ntfy";
 
@@ -568,27 +570,29 @@ fn play(
         a.tap_when(&Find::tag("invite_share").enabled(), NETWORK)
             .context("the invite link was never made (Share invite link stayed disabled)")?;
         // The share sheet previews the text it shares: the link itself.
-        let preview = a.wait_for(&Find::text(Text::Contains("pingers://join".into())), UI)?;
+        let preview = a.wait_for(&Find::text(Text::Contains(INVITE_PATH.into())), UI)?;
         let link = preview
             .label()
             .split_whitespace()
-            .find(|word| word.starts_with("pingers://join"))
+            .find(|word| word.contains(INVITE_PATH))
             .context("no link in the share sheet's preview")?
             .to_owned();
         a.back()?;
         let length = link.len();
         scene.link = Some(link);
         Ok(format!(
-            "pingers://join#… ({length} characters) read from the share sheet"
+            "<server>/j#v1.… ({length} characters) read from the share sheet"
         ))
     })?;
 
     step(report, scene, "B opens the invite link", |scene| {
         let link = scene.link.clone().context("no link")?;
         let b = &scene.b;
-        // Single quotes: the phone's shell must not treat '#' as a comment.
+        // Single quotes: the phone's shell must not treat '#' as a comment. The link is an
+        // https address and the app's VIEW filter covers only pingers://join, so the link goes
+        // to MainActivity by name, which handles any VIEW data as an invite.
         b.shell(&format!(
-            "am start -W -a android.intent.action.VIEW -d '{link}' {}",
+            "am start -W -a android.intent.action.VIEW -d '{link}' -n {}/{ACTIVITY}",
             scene.package
         ))?;
         Ok("opened with am start".to_owned())
@@ -647,10 +651,12 @@ fn play(
         "A sees the request (InviteApprove)",
         |scene| {
             let a = &scene.a;
-            a.wait_for(
-                &Find::text(Text::Is(format!("{JOINER} asked to join"))),
+            // The opened invite shows on Invite people; its Verify opens the request.
+            a.tap_when(
+                &Find::tag("invite_verify").or(Text::Is("Verify".into())),
                 NETWORK,
             )?;
+            a.wait_for(&Find::text(Text::Is(format!("{JOINER} asked to join"))), UI)?;
             let node = a.wait_for(&Find::tag("approve_code").or(Text::SafetyCode), UI)?;
             let code = safety_code(node.label())
                 .with_context(|| format!("{:?} is not a 12-digit code", node.label()))?;
@@ -686,12 +692,12 @@ fn play(
     })?;
 
     step(report, scene, "both see each other in the Party", |scene| {
-        open_party(&scene.a)?;
+        open_party(&scene.a, scene.package)?;
         scene
             .a
             .wait_for(&Find::text(Text::Is(JOINER.into())), NETWORK)
             .context("A's Party does not list B")?;
-        open_party(&scene.b)?;
+        open_party(&scene.b, scene.package)?;
         Ok(format!("A's Party lists {JOINER}"))
     })?;
 
@@ -873,10 +879,12 @@ fn play(
 /// Without FCM in the stack (no `--fcm-service-account`) the step says so and passes, since
 /// FCM is opt-in.
 ///
-/// Both emulators boot read-only from the same AVD, so they share one Play services identity,
-/// and FCM keeps only the registration made last: the other phone's token answers
-/// `UNREGISTERED` (the relay's 410). So A is tried first and B after a 410; at least one must
-/// take the push.
+/// Both emulators boot read-only from the same AVD, so they share one Play services identity.
+/// FCM then keeps one registration for the pair and delivers to whichever phone holds the
+/// identity's connection: the other phone's registration fails or its token answers
+/// `UNREGISTERED` (the relay's 410), and a push for A's token can arrive at B. So A's token is
+/// tried first and B's after a 410 or no token, and the push counts when either phone's core
+/// takes it.
 fn fcm_wakes_the_core(scene: &mut Scene) -> Result<String> {
     let config = scene.gms_push_relay.clone().context("not a gms build")?;
     if !crate::fcm_push::configured(&config)? {
@@ -885,50 +893,71 @@ fn fcm_wakes_the_core(scene: &mut Scene) -> Result<String> {
                 .to_owned(),
         );
     }
-    let mut gone = Vec::new();
-    for device in [&scene.a, &scene.b] {
+    let phones = [&scene.a, &scene.b];
+    let mut skipped = Vec::new();
+    for device in phones {
         let label = device.label;
-        let token = push_preference(device, scene.package, "fcm.token").with_context(|| {
-            format!("{label} never got an FCM token (no Play services, or no google-services.json)")
-        })?;
-        device.shell("logcat -c")?;
+        let Ok(token) = push_preference(device, scene.package, "fcm.token") else {
+            skipped.push(format!("{label} has no FCM token"));
+            continue;
+        };
+        for phone in phones {
+            phone.shell("logcat -c")?;
+        }
         match crate::fcm_push::send(&config, &token, [0; 8])? {
-            crate::fcm_push::Sent::Gone => gone.push(label),
+            crate::fcm_push::Sent::Gone => skipped.push(format!("{label}'s token unregistered")),
             crate::fcm_push::Sent::Accepted(status) => {
-                let line = fcm_reached_the_core(device, &status)?;
-                let note = if gone.is_empty() {
+                let arrival = fcm_reached_a_core(&phones, &status)?;
+                let note = if skipped.is_empty() {
                     String::new()
                 } else {
                     format!(
-                        " ({} token unregistered: the emulators share one Play services identity)",
-                        gone.join(", ")
+                        " ({}: the emulators share one Play services identity)",
+                        skipped.join(", ")
                     )
                 };
                 return Ok(format!(
-                    "relay answered {status}; {label}'s logcat: {line}{note}"
+                    "relay answered {status} for {label}'s token; {}'s logcat: {}{note}",
+                    arrival.label, arrival.line
                 ));
             }
         }
     }
-    bail!("FCM answered UNREGISTERED for both phones' tokens")
+    bail!(
+        "no phone took an FCM push ({}; no Play services, or no google-services.json?)",
+        skipped.join(", ")
+    )
 }
 
-/// Waits for `device`'s core to take an FCM push the relay accepted with `status`, and
-/// returns the log line.
-fn fcm_reached_the_core(device: &Device, status: &str) -> Result<String> {
-    let label = device.label;
+/// Where an FCM push arrived: the phone and its core's log line.
+struct Arrival {
+    label: &'static str,
+    line: String,
+}
+
+/// Waits for either phone's core to take an FCM push the relay accepted with `status`.
+fn fcm_reached_a_core(phones: &[&Device], status: &str) -> Result<Arrival> {
     let deadline = Deadline::after(NETWORK);
     loop {
-        let log = device.shell("logcat -d -s PingersCore")?;
-        if let Some(line) = log.lines().find(|line| line.contains("onPush FCM")) {
-            if !line.contains("onPush FCM: ok") {
-                bail!("{label}'s core did not take the FCM push: {}", line.trim());
+        for device in phones {
+            let log = device.shell("logcat -d -s PingersCore")?;
+            if let Some(line) = log.lines().find(|line| line.contains("onPush FCM")) {
+                if !line.contains("onPush FCM: ok") {
+                    bail!(
+                        "{}'s core did not take the FCM push: {}",
+                        device.label,
+                        line.trim()
+                    );
+                }
+                return Ok(Arrival {
+                    label: device.label,
+                    line: line.trim().to_owned(),
+                });
             }
-            return Ok(line.trim().to_owned());
         }
         if deadline.passed() {
             bail!(
-                "the relay took the push ({status}) but it never reached {label}'s core (no onPush FCM in logcat)"
+                "the relay took the push ({status}) but it never reached a core (no onPush FCM in either phone's logcat)"
             );
         }
         pause(Duration::from_secs(1));
@@ -1083,17 +1112,37 @@ fn install_pingers(device: &Device, apk: &Path, package: &str) -> Result<()> {
     device.shell("logcat -c")?;
     device.geo_fix(AWAY)?;
     device.shell(&format!("am start -W -n {package}/{ACTIVITY}"))?;
-    device
-        .wait_for(
-            &Find::tag("home_new_party").or(Text::Is("New party".into())),
-            UI,
-        )
-        .context("Home did not appear after launch")?;
-    Ok(())
+    through_first_run(device).context("Home did not appear after launch")
+}
+
+/// First run (design canvas `SetupWelcome`, `SetupBackground`) comes before Home on a fresh
+/// install. `adb install -g` has granted every permission it asks for, so each step's main
+/// button only moves on; it is tapped until Home shows.
+fn through_first_run(device: &Device) -> Result<()> {
+    let home = Find::tag("home_new_party").or(Text::Is("New party".into()));
+    let setup = Find::tag("setup_continue");
+    let deadline = Deadline::after(UI);
+    loop {
+        let screen = device.screen()?;
+        if screen.find(&home).is_some() {
+            return Ok(());
+        }
+        if deadline.passed() {
+            bail!(
+                "{device}: no {home} or {setup} within {} s; the screen shows: {}",
+                UI.as_secs(),
+                screen.summary()
+            );
+        }
+        if let Some(button) = screen.find(&setup) {
+            device.tap(button)?;
+        }
+        pause(Duration::from_millis(500));
+    }
 }
 
 /// Back to Home, then into the (only) Party.
-fn open_party(device: &Device) -> Result<()> {
+fn open_party(device: &Device, package: &str) -> Result<()> {
     let home = Find::tag("home_new_party");
     for _press in 0..5 {
         if device.screen()?.find(&home).is_some() {
@@ -1103,7 +1152,7 @@ fn open_party(device: &Device) -> Result<()> {
         pause(Duration::from_millis(500));
     }
     if device.screen()?.find(&home).is_none() {
-        device.shell(&format!("am start -W -n {ACTIVITY}"))?;
+        device.shell(&format!("am start -W -n {package}/{ACTIVITY}"))?;
     }
     device.tap_when(&Find::tag("party_row").or(Text::Is(PARTY.into())), NETWORK)?;
     device.wait_for(&Find::tag("party_add_spot"), UI)?;
