@@ -112,6 +112,60 @@ class PlatformUnitTest {
     }
 
     @Test
+    fun aBalancedFixFallsBackToGpsWithinItsTimeout() {
+        assertEquals(listOf(FixAttempt(FixQuality.HIGH, 20_000L)), fixAttempts(FixQuality.HIGH, 20_000L))
+        assertEquals(
+            listOf(FixAttempt(FixQuality.BALANCED, 10_000L), FixAttempt(FixQuality.HIGH, 10_000L)),
+            fixAttempts(FixQuality.BALANCED, 20_000L),
+        )
+    }
+
+    @Test
+    fun aFixChainAnswersOnceEvenWhenTheServiceNeverCallsBack() {
+        val timers = mutableListOf<() -> Unit>()
+        val started = mutableListOf<FixQuality>()
+        var cancelled = 0
+        val answers = mutableListOf<Fix?>()
+        val chain = FixChain(
+            attempts = fixAttempts(FixQuality.BALANCED, 20_000L),
+            schedule = { _, action -> timers.add(action) },
+            // The service never calls back.
+            start = { attempt, _ ->
+                started.add(attempt.quality)
+                val cancel: () -> Unit = { cancelled += 1 }
+                cancel
+            },
+            answer = { answers.add(it) },
+        )
+        chain.run()
+        timers.removeAt(0)()
+        assertEquals(listOf(FixQuality.BALANCED, FixQuality.HIGH), started)
+        timers.removeAt(0)()
+        assertEquals(2, cancelled)
+        assertEquals(listOf<Fix?>(null), answers)
+    }
+
+    @Test
+    fun aFixChainStopsAtTheFirstFix() {
+        val fix = Fix(51.5, -0.12, 8f, 1_000L)
+        val timers = mutableListOf<() -> Unit>()
+        val answers = mutableListOf<Fix?>()
+        FixChain(
+            attempts = fixAttempts(FixQuality.BALANCED, 20_000L),
+            schedule = { _, action -> timers.add(action) },
+            start = { attempt, result ->
+                result(if (attempt.quality == FixQuality.HIGH) fix else null)
+                val nothing: () -> Unit = {}
+                nothing
+            },
+            answer = { answers.add(it) },
+        ).run()
+        // Balanced found nothing, GPS answered; the cut-offs that fire later change nothing.
+        timers.forEach { it() }
+        assertEquals(listOf<Fix?>(fix), answers)
+    }
+
+    @Test
     fun meetupModesFollowContinuously() {
         assertNull(ContinuousRequest.of(LocationMode.IDLE))
         assertNull(ContinuousRequest.of(LocationMode.DWELL))

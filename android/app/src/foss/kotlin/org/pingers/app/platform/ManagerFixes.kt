@@ -11,7 +11,6 @@ import androidx.core.location.LocationManagerCompat
 import androidx.core.location.LocationRequestCompat
 import androidx.core.os.CancellationSignal
 import java.util.concurrent.Executor
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Fixes from the platform LocationManager, for the `foss` flavour (no Play services). High
@@ -48,17 +47,23 @@ class ManagerFixes(context: Context, private val sink: () -> CoreSink) : FixSour
                 return
             }
         }
-        val done = AtomicBoolean(false)
+        FixChain(
+            attempts = fixAttempts(quality, timeoutMillis),
+            schedule = { delay, action -> handler.postDelayed(action, delay) },
+            start = ::current,
+            answer = { fix -> sink().onFix(fix) },
+        ).run()
+    }
+
+    /** One try from the provider for its quality; returns what cancels it. */
+    @SuppressLint("MissingPermission") // The caller checked.
+    private fun current(attempt: FixAttempt, result: (Fix?) -> Unit): () -> Unit {
         val cancel = CancellationSignal()
-        handler.postDelayed({
-            if (done.compareAndSet(false, true)) {
-                cancel.cancel()
-                sink().onFix(null)
-            }
-        }, timeoutMillis.coerceAtLeast(1))
-        LocationManagerCompat.getCurrentLocation(manager, provider(quality), cancel, executor) { location ->
-            if (done.compareAndSet(false, true)) sink().onFix(location?.toFix())
+        // The platform gives no timeout of its own: FixChain cuts the try off.
+        LocationManagerCompat.getCurrentLocation(manager, provider(attempt.quality), cancel, executor) { location ->
+            result(location?.toFix())
         }
+        return { cancel.cancel() }
     }
 
     @SuppressLint("MissingPermission") // Checked first.

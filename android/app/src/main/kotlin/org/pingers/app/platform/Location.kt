@@ -51,3 +51,58 @@ data class ContinuousRequest(val highAccuracy: Boolean, val intervalMillis: Long
 interface GeofenceRegistrar {
     fun replace(regions: List<OsRegion>, responsivenessMillis: Int)
 }
+
+/** One try at a fix: how hard, and for how long. */
+data class FixAttempt(val quality: FixQuality, val timeoutMillis: Long)
+
+/**
+ * The tries one fix request makes, sharing its timeout. A balanced fix comes from Wi-Fi and
+ * cell location, which a phone may not have at all (Google Location Accuracy off, network
+ * location missing, an emulator): a balanced try that finds nothing in half the time gives the
+ * rest to GPS, so a phone with only GPS is still placed, not left without a fix.
+ */
+fun fixAttempts(quality: FixQuality, timeoutMillis: Long): List<FixAttempt> {
+    val total = timeoutMillis.coerceAtLeast(2)
+    return when (quality) {
+        FixQuality.HIGH -> listOf(FixAttempt(FixQuality.HIGH, total))
+        FixQuality.BALANCED -> {
+            val first = total / 2
+            listOf(FixAttempt(FixQuality.BALANCED, first), FixAttempt(FixQuality.HIGH, total - first))
+        }
+    }
+}
+
+/**
+ * Runs [attempts] in turn until one yields a fix, and answers [answer] exactly once: with the
+ * first fix, or null once every try has ended. Each try is cut off at its timeout plus
+ * [GRACE_MILLIS] even if the location service never calls back, so a request never waits
+ * forever. [start] begins a try, reports its result, and returns what cancels it when it is cut off.
+ */
+class FixChain(
+    private val attempts: List<FixAttempt>,
+    private val schedule: (delayMillis: Long, action: () -> Unit) -> Unit,
+    private val start: (attempt: FixAttempt, result: (Fix?) -> Unit) -> () -> Unit,
+    private val answer: (Fix?) -> Unit,
+) {
+    fun run() = attempt(0)
+
+    private fun attempt(index: Int) {
+        val current = attempts.getOrNull(index) ?: return answer(null)
+        val settled = java.util.concurrent.atomic.AtomicBoolean(false)
+        val result = { fix: Fix? ->
+            if (settled.compareAndSet(false, true)) {
+                if (fix != null || index + 1 >= attempts.size) answer(fix) else attempt(index + 1)
+            }
+        }
+        val cancel = start(current, result)
+        schedule(current.timeoutMillis + GRACE_MILLIS) {
+            if (!settled.get()) cancel()
+            result(null)
+        }
+    }
+
+    companion object {
+        /** How long past its own timeout a try may take to call back. */
+        const val GRACE_MILLIS = 1_000L
+    }
+}
