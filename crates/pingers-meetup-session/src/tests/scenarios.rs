@@ -206,7 +206,11 @@ async fn a_dropped_channel_reopens_and_catches_up_from_the_log() -> TestResult {
         .await?;
     // It is retried at once, then after a backoff.
     world.server.until_refused("Alice", 1).await?;
-    // No retry before the backoff.
+    // No retry before the backoff, however often her task goes round: each command it
+    // answers is one more turn of its loop.
+    for _turn in 0..2 {
+        alice.handle.own_fix(fix(world.now())?).await?;
+    }
     assert_eq!(world.server.refused("Alice"), 1);
     // Meanwhile Bob writes: it reaches only the group log.
     bob.handle.act(chat("Where are you?")?).await?;
