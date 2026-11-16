@@ -380,10 +380,13 @@ gh release create feed --repo OceanEilonwy/pingers --target main --latest=false 
 ```
 
 `NODO_REV` in `feed.yml` names the monokulo-nodo commit the feed is built with; it must have N1
-and N2, which monokulo-nodo merged in #12 (4ad5661, also the commit `cargo test -p xtask` parses
-the packaging with).
+and N2, which monokulo-nodo merged in #12, and bundles and owner pages (branch
+`bundles-and-owner-pages`, 226610d, whose PR is not merged yet): an older install review refuses
+the `pingers` app, and the workflow stops with "update NODO_REV". Until that PR is merged,
+`Cargo.toml` pins `nodo-manifest` and `nodo-settings` to 226610d for the packaging test; after,
+both move to the merge commit. (Before bundles both were 4ad5661, the merge of #12.)
 
-**Building locally** (Docker, a monokulo-nodo checkout at 4ad5661 or later, which has N1 and N2, at `$NODO`):
+**Building locally** (Docker, a monokulo-nodo checkout with N1, N2, bundles and owner pages, at `$NODO`):
 
 ```sh
 cargo xtask nodo-dist HEAD --nodo "$NODO"     # prints version, sha256; fills target/nodo/srcpkgs
@@ -455,7 +458,7 @@ tests, `crates/pingers-e2e`, and the push relay's ntfy script.
    channel both ways, and chat.
 
 **Tier 2: the real packages in nodo's x86-kvm VM** (`scripts/dev-vm.sh up` in a nodo checkout
-at 4ad5661 or later): build x86_64 packages, sign a test feed with a throwaway key, copy it into the
+with bundles and owner pages): build x86_64 packages, sign a test feed with a throwaway key, copy it into the
 VM as a directory feed, `AddFeed`, then install `pingers` (the bundle installs the four services,
 asking for a test domain and a throwaway service account key). Open Apps, pingers, Setup and
 check the page. Check the firewall (`_pingers-server` reaches nothing but 9472 and 9474;
