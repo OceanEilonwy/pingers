@@ -11,7 +11,8 @@ use pingers_delivery::{
     CommitOutcome, Delivery, DeliveryError, DeliveryStore, GroupLifetime, GroupStart, LiveAttach,
     MAX_LIVE_CHANNELS_PER_GROUP, MAX_QUIET_DELAY, MAX_SUBSCRIPTION_LIFETIME,
     MAX_SUBSCRIPTIONS_PER_GROUP, MEETUP_IDLE_LIFETIME, MemoryDeliveryStore, PAGE_ENTRIES,
-    PARTY_IDLE_LIFETIME, PastAuthKey, Reader, STORED_LIVE_FRAMES_PER_BUCKET, Wake,
+    PARTY_IDLE_LIFETIME, PastAuthKey, Reader, STORED_LIVE_FRAMES_PER_BUCKET,
+    WAKES_PER_GROUP_PER_MINUTE, Wake,
 };
 use pingers_proto::{
     AppMessage, CommitRequest, CommitResponse, ContentType, CreateGroup, Delivery as Mode, Epoch,
@@ -424,6 +425,28 @@ fn subscriptions_on_a_live_channel_are_not_pushed(
         accepted(world.commit(0, Urgency::Alert)?).ok_or(TestError::Conflict)?;
     assert_eq!(woken(&wakes), BTreeSet::from([sub_id(2)]));
     assert_eq!(targets, vec![10]);
+    Ok(())
+}
+
+/// A group sends at most `WAKES_PER_GROUP_PER_MINUTE` wakes a minute; past that its messages are
+/// stored without one, and the next minute wakes again.
+fn a_group_sends_a_bounded_number_of_wakes_a_minute(
+    store: impl DeliveryStore,
+) -> Result<(), TestError> {
+    let world = World::new(store, &[1])?;
+    for _ in 0..WAKES_PER_GROUP_PER_MINUTE {
+        let posted = world.post(0, Mode::Stored, Some(Urgency::Alert))?;
+        assert_eq!(woken(&posted.wakes), BTreeSet::from([sub_id(1)]));
+    }
+    let past = world.post(0, Mode::Stored, Some(Urgency::Alert))?;
+    assert!(past.wakes.is_empty());
+    assert!(
+        past.sequence.is_some(),
+        "the message is stored all the same"
+    );
+    world.clock.advance(Duration::from_mins(1));
+    let next = world.post(0, Mode::Stored, Some(Urgency::Alert))?;
+    assert_eq!(woken(&next.wakes), BTreeSet::from([sub_id(1)]));
     Ok(())
 }
 
@@ -1576,6 +1599,7 @@ for_each_store!(
     quiet_wakes_are_delayed_by_up_to_thirty_seconds,
     subscriptions_on_a_live_channel_are_not_pushed,
     stored_message_wakes_only_when_asked,
+    a_group_sends_a_bounded_number_of_wakes_a_minute,
     commit_applies_subscription_changes_before_waking,
     losing_commit_applies_no_subscription_changes,
     expired_subscription_is_not_woken_and_is_deleted,
@@ -1693,7 +1717,12 @@ fn sqlite_store_overwrites_removed_subscriptions() -> Result<(), TestError> {
     assert_eq!(world.delivery.expire_idle()?, vec![]);
     assert_eq!(traces(&[0xA3]), Vec::<String>::new());
     // The one that stands is still there.
-    assert!(world.delivery.subscription(&world.group, &sub_id(0xC1))?.is_some());
+    assert!(
+        world
+            .delivery
+            .subscription(&world.group, &sub_id(0xC1))?
+            .is_some()
+    );
     drop(world);
     for file in [&path, &wal, &path.with_extension("sqlite-shm")] {
         let _cleanup = std::fs::remove_file(file);

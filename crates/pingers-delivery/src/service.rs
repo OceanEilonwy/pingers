@@ -2,8 +2,8 @@
 //! The delivery service: the rules on top of a [`DeliveryStore`] and the live registry.
 
 use core::time::Duration;
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use pingers_crypto::{PushBind, push_bind_for_subscription};
 use pingers_proto::{
@@ -42,6 +42,15 @@ pub const STORED_LIVE_FRAMES_PER_BUCKET: u32 = 240;
 /// `Quiet` wakes are each delayed by a random 0 to 30 seconds to blur Party fan-out at the push
 /// relay (design B.4.9); alerts are not delayed.
 pub const MAX_QUIET_DELAY: Duration = Duration::from_secs(30);
+
+/// The most wakes one group sends in a minute (posts and commits together). Each wake pushes
+/// every subscription off the live channel, so this bounds the pushes one member can cause
+/// the others; a message past it is still stored and read on the next wake, which a busy
+/// conversation does not wait long for.
+pub const WAKES_PER_GROUP_PER_MINUTE: u32 = 60;
+
+/// Groups whose wake count is kept before stale minutes are dropped.
+const TRACKED_WAKE_WINDOWS: usize = 65_536;
 
 /// One sealed push to hand to the push relay (design D, "Wake rule"). The server sends
 /// `{ blob, bind, urgency, handle }` after `delay`, and calls
@@ -145,6 +154,8 @@ pub struct Delivery<S, T> {
     store: S,
     clock: Arc<dyn Clock>,
     live: LiveRegistry<T>,
+    /// Each group's current minute of wakes: when it started and how many it has sent.
+    wake_windows: Mutex<HashMap<GroupId, (UnixSeconds, u32)>>,
 }
 
 impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
@@ -154,6 +165,7 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
             store,
             clock,
             live: LiveRegistry::new(),
+            wake_windows: Mutex::new(HashMap::new()),
         }
     }
 
@@ -419,6 +431,7 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
 
     /// The wake rule (design D): every unexpired subscription not attached to a live channel of
     /// epoch `rule.connected_in`, with the request's urgency; `Quiet` ones get a random delay.
+    /// None once the group has sent [`WAKES_PER_GROUP_PER_MINUTE`] this minute.
     fn wakes(
         &self,
         group: &GroupId,
@@ -430,6 +443,9 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
             urgency,
         } = rule;
         let now = self.clock.now();
+        if !self.take_wake(group, now) {
+            return Ok(Vec::new());
+        }
         let connected = self.live.connected(group, connected_in)?;
         Ok(self
             .store
@@ -447,6 +463,28 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
                 },
             })
             .collect())
+    }
+
+    /// Counts one wake against `group`'s minute; `false` once [`WAKES_PER_GROUP_PER_MINUTE`]
+    /// are used up.
+    fn take_wake(&self, group: &GroupId, now: UnixSeconds) -> bool {
+        let minute = Duration::from_mins(1);
+        let mut windows = self
+            .wake_windows
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if windows.len() >= TRACKED_WAKE_WINDOWS {
+            windows.retain(|_, (start, _)| now.saturating_duration_since(*start) < minute);
+        }
+        let window = windows.entry(*group).or_insert((now, 0));
+        if now.saturating_duration_since(window.0) >= minute {
+            *window = (now, 0);
+        }
+        if window.1 >= WAKES_PER_GROUP_PER_MINUTE {
+            return false;
+        }
+        window.1 = window.1.saturating_add(1);
+        true
     }
 
     /// `GET /v1/groups/{id}/msgs?after=seq`: up to [`crate::PAGE_ENTRIES`] entries after `after`.

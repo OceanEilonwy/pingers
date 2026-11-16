@@ -45,7 +45,7 @@ pub use memory::MemoryDeliveryStore;
 pub use service::{
     CommitOutcome, Delivery, Forwarded, LiveAttach, MAX_LIVE_CHANNELS_PER_GROUP, MAX_QUIET_DELAY,
     MAX_SUBSCRIPTION_LIFETIME, MAX_SUBSCRIPTIONS_PER_GROUP, Posted, Reader,
-    STORED_LIVE_FRAMES_PER_BUCKET, Wake,
+    STORED_LIVE_FRAMES_PER_BUCKET, WAKES_PER_GROUP_PER_MINUTE, Wake,
 };
 #[cfg(feature = "sqlite")]
 pub use sqlite::SqliteDeliveryStore;
