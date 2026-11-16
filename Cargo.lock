@@ -4008,6 +4008,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "pingers-setup"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "pingers-crypto",
+ "pingers-ohttp",
+ "pingers-proto",
+ "pingers-time",
+ "rand_chacha 0.10.0",
+ "rand_core 0.10.1",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "toml 1.2.1+spec-1.1.0",
+ "webpki-roots",
+ "zeroize",
+]
+
+[[package]]
 name = "pingers-store"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,40 @@
+[package]
+name = "pingers-setup"
+description = "The owner's setup page on a monokulo-nodo appliance: the checklist, pins and first-phone link nodo shows."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[package.metadata.pingers]
+layer = 5
+
+# The binary is named after the nodo app it is, `pingers`, so nodo's `pkill -x pingers` stops it.
+[[bin]]
+name = "pingers"
+path = "src/main.rs"
+
+[dependencies]
+pingers-crypto = { workspace = true }
+pingers-ohttp = { workspace = true }
+pingers-proto = { workspace = true }
+axum = { workspace = true }
+reqwest = { workspace = true }
+rustls = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["net", "signal"] }
+tokio-rustls = { workspace = true }
+toml = { workspace = true }
+webpki-roots = { workspace = true }
+zeroize = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+pingers-time = { workspace = true }
+rand_chacha = { workspace = true }
+rand_core = { workspace = true }
+
+[lints]
+workspace = true
