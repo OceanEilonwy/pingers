@@ -507,6 +507,17 @@ impl Core {
         Ok(self.client.dismiss_join().await?)
     }
 
+    /// Reads what joins wait for now. Asked to join calls it every few seconds while it is on
+    /// screen: without wake-up pushes (or before the platform's push token arrives) nothing else
+    /// tells the app it was let in.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Storage`].
+    pub async fn check_joins(&self) -> Result<(), CoreError> {
+        Ok(self.client.check_joins().await?)
+    }
+
     /// Lets in the person who asked to join with `request`, once they read out the code the
     /// screen shows ("Codes match · Let Ben in").
     ///
@@ -1450,6 +1461,8 @@ mod tests {
         assert_eq!(fakes.calls().last(), Some(&CrateCall::WithdrawJoin));
         core.dismiss_join().await?;
         assert_eq!(fakes.calls().last(), Some(&CrateCall::DismissJoin));
+        core.check_joins().await?;
+        assert_eq!(fakes.calls().last(), Some(&CrateCall::CheckJoins));
         core.open_invite("https://pingers.test/j#k".into(), "Ben".into())
             .await?;
         assert!(matches!(

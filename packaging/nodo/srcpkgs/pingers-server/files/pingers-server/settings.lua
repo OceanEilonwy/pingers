@@ -63,6 +63,21 @@ return {
       validate = https_origin,
     },
     {
+      name = "app_signing_certificate",
+      type = "string",
+      label = "App signing certificate",
+      help = "The SHA-256 fingerprint of the certificate the Pingers app is signed with, as "
+        .. "keytool prints it (app_links.certificates). /.well-known/assetlinks.json names it, "
+        .. "so Android opens this server's invite links in the app directly. The default is "
+        .. "the official builds' certificate; change it only for your own app builds.",
+      required = true,
+      default = "AA:44:E4:54:B0:F8:FA:A8:9B:8F:69:EF:72:90:6D:AA:2A:B8:C3:F2:D6:BE:87:B1:23:C2:D3:30:C9:BD:18:16",
+      validate = function(fingerprint)
+        return nodo.matches(fingerprint, "^([0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$"),
+          "must be 32 hex pairs separated by colons"
+      end,
+    },
+    {
       name = "logging",
       type = "enum",
       label = "Logging",

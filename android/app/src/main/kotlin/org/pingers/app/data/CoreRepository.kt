@@ -751,6 +751,8 @@ class CoreRepository(
 
     override fun withdrawJoin() = call("withdraw join") { it.withdrawJoin() }
 
+    override fun checkJoins() = call("check joins") { it.checkJoins() }
+
     override fun openJoinedParty() {
         val party = _letIn.value?.party ?: return
         currentParty = party

@@ -50,16 +50,18 @@ enum TestError {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_join_with_pushes_on_needs_a_token_and_every_join_a_real_link() -> Result<(), TestError> {
+async fn a_join_goes_ahead_without_a_push_token_and_every_join_needs_a_real_link()
+-> Result<(), TestError> {
     let config = HarnessConfig::default();
     let harness = InProcessHarness::start(&config)?;
     let rig = rig(&harness, &config, harness_pins(&harness)?).await?;
     let link = pingers_client::snapshot::InviteUrl::new("https://pingers.invalid/j#x")?;
     let name = pingers_client::snapshot::Name::new("Bob")?;
-    // No token from the platform: no subscription can be sealed for the join request.
+    // No token from the platform yet: the request would go without a subscription (the device
+    // polls instead), so the link is read next, and this one holds no invite.
     assert!(matches!(
         rig.client.open_invite(link.clone(), name.clone()).await,
-        Err(ClientError::Unavailable(Unavailable::NoPushToken))
+        Err(ClientError::Parties(_))
     ));
     rig.platform.set_push_registration(Some(PushRegistration {
         platform: PushPlatform::UnifiedPush,
@@ -717,5 +719,58 @@ async fn ask_compare_codes_let_in_then_turn_the_next_one_away() -> Result<(), Te
     // Cat gives up: her request is withdrawn and her phone forgets it.
     cat.client.withdraw_join().await?;
     assert_eq!(cat.client.snapshot().joining, None);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_join_without_a_push_token_completes_through_checks_on_screen() -> Result<(), TestError> {
+    use pingers_client::ports::JoinDecision;
+    use pingers_client::snapshot::{Joining, Name};
+    use pingers_testkit::EventKind;
+
+    let config = HarnessConfig::default();
+    let harness = InProcessHarness::start(&config)?;
+    let ana = person(&harness, &config, 3).await?;
+    up_token(&ana);
+    ana.client.set_wake_pushes(WakePushes::On).await?;
+    // Ben keeps the default, wake-up pushes on, but the platform has given him no token yet:
+    // no push will announce his Welcome.
+    let ben = rig_as(
+        &harness,
+        &config,
+        harness_pins(&harness)?,
+        Who {
+            seed: 4,
+            account: Account::Register,
+        },
+    )
+    .await?;
+    let party = climbing_crew(&ana).await?;
+    let link = ana.client.create_invite(party).await?;
+    ben.client.open_invite(link.url, Name::new("Ben")?).await?;
+    let ben_code = asked_code(&ben).ok_or(TestError::Setup("Ben has no code"))?;
+
+    // Ana's screen checks while it is open: the request appears without a push or a new
+    // foreground.
+    assert!(ana.client.snapshot().party(party)?.join_requests.is_empty());
+    ana.client.check_joins().await?;
+    let snapshot = ana.client.snapshot();
+    let request = snapshot
+        .party(party)?
+        .join_requests
+        .first()
+        .ok_or(TestError::Setup("Ben's request"))?;
+    assert_eq!(request.code, ben_code);
+    ana.client
+        .decide_join(party, request.id, JoinDecision::Admit)
+        .await?;
+
+    // Ben's Asked to join checks while it is on screen: he is in.
+    ben.client.check_joins().await?;
+    assert!(matches!(
+        ben.client.snapshot().joining,
+        Some(Joining::LetIn { party: joined, .. }) if joined == party
+    ));
+    assert_eq!(ben.events.count(EventKind::LetIn), 1);
     Ok(())
 }

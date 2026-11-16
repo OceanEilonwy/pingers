@@ -116,7 +116,7 @@ impl Client {
         self.publish_snapshot().await.map(drop)
     }
 
-    fn emit(&self, event: ClientEvent) {
+    pub(super) fn emit(&self, event: ClientEvent) {
         let events = self.events.as_ref();
         match event {
             ClientEvent::PartiesChanged => events.parties_changed(),

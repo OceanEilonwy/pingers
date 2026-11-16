@@ -24,7 +24,7 @@ use super::records::{self, Key, corrupt};
 use super::sync::Net;
 use crate::ClientError;
 use crate::ports::{
-    AllowListChange, JoinDecision, PartiesPort, PartiesSection, PartyDraft, SpotDraft,
+    AllowListChange, ClientEvent, JoinDecision, PartiesPort, PartiesSection, PartyDraft, SpotDraft,
 };
 use crate::snapshot::{
     Host, Hosting, Invite, InviteLink, InviteStatus, InviteUrl, JoinRequest, Joining, Me, Member,
@@ -199,6 +199,10 @@ impl PartiesPort for Parties {
 
     async fn dismiss_join(&self) -> Result<(), ClientError> {
         super::join::dismiss(&self.net).await
+    }
+
+    async fn check_joins(&self) -> Result<Vec<ClientEvent>, ClientError> {
+        super::join::poll(&self.net).await
     }
 
     async fn decide_join(
