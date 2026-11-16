@@ -59,6 +59,9 @@ pub enum StoreError {
     /// A server was named that has no `server` row.
     #[error("unknown server")]
     UnknownServer,
+    /// A Party's configuration named another server than the one the Party lives on.
+    #[error("the Party lives on another server")]
+    ServerMismatch,
     /// A thread panicked while holding the session's connection.
     #[error("the session's connection was poisoned by a panic")]
     Poisoned,

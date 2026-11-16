@@ -72,7 +72,7 @@ fn grant_key_is_read_back_from_a_leaf() -> TestResult {
     let mut rng = rng(50);
     let device = Device::new(&mut rng);
     let bytes = device.meetup_key_package(&grant_key(9), &mut rng)?;
-    let provider = crate::provider::Provider::new(&device.storage, crate::provider::NoRand);
+    let provider = crate::provider::Provider::new(&device.storage, crate::provider::NoRand)?;
     let key_package = crate::group::parse_key_package(&bytes, &provider)?;
     assert_eq!(leaf_grant_key(key_package.leaf_node()), Some(grant_key(9)));
     let party = device.party_key_package(&mut rng)?;

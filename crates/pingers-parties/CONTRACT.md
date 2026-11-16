@@ -33,6 +33,9 @@ Parties as long-lived things (client, L3). Sans network: every request for the s
 - Spots: `create_spot(&PartyId, NewSpot, rng)`, `edit_spot(&PartyId, SpotEdit, rng)`,
   `delete_spot` (each `-> SpotChange { spot, outbound: GroupMessage }`), `spots`;
   `SpotShape::{Circle, Polygon}::into_fence`.
+- Profiles: `update_profile(&PartyId, ProfileChange, rng) -> ProfilePublication`,
+  `publish_waiting_profile -> Option<Outbound>`, `profile_waiting`; `upgrade_records`;
+  `PostQuantum::suite() -> CipherSuitePolicy` (public).
 - `Outbound::{CreateGroup, Commit(OutgoingCommit), GroupMessage, MailboxPost, DeleteMailbox,
   Leave(LeaveRequest)}`; `InviteLink` (`new`, `from_text`, `as_str`, `payload`);
   `SafetyCode`; `inviter_fingerprint`; `INVITE_LIFETIME` (24 h); `PartiesError`.
@@ -77,43 +80,71 @@ pooled `Reply` one; with none, `NoPooledMailbox`.
   expiry, whichever is sooner; `now >= expires` is expired.
 - **Inviter fingerprint** = `account_id(pk)[..8]` (design gives no formula); the joiner refuses
   a Welcome whose group has no such leaf, and keeps nothing.
-- **Safety code**: 60 digits, each key's `account_id` read as an integer mod 10³⁰, smaller key
-  first. Interim until pingers-crypto has a proper derivation (requests).
+- **Safety code**: pingers-crypto's `safety_number` (60 digits from 5200 rounds of labelled
+  SHA-512 per key, smaller key first), shown in twelve groups of five.
 - **Roster history**: the current and previous epochs' rosters are kept (knock verification
   never asks for older ones, design B.4.7).
 - **Member rows** exist once a name is known (join request, snapshot or profile operation);
-  `roster()` lists every leaf, with `name: None` until then.
-- **Subscriptions**: the joiner's profile carries its subscription id, so whoever removes a
-  member lists it in `subscriptions_removed`. Leavers delete their own.
-- **Spots**: last writer wins by Lamport clock, ties broken by the larger encoding; tombstones
-  stay; a Spot's `created_by` must be its first sender and never changes. Circles must be at
-  least `MINIMUM_SPOT_RADIUS`; polygons are checked by `Polygon::new` on create and on
-  receipt.
-- **Party operations** (profile, Spot) are padded to the smallest mailbox class and sent
-  stored with a Quiet wake (design G.2). Commits wake Quiet.
+  `roster()` lists every leaf, with `name: None` until then. An added member's name goes to
+  the leaf holding their KeyPackage's signature key (`pingers_mls::inspect_key_package`).
+- **Profiles** (2026-11-14): `update_profile(&PartyId, ProfileChange::{Name, Subscription},
+  rng) -> ProfilePublication::{Send(Box<Outbound>), Waiting}` stores the change at once and
+  seals a profile operation (name and subscription id) for the other members, who apply it as
+  `Incoming::ProfileUpdated`. While this device's commit, or a leaver's proposal, waits, the
+  profile is `Waiting`; `publish_waiting_profile -> Option<Outbound>` sends it once the commit
+  has settled (`profile_waiting` tells). pingers-client publishes a new display name to every
+  Party and calls `publish_waiting_profile` after each pull and commit.
+- **Subscriptions on removal**: every profile, and every member's entry in the state
+  snapshot, carries their Party subscription id, so whoever removes a member (including one
+  who joined later) lists it in `subscriptions_removed`. Committing a leaver's self-remove
+  proposal lists the leaver's subscription too (`pingers_mls::Group::pending_removals`), in
+  case the leaver's own `DELETE /subs` did not happen. The server (pingers-delivery) drops
+  the listed ids with the commit and ignores unknown ones; remaining members drop the removed
+  member's id when they merge the commit.
+- **Spots**: last writer wins by Lamport clock, ties broken by the larger wire encoding;
+  tombstones stay; a Spot's `created_by` must be its first sender and never changes. Circles
+  must be at least `MINIMUM_SPOT_RADIUS`; polygons are checked by `Polygon::new` on create and
+  on receipt.
+- **Party operations** (profile, Spot) are pingers-proto `PartyOperation`s, padded to the
+  smallest mailbox class and sent stored with a Quiet wake (design G.2). The snapshot is a
+  pingers-proto `PartySnapshot`. Commits wake Quiet.
 - **Settings**: server and suite are fixed at creation; a joiner takes the server from the
-  link and assumes the classical suite.
+  link and the suite from the group it joined (`Group::suite`).
+- **Quantum-resistant Parties** (feature `x-wing`, over pingers-mls's): the group runs X-Wing
+  (0x004D) and its Meetups use X-Wing grant keys. Without the feature the option fails with
+  `UnsupportedSuite` and keeps nothing. pingers-ffi enables it by default; join requests then
+  carry an X-Wing key package as well (request 4).
 - **Clock injected**; `now` is read once per operation.
+- **Per-Party state in store tables** (2026-11-14): settings, roster history, members' subscription
+  ids, the in-flight commit and a waiting profile live in pingers-store's schema-v6 tables
+  (`party_configs`, `rosters`, `member_subscriptions`, `pending_commits`, `profiles_waiting`),
+  which cascade with the Party. Invites, waiting join requests, joins in progress and how this
+  device joined a Party live in the schema-v7 tables (2026-11-16: `party_invites`,
+  `join_approvals`, which go with their invite, `party_joins` and `joined_via`); this crate keeps
+  no key-value records any more. `upgrade_records` moves old records of every kind into the
+  tables (one transaction per Party, then one for joins in progress, found with pingers-store's
+  `kv_keys_with_prefix`; idempotent; a waiting request whose invite record is gone is dropped);
+  pingers-client runs it when it opens the database. A Spot tombstone, own or received, clears
+  the Spot's presence row.
 
-## Interim parts and requests to lower crates
+## Requests to lower crates
 
-1. **pingers-proto**: wire types for the Party state operations (`Profile { name,
-   subscription }`, `Spot` upsert/tombstone) and the state snapshot (`party_id`, name, member
-   profiles, Spots). They are hand-encoded in `src/codec.rs` / `src/ops.rs` for now.
-2. **pingers-store**: tables for invites (secret, creation, expiry, status, read position), pending join
-   approvals, the in-flight commit, per-Party server/relays/suite, roster history and members'
-   subscription ids. Kept meanwhile under `pingers-parties/v1/` through `MlsStorage` on
-   `Session` (`src/records.rs`). Also `Presence::delete`, so a Spot tombstone can drop its
-   presence row.
-3. **pingers-crypto**: a labelled safety-number derivation (`safety_number(pk_a, pk_b)`) and
-   an `inviter_fingerprint(pk)`.
+1. **pingers-proto** wire types for Party operations and the snapshot: done (2026-11-14,
+   `PartyOperation`, `PartySnapshot`, with vectors and fuzz targets).
+2. **pingers-store** tables: done. Settings, roster history, subscriptions, the in-flight commit
+   and the waiting profile (schema v6, 2026-11-14); invites, waiting join requests, joins in
+   progress and `joined_via` (schema v7, 2026-11-16). A Spot tombstone clears its presence row
+   (`Presence::clear`).
+3. **pingers-crypto** `safety_number` and `inviter_fingerprint`: done (2026-11-14).
 4. **A joiner's suite** (owner decision 2026-11-14): the link keeps the suite out, so a join
    request carries a classical key package and, where the build can make one, an X-Wing one;
    the inviter adds the one its Party's suite needs, and a quantum-resistant Party refuses a
-   request without one (`Refusal::NoQuantumResistantKeyPackage`). Until pingers-mls makes
-   X-Wing key packages (v1-parties) the slot is sent empty.
-5. **pingers-mls**: the KeyPackage's signature key (to name an added member before merge),
-   and `QuantumResistant` once X-Wing is wired.
+   request without one (`Refusal::NoQuantumResistantKeyPackage`). Done: with the `x-wing`
+   feature, which pingers-ffi enables by default, pingers-mls makes X-Wing key packages, so
+   every app build fills the slot.
+5. **pingers-mls** `inspect_key_package`, `pending_removals`, `Group::suite`, and the X-Wing
+   suite (libcrux; two vendored, patched libcrux crates until openmls_libcrux_crypto releases
+   on the fixed versions): done (2026-11-14).
 
 ## Mutation testing
 

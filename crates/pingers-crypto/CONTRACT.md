@@ -155,3 +155,16 @@ three MLS exporter labels (`ExporterLabel`), which pingers-mls passes to OpenMLS
   current 15-minute bucket; pingers-server accepts the current bucket, or the previous one
   within 60 s of a rollover. A replay inside the window only gets the same account another
   bearer. New label `pingers/v1/auth` (decision).
+
+### Safety numbers and inviter fingerprints (added 2026-11-14, v1-parties)
+
+- **`safety_number(&pk_a, &pk_b) -> SafetyNumber`** (additive; pingers-parties request 3): the
+  60-digit number of design B.1 over two leaf keys, the same in either order. Per key:
+  `h = SHA-512("pingers/v1/safety-number" || pk)`, then `h = SHA-512(h || pk)` 5199 more
+  times (Signal's work factor); `h[..30]` read as six big-endian 40-bit integers, each modulo
+  10⁵, gives 30 digits; the bytewise smaller key's digits come first. `SafetyNumber::digits()`
+  returns them; `Debug` is redacted. New label `pingers/v1/safety-number` (decision: the
+  design gives no derivation). Vectors: `vectors/crypto/safety-number.json`, computed with
+  openssl, not with this crate.
+- **`inviter_fingerprint(&pk) -> InviterFingerprint`** (moved from pingers-parties):
+  `SHA-256(pk)[..8]`, the first 8 bytes of the account id. Same vectors file.

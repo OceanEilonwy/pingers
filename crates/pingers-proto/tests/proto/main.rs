@@ -3,6 +3,7 @@
 #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
 mod debug;
+mod party;
 mod rejects;
 mod round_trip;
 mod strategies;

@@ -13,7 +13,7 @@ use pingers_geo::Fence;
 use pingers_parties::{
     InviteId, InviteStatus as PartiesInviteStatus, JoinCode, Myself, NewInvite, NewParty, NewSpot,
     Outbound, PartiesError, PartyLifecycle, PartySettings, PostQuantum as PartiesPostQuantum,
-    RelayChoice, SpotEdit, SpotShape,
+    ProfileChange, ProfilePublication, RelayChoice, SpotEdit, SpotShape,
 };
 use pingers_proto::{LeafIndex, MailboxId, PartyId, ServerId, SpotId};
 use pingers_store::{MemberName, Party as StoredParty, PartyName, Session, SpotName, Verification};
@@ -185,16 +185,35 @@ impl PartiesPort for Parties {
         self.send(&server, [outbound]).await
     }
 
+    /// Keeps the name for new Parties and publishes it to every Party this device is in
+    /// (design B.2: a profile operation each member applies). A Party with a commit in flight
+    /// sends it once the commit settles (`PartyLog::publish_waiting_profile`).
     async fn set_display_name(&self, name: Name) -> Result<(), ClientError> {
-        self.backend
-            .store(move |session, _clock, _rng| {
+        let outbound = self
+            .backend
+            .store(move |session, clock, rng| {
                 // Checked as pingers-parties checks a member name, so a join cannot fail on it.
                 let name = MemberName::new(name.as_str().to_owned())?;
                 records::write(session, &Key::DisplayName, |writer| {
                     writer.text(name.as_str());
-                })
+                })?;
+                let lifecycle = PartyLifecycle::new(session, clock);
+                let mut outbound = Vec::new();
+                for row in session.parties().list()? {
+                    let change = ProfileChange::Name(name.clone());
+                    match lifecycle.update_profile(&row.id, change, rng)? {
+                        // Each Party's update goes to the server that Party lives on.
+                        ProfilePublication::Send(message) => outbound.push((row.server, *message)),
+                        ProfilePublication::Waiting => {}
+                    }
+                }
+                Ok(outbound)
             })
-            .await
+            .await?;
+        for (server, message) in outbound {
+            self.net.push(&server, [message]);
+        }
+        self.net.flush().await
     }
 
     /// Posts the join request (`join.rs`). Nothing about the Party is known until the Welcome.

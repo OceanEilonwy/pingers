@@ -9,7 +9,8 @@
 //!   length; text as UTF-8 text strings;
 //! - `Option::None` as CBOR `null`, `Some(value)` as the value itself;
 //! - two-state enums as small unsigned integers; enums with data as `[variant, fields...]`;
-//! - `f32` as a four-byte float (major type 7, `0xfa`).
+//! - `f32` as a four-byte float (major type 7, `0xfa`); `f64` (Spot geometry) as an
+//!   eight-byte float (`0xfb`).
 //!
 //! The encoder below is written by hand so that it can only produce that canonical form and
 //! cannot fail. The decoder uses `minicbor` for the parsing and then re-encodes the value and
@@ -31,6 +32,7 @@ const MAJOR_TEXT: u8 = 0x60;
 const MAJOR_ARRAY: u8 = 0x80;
 const NULL: u8 = 0xf6;
 const FLOAT32: u8 = 0xfa;
+const FLOAT64: u8 = 0xfb;
 /// Additional-information values 0 to 23 are the value itself.
 const LARGEST_IMMEDIATE: u8 = 23;
 const FOLLOWS_U8: u8 = 24;
@@ -121,6 +123,13 @@ impl Writer {
     /// A four-byte float.
     pub(crate) fn float(&mut self, value: f32) {
         self.bytes.push(FLOAT32);
+        self.bytes.extend_from_slice(&value.to_be_bytes());
+    }
+
+    /// An eight-byte float, always in that width (never shortened), so geometry round-trips
+    /// bit for bit.
+    pub(crate) fn double(&mut self, value: f64) {
+        self.bytes.push(FLOAT64);
         self.bytes.extend_from_slice(&value.to_be_bytes());
     }
 

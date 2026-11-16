@@ -200,7 +200,7 @@ fn publish(
     let identity = identity(session)?;
     let context = MlsContext::new(session, &identity.signing_key);
     let mut group = context.party_group(&row.group)?;
-    session.spots().put(&spot)?;
+    crate::lifecycle::put_spot(session, &spot)?;
     let id = spot.id;
     let outbound = seal_operation(&mut group, &PartyOperation::Spot(spot), rng)?;
     Ok(SpotChange { spot: id, outbound })

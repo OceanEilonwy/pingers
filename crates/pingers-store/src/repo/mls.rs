@@ -12,6 +12,25 @@ use crate::{Session, StoreError};
 /// so this matches exactly those keys, with no LIKE wildcards or collation to worry about.
 pub(crate) const DELETE_PREFIX: &str = "DELETE FROM mls_kv WHERE substr(key, 1, length(?1)) = ?1";
 
+impl Session {
+    /// The `mls_kv` keys that start with `prefix`, in byte order. The `MlsStorage` trait cannot
+    /// list keys; this exists so a crate that kept key-value records before the store had tables
+    /// for them can find and move them. The keys are that crate's own byte layout.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Database`] if the read fails.
+    pub fn kv_keys_with_prefix(&self, prefix: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
+        self.with(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT key FROM mls_kv WHERE substr(key, 1, length(?1)) = ?1 ORDER BY key",
+            )?;
+            let keys = statement.query_map([prefix], |row| row.get(0))?;
+            Ok(keys.collect::<Result<_, _>>()?)
+        })
+    }
+}
+
 /// OpenMLS state as opaque bytes (design C.2 `mls_*`). pingers-mls chooses the key layout.
 ///
 /// Each call is atomic. Inside [`Session::transaction`], MLS writes commit or roll back
@@ -80,6 +99,7 @@ fn storage_error(error: &StoreError) -> StorageError {
         | StoreError::NotFound { .. }
         | StoreError::InvalidText { .. }
         | StoreError::UnknownServer
+        | StoreError::ServerMismatch
         | StoreError::Internal => StorageError::Failed,
         StoreError::WrongKey
         | StoreError::Busy
@@ -103,6 +123,21 @@ mod tests {
 
     use super::*;
     use crate::test_support::{Fixture, TestError};
+
+    #[test]
+    fn keys_are_listed_by_prefix_in_byte_order() -> Result<(), TestError> {
+        let fixture = Fixture::new()?;
+        let storage: &dyn MlsStorage = &fixture.session;
+        for key in [&b"a/2"[..], b"a/1", b"a", b"b/1", b"a%"] {
+            storage.write(key, b"x")?;
+        }
+        assert_eq!(
+            fixture.session.kv_keys_with_prefix(b"a/")?,
+            vec![b"a/1".to_vec(), b"a/2".to_vec()]
+        );
+        assert!(fixture.session.kv_keys_with_prefix(b"c")?.is_empty());
+        Ok(())
+    }
 
     #[test]
     fn read_write_delete_round_trip() -> Result<(), TestError> {
