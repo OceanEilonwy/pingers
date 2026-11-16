@@ -92,11 +92,13 @@ pub(crate) async fn real_pause() {
     tokio::time::sleep(Duration::from_millis(10)).await;
 }
 
-/// Runs `future`, advancing `clock` by `step` between short real pauses, so timers the code
-/// under test sleeps on fire when it gets to them.
-pub(crate) async fn advancing<F: Future>(
+/// Runs `future`, advancing `clock` by `step` between short real pauses once `started` says
+/// so, so timers the code under test sleeps on fire when it gets to them, and time does not
+/// run out on a slow machine before the code reaches the point the test is about.
+pub(crate) async fn advancing_once<F: Future>(
     clock: &ManualClock,
     step: Duration,
+    started: impl Fn() -> bool,
     future: F,
 ) -> Result<F::Output, TestError> {
     let mut future = std::pin::pin!(future);
@@ -104,7 +106,9 @@ pub(crate) async fn advancing<F: Future>(
         loop {
             tokio::select! {
                 output = &mut future => return output,
-                () = real_pause() => clock.advance(step),
+                () = real_pause() => if started() {
+                    clock.advance(step);
+                },
             }
         }
     })
