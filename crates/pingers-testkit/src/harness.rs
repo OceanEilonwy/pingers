@@ -69,6 +69,10 @@ pub struct HarnessConfig {
     /// The operator's registration codes (design B.1): empty, the server takes any
     /// registration; otherwise `POST /v1/accounts` must present one of them.
     pub registration_codes: Vec<String>,
+    /// Where the server forwards map downloads through the relay (pingers-server's
+    /// `map_host_gateway`, such as `http://127.0.0.1:<port>` of an in-process map host); `None`
+    /// forwards to [`HARNESS_MAP_HOST`], which never resolves.
+    pub map_host_gateway: Option<String>,
     /// Whether the server accepts RLN membership proofs (on by default; off is the operator's
     /// kill switch, design B.4.8 fallback 3).
     #[cfg(feature = "harness")]
@@ -83,6 +87,7 @@ impl Default for HarnessConfig {
             seed: 0,
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
             registration_codes: Vec::new(),
+            map_host_gateway: None,
             #[cfg(feature = "harness")]
             membership_proofs: pingers_server::MembershipProofs::On,
         }
@@ -141,6 +146,8 @@ pub enum Service {
     OhttpRelay,
     /// pingers-push-relay.
     PushRelay,
+    /// A TLS front (`TlsFront`, feature `harness`).
+    TlsFront,
 }
 
 /// Why the harness could not start.
@@ -359,6 +366,64 @@ pub async fn send_direct(
             .collect(),
         body: bytes,
     })
+}
+
+/// A TLS front with a certificate from a test CA, forwarding each connection's bytes to a
+/// plain HTTP/2 listener: for clients that take only `https://` talking to a service that
+/// leaves TLS to a reverse proxy (the map host). Stops when dropped.
+#[cfg(feature = "harness")]
+pub struct TlsFront {
+    address: SocketAddr,
+    ca_pem: String,
+    /// Dropping it closes the channel, which stops the forwarding task.
+    _stop: tokio::sync::oneshot::Sender<()>,
+}
+
+#[cfg(feature = "harness")]
+impl TlsFront {
+    /// Listens on an ephemeral port of `bind` and forwards to `target`, on the calling tokio
+    /// runtime.
+    ///
+    /// # Errors
+    ///
+    /// [`HarnessError::Keys`] if the certificate cannot be made; [`HarnessError::Bind`] if the
+    /// port cannot be bound.
+    pub async fn start(bind: IpAddr, target: SocketAddr) -> Result<Self, HarnessError> {
+        let tls = tls::test_tls(bind).map_err(|_| HarnessError::Keys {
+            service: Service::TlsFront,
+        })?;
+        let listener = tokio::net::TcpListener::bind(SocketAddr::new(bind, 0))
+            .await
+            .map_err(|source| HarnessError::Bind {
+                service: Service::TlsFront,
+                source,
+            })?;
+        let address = listener.local_addr().map_err(|source| HarnessError::Bind {
+            service: Service::TlsFront,
+            source,
+        })?;
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(tls::forward(listener, tls.acceptor, target, async move {
+            let _ = stopped.await;
+        }));
+        Ok(Self {
+            address,
+            ca_pem: tls.ca_pem,
+            _stop: stop,
+        })
+    }
+
+    /// Where it listens.
+    #[must_use]
+    pub const fn address(&self) -> SocketAddr {
+        self.address
+    }
+
+    /// The test CA that issued its certificate, in PEM.
+    #[must_use]
+    pub fn ca_pem(&self) -> &str {
+        &self.ca_pem
+    }
 }
 
 #[cfg(test)]

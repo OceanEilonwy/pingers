@@ -11,12 +11,13 @@ use crate::snapshot::{
 };
 
 /// A zone's shape as its row describes it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ZoneShape {
     /// A circle of this radius.
     Circle(Meters),
-    /// A drawn area.
-    Area,
+    /// A drawn area, its vertices in order (not repeating the first), so the map draws it
+    /// exactly.
+    Area(Vec<Coordinate>),
 }
 
 /// Which Parties a zone hides this device from, by name.
@@ -69,7 +70,7 @@ pub fn exclusion_zones(snapshot: &ClientSnapshot) -> ExclusionZones {
             name: zone.name.clone(),
             shape: match &zone.fence {
                 Fence::Circle(circle) => ZoneShape::Circle(circle.radius()),
-                Fence::Polygon(_) => ZoneShape::Area,
+                Fence::Polygon(polygon) => ZoneShape::Area(polygon.vertices().to_vec()),
             },
             fence: zone.fence.clone(),
             times: zone.schedule.times,
@@ -237,7 +238,13 @@ mod tests {
                 .first()
                 .map(|zone| zone.fence.enclosing_circle().center())
         );
-        assert_eq!(work.shape, ZoneShape::Area);
+        // A drawn area carries its own vertices, so the map draws the zone the user drew.
+        let drawn = match snapshot.zones.get(1).map(|zone| &zone.fence) {
+            Some(Fence::Polygon(polygon)) => polygon.vertices().to_vec(),
+            _ => return Err(FixtureError::Missing),
+        };
+        assert!(drawn.len() >= 3);
+        assert_eq!(work.shape, ZoneShape::Area(drawn));
         assert!(matches!(
             work.times,
             ZoneTimes::Window {

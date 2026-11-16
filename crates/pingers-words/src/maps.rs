@@ -64,9 +64,19 @@ pub fn maps(language: Language, configuration: &MapsConfiguration) -> MapsText {
         MapHostSource::Publisher => "The Pingers app's default map host",
     };
     let address = if configuration.through_relay {
-        "Not your internet address: downloads go through your privacy relay"
+        "Not your internet address: downloads go through your privacy relay and your Pingers \
+         server, which pass them on sealed"
     } else {
         "Your internet address, when you download a map"
+    };
+    let fallback = if configuration.through_relay {
+        "Through the privacy relay, maps come only from your server's map host: your server \
+         passes map downloads to that host and no other. Your server and the relay see that \
+         you download a map and roughly how large it is, never which area."
+    } else {
+        "If this host doesn't have an area, Pingers gets that area from the next host instead: \
+         the one you chose, then your server's, then the app's default. That host learns the \
+         download too."
     };
     MapsText {
         heading: "Maps".into(),
@@ -80,12 +90,12 @@ pub fn maps(language: Language, configuration: &MapsConfiguration) -> MapsText {
             "What you search for: search runs on this phone".into(),
             "Your Parties, Spots or anyone's location".into(),
         ],
-        fallback: "If this host doesn't have an area, Pingers gets that area from the next host \
-                   instead: the one you chose, then your server's, then the app's default. That \
-                   host learns the download too."
-            .into(),
+        fallback: fallback.into(),
         relay_setting: "Download maps through privacy relay".into(),
-        relay_detail: "Hides your internet address from the map host. Downloads are slower.".into(),
+        relay_detail: "Hides your internet address from the map host, and which areas you \
+                       download from your server and the relay. Only your server's map host \
+                       can be used. Downloads are slower."
+            .into(),
     }
 }
 
@@ -134,7 +144,7 @@ pub fn downloaded_maps(
     };
     let sees = if configuration.through_relay {
         "It sees which areas you download, not your internet address: downloads go through your \
-         privacy relay."
+         privacy relay and your Pingers server, sealed so that neither of them sees the area."
     } else {
         "It sees your internet address when you download a map, and which areas you download."
     };
@@ -192,6 +202,21 @@ mod tests {
             "The Pingers app's default map host. It sees your internet address when you download \
              a map, and which areas you download. Never where you are, your Parties or your Spots."
         );
+        let relayed = downloaded_maps(
+            Language::English,
+            &MapsConfiguration {
+                host: "maps.flat7.org".into(),
+                source: MapHostSource::Server,
+                through_relay: true,
+            },
+        );
+        assert_eq!(
+            relayed.host_detail,
+            "The map host your Pingers server recommends. It sees which areas you download, not \
+             your internet address: downloads go through your privacy relay and your Pingers \
+             server, sealed so that neither of them sees the area. Never where you are, your \
+             Parties or your Spots."
+        );
         assert_eq!(text.attribution, "Map data from OpenStreetMap contributors");
         assert_eq!(
             downloading(
@@ -237,6 +262,14 @@ mod tests {
         );
         assert_eq!(relayed.source, "Recommended by your Pingers server");
         assert_eq!(relayed.never_sees.len(), 3);
-        assert!(relayed.fallback.contains("learns the download too"));
+        // Through the relay only the server's map host is used, and nothing names the area.
+        assert!(
+            relayed
+                .fallback
+                .contains("only from your server's map host")
+        );
+        assert!(relayed.fallback.contains("never which area"));
+        assert!(direct.fallback.contains("learns the download too"));
+        assert_ne!(direct.relay_detail, "");
     }
 }

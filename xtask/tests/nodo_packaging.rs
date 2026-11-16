@@ -334,13 +334,22 @@ fn references_open_exactly_the_loopback_ports_of_the_design() -> TestResult {
             "Port { protocol: Tcp, port: 9471 }".to_owned()
         )]
     );
-    // The server reaches only the push relay.
+    // The server reaches only the push relay and the map host's gateway (map downloads
+    // through the privacy relay), never the internet.
+    let mut server = ports("pingers-server", "server")?;
+    server.sort();
     assert_eq!(
-        ports("pingers-server", "server")?,
-        vec![(
-            "pingers-push-relay".to_owned(),
-            "Port { protocol: Tcp, port: 9472 }".to_owned()
-        )]
+        server,
+        vec![
+            (
+                "pingers-map-host".to_owned(),
+                "Port { protocol: Tcp, port: 9474 }".to_owned()
+            ),
+            (
+                "pingers-push-relay".to_owned(),
+                "Port { protocol: Tcp, port: 9472 }".to_owned()
+            ),
+        ]
     );
     assert!(ports("pingers-map-host", "map-host")?.is_empty());
     assert!(ports("pingers-push-relay", "push-relay")?.is_empty());

@@ -5,6 +5,9 @@ server_id = "$(pingers-server.server_id)"
 server_operator = "$(pingers-server.operator)"
 ohttp_relay_urls = ["$(pingers-server.ohttp_relay_url)"]
 map_host = "$(pingers-server.map_host)"
+# Map downloads through the privacy relay go to pingers-map-host's own gateway on this device,
+# on loopback: the server needs no internet access for them, and sees no region (design B.12).
+map_host_gateway = "$(pingers-map-host.gateway-url)"
 logging = "$(pingers-server.logging)"
 # Only devices presenting this code can make an account (design B.1). Generated on install.
 registration_codes = ["$(pingers-server.registration_code)"]

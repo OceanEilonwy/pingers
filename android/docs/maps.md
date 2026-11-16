@@ -4,7 +4,8 @@ Pingers shows real maps without telling anyone where the user is looking.
 
 - **Whole region packs, never tiles for the view.** A pack is one PMTiles file covering a city,
   state or country (OpenStreetMap data, the [Protomaps basemap](https://docs.protomaps.com/basemaps/downloads)),
-  downloaded whole from a map host, checked against its SHA-256 and kept on the phone.
+  downloaded whole from a map host by the Rust core, checked against its SHA-256 and kept on
+  the phone.
   MapLibre Native draws it from the file. No request ever names the part of the map on screen.
 - **Search on the phone.** Each pack ships a place-name index (`<region>.places.tsv`: towns,
   suburbs, streets, points of interest). "Search a place" in the Spot editor matches it
@@ -49,9 +50,26 @@ with a **Download map for this area** prompt that opens the region picker.
 | Party | real map behind the Spot circles and areas |
 | Spot editor | real map; drag to move the Spot; "Search a place" moves it to a found place |
 | Draw area | real map under the point-by-point editor |
-| Exclusion zones | real map; circle zones drawn from their centre and radius. The zones view model has no vertices for drawn areas yet, so those are a fixed-size hatched block at their label |
+| Exclusion zones | real map; circle zones drawn from their centre and radius, drawn areas through their own vertices (the view model's `ZoneShape.Area` carries them) |
 | Meetup, Meet point | real map under members, the meet point and the pin |
 | Location request | stays the placeholder: a dimmed background, and its view model has no frame |
+
+## Who downloads
+
+The Rust core, never the shell (design E.1: the shells make no network calls). `Maps` asks the
+core (pingers-ffi, over `crates/pingers-map-downloads`):
+
+| Call | What the core does |
+| --- | --- |
+| `mapCatalog(MapSettings)` | fetches `catalog.json` from every host in the chain, in pieces, and offers each region from the first host that lists it |
+| `downloadMap(MapDownloadRequest, listener)` | downloads the region's index and pack into `files/maps` in byte-range pieces, resuming a `.partial` file named after the checksum it must reach, checks each against the manifest's SHA-256 (pingers-crypto), moves it into place and writes the manifest last; reports bytes and "preparing" to the listener; retries a preparing cache-mode host after its `Retry-After` |
+| `installedMaps(dir)` | the manifests in `files/maps` whose pack is there at full length |
+| `deleteMap(dir, id)` | removes the manifest first, then the files and any partial downloads |
+| `forgetMapHostKey()` | trusts a map host's changed gateway key (below) |
+
+The shell keeps the user's settings (the override and the relay switch, in shared preferences),
+draws the installed packs with MapLibre and searches their indexes on the phone. Cancelling a
+download (Delete while it runs) cancels the core's call; the next download resumes the partial.
 
 ## The map host chain
 
@@ -59,79 +77,72 @@ Highest priority first, per region:
 
 1. a user override (Advanced, "Map host");
 2. the host the user's Pingers server advertises: `map_host` in `/v1/params` (pingers-proto
-   `Params.map_host`). The core reads `/v1/params` through the relay once per process (on a wake
-   that goes to the network, or when push registration looks up the push relay) and keeps the
-   last value; `Snapshot.serverMapHost()` hands it to `Maps` through `CoreHost.serverMapHost()`.
-   Until the core has read it once, this link is skipped;
+   `Params.map_host`). The core reads `/v1/params` through the relay once per process and keeps
+   the last value in its store; it adds this host to the chain itself. `CoreHost.serverMapHost()`
+   gives it to `Maps` for the words about which host is in use;
 3. the publisher's default, `BuildConfig.MAP_HOST`, set with `-PpingersMapHost=https://…`
    or the `PINGERS_MAP_HOST` environment variable in CI. Deployment configuration, never source;
    unset, it is `https://maps.pingers.invalid`, which never resolves.
 
-The picker fetches `catalog.json` from every host in the chain and offers each region from the
-first host that lists it (`resolveRegions`), so a host that lacks an area hands only that area
-to the next one. Each row says which host serves it. A cache-mode host lists regions it has not
-cut yet as `on_demand`; downloading one shows "The map host is preparing this area" and retries
-after the host's `Retry-After`.
+Map hosts are `https://` only. A host that lacks an area hands only that area to the next one.
+Each row in the picker says which host serves it. A cache-mode host lists regions it has not cut
+yet as `on_demand`; downloading one shows "The map host is preparing this area" while the core
+waits.
 
 ## Region picker
 
 Advanced → Maps → Downloaded maps, or the prompt on any placeholder map. It lists:
 
-- **This area**: offers whose bbox contains the centre of the map the user came from. Worked out
-  on the phone; nothing is sent.
+- **This area**: ready offers whose bbox contains the centre of the map the user came from.
+  Worked out on the phone; nothing is sent.
 - **On this phone**: installed packs with "Map data from <build date>", and "Update available"
   when a host offers a newer build. Updates are opt-in.
 - the rest, grouped by region group (a country's states under the country), with the download
-  size and host.
-
-Downloads resume (`Range`), are verified against the manifest's SHA-256 before they replace
-anything, and a region counts as installed only once its manifest is written (last).
+  size and host;
+- below, each host that offered nothing and why: it did not answer, it cannot be reached
+  through the privacy relay, there is no Pingers server to relay through yet, or its key changed
+  (with **Trust the new key**).
 
 ## Download maps through privacy relay
 
-The setting exists and is honoured: with it on, the app does not download directly.
+With the setting on, every map request goes through the user's OHTTP relay and Pingers server
+to the map host's own OHTTP gateway, sealed to the map host's key (design B.12, "Downloads
+through the privacy relay"):
 
-**Gap: relay downloads are not implemented.** The shell has no OHTTP client: the only one is in
-the Rust core (pingers-transport), and pingers-ffi exposes no "fetch through the relay" call. So
-with the setting on, downloads fail with "Downloads through the privacy relay aren't available
-yet" instead of quietly going direct. To close it:
-
-1. **Core:** a `Core::fetch_map_file(host, file, range)` that sends `GET <host>/<file>` with a
-   `Range` header as ordinary OHTTP requests through the party's relay, ranges of at most 1 MiB
-   each (relays limit response sizes; B.12 notes board pages are up to 256 KiB, so check the
-   relay's limit), with a fresh HPKE context per request. Chunked OHTTP (draft-08) would carry a
-   whole file in one exchange, but the transport's chunked support is shaped for the meetup live
-   channel; per-range requests are simpler and resume naturally.
-2. **Gateway:** the OHTTP gateway is the Pingers server, which only serves its own API. It needs
-   a route that forwards `GET` with `Range` to the configured map host (an allow-list of one or
-   more hosts, no other targets), or the map host must run its own OHTTP gateway.
-3. **Shell:** `RelayFetcher` calls the core instead of throwing.
-
-The relay then sees the phone's IP and the transfer sizes; the map host sees the gateway's IP and
-the region; neither sees both.
+- The relay sees the phone's address and sizes; the server sees that some anonymous client
+  downloaded map data of a size class; the map host sees which files, from the server's address.
+  Every answer is padded to 256 KiB and each download's request count to a size class, so sizes
+  do not name a region.
+- Only the server's own map host can be reached this way (the server forwards to it and nowhere
+  else). The override and the publisher's host are skipped, and the picker says so.
+- The map host's key config comes through the server too; the core pins it on first use. If it
+  changes, relayed downloads from that host stop until the user taps **Trust the new key**
+  (`forgetMapHostKey`).
+- Without a Pingers server (no instance), there is no relay route: nothing is sent, and the picker
+  says so.
 
 ## Testing on the emulator
 
-```sh
-# On the host: cut the test pack, then serve it with pingers-map-host.
-pingers-tiles cut regions.toml --build https://build.protomaps.com/20261112.pmtiles \
-    --out /path/packs --pmtiles /path/pmtiles
-cargo run -p pingers-map-host -- host.toml      # listen = "0.0.0.0:8090", directory = /path/packs
+With the local stack (`cargo xtask local-stack --packs <dir of pingers-tiles output>`; docs/deploy-nodo.md,
+"Local testing"), the map host is `https://10.0.2.2:9446` behind the stack's TLS front, the
+server advertises it and forwards relayed map downloads to it (`map_host_gateway =
+"http://127.0.0.1:9474"`), and `cargo xtask local-app` builds a debug app that trusts the stack's
+CA and uses that host as the publisher's default:
 
-# In the app (debug builds): point maps at the host, which the emulator sees as 10.0.2.2.
-adb shell am start -n org.pingers.app.debug/org.pingers.app.MainActivity \
-    --ez fake true --es map_host http://10.0.2.2:8090 --es screen SpotEditor
+```sh
+cargo xtask local-stack --packs /path/packs
+cargo xtask local-app && adb install -r android/app/build/outputs/apk/foss/debug/app-foss-debug.apk
+# Debug builds can point maps at another https host:
+adb shell am start -n org.pingers.app.foss.debug/org.pingers.app.MainActivity --es map_host https://10.0.2.2:9446
 ```
 
-Debug builds allow plain HTTP to `10.0.2.2` and `localhost` only
-(`src/debug/res/xml/network_security_config.xml`); release builds are HTTPS only.
+Turn **Download maps through privacy relay** on in Advanced to test the relayed path: the map
+host's log shows the requests arriving from the server, not from the emulator.
 
 ## Open decisions
 
 - ~~Who hosts the default packs~~: the publisher, configured per build through `PINGERS_MAP_HOST`.
-- **Shell network calls.** The design says the shells make no network calls (design E.1); pack
-  downloads are an exception made in the shell (plain HTTPS, whole files). Moving them into the
-  core would also give the relay path for free.
+- ~~Shell network calls~~: the core downloads (2026-11-14).
 - **Pack granularity** for the publisher's host: city packs say more about the user than state
   packs (B.12, "Map host").
 
@@ -139,5 +150,11 @@ Debug builds allow plain HTTP to `10.0.2.2` and `localhost` only
 
 From the emulator test (Pixel 9 Pro, 2026-11-13; the Central Melbourne pack served by
 pingers-map-host on the host), in `docs/screenshots/maps/`: the placeholder with the download
-prompt, the picker before and after downloading, "Search a place", the Spot editor and Draw
-area on the real map, and the picker with the relay setting on.
+prompt, the picker before and after downloading, "Search a place", and the Spot editor and Draw
+area on the real map (`01` to `07`).
+
+From the core-download test (Pixel 9 Pro, host GPU, 2026-11-14; `cargo xtask local-stack` with
+the Central Melbourne pack), on Downloaded maps: the catalog from the core (`10`), a direct
+download in progress (`11`) and the map drawn from it after "Search a place" (`12`); with
+"Download maps through privacy relay" on, the catalog and host card (`13`), a relayed download
+in progress (`14`), the region installed (`15`) and the map drawn from the relayed pack (`16`).

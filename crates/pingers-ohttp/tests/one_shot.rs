@@ -6,7 +6,8 @@ mod common;
 
 use common::{SECRET, TestError, gateway_key, request, response, setup};
 use pingers_ohttp::{
-    Gateway, GatewayKey, KeyConfig, KeyPins, OhttpError, check_pin, check_pins, encapsulate_request,
+    Gateway, GatewayKey, KeyConfig, KeyPins, OhttpError, check_pin, check_pins,
+    encapsulate_request, encapsulate_request_padded,
 };
 use pingers_testkit::{FixedRng, seeded_rng};
 
@@ -363,5 +364,55 @@ fn from_bytes_derives_the_public_key() -> Result<(), TestError> {
         config.encoded().get(3..35),
         hex::decode(RFC_CONFIG)?.get(3..35)
     );
+    Ok(())
+}
+
+#[test]
+fn padded_messages_have_the_asked_length_and_open_as_unpadded() -> Result<(), TestError> {
+    let setup = setup()?;
+    let mut rng = seeded_rng(11);
+    let plain = encapsulate_request(&setup.config, &request(), &mut rng)?;
+    let padded = encapsulate_request_padded(&setup.config, &request(), 1024, &mut rng)?;
+    let shorter = encapsulate_request_padded(&setup.config, &request(), 512, &mut rng)?;
+    // Same header and AEAD overhead either way: only the padded plaintext length differs.
+    let overhead = plain.message.len() - request().encode()?.len();
+    assert_eq!(padded.message.len(), overhead + 1024);
+    assert_eq!(shorter.message.len(), overhead + 512);
+    let decapsulated = setup.gateway.decapsulate(&padded.message)?;
+    assert_eq!(decapsulated.request, request());
+
+    let sealed = decapsulated
+        .responder
+        .seal_padded(&response()?, 4096, &mut rng)?;
+    let unpadded = setup
+        .gateway
+        .decapsulate(&plain.message)?
+        .responder
+        .seal(&response()?, &mut rng)?;
+    assert_eq!(
+        sealed.len() - unpadded.len(),
+        4096 - response()?.encode()?.len()
+    );
+    assert_eq!(padded.response_context.open(&sealed)?, response()?);
+    Ok(())
+}
+
+#[test]
+fn padding_shorter_than_the_message_is_refused() -> Result<(), TestError> {
+    let setup = setup()?;
+    let mut rng = seeded_rng(12);
+    let exact = request().encode()?.len();
+    assert!(encapsulate_request_padded(&setup.config, &request(), exact, &mut rng).is_ok());
+    assert!(matches!(
+        encapsulate_request_padded(&setup.config, &request(), exact - 1, &mut rng),
+        Err(OhttpError::LongerThanPadding)
+    ));
+    let encapsulated = encapsulate_request(&setup.config, &request(), &mut rng)?;
+    let responder = setup.gateway.decapsulate(&encapsulated.message)?.responder;
+    let length = response()?.encode()?.len();
+    assert!(matches!(
+        responder.seal_padded(&response()?, length - 1, &mut rng),
+        Err(OhttpError::LongerThanPadding)
+    ));
     Ok(())
 }

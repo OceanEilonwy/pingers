@@ -40,9 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -523,13 +521,14 @@ fun ExclusionZonesScreen(state: ExclusionZonesState, repo: PingersRepository, na
         )
         Box(Modifier.clip(RoundedCornerShape(22.dp)).border(1.dp, Pc.Line, RoundedCornerShape(22.dp))) {
             MapBox(Scenes.Exclusion, frame = state.mapFrame, overlay = {
-                // Circles from their centre and radius. The zones view model carries no
-                // vertices for drawn areas yet, so an area is a fixed-size hatched block at its label.
+                // Circles from their centre and radius, drawn areas through their own vertices.
                 state.zones.forEach { z ->
-                    val at = state.mapFrame.toMap(z.labelAt)
                     when (val shape = z.shape) {
-                        is ZoneShape.Circle -> hatched(Path().apply { addOval(androidx.compose.ui.geometry.Rect(Offset(at.x, at.y), state.mapFrame.units(shape.radiusM.toDouble()))) })
-                        ZoneShape.Area -> hatched(Path().apply { addRoundRect(RoundRect(at.x - 50f, at.y - 35f, at.x + 50f, at.y + 35f, CornerRadius(8f))) })
+                        is ZoneShape.Circle -> {
+                            val at = state.mapFrame.toMap(z.labelAt)
+                            hatched(Path().apply { addOval(androidx.compose.ui.geometry.Rect(Offset(at.x, at.y), state.mapFrame.units(shape.radiusM.toDouble()))) })
+                        }
+                        is ZoneShape.Area -> hatched(polygon(shape.points.map(state.mapFrame::toMap), close = true))
                     }
                 }
                 state.me?.let(state.mapFrame::toMap)?.let { me ->
@@ -549,7 +548,7 @@ fun ExclusionZonesScreen(state: ExclusionZonesState, repo: PingersRepository, na
                 ListRow({ repo.openZoneTimes(z.id); nav.go(Route.ZoneTimes) }, Modifier.testTag(org.pingers.app.ui.E2eTags.ZONE_ROW)) {
                     val shape = when (val s = z.shape) {
                         is ZoneShape.Circle -> stringResource(R.string.zone_circle, s.radiusM)
-                        ZoneShape.Area -> stringResource(R.string.zone_area)
+                        is ZoneShape.Area -> stringResource(R.string.zone_area)
                     }
                     TwoLines(z.name, listOf(shape, z.schedule ?: stringResource(R.string.zone_all_parties)).joinToString(" · "), Modifier.weight(1f))
                     ChevronIcon()

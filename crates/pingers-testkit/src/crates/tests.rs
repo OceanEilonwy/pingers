@@ -32,6 +32,10 @@ enum TestError {
     Gate(#[from] GateError),
     #[error(transparent)]
     Proto(#[from] pingers_proto::ProtoError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Maps(#[from] pingers_map_downloads::MapsError),
     #[error("a fake port call did not finish at once")]
     Pending,
 }
@@ -209,14 +213,27 @@ fn touch(
             now(crates.meetups.leave_meetup(MEETUP))?,
             now(crates.meetups.section())?.map(drop),
         ],
+        // The maps port has no section: two calls instead.
+        CrateName::Maps => [
+            now(crates.maps.catalog(no_hosts(), MapRoute::Direct))?.map(drop),
+            now(crates.maps.forget_key_pin())?,
+        ],
     })
 }
 
-const ALL: [CrateName; 4] = [
+fn no_hosts() -> MapHosts {
+    MapHosts {
+        user_override: None,
+        publisher: None,
+    }
+}
+
+const ALL: [CrateName; 5] = [
     CrateName::Parties,
     CrateName::Sync,
     CrateName::Wake,
     CrateName::Meetups,
+    CrateName::Maps,
 ];
 
 #[test]
@@ -239,9 +256,99 @@ fn a_failing_crate_fails_only_its_own_calls_with_its_own_error() -> TestResult {
     for crate_name in ALL {
         assert!(touch(&fakes, crate_name)?.iter().all(Result::is_ok));
     }
-    // A failing call is still recorded: one port call per touch, five rounds of four.
-    assert_eq!(fakes.calls().len(), 20);
-    assert_eq!(fakes.section_reads(), 20);
+    // A failing call is still recorded: six rounds of four crates' one port call and the
+    // maps port's two, and of the four sections.
+    assert_eq!(fakes.calls().len(), 36);
+    assert_eq!(fakes.section_reads(), 24);
+    Ok(())
+}
+
+/// A region as pingers-tiles writes it: "abc" as the pack and an empty index, whose SHA-256s
+/// are the standard vectors.
+fn write_region(directory: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(directory)?;
+    std::fs::write(directory.join("oceania.fake.pmtiles"), b"abc")?;
+    std::fs::write(directory.join("oceania.fake.places.tsv"), b"")?;
+    std::fs::write(
+        directory.join("oceania.fake.json"),
+        r#"{"format":1,"id":"oceania/fake","name":"Fake","bbox":[1,1,2,2],"max_zoom":10,
+           "build_date":"2026-11-12",
+           "pack":{"file":"oceania.fake.pmtiles","size":3,
+                   "sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+           "index":{"file":"oceania.fake.places.tsv","size":0,
+                    "sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}"#,
+    )
+}
+
+/// A download listener that ignores everything.
+struct Quiet;
+
+impl pingers_map_downloads::install::DownloadProgress for Quiet {
+    fn downloaded(&self, _done: u64, _total: u64) {}
+    fn preparing(&self, _retry_after: Duration) {}
+}
+
+#[tokio::test]
+async fn the_fake_maps_port_has_no_hosts_but_a_real_maps_directory() -> TestResult {
+    let fakes = FakeCrates::new()?;
+    let crates = fakes.crates();
+    let directory =
+        std::env::temp_dir().join(format!("pingers-testkit-fake-maps-{}", std::process::id()));
+    let _stale = std::fs::remove_dir_all(&directory);
+    write_region(&directory)?;
+    let catalog = crates.maps.catalog(no_hosts(), MapRoute::Relay).await?;
+    assert!(catalog.offers.is_empty() && catalog.failed.is_empty());
+    assert_eq!(
+        fakes.calls().last(),
+        Some(&CrateCall::MapCatalog(no_hosts(), MapRoute::Relay))
+    );
+    let installed = crates.maps.installed(directory.clone()).await?;
+    assert_eq!(
+        installed
+            .iter()
+            .map(|manifest| manifest.id.as_str())
+            .collect::<Vec<_>>(),
+        ["oceania/fake"]
+    );
+    crates
+        .maps
+        .delete(directory.clone(), "oceania/fake".to_owned())
+        .await?;
+    assert!(!directory.join("oceania.fake.pmtiles").exists());
+    assert_eq!(
+        fakes.calls().last(),
+        Some(&CrateCall::DeleteMap(
+            directory.clone(),
+            "oceania/fake".to_owned()
+        ))
+    );
+    crates.maps.forget_key_pin().await?;
+    assert_eq!(fakes.calls().last(), Some(&CrateCall::ForgetMapHostKey));
+    // With no hosts, nothing is offered to download.
+    let job = MapDownload {
+        offer: pingers_map_downloads::catalog::RegionOffer {
+            entry: pingers_map_downloads::CatalogEntry::OnDemand {
+                id: "oceania/fake".to_owned(),
+                stem: pingers_map_downloads::StemName::of_region("oceania/fake")?,
+                name: "Fake".to_owned(),
+                group: None,
+            },
+            host: pingers_map_downloads::MapHost::new(
+                &pingers_proto::MapHostUrl::new("https://maps.example".to_owned())?,
+                pingers_map_downloads::MapHostSource::Server,
+            ),
+        },
+        route: MapRoute::Direct,
+        directory: directory.clone(),
+    };
+    assert!(matches!(
+        crates.maps.download(job.clone(), Arc::new(Quiet)).await,
+        Err(ClientError::Maps(
+            pingers_map_downloads::MapsError::NotOffered
+        ))
+    ));
+    assert_eq!(fakes.calls().last(), Some(&CrateCall::DownloadMap(job)));
+    std::fs::remove_dir_all(&directory)?;
     Ok(())
 }
 
@@ -264,6 +371,10 @@ fn each_crate_fails_with_an_error_of_its_own_type() {
     assert!(matches!(
         error(CrateName::Meetups),
         ClientError::MeetupSession(pingers_meetup_session::SessionError::Internal)
+    ));
+    assert!(matches!(
+        error(CrateName::Maps),
+        ClientError::Maps(pingers_map_downloads::MapsError::Internal)
     ));
 }
 
