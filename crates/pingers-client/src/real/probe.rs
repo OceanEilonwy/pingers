@@ -261,16 +261,7 @@ impl Net {
                 Some(pins) => pins.gateway.hashes().to_vec(),
                 None => vec![gateway_key],
             },
-            push_relay_pins: match (&push_relay, invite) {
-                (Some(chosen), _) if chosen.is_build => Vec::new(),
-                (Some(_), Some(pins)) => pins
-                    .push_relay
-                    .as_ref()
-                    .map(|pins| pins.hashes().to_vec())
-                    .unwrap_or_default(),
-                (Some(chosen), None) => vec![chosen.key],
-                (None, _) => Vec::new(),
-            },
+            push_relay_pins: push_relay_pins_to_record(push_relay.as_ref(), invite, build.as_ref()),
             trust: if invite.is_some() {
                 ServerTrust::Invite
             } else {
@@ -334,6 +325,30 @@ async fn push_relay_for(
         // The relay did not answer: the server is used without wake-up pushes until a later
         // look.
         Err(_) => Ok(None),
+    }
+}
+
+/// The push relay pins to record for a server: the build's for the build's own relay (those it
+/// is checked against, recorded so the server's invites pass them on to a joiner whose build has
+/// another push relay), else the invite's, else the key the user is shown and trusts. None for
+/// no push relay, or the build's relay in a build that pins none (no token is sealed to it).
+fn push_relay_pins_to_record(
+    push_relay: Option<&Chosen>,
+    invite: Option<&InvitePins>,
+    build: Option<&super::push::PushRelaySetup>,
+) -> Vec<KeyConfigHash> {
+    match (push_relay, invite) {
+        (Some(chosen), _) if chosen.is_build => build
+            .and_then(|setup| setup.pins.as_ref())
+            .map(|pins| pins.hashes().to_vec())
+            .unwrap_or_default(),
+        (Some(_), Some(pins)) => pins
+            .push_relay
+            .as_ref()
+            .map(|pins| pins.hashes().to_vec())
+            .unwrap_or_default(),
+        (Some(chosen), None) => vec![chosen.key],
+        (None, _) => Vec::new(),
     }
 }
 
@@ -494,6 +509,48 @@ mod tests {
             Some(RelayId::new(1))
         );
         assert_eq!(id(choose_push_relay(&[], None, None)), None);
+        Ok(())
+    }
+
+    #[test]
+    fn a_server_on_the_build_s_push_relay_records_the_build_s_pins() -> TestResult {
+        let hash = |byte| KeyConfigHash::from_bytes([byte; 32]);
+        let chosen = |is_build| -> Result<Chosen, Box<dyn std::error::Error>> {
+            Ok(Chosen {
+                info: relay(1, "https://push.example", 5)?,
+                key: hash(5),
+                is_build,
+            })
+        };
+        let build = super::super::push::PushRelaySetup {
+            origin: "https://push.example".to_owned(),
+            pins: Some(KeyPins::from(hash(7))),
+        };
+        let invite = InvitePins {
+            gateway: KeyPins::from(hash(1)),
+            push_relay: Some(KeyPins::from(hash(9))),
+        };
+        let official = chosen(true)?;
+        let own = chosen(false)?;
+        // The build's own relay: its pins, whoever named the server, so invites pass them on.
+        for named in [None, Some(&invite)] {
+            assert_eq!(
+                push_relay_pins_to_record(Some(&official), named, Some(&build)),
+                [hash(7)]
+            );
+        }
+        // A build that pins none for its relay records none (no token is sealed to it).
+        assert!(push_relay_pins_to_record(Some(&official), None, None).is_empty());
+        // The server's own relay: the invite's pins, or the key the user trusted.
+        assert_eq!(
+            push_relay_pins_to_record(Some(&own), Some(&invite), Some(&build)),
+            [hash(9)]
+        );
+        assert_eq!(
+            push_relay_pins_to_record(Some(&own), None, Some(&build)),
+            [hash(5)]
+        );
+        assert!(push_relay_pins_to_record(None, Some(&invite), Some(&build)).is_empty());
         Ok(())
     }
 }
