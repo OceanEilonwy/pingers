@@ -731,3 +731,25 @@ async fn restore_keeps_every_stored_field() -> Result<(), TestError> {
     assert_eq!(WakeState::restore(snapshot.clone()).snapshot(), snapshot);
     Ok(())
 }
+
+/// Opening the app reads the Party logs and the mailboxes (a Spot a member made shows) even
+/// with nothing to upload and wake-up pushes on, where the same wake on a schedule would send
+/// nothing.
+#[tokio::test]
+async fn opening_the_app_reads_the_party_logs() -> Result<(), TestError> {
+    let town = Town::new()?;
+    let mut alice = town.phone(0)?;
+    let away = town.spot("canal")?;
+    alice.platform.script_fix(away.fix_outside(alice.now())?);
+    alice.wake(WakeTrigger::Scheduled).await?;
+    alice.server.take_calls();
+
+    town.advance(Duration::from_secs(1));
+    alice.platform.script_fix(away.fix_outside(alice.now())?);
+    let opened = alice.wake(WakeTrigger::Opened).await?;
+    assert!(matches!(opened.upload, UploadOutcome::NotDue(_)));
+    let calls = alice.server.calls();
+    assert_eq!(calls.first(), Some(&Call::PullLogs));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Upload { .. })));
+    Ok(())
+}

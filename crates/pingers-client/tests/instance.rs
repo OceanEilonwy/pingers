@@ -1019,3 +1019,342 @@ async fn a_join_without_a_push_token_completes_through_checks_on_screen() -> Res
     assert_eq!(ben.events.count(EventKind::LetIn), 1);
     Ok(())
 }
+
+/// The longest the server holds a `Quiet` push back (pingers-delivery's `MAX_QUIET_DELAY`).
+const QUIET_DELAY: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The harness and the clock it shares with the phones.
+struct Stack {
+    config: HarnessConfig,
+    harness: InProcessHarness,
+}
+
+impl Stack {
+    fn start() -> Result<Self, TestError> {
+        let config = HarnessConfig::default();
+        let harness = InProcessHarness::start(&config)?;
+        Ok(Self { config, harness })
+    }
+
+    /// Someone with wake-up pushes on (the default) and, with `token`, the platform's push
+    /// token, their own so the harness can tell whose phone a push woke.
+    async fn phone(&self, seed: u64, token: Token) -> Result<Phone, TestError> {
+        let rig = rig_as(
+            &self.harness,
+            &self.config,
+            harness_pins(&self.harness)?,
+            Who {
+                seed,
+                account: Account::Register,
+                relay: None,
+            },
+        )
+        .await?;
+        let phone = Phone {
+            rig,
+            token: PushToken::from_bytes(format!("https://push.harness.invalid/up/{seed}").into()),
+        };
+        if token == Token::Given {
+            phone.give_token();
+            phone.rig.client.set_wake_pushes(WakePushes::On).await?;
+        }
+        Ok(phone)
+    }
+
+    /// Lets the server's quiet delay pass until `phone` has had more than `seen` pushes;
+    /// whether it did.
+    async fn pushed(&self, phone: &Phone, seen: usize) -> bool {
+        // The server's delay starts when its push task first runs, which may be after the
+        // clock moved: move it again until the push is out, a few times at most.
+        for _round in 0..4 {
+            self.config.clock.advance(QUIET_DELAY);
+            let waited = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while phone.pushes(&self.harness) <= seen {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await;
+            if waited.is_ok() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Waits for the Party's push to reach `phone` (it had `seen` before), then hands the core
+    /// the handle the push carried, as the push service would.
+    async fn woken(
+        &self,
+        phone: &Phone,
+        party: pingers_proto::PartyId,
+        seen: usize,
+    ) -> Result<(), TestError> {
+        if !self.pushed(phone, seen).await {
+            return Err(TestError::Setup("no push reached the phone"));
+        }
+        let handle = phone
+            .party_push_handle(party)?
+            .ok_or(TestError::Setup("no subscription"))?;
+        phone.rig.client.on_push(handle).await?;
+        Ok(())
+    }
+}
+
+/// Whether the platform has given the phone its push token yet.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Token {
+    Given,
+    NotYet,
+}
+
+/// A phone and its UnifiedPush endpoint.
+struct Phone {
+    rig: Rig,
+    token: PushToken,
+}
+
+impl Phone {
+    fn give_token(&self) {
+        self.rig
+            .platform
+            .set_push_registration(Some(PushRegistration {
+                platform: PushPlatform::UnifiedPush,
+                token: self.token.clone(),
+            }));
+    }
+
+    /// How many pushes the relay has sent this phone.
+    fn pushes(&self, harness: &InProcessHarness) -> usize {
+        harness
+            .pushes()
+            .iter()
+            .filter(|push| push.token == self.token)
+            .count()
+    }
+
+    /// The handle in this phone's subscription to `party`'s group, if it has one.
+    fn party_push_handle(
+        &self,
+        party: pingers_proto::PartyId,
+    ) -> Result<Option<pingers_proto::PushHandle>, TestError> {
+        let database = Database::open(
+            &self.rig.database,
+            DatabaseKey::from_bytes(Zeroizing::new(KEY)),
+        )?;
+        let session = database.session()?;
+        let row = session
+            .parties()
+            .get(&party)?
+            .ok_or(TestError::Setup("no such Party"))?;
+        let group = row.group;
+        Ok(session
+            .server(&row.server)?
+            .subscriptions()
+            .get(&group)?
+            .map(|subscription| subscription.handle))
+    }
+
+    /// The names of `party`'s Spots on this phone, sorted.
+    fn spots(&self, party: pingers_proto::PartyId) -> Result<Vec<String>, TestError> {
+        let mut names: Vec<String> = self
+            .rig
+            .client
+            .snapshot()
+            .party(party)?
+            .spots
+            .iter()
+            .map(|spot| spot.name.as_str().to_owned())
+            .collect();
+        names.sort();
+        Ok(names)
+    }
+
+    /// Saves a Spot, new (`id` `None`) or edited, around the same centre.
+    async fn save_spot(
+        &self,
+        party: pingers_proto::PartyId,
+        id: Option<pingers_proto::SpotId>,
+        name: &str,
+    ) -> Result<pingers_proto::SpotId, TestError> {
+        use pingers_geo::{Circle, Coordinate, Fence, Meters};
+        let centre = Coordinate::new(51.5007, -0.1246).map_err(|_| TestError::Setup("centre"))?;
+        let radius = Meters::new(150.0).map_err(|_| TestError::Setup("radius"))?;
+        let circle = Circle::new(centre, radius).map_err(|_| TestError::Setup("circle"))?;
+        Ok(self
+            .rig
+            .client
+            .save_spot(
+                party,
+                pingers_client::ports::SpotDraft {
+                    id,
+                    name: pingers_client::snapshot::Name::new(name)?,
+                    fence: Fence::Circle(circle),
+                },
+            )
+            .await?)
+    }
+}
+
+/// Ana's Party with Ben let in through flow A (link, code, Admit, Welcome), as on the
+/// emulators: Ana sees the request when she opens the app, Ben checks while Asked to join
+/// shows.
+async fn ana_lets_ben_in(ana: &Phone, ben: &Phone) -> Result<pingers_proto::PartyId, TestError> {
+    use pingers_client::ports::{Foreground, JoinDecision};
+    use pingers_client::snapshot::{Joining, Name};
+
+    let party = climbing_crew(&ana.rig).await?;
+    let link = ana.rig.client.create_invite(party).await?;
+    ben.rig
+        .client
+        .open_invite(link.url, Name::new("Ben")?)
+        .await?;
+    ana.rig.client.on_foreground(Foreground::Visible).await?;
+    let request = ana
+        .rig
+        .client
+        .snapshot()
+        .party(party)?
+        .join_requests
+        .first()
+        .map(|request| request.id)
+        .ok_or(TestError::Setup("Ben's request"))?;
+    ana.rig
+        .client
+        .decide_join(party, request, JoinDecision::Admit)
+        .await?;
+    ben.rig.client.check_joins().await?;
+    if !matches!(
+        ben.rig.client.snapshot().joining,
+        Some(Joining::LetIn { .. })
+    ) {
+        return Err(TestError::Setup("Ben was not let in"));
+    }
+    ben.rig.client.dismiss_join().await?;
+    Ok(party)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spots_reach_the_other_member_through_the_party_push() -> Result<(), TestError> {
+    let stack = Stack::start()?;
+    let ana = stack.phone(3, Token::Given).await?;
+    let ben = stack.phone(4, Token::Given).await?;
+    let party = ana_lets_ben_in(&ana, &ben).await?;
+
+    // Ana makes a Spot; the Party's push wakes Ben's phone and the Spot shows.
+    let seen = ben.pushes(&stack.harness);
+    let crag = ana.save_spot(party, None, "Crag").await?;
+    stack.woken(&ben, party, seen).await?;
+    assert_eq!(ben.spots(party)?, ["Crag"]);
+
+    // Ana renames it: the edit reaches Ben the same way.
+    let seen = ben.pushes(&stack.harness);
+    ana.save_spot(party, Some(crag), "North crag").await?;
+    stack.woken(&ben, party, seen).await?;
+    assert_eq!(ben.spots(party)?, ["North crag"]);
+
+    // Ben makes one of his own: Ana, who made the Party, is woken for it too.
+    let seen = ana.pushes(&stack.harness);
+    ben.save_spot(party, None, "Boulders").await?;
+    stack.woken(&ana, party, seen).await?;
+    assert_eq!(ana.spots(party)?, ["Boulders", "North crag"]);
+
+    // Ana deletes hers: it goes from Ben's phone.
+    let seen = ben.pushes(&stack.harness);
+    ana.rig.client.delete_spot(party, crag).await?;
+    stack.woken(&ben, party, seen).await?;
+    assert_eq!(ben.spots(party)?, ["Boulders"]);
+    Ok(())
+}
+
+/// The emulators' order of events: both phones made and joined the Party before ntfy gave
+/// them an endpoint. The token's arrival subscribes each to the Party.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_push_token_that_comes_late_subscribes_to_the_parties() -> Result<(), TestError> {
+    let stack = Stack::start()?;
+    let ana = stack.phone(3, Token::NotYet).await?;
+    let ben = stack.phone(4, Token::NotYet).await?;
+    let party = ana_lets_ben_in(&ana, &ben).await?;
+    assert_eq!(ana.party_push_handle(party)?, None);
+    assert_eq!(ben.party_push_handle(party)?, None);
+
+    for phone in [&ana, &ben] {
+        phone.give_token();
+        phone.rig.client.push_tokens_changed().await?;
+        assert!(phone.party_push_handle(party)?.is_some());
+    }
+    let seen = ben.pushes(&stack.harness);
+    ana.save_spot(party, None, "Crag").await?;
+    stack.woken(&ben, party, seen).await?;
+    assert_eq!(ben.spots(party)?, ["Crag"]);
+
+    let seen = ana.pushes(&stack.harness);
+    ben.save_spot(party, None, "Boulders").await?;
+    stack.woken(&ana, party, seen).await?;
+    assert_eq!(ana.spots(party)?, ["Boulders", "Crag"]);
+    Ok(())
+}
+
+/// A push that never came (the phone was off, or the push relay dropped it): opening the app
+/// reads the Party log, with wake-up pushes on and nothing to upload.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn opening_the_app_shows_a_spot_whose_push_never_came() -> Result<(), TestError> {
+    use pingers_client::ports::Foreground;
+
+    let stack = Stack::start()?;
+    let ana = stack.phone(3, Token::Given).await?;
+    let ben = stack.phone(4, Token::Given).await?;
+    let party = ana_lets_ben_in(&ana, &ben).await?;
+    ben.rig.client.on_foreground(Foreground::Visible).await?;
+    ben.rig.client.on_foreground(Foreground::Hidden).await?;
+
+    ana.save_spot(party, None, "Crag").await?;
+    assert!(ben.spots(party)?.is_empty());
+    ben.rig.client.on_foreground(Foreground::Visible).await?;
+    assert_eq!(ben.spots(party)?, ["Crag"]);
+    Ok(())
+}
+
+/// "No wake-up pushes" deletes the Party subscription: the server no longer wakes the phone
+/// for the Party, and the Spot shows when the app is next opened.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turning_wake_up_pushes_off_ends_the_party_s_pushes() -> Result<(), TestError> {
+    use pingers_client::ports::Foreground;
+
+    let stack = Stack::start()?;
+    let ana = stack.phone(3, Token::Given).await?;
+    let ben = stack.phone(4, Token::Given).await?;
+    let party = ana_lets_ben_in(&ana, &ben).await?;
+    ben.rig
+        .client
+        .set_wake_pushes(WakePushes::NoWakePushes)
+        .await?;
+    assert_eq!(ben.party_push_handle(party)?, None);
+
+    let seen = ben.pushes(&stack.harness);
+    ana.save_spot(party, None, "Crag").await?;
+    assert!(!stack.pushed(&ben, seen).await);
+    ben.rig.client.on_foreground(Foreground::Visible).await?;
+    assert_eq!(ben.spots(party)?, ["Crag"]);
+    Ok(())
+}
+
+/// "No wake-up pushes": nothing wakes Ben for the Party, and his next scheduled wake reads
+/// the Party log and shows the Spot.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn without_wake_up_pushes_the_next_wake_shows_the_spot() -> Result<(), TestError> {
+    let stack = Stack::start()?;
+    let ana = stack.phone(3, Token::Given).await?;
+    let ben = stack.phone(4, Token::NotYet).await?;
+    ben.rig
+        .client
+        .set_wake_pushes(WakePushes::NoWakePushes)
+        .await?;
+    let party = ana_lets_ben_in(&ana, &ben).await?;
+    assert_eq!(ben.party_push_handle(party)?, None);
+
+    ana.save_spot(party, None, "Crag").await?;
+    assert!(ben.spots(party)?.is_empty());
+    ben.rig.client.on_wake().await?;
+    assert_eq!(ben.spots(party)?, ["Crag"]);
+    Ok(())
+}

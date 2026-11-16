@@ -562,15 +562,17 @@ async fn with_wake_pushes_off_new_mailboxes_carry_no_push() -> Result<(), TestEr
     )
     .await
     .map_err(|_elapsed| TestError::Setup("creating the Party did not finish"))??;
-    // Turning them off makes one step: the empty pool comes first, and gets no push.
+    // Turning them off makes one step: the Party's subscription goes first. The next wake's
+    // step fills the empty pool, with no push.
     client.set_wake_pushes(WakePushes::NoWakePushes).await?;
+    client.on_wake().await?;
     let database = Database::open(&path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
     let session = database.session()?;
     let mailboxes = session
         .server(&ServerId::new(harness.endpoints().server_id.clone())?)?
         .mailboxes()
         .live(clock.now())?;
-    assert_eq!(mailboxes.len(), 1);
+    assert!(!mailboxes.is_empty());
     assert!(mailboxes.iter().all(|mailbox| mailbox.push.is_none()));
     Ok(())
 }

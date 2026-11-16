@@ -4,7 +4,7 @@
 //! (design B.4.9).
 
 use pingers_meetup_session::meetup_log_auth_key;
-use pingers_parties::PartyLifecycle;
+use pingers_parties::{PartyLifecycle, ProfileChange, ProfilePublication};
 use pingers_proto::{GroupId, ServerId, Subscription, TimeToLive};
 use pingers_store::{MailboxPurpose, Session, WakePushes as StoredPushes};
 use pingers_sync::{
@@ -173,7 +173,65 @@ impl Net {
             .maintain_push_registrations(&maintenance, WakeBudget::UNLIMITED)
             .await;
         link.observe(&result);
-        Ok(result?)
+        let maintained = result?;
+        if matches!(
+            maintained,
+            Maintained::SubscriptionAdded | Maintained::SubscriptionRemoved | Maintained::Forgotten
+        ) {
+            self.announce_subscriptions(&link.server).await?;
+        }
+        Ok(maintained)
+    }
+
+    /// Tells each Party on `server` whose subscription this device added or removed since the
+    /// members were last told (a profile operation naming it), so whoever removes this device
+    /// later drops the right one from that server (design B.2). A resealed subscription keeps
+    /// its id and needs no word.
+    ///
+    /// # Errors
+    ///
+    /// A storage failure; [`ClientError::Parties`].
+    async fn announce_subscriptions(&self, server: &ServerId) -> Result<(), ClientError> {
+        let on = server.clone();
+        let outbound = self
+            .backend
+            .store(move |session, clock, rng| {
+                let Some(identity) = session.identity().load()? else {
+                    return Ok(Vec::new());
+                };
+                let own_key = identity.signing_key.public_key();
+                let lifecycle = PartyLifecycle::new(session, clock);
+                let scoped = session.server(&on)?;
+                let mut outbound = Vec::new();
+                for row in session.parties().list()? {
+                    if row.server != on {
+                        continue;
+                    }
+                    let held = scoped
+                        .subscriptions()
+                        .get(&row.group)?
+                        .map(|subscription| subscription.id);
+                    if session.member_subscriptions().get(&row.id, &own_key)? == held {
+                        continue;
+                    }
+                    match lifecycle.update_profile(
+                        &row.id,
+                        ProfileChange::Subscription(held),
+                        rng,
+                    )? {
+                        ProfilePublication::Send(message) => outbound.push(*message),
+                        // Sent with the waiting profile once the commit settles.
+                        ProfilePublication::Waiting => {}
+                    }
+                }
+                Ok(outbound)
+            })
+            .await?;
+        if outbound.is_empty() {
+            return Ok(());
+        }
+        self.push(server, outbound);
+        self.flush().await
     }
 
     /// One maintenance step on every server right after the token or the setting changed, so
