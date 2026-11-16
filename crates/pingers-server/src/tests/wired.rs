@@ -703,3 +703,142 @@ async fn a_push_relay_config_is_fetched_once_per_cache_lifetime() -> TestResult 
     assert_eq!(count()?, 3);
     server.stop().await
 }
+
+/// A relay config for key `key_id` with public key `public`.
+fn relay_config(key_id: u8, public: u8) -> Result<Vec<u8>, TestError> {
+    Ok(pingers_proto::PushRelayConfig {
+        key_config: pingers_proto::PushRelayKeyConfig {
+            key_id: pingers_proto::PushRelayKeyId::new(key_id),
+            public_key: [public; 32],
+        },
+        platforms: vec![pingers_proto::PushPlatform::Fcm],
+        max_time_to_live: TimeToLive::new(Duration::from_hours(24))?,
+        operator: "Me".to_owned(),
+    }
+    .encode()?)
+}
+
+/// The pin of a relay config's key, as `/v1/params` lists it.
+fn relay_pin(config: &[u8]) -> Result<pingers_proto::KeyConfigHash, TestError> {
+    let config = pingers_proto::PushRelayConfig::decode(config)?;
+    Ok(pingers_crypto::key_config_hash(
+        &config.key_config.to_bytes(),
+    ))
+}
+
+/// A push relay on loopback whose `GET /v1/config` answers what `config` holds now, or `503`
+/// while it holds nothing.
+async fn changing_relay(config: Arc<Mutex<Option<Vec<u8>>>>) -> Result<SocketAddr, TestError> {
+    let router = Router::new().route(
+        "/v1/config",
+        axum::routing::get(move || {
+            let held = config.lock().ok().and_then(|held| held.clone());
+            async move {
+                match held {
+                    Some(body) => (StatusCode::OK, body),
+                    None => (StatusCode::SERVICE_UNAVAILABLE, Vec::new()),
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    Ok(address)
+}
+
+/// The push relays `/v1/params` lists now.
+async fn listed_relays(server: &Running) -> Result<Vec<pingers_proto::PushRelayInfo>, TestError> {
+    let params = super::wallet::direct(server, "GET /v1/params", None, Vec::new()).await?;
+    Ok(pingers_proto::Params::decode(&params.body)?.push_relays)
+}
+
+/// Waits until `/v1/params` lists exactly `expected` as the learned relay's key, or `None` for
+/// no relay. The learning task runs on its own, so the clock moves on by `step` between looks:
+/// whenever the task is asleep, the next step wakes it.
+async fn until_listed(
+    server: &Running,
+    expected: Option<pingers_proto::KeyConfigHash>,
+    step: Duration,
+) -> TestResult {
+    for _ in 0..1000 {
+        let listed: Vec<_> = listed_relays(server)
+            .await?
+            .into_iter()
+            .map(|relay| relay.key_config_hash)
+            .collect();
+        if listed == expected.into_iter().collect::<Vec<_>>() {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+        server.clock.advance(step);
+    }
+    Err(format!("the listed relay key never became {expected:?}").into())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_learned_relay_is_listed_once_it_answers_and_follows_its_key() -> TestResult {
+    let config = Arc::new(Mutex::new(None));
+    let address = changing_relay(Arc::clone(&config)).await?;
+    let relays = ListedRelays::new([(
+        RelayId::new(1),
+        RelayTarget {
+            url: pingers_mailbox::PushRelayUrl::new(format!("http://{address}"))?,
+            credential: RelayCredential::new("credential".to_owned()),
+        },
+    )]);
+    let server = super::run(
+        crate::ServerConfig {
+            learned_push_relays: vec![crate::LearnedPushRelay {
+                relay_id: RelayId::new(1),
+                url: RelayUrl::new("https://push.example".to_owned())?,
+                operator: "Me".to_owned(),
+            }],
+            ..super::configured(Setup {
+                push_relays: relays,
+                ..Setup::default()
+            })?
+        },
+        Echo,
+    )
+    .await?;
+    // The relay is not up yet: nothing is listed, and the server asks again soon.
+    until_listed(&server, None, Duration::ZERO).await?;
+    let first = relay_config(1, 5)?;
+    *config.lock().map_err(|_| "lock")? = Some(first.clone());
+    until_listed(
+        &server,
+        Some(relay_pin(&first)?),
+        crate::tasks::RELAY_CONFIG_RETRY,
+    )
+    .await?;
+    let listed = listed_relays(&server).await?;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed.first().map(|relay| relay.url.as_str()),
+        Some("https://push.example")
+    );
+    assert_eq!(
+        listed.first().map(|relay| relay.operator.as_str()),
+        Some("Me")
+    );
+    // The relay rotates: the server lists the new key within one cache lifetime, and keeps the
+    // last key it saw while the relay does not answer.
+    *config.lock().map_err(|_| "lock")? = None;
+    for _ in 0..10 {
+        server.clock.advance(crate::tasks::RELAY_CONFIG_TTL);
+        tokio::task::yield_now().await;
+    }
+    until_listed(&server, Some(relay_pin(&first)?), Duration::ZERO).await?;
+    let second = relay_config(2, 6)?;
+    *config.lock().map_err(|_| "lock")? = Some(second.clone());
+    until_listed(
+        &server,
+        Some(relay_pin(&second)?),
+        crate::tasks::RELAY_CONFIG_TTL,
+    )
+    .await?;
+    server.stop().await
+}

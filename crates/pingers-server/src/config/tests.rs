@@ -667,7 +667,7 @@ fn the_map_host_gateway_is_the_map_host_unless_named() -> Result<(), ConfigError
 fn bad_identity_fields_are_refused() {
     let with_key = minimal(&key(1, SECRET_A));
     let http_server = with_key.replace("https://pingers.test", "http://pingers.test");
-    let cases: [(String, Expected); 7] = [
+    let cases: [(String, Expected); 9] = [
         (http_server, |error| matches!(error, ConfigError::ServerId)),
         (
             format!("map_host = \"http://maps.example\"\n{with_key}"),
@@ -692,6 +692,22 @@ fn bad_identity_fields_are_refused() {
             ),
             |error| matches!(error, ConfigError::RelayInfo),
         ),
+        // Learned from the relay, or given: not both, and either way with an operator.
+        (
+            format!(
+                "{with_key}{}key_config_hash = \"{}\"\nkey_config_from_relay = true\noperator = \"x\"\n",
+                relay(1, "https://a"),
+                pingers_proto::KeyConfigHash::from_bytes([1; 32]).to_pin()
+            ),
+            |error| matches!(error, ConfigError::RelayInfo),
+        ),
+        (
+            format!(
+                "{with_key}{}key_config_from_relay = true\n",
+                relay(1, "https://a")
+            ),
+            |error| matches!(error, ConfigError::RelayInfo),
+        ),
         // The hash as hex is not a pin: there is one text form.
         (
             format!(
@@ -709,4 +725,30 @@ fn bad_identity_fields_are_refused() {
             "{text}\n{refused:?}"
         );
     }
+}
+
+#[test]
+fn a_relay_whose_key_is_learned_is_listed_apart() -> TestResult {
+    let config = ServerConfig::parse(&format!(
+        "{}{}key_config_from_relay = true\noperator = \"Relay Ltd\"\n",
+        minimal(&key(1, SECRET_A)),
+        relay(3, "http://127.0.0.1:9472"),
+    ))?;
+    assert!(config.advertised_push_relays.is_empty());
+    assert_eq!(
+        config.learned_push_relays,
+        [super::LearnedPushRelay {
+            relay_id: pingers_proto::RelayId::new(3),
+            url: pingers_proto::RelayUrl::new("https://public.example".to_owned())?,
+            operator: "Relay Ltd".to_owned(),
+        }]
+    );
+    // Off is the same as leaving it out.
+    let off = ServerConfig::parse(&format!(
+        "{}{}key_config_from_relay = false\n",
+        minimal(&key(1, SECRET_A)),
+        relay(3, "http://127.0.0.1:9472"),
+    ))?;
+    assert!(off.learned_push_relays.is_empty() && off.advertised_push_relays.is_empty());
+    Ok(())
 }

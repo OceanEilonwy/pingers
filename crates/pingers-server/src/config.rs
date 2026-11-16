@@ -67,6 +67,11 @@
 //! key_config_hash = "<pin>"        # optional, with operator: listed in /v1/params. The relay
 //!                                  # key's pin as `pingers-push-relay pins` prints it: 43
 //!                                  # base64url characters (KeyConfigHash::to_pin)
+//! # key_config_from_relay = true    # instead of key_config_hash: the server asks the relay at
+//!                                  # url for its published key (GET /v1/config) at start and
+//!                                  # every 5 minutes, and lists that key's hash, so a
+//!                                  # rotation needs no change here; for a relay the operator
+//!                                  # also runs, reached over loopback
 //! operator = "Push Relay Ltd"
 //!
 //! [app_links]                      # optional: the Android apps that may open this server's
@@ -180,11 +185,11 @@ pub enum ConfigError {
     )]
     MapHostGateway,
     /// A push relay's `key_config_hash` is not a pin (43 base64url characters, as
-    /// `pingers-push-relay pins` prints), or only one of `key_config_hash` and `operator` is
-    /// given.
+    /// `pingers-push-relay pins` prints), or `operator` is not given with exactly one of
+    /// `key_config_hash` and `key_config_from_relay = true`.
     #[error(
-        "configuration: push_relays.key_config_hash must be a 43-character base64url pin, \
-         given with operator"
+        "configuration: push_relays.key_config_hash must be a 43-character base64url pin; \
+         operator goes with exactly one of key_config_hash and key_config_from_relay = true"
     )]
     RelayInfo,
     /// An `[app_links]` package id is not a Java package name, a certificate is not a SHA-256
@@ -268,6 +273,19 @@ impl RelayAllowList {
     }
 }
 
+/// A push relay listed in `/v1/params` with the hash of the key it publishes now, which the
+/// server fetches from the relay at `url` (`GET /v1/config`) and fetches again every few
+/// minutes, so a rotation needs no change here. Until the first answer the relay is not listed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LearnedPushRelay {
+    /// The id mailboxes refer to it by.
+    pub relay_id: RelayId,
+    /// Where devices reach it (`public_url`).
+    pub url: RelayUrl,
+    /// Who runs it, as declared.
+    pub operator: String,
+}
+
 /// Which configured key `GET /v1/ohttp/config` serves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ServedKey {
@@ -337,6 +355,16 @@ impl OhttpKeys {
         self.keys.iter().map(GatewayKey::config).collect()
     }
 
+    /// The config of the other rotation slot: the first configured key that is not served.
+    /// `None` with a single key.
+    #[must_use]
+    pub fn next(&self) -> Option<KeyConfig> {
+        self.keys
+            .iter()
+            .map(GatewayKey::config)
+            .find(|config| config.key_id() != self.served.key_id())
+    }
+
     pub(crate) fn into_keys(self) -> Vec<GatewayKey> {
         self.keys
     }
@@ -371,6 +399,9 @@ pub struct ServerConfig {
     /// The push relays advertised in `/v1/params` (those configured with a key hash and an
     /// operator).
     pub advertised_push_relays: Vec<PushRelayInfo>,
+    /// The push relays advertised in `/v1/params` once their key hash is learned from the relay
+    /// itself (`key_config_from_relay = true`): the hash follows the key the relay publishes.
+    pub learned_push_relays: Vec<LearnedPushRelay>,
     /// The map host advertised in `/v1/params`, if this server names one.
     pub map_host: Option<MapHostUrl>,
     /// Where map downloads through the relay are forwarded: `map_host_gateway`, or `map_host`
@@ -561,6 +592,7 @@ impl ServerConfig {
             signups_per_hour: DEFAULT_SIGNUPS_PER_HOUR,
             ohttp_relay_urls: Vec::new(),
             advertised_push_relays: Vec::new(),
+            learned_push_relays: Vec::new(),
             map_host: None,
             map_host_gateway: None,
             push_relay_ca: None,
@@ -669,6 +701,8 @@ struct FilePushRelay {
     url: String,
     credential: String,
     key_config_hash: Option<String>,
+    #[serde(default)]
+    key_config_from_relay: bool,
     operator: Option<String>,
     public_url: String,
 }
@@ -685,12 +719,14 @@ const fn default_expire_interval() -> u64 {
 struct PushRelays {
     listed: ListedRelays,
     advertised: Vec<PushRelayInfo>,
+    learned: Vec<LearnedPushRelay>,
 }
 
 fn push_relays(relays: Vec<FilePushRelay>) -> Result<PushRelays, ConfigError> {
     let mut seen = Vec::with_capacity(relays.len());
     let mut listed = Vec::with_capacity(relays.len());
     let mut advertised = Vec::new();
+    let mut learned = Vec::new();
     for relay in relays {
         if seen.contains(&relay.relay_id) {
             return Err(ConfigError::DuplicateRelayId {
@@ -701,16 +737,25 @@ fn push_relays(relays: Vec<FilePushRelay>) -> Result<PushRelays, ConfigError> {
         let url = PushRelayUrl::new(relay.url).map_err(|_| ConfigError::RelayUrl)?;
         let public_url =
             RelayUrl::new(relay.public_url).map_err(|_| ConfigError::PublicRelayUrl)?;
-        match (relay.key_config_hash, relay.operator) {
-            (None, None) => {}
-            (Some(hash), Some(operator)) => advertised.push(PushRelayInfo {
+        match (
+            relay.key_config_hash,
+            relay.key_config_from_relay,
+            relay.operator,
+        ) {
+            (None, false, None) => {}
+            (Some(hash), false, Some(operator)) => advertised.push(PushRelayInfo {
                 relay_id: RelayId::new(relay.relay_id),
                 url: public_url,
                 key_config_hash: KeyConfigHash::from_pin(&hash)
                     .map_err(|_| ConfigError::RelayInfo)?,
                 operator,
             }),
-            (Some(_), None) | (None, Some(_)) => return Err(ConfigError::RelayInfo),
+            (None, true, Some(operator)) => learned.push(LearnedPushRelay {
+                relay_id: RelayId::new(relay.relay_id),
+                url: public_url,
+                operator,
+            }),
+            _ => return Err(ConfigError::RelayInfo),
         }
         listed.push((
             RelayId::new(relay.relay_id),
@@ -723,6 +768,7 @@ fn push_relays(relays: Vec<FilePushRelay>) -> Result<PushRelays, ConfigError> {
     Ok(PushRelays {
         listed: ListedRelays::new(listed),
         advertised,
+        learned,
     })
 }
 
@@ -827,6 +873,7 @@ impl ServerConfig {
                 .map(|url| RelayUrl::new(url).map_err(|_| ConfigError::OhttpRelayUrl))
                 .collect::<Result<_, _>>()?,
             advertised_push_relays: push.advertised,
+            learned_push_relays: push.learned,
             map_host_gateway: MapHostGateway::from_settings(
                 map_host.as_ref().map(MapHostUrl::as_str),
                 file.map_host_gateway,

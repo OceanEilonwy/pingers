@@ -75,6 +75,8 @@ async fn the_landing_page_is_static_strict_and_names_no_invite() -> TestResult {
     // It reads the fragment on the phone and hands it to the app, nowhere else.
     assert!(script.contains("window.location.hash"));
     assert!(script.contains("\"pingers://join#\""));
+    // Invites and the owner's setup link (#s1.) both go to the app.
+    assert!(script.contains("#[vs]1"));
     // On Android, an intent URL naming each app in turn, the install page last.
     assert!(script.contains("intent://join#Intent;scheme=pingers;package="));
     assert!(script.contains("S.browser_fallback_url="));

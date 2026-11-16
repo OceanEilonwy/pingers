@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! What a browser sees of invite links (`https://<server>/j#v1.<invite>`): the landing page at
+//! What a browser sees of invite links (`https://<server>/j#v1.<invite>`, and the owner's
+//! first-phone setup link `/j#s1.<setup>`): the landing page at
 //! `GET /j` that hands the invite to the app, and `GET /.well-known/assetlinks.json`, which lets
 //! Android open this server's links in the app directly (App Links).
 //!

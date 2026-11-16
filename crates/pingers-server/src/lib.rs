@@ -85,8 +85,8 @@ pub use crate::admin::{
 };
 pub use crate::config::{
     AddressList, AndroidPackage, AppLinks, CertificateFingerprint, CertificateSource, ConfigError,
-    Database, Logging, MapHostGateway, MembershipProofs, OhttpKeys, RelayAllowList, Required,
-    ServedKey, ServerConfig,
+    Database, LearnedPushRelay, Logging, MapHostGateway, MembershipProofs, OhttpKeys,
+    RelayAllowList, Required, ServedKey, ServerConfig,
 };
 pub use crate::error::ServerError;
 pub use crate::forwarded::TrustedProxies;
@@ -152,8 +152,33 @@ pub(crate) struct PublishedParams {
     pub(crate) server_operator: String,
     pub(crate) ohttp_relays: Vec<RelayUrl>,
     pub(crate) push_relays: Vec<PushRelayInfo>,
+    /// Relays listed with the key hash learned from them (`key_config_from_relay`): `None`
+    /// until the relay first answers, and then the hash of the key it last published.
+    pub(crate) learned_push_relays: Vec<(
+        LearnedPushRelay,
+        Mutex<Option<pingers_proto::KeyConfigHash>>,
+    )>,
     pub(crate) map_host: Option<pingers_proto::MapHostUrl>,
     pub(crate) membership_proofs: MembershipProofs,
+}
+
+impl PublishedParams {
+    /// The push relays `/v1/params` lists: the configured ones, then each learned one whose
+    /// key is known.
+    pub(crate) fn advertised_push_relays(&self) -> Vec<PushRelayInfo> {
+        let mut relays = self.push_relays.clone();
+        for (relay, hash) in &self.learned_push_relays {
+            if let Some(key_config_hash) = *hash.lock().unwrap_or_else(PoisonError::into_inner) {
+                relays.push(PushRelayInfo {
+                    relay_id: relay.relay_id,
+                    url: relay.url.clone(),
+                    key_config_hash,
+                    operator: relay.operator.clone(),
+                });
+            }
+        }
+        relays
+    }
 }
 
 /// Where live exchanges go.
@@ -168,6 +193,9 @@ pub(crate) enum LiveRoute {
 pub(crate) struct Shared {
     pub(crate) gateway: Gateway,
     pub(crate) served_config: KeyConfig,
+    /// The other rotation slot's config (the first configured key that is not served), for
+    /// `GET /v1/ohttp/config/next` on the gateway listener; `None` with a single key.
+    pub(crate) next_config: Option<KeyConfig>,
     pub(crate) relays: RelayAllowList,
     pub(crate) trusted_proxies: TrustedProxies,
     pub(crate) metrics_access: AddressList,
@@ -395,6 +423,7 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
         live,
     } = outside;
     let served_config = config.ohttp_keys.served().clone();
+    let next_config = config.ohttp_keys.next();
     let timer: Arc<dyn Timer> = Arc::new(timer);
     let clock: Arc<dyn Clock> = Arc::new(clock);
     let mut rng = ChaCha20Rng::from_seed(*seed.bytes);
@@ -428,6 +457,7 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
     let shared = Arc::new(Shared {
         gateway: Gateway::new(config.ohttp_keys.into_keys()),
         served_config,
+        next_config,
         relays: config.relays,
         trusted_proxies: config.trusted_proxies,
         metrics_access: config.metrics,
@@ -460,33 +490,43 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
             server_operator: config.server_operator,
             ohttp_relays: config.ohttp_relay_urls,
             push_relays: config.advertised_push_relays,
+            learned_push_relays: unknown_keys(config.learned_push_relays),
             map_host: config.map_host,
             membership_proofs: config.membership_proofs,
         },
         rng: Mutex::new(rng),
     });
     start_sweeps(&shared, config.expire_interval);
-    let reporter = match config.logging {
-        Logging::Off => None,
-        Logging::Counts { interval } => {
-            let shared = Arc::clone(&shared);
-            Some(tokio::spawn(async move {
-                let report = CountsReport {
-                    metrics: &shared.metrics,
-                    clock: &clock,
-                    timer: &*timer,
-                    interval,
-                };
-                report.run(write_counts).await;
-            }))
-        }
-    };
+    start_learning_relay_keys(&shared);
+    let reporter = start_counts_report(&shared, config.logging, clock, timer);
     http::accept_loop(listeners, &shared, shutdown).await;
     shared.tasks.abort_all();
     if let Some(reporter) = reporter {
         reporter.abort();
     }
     Ok(())
+}
+
+/// Writes the counts report every interval when `logging` asks for it.
+fn start_counts_report(
+    shared: &Arc<Shared>,
+    logging: Logging,
+    clock: Arc<dyn Clock>,
+    timer: Arc<dyn Timer>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let Logging::Counts { interval } = logging else {
+        return None;
+    };
+    let shared = Arc::clone(shared);
+    Some(tokio::spawn(async move {
+        let report = CountsReport {
+            metrics: &shared.metrics,
+            clock: &clock,
+            timer: &*timer,
+            interval,
+        };
+        report.run(write_counts).await;
+    }))
 }
 
 /// Runs `work` on the blocking pool if the server is still running.
@@ -573,3 +613,68 @@ fn write_counts(report: &str) {
 
 #[cfg(test)]
 mod tests;
+
+/// The learned relays, none of whose keys is known yet.
+fn unknown_keys(
+    relays: Vec<LearnedPushRelay>,
+) -> Vec<(
+    LearnedPushRelay,
+    Mutex<Option<pingers_proto::KeyConfigHash>>,
+)> {
+    relays
+        .into_iter()
+        .map(|relay| (relay, Mutex::new(None)))
+        .collect()
+}
+
+/// Keeps the hash of each `key_config_from_relay` push relay's published key: asked at once,
+/// again every [`tasks::RELAY_CONFIG_TTL`] once every relay answered, and every
+/// [`tasks::RELAY_CONFIG_RETRY`] while one has not (the relay may start after the server).
+/// A relay that stops answering keeps the hash it last published.
+fn start_learning_relay_keys(shared: &Arc<Shared>) {
+    if shared.params.learned_push_relays.is_empty() {
+        return;
+    }
+    let weak = Arc::downgrade(shared);
+    let timer = Arc::clone(&shared.timer);
+    shared.tasks.spawn(async move {
+        loop {
+            let Some(shared) = weak.upgrade() else {
+                return;
+            };
+            let every_relay_known = learn_relay_keys(&shared).await;
+            drop(shared);
+            timer
+                .sleep(if every_relay_known {
+                    tasks::RELAY_CONFIG_TTL
+                } else {
+                    tasks::RELAY_CONFIG_RETRY
+                })
+                .await;
+        }
+    });
+}
+
+/// Asks each learned relay for its published key once; whether every one is now known.
+async fn learn_relay_keys(shared: &Shared) -> bool {
+    use pingers_proto::WireDecode as _;
+    let mut every_relay_known = true;
+    for (relay, hash) in &shared.params.learned_push_relays {
+        let fetched = match shared
+            .tasks
+            .push_relay_config(relay.relay_id, tasks::RelayConfigKind::Published)
+        {
+            Some(fetch) => fetch.await.ok().flatten(),
+            None => None,
+        };
+        let learned = fetched
+            .and_then(|body| pingers_proto::PushRelayConfig::decode(&body).ok())
+            .map(|config| pingers_crypto::key_config_hash(&config.key_config.to_bytes()));
+        let mut held = hash.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(learned) = learned {
+            *held = Some(learned);
+        }
+        every_relay_known &= held.is_some();
+    }
+    every_relay_known
+}

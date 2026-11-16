@@ -652,6 +652,23 @@ async fn served_key_id_picks_the_served_key_and_both_keys_open() -> TestResult {
         .await?;
         assert_eq!(read_all(fetched).await?, server.config.encoded());
     }
+    // The gateway listener also hands out the other slot's config, for a pin set; the public
+    // listener does not (it is not a direct route).
+    let mut gateway = connect(server.gateway, LOOPBACK).await?;
+    let next = send(
+        &mut gateway,
+        request(Method::GET, "/v1/ohttp/config/next", None, Body::empty())?,
+    )
+    .await?;
+    assert_eq!(next.status(), StatusCode::OK);
+    assert_eq!(read_all(next).await?, first_config.encoded());
+    let mut public = connect(server.address, LOOPBACK).await?;
+    let next = send(
+        &mut public,
+        request(Method::GET, "/v1/ohttp/config/next", None, Body::empty())?,
+    )
+    .await?;
+    assert_ne!(next.status(), StatusCode::OK);
     // A client still on the slot no longer served is answered (rotation), sealed to it.
     let mut relay = connect(server.gateway, LOOPBACK).await?;
     for config in [&server.config, &first_config] {
@@ -1155,3 +1172,16 @@ mod pushes;
 mod restart;
 mod wallet;
 mod wired;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_single_key_has_no_next_config() -> TestResult {
+    let server = start(Setup::default(), Echo).await?;
+    let mut gateway = connect(server.gateway, LOOPBACK).await?;
+    let next = send(
+        &mut gateway,
+        request(Method::GET, "/v1/ohttp/config/next", None, Body::empty())?,
+    )
+    .await?;
+    assert_eq!(next.status(), StatusCode::NOT_FOUND);
+    server.stop().await
+}

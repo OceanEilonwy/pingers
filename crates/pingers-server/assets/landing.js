@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The invite landing page (GET /j): hands the link's fragment to the Pingers app. The fragment
-// holds the invite; browsers never send it to the server, and this script sends it nowhere
+// holds the invite (#v1.) or, for the owner's first phone, the setup link their appliance shows
+// as a QR code (#s1.); browsers never send it to the server, and this script sends it nowhere
 // but to the app on this phone.
 "use strict";
 (function () {
@@ -8,9 +9,15 @@
   var missing = document.getElementById("missing");
   var install = document.getElementById("install");
   var hash = window.location.hash;
-  if (!/^#v1\.[A-Za-z0-9_-]+$/.test(hash)) {
+  if (!/^#[vs]1\.[A-Za-z0-9_-]+$/.test(hash)) {
     missing.hidden = false;
     return;
+  }
+  if (hash.slice(1, 3) === "s1") {
+    document.title = "Set up Pingers";
+    document.getElementById("title").textContent = "Set up Pingers on this phone";
+    document.getElementById("lead").textContent =
+      "Open this link in the Pingers app to make this phone's account on your server.";
   }
   var invite = hash.slice(1);
   var target = "pingers://join#" + invite;

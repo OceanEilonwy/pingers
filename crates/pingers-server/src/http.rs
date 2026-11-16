@@ -35,6 +35,10 @@ use crate::{Listeners, Peer, Shared};
 /// Where the relay fetches the key config it hands to clients.
 const OHTTP_CONFIG_PATH: &str = "/v1/ohttp/config";
 
+/// The other rotation slot's key config, on the gateway listener only: what the appliance's
+/// setup page pins besides the served key, from the running server (a pin set holds both).
+const OHTTP_NEXT_CONFIG_PATH: &str = "/v1/ohttp/config/next";
+
 /// The public listener: metrics and direct requests. The gateway is not here: behind a
 /// reverse proxy every client looks like the proxy, so the relay-only rule could not hold.
 pub(crate) fn public_router(shared: Arc<Shared>) -> Router {
@@ -49,11 +53,12 @@ pub(crate) fn public_router(shared: Arc<Shared>) -> Router {
         .with_state(shared)
 }
 
-/// The gateway listener: the gateway and its key config, nothing else.
+/// The gateway listener: the gateway and its key configs (served and next), nothing else.
 pub(crate) fn gateway_router(shared: Arc<Shared>) -> Router {
     Router::new()
         .route("/ohttp", post(post_ohttp))
         .route(OHTTP_CONFIG_PATH, get(key_config))
+        .route(OHTTP_NEXT_CONFIG_PATH, get(next_key_config))
         .fallback(not_found)
         .with_state(shared)
 }
@@ -65,6 +70,21 @@ async fn not_found() -> StatusCode {
 /// `GET /v1/ohttp/config` on the gateway listener, the same answer as on the public one.
 async fn key_config(State(shared): State<Arc<Shared>>) -> Response {
     let reply = key_config_reply(&shared);
+    shared.metrics.record(Channel::Direct, reply.status);
+    direct_response(reply)
+}
+
+/// `GET /v1/ohttp/config/next` on the gateway listener: the key config of the slot that is not
+/// served, `404` with a single key. Every configured key opens requests, so this is public
+/// information ahead of a rotation, as the pins in app builds are.
+async fn next_key_config(State(shared): State<Arc<Shared>>) -> Response {
+    let reply = match &shared.next_config {
+        Some(config) => crate::dispatch::Reply {
+            body: config.encoded().to_vec(),
+            ..key_config_reply(&shared)
+        },
+        None => crate::dispatch::Reply::status(StatusCode::NOT_FOUND),
+    };
     shared.metrics.record(Channel::Direct, reply.status);
     direct_response(reply)
 }
