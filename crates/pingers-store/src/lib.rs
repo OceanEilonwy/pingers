@@ -95,6 +95,12 @@
 //!   ids, for `subscriptions_removed`), `pending_commit` (the in-flight commit as opaque bytes
 //!   pingers-parties encodes) and `profile_waiting`. Every row cascades with its Party. Spot
 //!   tombstones drop their presence row with [`Presence::clear`].
+//! - **pingers-parties' invites and joins** (schema version 7), key-value rows before join flow A
+//!   settled: `party_invite` (the link's secret, times, state and read position; cascades with
+//!   its Party), `join_approval` (requests waiting for the inviter, as pingers-proto
+//!   `JoinRequest`s, in arrival order; cascade with their invite), `party_join` (a join this
+//!   device asked for, with the link and the key packages it sent; no Party row exists yet) and
+//!   `joined_via` (who let this device in, and the join code).
 //! - **Unsigned values past `i64::MAX`** are refused ([`StoreError::OutOfRange`]), never
 //!   wrapped.
 //!
@@ -143,6 +149,10 @@ pub use repo::meetup::{
 pub use repo::party::{
     AlwaysAllow, Identities, Identity, LocationVisibility, Member, Members, Parties, Party,
     Verification,
+};
+pub use repo::party_join::{
+    InviteState, JoinApproval, JoinApprovals, JoinedVia, JoinedVias, PartyInvite, PartyInvites,
+    PartyJoin, PartyJoins,
 };
 pub use repo::party_state::{
     MemberSubscription, MemberSubscriptions, PartyConfig, PartyConfigs, PartySuite, PendingCommits,
