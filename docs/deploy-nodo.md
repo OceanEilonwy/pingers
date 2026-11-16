@@ -255,8 +255,9 @@ With `[app_links]` the server also serves `/.well-known/assetlinks.json`, so And
 `https://<server_id>/j` links straight in an official build (Play `org.pingers.app`, F-Droid
 `org.pingers.app.foss`) without the page. The setting `app_signing_certificate` is the signing
 certificate's SHA-256 fingerprint; its default is the official builds'. App Links verify only
-on port 443. Links of other servers open through the landing page (on Android 10 and 11, also
-through the "Open with" chooser).
+on port 443. Links of other servers open through the landing page, which hands them to the app by package
+name: the app declares no unverifiable https filter (on Android 11 and earlier one would make
+its own server's links unverified too).
 
 ## 2. Exposure, and the router's reverse proxy
 

@@ -52,15 +52,13 @@
                     android:host="${pingersServerHost}"
                     android:pathPrefix="/j" />
             </intent-filter>
-            <!-- Invite links of any other server: not verifiable. Android 10 and 11 offer Pingers
-                 in their "Open with" chooser; from Android 12 such links open in the browser,
-                 and the server's landing page hands them to the app. -->
-            <intent-filter android:autoVerify="false">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="*" android:pathPrefix="/j" />
-            </intent-filter>
+            <!-- No filter for other servers' https links (host "*"): such a filter cannot be
+                 verified, and on Android 11 and earlier it made the whole app's verification fail
+                 (domains "pingers.invalid *", status "ask" on an API 30 emulator, 2026-11-17), so
+                 even this server's links, setup links with their registration code included,
+                 went to a chooser any app claiming the same links could appear in. Other
+                 servers' links open in the browser, whose landing page hands them to this app by
+                 package name. -->
             <!-- pingers://join#v1.<invite>: what a server's landing page at /j forwards to (an
                  intent:// URL there carries the invite as the extra "invite" instead). -->
             <intent-filter>
