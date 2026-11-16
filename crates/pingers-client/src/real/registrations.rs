@@ -285,3 +285,30 @@ impl Net {
         Ok(downgrade.map_or(PushDelivery::Full, PushDelivery::Downgraded))
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    use pingers_store::StoreError;
+
+    use super::*;
+
+    /// Only a storage failure stops a push maintenance step; anything else waits for the next.
+    #[test]
+    fn only_storage_failures_count_as_the_store_s() {
+        for failure in [
+            ClientError::Store(StoreError::Busy),
+            ClientError::Records(pingers_mls::StorageError::Unavailable),
+            ClientError::Sync(SyncError::Store(StoreError::Busy)),
+        ] {
+            assert!(is_store(&failure), "{failure:?}");
+        }
+        for other in [
+            ClientError::Internal,
+            Unavailable::NoPushToken.into(),
+            SyncError::PushRelayKeyMismatch.into(),
+        ] {
+            assert!(!is_store(&other), "{other:?}");
+        }
+    }
+}
