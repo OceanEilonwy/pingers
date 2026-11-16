@@ -562,3 +562,27 @@ async fn a_local_tree_that_no_longer_matches_is_fetched_again_whole() -> TestRes
     assert_eq!(last_scheme(&device).as_deref(), Some("PingersRln"));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_self_test_stops_with_the_last_engine_that_shares_it() -> TestResult {
+    let world = World::start()?;
+    let device = world.device()?;
+    assert_eq!(
+        device.engine.start_prover_self_test().await?,
+        SelfTestStart::Started
+    );
+    // The process's engines go (the app is closed): the test stops and records nothing, so the
+    // next process tests again rather than trusting a half-run test.
+    let device = world.restart(device)?;
+    let waited = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if device.engine.prover_standing().await? != SelfTestStanding::Due {
+                return Ok::<_, TestError>(());
+            }
+            real_pause().await;
+        }
+    })
+    .await;
+    assert!(waited.is_err(), "a stopped self-test recorded a result");
+    Ok(())
+}
