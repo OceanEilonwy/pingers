@@ -549,3 +549,28 @@ fn asks_change_state_and_expire() -> Result<(), TestError> {
     ));
     Ok(())
 }
+
+#[test]
+fn ending_a_meetup_forgets_its_subscription() -> Result<(), TestError> {
+    let fixture = Fixture::new()?;
+    let session = &fixture.session;
+    let owner = party(1)?;
+    session.parties().insert(&owner)?;
+    let ended = meetup(&owner.id, 1);
+    let other = meetup(&owner.id, 2);
+    let server = fixture.server()?;
+    for (meetup, fill) in [(&ended, 1_u8), (&other, 2)] {
+        session.meetups().start(meetup)?;
+        server.subscriptions().put(&crate::StoredSubscription {
+            group: meetup.group,
+            id: pingers_proto::SubscriptionId::from_bytes([fill; 16]),
+            handle: pingers_proto::PushHandle::from_bytes([fill; 8]),
+            expires_at: UnixSeconds::new(9_000),
+            seal: None,
+        })?;
+    }
+    session.meetups().end(&ended.group)?;
+    assert!(server.subscriptions().get(&ended.group)?.is_none());
+    assert!(server.subscriptions().get(&other.group)?.is_some());
+    Ok(())
+}

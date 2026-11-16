@@ -7,7 +7,6 @@ use core::time::Duration;
 use pingers_meetup::{
     AllowListChoice, AskBack, ExactLocation, GrantScope, LocationAnswer, MeetupAction, MeetupEvent,
 };
-use pingers_mls::CipherSuitePolicy;
 use pingers_proto::{Delivery, LeafIndex};
 
 use super::{Live, TestError, TestResult, World, fix};
@@ -118,7 +117,7 @@ async fn revoking_while_members_are_offline_reaches_only_those_who_keep_access()
     let [mut alice, bob] = world.meetup_of_two().await?;
     let knock = knock_key_package(
         world.device(2)?.database(),
-        CipherSuitePolicy::Classical,
+        super::knocking(2),
         Box::new(pingers_testkit::seeded_rng(3)),
     )
     .await?;

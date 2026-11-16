@@ -7,6 +7,7 @@ use pingers_proto::PushHandle;
 
 use super::Client;
 use crate::ClientError;
+use crate::forward::emit;
 use crate::ports::{ClientEvent, Foreground, GeofenceTransition, WakeInput, WakeOutcome};
 
 impl Client {
@@ -116,17 +117,8 @@ impl Client {
         self.publish_snapshot().await.map(drop)
     }
 
+    /// Makes the [`Events`](crate::Events) call `event` stands for.
     pub(super) fn emit(&self, event: ClientEvent) {
-        let events = self.events.as_ref();
-        match event {
-            ClientEvent::PartiesChanged => events.parties_changed(),
-            ClientEvent::JoinRequested(party) => events.join_requested(party),
-            ClientEvent::LetIn(party) => events.let_in(party),
-            ClientEvent::MeetupStarted(meetup) => events.meetup_started(meetup),
-            ClientEvent::MeetupUpdated(meetup) => events.meetup_updated(meetup),
-            ClientEvent::MeetupEnded(meetup) => events.meetup_ended(meetup),
-            ClientEvent::Notice(notice) => events.notice(notice),
-            ClientEvent::PrivacyStatusChanged => events.privacy_status_changed(),
-        }
+        emit(self.events.as_ref(), event);
     }
 }

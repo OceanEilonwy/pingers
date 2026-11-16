@@ -20,6 +20,7 @@ use pingers_store::{Database, DatabaseKey};
 use tokio::sync::watch;
 use zeroize::Zeroizing;
 
+use crate::forward::{Forwarder, Forwarding, forward};
 use crate::ports::Crates;
 use crate::snapshot::ClientSnapshot;
 use crate::{ClientError, Events, Instance, Outside, Platform, SecureStoreKey};
@@ -41,6 +42,8 @@ pub struct Client {
     events: Arc<dyn Events>,
     crates: Crates,
     snapshot: watch::Sender<Arc<ClientSnapshot>>,
+    /// Passes on what the live Meetups raise on their own.
+    _meetup_events: Option<Forwarder>,
 }
 
 impl Client {
@@ -88,12 +91,21 @@ impl Client {
             .await
             .map_err(|_panicked| ClientError::Internal)??;
         let crates = build(database)?;
-        let snapshot = Arc::new(assemble(&crates).await?);
+        let snapshot = watch::channel(Arc::new(assemble(&crates).await?)).0;
+        let meetup_events = crates.meetups.take_events().map(|incoming| {
+            forward(Forwarding {
+                incoming,
+                crates: crates.clone(),
+                snapshot: snapshot.clone(),
+                events: Arc::clone(&events),
+            })
+        });
         Ok(Self {
             platform,
             events,
             crates,
-            snapshot: watch::channel(snapshot).0,
+            snapshot,
+            _meetup_events: meetup_events,
         })
     }
 
@@ -142,7 +154,7 @@ fn database_key(platform: &dyn Platform) -> Result<DatabaseKey, ClientError> {
 }
 
 /// One snapshot from the four crates' sections.
-async fn assemble(crates: &Crates) -> Result<ClientSnapshot, ClientError> {
+pub(crate) async fn assemble(crates: &Crates) -> Result<ClientSnapshot, ClientError> {
     let parties = crates.parties.section().await?;
     let pipeline = crates.wake.section().await?;
     let server = crates.sync.section().await?;

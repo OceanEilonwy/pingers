@@ -23,6 +23,26 @@ pub(crate) struct Incoming {
     pub(crate) expires: UnixSeconds,
 }
 
+/// A request this device sent that is still pending ("Request sent").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PendingAsk {
+    /// The request.
+    pub id: LocationRequestId,
+    /// When it lapses.
+    pub expires: UnixSeconds,
+}
+
+/// A request this device received that waits on an answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PendingRequest {
+    /// The request, for the answer.
+    pub id: LocationRequestId,
+    /// Who asks.
+    pub from: LeafIndex,
+    /// When it lapses unanswered.
+    pub expires: UnixSeconds,
+}
+
 /// Requests waiting on an answer, in both directions.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Requests {
@@ -30,8 +50,8 @@ pub(crate) struct Requests {
     /// Every request id received, until its ask has expired by its own timestamp; a copy
     /// arriving later is then refused as expired.
     seen: BTreeMap<LocationRequestId, UnixSeconds>,
-    /// When this device's request to each member lapses.
-    outgoing: BTreeMap<LeafIndex, UnixSeconds>,
+    /// This device's pending request to each member.
+    outgoing: BTreeMap<LeafIndex, PendingAsk>,
 }
 
 /// Whether a received ask should be acted on.
@@ -98,16 +118,29 @@ impl Requests {
     }
 
     /// Records this device's request to `target`.
-    pub(crate) fn sent(&mut self, target: LeafIndex, expires: UnixSeconds) {
-        self.outgoing.insert(target, expires);
+    pub(crate) fn sent(&mut self, target: LeafIndex, ask: PendingAsk) {
+        self.outgoing.insert(target, ask);
     }
 
-    /// When this device's request to `target` lapses, if one is pending.
-    pub(crate) fn outgoing(&self, target: LeafIndex, now: UnixSeconds) -> Option<UnixSeconds> {
+    /// This device's request to `target`, if one is pending.
+    pub(crate) fn outgoing(&self, target: LeafIndex, now: UnixSeconds) -> Option<PendingAsk> {
         self.outgoing
             .get(&target)
             .copied()
-            .filter(|expires| *expires > now)
+            .filter(|ask| ask.expires > now)
+    }
+
+    /// The received requests still waiting on an answer at `now`.
+    pub(crate) fn incoming(&self, now: UnixSeconds) -> Vec<PendingRequest> {
+        self.incoming
+            .iter()
+            .filter(|(_id, pending)| pending.expires > now)
+            .map(|(id, pending)| PendingRequest {
+                id: *id,
+                from: pending.from,
+                expires: pending.expires,
+            })
+            .collect()
     }
 
     /// The request to `target` was answered with a grant.
@@ -119,7 +152,7 @@ impl Requests {
     pub(crate) fn expire(&mut self, now: UnixSeconds) {
         self.incoming
             .retain(|_request, pending| pending.expires > now);
-        self.outgoing.retain(|_target, expires| *expires > now);
+        self.outgoing.retain(|_target, ask| ask.expires > now);
         self.seen.retain(|_request, expires| *expires > now);
     }
 
@@ -254,7 +287,13 @@ mod tests {
             LeafIndex::new(2),
             UnixSeconds::new(1_000),
         )?;
-        requests.sent(LeafIndex::new(3), UnixSeconds::new(1_700));
+        requests.sent(
+            LeafIndex::new(3),
+            PendingAsk {
+                id: request(9),
+                expires: UnixSeconds::new(1_700),
+            },
+        );
         requests.expire(UnixSeconds::new(1_600));
         assert!(matches!(
             requests.take(request(1), UnixSeconds::new(0)),
@@ -281,14 +320,40 @@ mod tests {
     #[test]
     fn an_outgoing_request_is_pending_until_it_expires() {
         let mut requests = Requests::default();
-        requests.sent(LeafIndex::new(3), UnixSeconds::new(1_600));
+        let ask = PendingAsk {
+            id: request(4),
+            expires: UnixSeconds::new(1_600),
+        };
+        requests.sent(LeafIndex::new(3), ask);
         assert_eq!(
             requests.outgoing(LeafIndex::new(3), UnixSeconds::new(1_599)),
-            Some(UnixSeconds::new(1_600))
+            Some(ask)
         );
         assert_eq!(
             requests.outgoing(LeafIndex::new(3), UnixSeconds::new(1_600)),
             None
         );
+    }
+
+    #[test]
+    fn received_requests_are_listed_until_they_lapse() -> Result<(), MeetupError> {
+        let mut requests = Requests::default();
+        let _new = receive(
+            &mut requests,
+            request(1),
+            LeafIndex::new(2),
+            UnixSeconds::new(1_000),
+        )?;
+        let listed = requests.incoming(UnixSeconds::new(1_000));
+        assert_eq!(
+            listed,
+            vec![PendingRequest {
+                id: request(1),
+                from: LeafIndex::new(2),
+                expires: UnixSeconds::new(1_600),
+            }]
+        );
+        assert!(requests.incoming(UnixSeconds::new(1_600)).is_empty());
+        Ok(())
     }
 }

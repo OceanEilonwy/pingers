@@ -36,7 +36,21 @@ fn an_ask_reaches_only_its_target() -> TestResult {
     };
     assert!(requested(&net.device(BEN)?.events));
     assert!(!requested(&net.device(ALICE)?.events));
-    assert!(net.session(CHLOE)?.pending_request(BEN, net.now).is_some());
+    // Both ends name the same request: Chloé's pending ask, and the one waiting on Ben.
+    let sent = net
+        .session(CHLOE)?
+        .pending_request(BEN, net.now)
+        .ok_or(MeetupError::UnknownRequest)?;
+    let waiting = net.session(BEN)?.incoming_requests(net.now);
+    assert_eq!(
+        waiting,
+        vec![crate::PendingRequest {
+            id: sent.id,
+            from: CHLOE,
+            expires: sent.expires,
+        }]
+    );
+    assert!(net.session(ALICE)?.incoming_requests(net.now).is_empty());
     Ok(())
 }
 

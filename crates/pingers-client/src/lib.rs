@@ -20,11 +20,14 @@
 //! - [`snapshot`]: the [`ClientSnapshot`](snapshot::ClientSnapshot) every call republishes.
 //!
 //! Commands report changes through the snapshot ([`Client::subscribe`]); [`Events`] carries
-//! what the pipeline found on its own.
+//! what the pipeline found on its own, and what the live Meetups raise (a message, a
+//! position, a location request, a member joining, the end), each after the snapshot that
+//! shows it is published.
 #![forbid(unsafe_code)]
 
 mod client;
 mod error;
+mod forward;
 pub mod ports;
 mod real;
 pub mod snapshot;

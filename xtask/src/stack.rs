@@ -225,6 +225,11 @@ impl Layout {
     fn run(&self) -> PathBuf {
         self.root.join("run")
     }
+    /// Whether this layout's stack is the one running: its supervisor keeps a pid file while
+    /// it runs. Another stack directory's stack can hold the same ports, with other keys.
+    pub(crate) fn owns_running_stack(&self) -> bool {
+        self.run().join("stack.pids").is_file()
+    }
     /// The app's build variables, one `NAME=value` per line.
     pub(crate) fn app_env(&self) -> PathBuf {
         self.root.join("app.env")
@@ -335,6 +340,22 @@ pub(crate) fn front_is_up() -> bool {
     [FRONT_SERVER, FRONT_OHTTP, FRONT_PUSH, FRONT_MAPS]
         .into_iter()
         .all(|port| answers(loopback(port)))
+}
+
+/// Whether any port a stack listens on answers: a stack still starting (ntfy first) holds
+/// some before its front is up.
+pub(crate) fn any_port_is_taken() -> bool {
+    [
+        FRONT_SERVER,
+        FRONT_OHTTP,
+        FRONT_PUSH,
+        FRONT_MAPS,
+        NTFY_PORT,
+        FRONT_SECOND_SERVER,
+        FRONT_SECOND_OHTTP,
+    ]
+    .into_iter()
+    .any(|port| answers(loopback(port)))
 }
 
 /// Builds the binaries and writes every key, configuration and the app's variables.
@@ -1278,6 +1299,18 @@ mod tests {
         );
         assert_eq!(StackOptions::parse(&strings(&["--dir"])), None);
         assert_eq!(StackOptions::parse(&strings(&["--other"])), None);
+    }
+
+    #[test]
+    fn a_layout_owns_the_running_stack_only_with_its_pid_file() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("xtask-owns-stack-{}", std::process::id()));
+        let layout = Layout::new(root.clone());
+        fs::create_dir_all(layout.run())?;
+        assert!(!layout.owns_running_stack());
+        fs::write(layout.run().join("stack.pids"), "1 pingers-server\n")?;
+        assert!(layout.owns_running_stack());
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]

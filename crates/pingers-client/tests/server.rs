@@ -507,20 +507,27 @@ async fn a_new_token_and_a_relay_rotation_reach_every_registration() -> Result<(
     let first = fingerprint(&old_key, "https://up.invalid/a")?;
     assert_eq!(seals(&path, clock.now())?, vec![first, first]);
 
-    // A new token reaches the subscription and the pooled mailbox, one step each.
+    // A new token: the empty reply pool is filled first (a knock needs a reply mailbox now),
+    // sealed with it; then the subscription and the knock mailbox are sealed again, one step
+    // each.
     platform.set_push_registration(Some(token("https://up.invalid/b")));
     steps(&client, 1).await?;
     let renewed = fingerprint(&old_key, "https://up.invalid/b")?;
+    let count =
+        |seals: &[PushSealFingerprint]| seals.iter().filter(|seal| **seal == renewed).count();
     assert_eq!(
-        seals(&path, clock.now())?
-            .iter()
-            .filter(|seal| **seal == renewed)
-            .count(),
+        count(&seals(&path, clock.now())?),
         1,
         "one registration per step"
     );
     steps(&client, 1).await?;
-    assert_eq!(seals(&path, clock.now())?, vec![renewed, renewed]);
+    assert_eq!(
+        count(&seals(&path, clock.now())?),
+        2,
+        "one registration per step"
+    );
+    steps(&client, 1).await?;
+    assert_eq!(seals(&path, clock.now())?, vec![renewed; 3]);
 
     // After the rotation the same token is sealed to the new key, again one step each.
     clock.advance(std::time::Duration::from_hours(49));

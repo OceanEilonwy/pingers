@@ -1128,8 +1128,15 @@ where
             else {
                 continue;
             };
-            let Ok(key_package) = self.env.parties.key_package(party.party) else {
-                continue;
+            let meetups = self.env.meetups;
+            let Some(carried) = self
+                .port(
+                    WakeStep::Knock,
+                    meetups.knock_key_package(party.party, reply_mailbox),
+                )
+                .await
+            else {
+                break;
             };
             let knock = build_knock(
                 &KnockInputs {
@@ -1137,9 +1144,9 @@ where
                     spot: keys,
                     own_record: board.own_record_for(target.spot),
                     own_leaf: party.own_leaf,
-                    key_package,
+                    key_package: carried.key_package,
                     reply_mailbox,
-                    meetup_subscription: None,
+                    meetup_subscription: carried.subscription,
                     signing_key: self.env.parties.signing_key(),
                     class: party.knock_class,
                 },
@@ -1401,7 +1408,11 @@ where
                     continue;
                 };
                 let meetups = self.env.meetups;
-                let reply = ReplyPost { key, post };
+                let reply = ReplyPost {
+                    key,
+                    reply_mailbox: sent.reply_mailbox,
+                    post,
+                };
                 if self
                     .port(WakeStep::Handoff, meetups.welcome(reply))
                     .await

@@ -28,7 +28,9 @@ B.4.9, B.12, D, E.2). L3: tokio (spawn_blocking, select), no detached tasks.
   privacy class, `Route::credential()` the RLN scope of the anonymous credential (writes only).
 - `SyncEngine::send(request, Sending { policy, budget }) -> Outcome::{Answered(Response),
   Queued(NotSentReason), Dropped(NotSentReason)}`; `flush_queue(budget) -> FlushReport`;
-  `queued()` (async, counts the store's queue); `open_live(ApiRequest::live(..)) -> Box<dyn DuplexStream>`.
+  `queued()` (async, counts the store's queue); `open_live(ApiRequest::live(group, Option<&sub>, signer)) -> Box<dyn DuplexStream>`
+  (chunked OHTTP on the Stream route; pingers-client hands it to pingers-meetup-session's
+  `GroupNetwork::open_live`).
 - `QueuePolicy::{Drop, KeepUntil(UnixSeconds)}`; `Sending::{or_drop, or_keep_until}`.
 - `WakeBudget::{UNLIMITED, from_now(timer, left)}`; `MIN_REQUEST_TIME` (2 s).
 - Credentials: `ProcessRole::{MainApp, Extension}`, `CredentialPolicy { accepted,

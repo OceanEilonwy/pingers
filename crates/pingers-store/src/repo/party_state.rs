@@ -95,7 +95,7 @@ impl PartyConfigs<'_> {
             RelayList::Custom(relays) => (1, relays),
         };
         self.session.with(|connection| {
-            // The Party's server is kept once, in its `party` row (schema version 9); the
+            // The Party's server is kept once, in its `party` row (schema version 10); the
             // configuration must agree with it.
             let lives_on: Option<String> = connection
                 .query_row(

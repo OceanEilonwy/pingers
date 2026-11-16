@@ -56,6 +56,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 9,
         sql: include_str!("migrations/v9.sql"),
     },
+    Migration {
+        version: 10,
+        sql: include_str!("migrations/v10.sql"),
+    },
 ];
 
 /// The version a fully migrated database has.
@@ -165,7 +169,7 @@ mod tests {
         Ok(())
     }
 
-    /// A device's data as the last single-server schema (version 8) held it.
+    /// A device's data as the last single-server schema (version 9) held it.
     const SINGLE_SERVER_DATA: &str = "
         INSERT INTO identity (singleton, account_id, sig_sk, server_url, server_pin)
             VALUES (1, zeroblob(16), x'0101010101010101010101010101010101010101010101010101010101010101',
@@ -201,7 +205,7 @@ mod tests {
         {
             let connection = Connection::open(&path)?;
             connection.execute_batch(&key(1).pragma())?;
-            migrate_to(&connection, 8)?;
+            migrate_to(&connection, 9)?;
             connection.execute_batch(SINGLE_SERVER_DATA)?;
         }
         let database = Database::open(&path, key(1))?;
@@ -280,7 +284,7 @@ mod tests {
         {
             let connection = Connection::open(&path)?;
             connection.execute_batch(&key(1).pragma())?;
-            migrate_to(&connection, 8)?;
+            migrate_to(&connection, 9)?;
             connection
                 .execute_batch("INSERT INTO settings (k, v) VALUES ('display_name', x'00');")?;
         }

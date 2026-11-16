@@ -10,6 +10,7 @@ use zeroize::Zeroizing;
 
 use crate::geo::Coordinate;
 use crate::ids::{LocationRequestId, MeetupId, MemberId, PartyId, SpotId};
+use crate::notifications::Notifier;
 
 /// Why a platform call failed.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -326,36 +327,48 @@ impl client::Platform for PlatformAdapter {
     }
 }
 
-/// The app's [`Events`] as pingers-client's.
-pub(crate) struct EventsAdapter(pub(crate) Arc<dyn Events>);
+/// The app's [`Events`] as pingers-client's. A live Meetup's message, request or start is also
+/// notified ([`Notifier::live_event`]).
+pub(crate) struct EventsAdapter {
+    events: Arc<dyn Events>,
+    notifier: Arc<Notifier>,
+}
+
+impl EventsAdapter {
+    pub(crate) fn new(events: Arc<dyn Events>, notifier: Arc<Notifier>) -> Self {
+        Self { events, notifier }
+    }
+}
 
 impl client::Events for EventsAdapter {
     fn parties_changed(&self) {
-        self.0.parties_changed();
+        self.events.parties_changed();
     }
 
     fn join_requested(&self, party: pingers_proto::PartyId) {
-        self.0.join_requested(party.into());
+        self.events.join_requested(party.into());
     }
 
     fn let_in(&self, party: pingers_proto::PartyId) {
-        self.0.let_in(party.into());
+        self.events.let_in(party.into());
     }
 
     fn meetup_started(&self, meetup: pingers_proto::GroupId) {
-        self.0.meetup_started(meetup.into());
+        self.events.meetup_started(meetup.into());
+        self.notifier.live_event();
     }
 
     fn meetup_updated(&self, meetup: pingers_proto::GroupId) {
-        self.0.meetup_updated(meetup.into());
+        self.events.meetup_updated(meetup.into());
     }
 
     fn meetup_message(&self, meetup: pingers_proto::GroupId) {
-        self.0.meetup_message(meetup.into());
+        self.events.meetup_message(meetup.into());
+        self.notifier.live_event();
     }
 
     fn peer_location(&self, meetup: pingers_proto::GroupId, peer: pingers_proto::LeafIndex) {
-        self.0.peer_location(meetup.into(), peer.into());
+        self.events.peer_location(meetup.into(), peer.into());
     }
 
     fn location_request(
@@ -364,8 +377,9 @@ impl client::Events for EventsAdapter {
         from: pingers_proto::LeafIndex,
         request: pingers_proto::LocationRequestId,
     ) {
-        self.0
+        self.events
             .location_request(meetup.into(), from.into(), request.into());
+        self.notifier.live_event();
     }
 
     fn location_access_changed(
@@ -375,18 +389,19 @@ impl client::Events for EventsAdapter {
         _access: pingers_meetup::ExactLocation,
     ) {
         // The app reads the new access from a fresh snapshot, as for every other event.
-        self.0.location_access_changed(meetup.into(), peer.into());
+        self.events
+            .location_access_changed(meetup.into(), peer.into());
     }
 
     fn meetup_ended(&self, meetup: pingers_proto::GroupId) {
-        self.0.meetup_ended(meetup.into());
+        self.events.meetup_ended(meetup.into());
     }
 
     fn notice(&self, notice: client::Notice) {
-        self.0.notice(notice.into());
+        self.events.notice(notice.into());
     }
 
     fn privacy_status_changed(&self) {
-        self.0.privacy_status_changed();
+        self.events.privacy_status_changed();
     }
 }

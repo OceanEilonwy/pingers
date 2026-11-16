@@ -110,6 +110,8 @@ const UI: Duration = Duration::from_secs(20);
 const NETWORK: Duration = Duration::from_secs(120);
 /// Waits for presence (the entry rule, wakes, the knock) and for the Meetup to end.
 const PRESENCE: Duration = Duration::from_secs(360);
+/// How long to wait for another stack directory's stack to stop before starting ours.
+const FOREIGN_STACK: Duration = Duration::from_mins(45);
 
 /// What the command line asked for.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -357,20 +359,7 @@ fn setup_and_play(
     // The stack: one already running, or one of our own for this run.
     let mut own_stack: Option<Supervisor> = None;
     setup_step(report, "local stack up", || {
-        if stack::front_is_up() {
-            if options.cross_server && !stack::second_front_is_up() {
-                bail!(
-                    "a stack without server B already holds the ports: stop it, or run without --cross-server"
-                );
-            }
-            return Ok("using the stack already running".to_owned());
-        }
-        let prepared = stack::prepare(workspace, &options.stack)?;
-        own_stack = Some(stack::start(&prepared)?);
-        Ok(format!(
-            "started for this run; logs in {}",
-            prepared.layout.logs().display()
-        ))
+        stack_up(workspace, options, layout, &mut own_stack)
     })?;
 
     let mut apk = PathBuf::new();
@@ -498,6 +487,55 @@ fn setup_and_play(
     result
 }
 
+/// This stack directory's stack if it is running, or a new one for this run (after any other
+/// stack directory's stack has stopped); `own_stack` holds a new one until the run ends.
+fn stack_up(
+    workspace: &Path,
+    options: &ScenarioOptions,
+    layout: &Layout,
+    own_stack: &mut Option<Supervisor>,
+) -> Result<String> {
+    if stack::front_is_up() && layout.owns_running_stack() {
+        if options.cross_server && !stack::second_front_is_up() {
+            bail!(
+                "this directory's stack is running without server B: stop it, or run without --cross-server"
+            );
+        }
+        return Ok("using the stack already running".to_owned());
+    }
+    wait_out_foreign_stack()?;
+    let prepared = stack::prepare(workspace, &options.stack)?;
+    *own_stack = Some(stack::start(&prepared)?);
+    Ok(format!(
+        "started for this run; logs in {}",
+        prepared.layout.logs().display()
+    ))
+}
+
+/// Another stack directory's stack (another worktree's run) can hold the ports, with keys this
+/// app is not built for: waits for it to stop rather than talk to it.
+fn wait_out_foreign_stack() -> Result<()> {
+    if !stack::any_port_is_taken() {
+        return Ok(());
+    }
+    writeln!(
+        io::stderr(),
+        "e2e: another stack holds the ports; waiting up to {} min for it to stop",
+        FOREIGN_STACK.as_secs() / 60
+    )?;
+    let deadline = Deadline::after(FOREIGN_STACK);
+    while stack::any_port_is_taken() {
+        if deadline.passed() {
+            bail!(
+                "another stack directory's stack still holds the ports after {} min",
+                FOREIGN_STACK.as_secs() / 60
+            );
+        }
+        pause(Duration::from_secs(10));
+    }
+    Ok(())
+}
+
 /// A step before the phones exist: no evidence but the message.
 fn setup_step(
     report: &mut Report,
@@ -564,8 +602,9 @@ fn play(
         )?;
         let field = a.tap_when(&Find::text(Text::Is("Party name".into())).field(), UI)?;
         a.type_text(PARTY)?;
+        // Create waits for the reachability check through the relay, a network call.
         let create = Find::tag("new_party_create").enabled();
-        if let Err(error) = a.tap_when(&create, UI) {
+        if let Err(error) = a.tap_when(&create, NETWORK) {
             bail!(
                 "Create party never became enabled after typing the name into {:?}: {error:#}",
                 field.label()
@@ -850,6 +889,22 @@ fn play(
                 latitude: B_INSIDE.latitude + nudge,
                 longitude: B_INSIDE.longitude,
             })?;
+            // An emulator has no Wi-Fi or cell location, so the OS geofences (which ride on the
+            // low-power location a real phone always has) only see a fix when Pingers asks
+            // for one. Opening the app at the Spot, as a person arriving would, runs a wake
+            // that asks, and each wake fills one more mailbox (a knock needs a reply mailbox,
+            // a record a knock mailbox); every fourth round until the Meetup shows.
+            if round.is_multiple_of(4) {
+                for device in [&scene.a, &scene.b] {
+                    // Another app on top stops Pingers' activity for certain (the launcher may be
+                    // busy being updated).
+                    device.shell("am start -W -a android.settings.SETTINGS")?;
+                }
+                pause(Duration::from_secs(2));
+                for device in [&scene.a, &scene.b] {
+                    device.shell(&format!("am start -W -n {}/{ACTIVITY}", scene.package))?;
+                }
+            }
             let on_a = scene.a.screen()?.find(&signal).is_some();
             let on_b = scene.b.screen()?.find(&signal).is_some();
             if on_a && on_b {
@@ -933,6 +988,15 @@ fn play(
                 &Find::tag("location_allow").or(Text::Is("Allow".into())),
                 NETWORK,
             )?;
+            // A's answer asks to see B too ("Ask to see Ben too" is on by default), and B's
+            // phone opens that request over the Meetup: B puts it off to look.
+            let asked_back =
+                Find::text(Text::Contains("wants to see exactly where you are".into()));
+            if scene.b.wait_for(&asked_back, UI).is_ok() {
+                scene
+                    .b
+                    .tap_when(&Find::text(Text::Is("Not now".into())), UI)?;
+            }
             scene.b.wait_for(
                 &Find::text(Text::Contains("sharing with you".into()))
                     .or(Text::Is("Sharing with you".into())),
@@ -1258,6 +1322,9 @@ fn set_ntfy_server(device: &Device, server: &str) -> Result<()> {
 /// animations off, the phone away from the Spot, and Home on screen.
 fn install_pingers(device: &Device, apk: &Path, package: &str) -> Result<()> {
     let _ignored = device.adb(&["uninstall", package]);
+    // The Play Store updates apps in the background of a fresh image, Chrome among them,
+    // and kills them mid-step; nothing here needs it (Play services, which FCM uses, stays).
+    let _ignored = device.shell("pm disable-user --user 0 com.android.vending");
     device.adb(&["install", "-r", "-g", &apk.display().to_string()])?;
     for setting in [
         "window_animation_scale",
@@ -1355,6 +1422,7 @@ fn through_landing_page(device: &Device, link: &str) -> Result<String> {
     let joined = Find::tag("join_ask").or(Text::Is("Ask to join".into()));
     let deadline = Deadline::after(NETWORK);
     let mut tapped_open = false;
+    let mut page_without_button: Option<Deadline> = None;
     loop {
         let screen = device.screen()?;
         if screen.find(&joined).is_some() {
@@ -1387,6 +1455,22 @@ fn through_landing_page(device: &Device, link: &str) -> Result<String> {
         } else if let Some(button) = screen.find(&open) {
             device.tap(button)?;
             tapped_open = true;
+        } else if screen
+            .find(&Find::text(Text::StartsWith(
+                "Don't have Pingers yet".into(),
+            )))
+            .is_some()
+        {
+            // The page is up but its script has not shown the button: right after the
+            // certificate warning, Chrome may have loaded the page without it. Once a while,
+            // load the link again.
+            let reload = *page_without_button.get_or_insert_with(|| Deadline::after(UI));
+            if reload.passed() {
+                device.shell(&format!(
+                    "am start -W -a android.intent.action.VIEW -d '{link}' {CHROME}"
+                ))?;
+                page_without_button = None;
+            }
         }
         pause(Duration::from_secs(1));
     }

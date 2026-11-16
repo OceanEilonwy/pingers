@@ -1,0 +1,16 @@
+{
+  "name": "meetup-subscription-extension",
+  "description": "The pingers_meetup_subscription leaf-node extension of a Meetup member: type 0xF0A2 (private use), extension_data = the member's 16-byte subscription id, encoded as an MLS Extension (RFC 9420 section 7.2, variable-length size prefix). It follows the pingers_grant_key extension in the leaf's extension list.",
+  "vectors": [
+    {
+      "name": "subscription-id",
+      "inputs": {
+        "subscription_id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+      },
+      "expected": {
+        "extension_type": 61602,
+        "extension": "f0a210a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+      }
+    }
+  ]
+}

@@ -5,17 +5,27 @@
 use core::time::Duration;
 
 use pingers_geo::{Meters, PresenceState};
+use pingers_presence::VerifiedKnock;
 use pingers_presence::{
     Admission, EpochState, EpochTransition, KnockDecision, LEASE_DURATION, MIN_UPLOAD_SPACING,
     MeetupKeyId, UploadTrigger,
 };
-use pingers_proto::{Epoch, ReadBoard};
+use pingers_proto::{Epoch, MailboxId, ReadBoard};
 
-use super::fakes::Call;
+use super::fakes::{Call, Replied, knock_subscription};
 use super::{EPOCH, TestError, Town};
 use crate::{
     KnockOutcome, KnockStatus, PushReason, UploadOutcome, WakeEnding, WakeNotice, WakeTrigger,
 };
+
+/// The Welcome names its knock by the reply mailbox the knocker's key package was made for,
+/// and the knock carried the Meetup subscription made with that key package.
+fn answers_its_knock(welcome: &Replied, knock: &VerifiedKnock, made_for: &[MailboxId]) {
+    let mailbox = knock.knock.reply_mailbox;
+    assert_eq!(welcome.reply_mailbox, mailbox);
+    assert_eq!(made_for, [mailbox]);
+    assert_eq!(knock.knock.meetup_subscription, knock_subscription(mailbox));
+}
 
 /// G.3: the OS reports the entry, two fixes confirm it, and the lease carries one real record
 /// and three dummies. Nobody else is there, so nothing matches.
@@ -171,6 +181,7 @@ async fn second_arrival_knocks_and_the_poster_admits_after_a_liveness_check()
     assert_eq!(welcome.key, admission.key);
     assert_eq!(welcome.psk, admission.psk);
     assert_eq!(welcome.post, b"welcome".to_vec());
+    answers_its_knock(welcome, &admission.knock, &bob.meetups.knock_keys());
     let status = bob.board().sent_knocks.first().map(|sent| sent.status);
     assert_eq!(status, Some(KnockStatus::Answered));
     // Answered knocks are not read again.

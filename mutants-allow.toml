@@ -19,21 +19,9 @@ name = "crates/pingers-geo/src/presence.rs: replace > with >= in SpotPresence::r
 reason = "equivalent (two sites): when the compared times are equal, both branches pick the same UnixSeconds"
 
 [[mutant]]
-name = "crates/pingers-client/src/real/meetups.rs: replace Meetups::runtime -> Option<Runtime> with None"
-reason = "equivalent in the client tests: they run without an instance, so there is no runtime either way, and with one the create_group call needs a reachable server. Remove when a client test runs against the harness server."
-
-[[mutant]]
-name = "crates/pingers-client/src/real/meetups.rs: replace <impl MeetupPort for Meetups>::leave -> Result<(), PortError> with Ok(())"
-reason = "equivalent in the client tests: without a harness server no Meetup goes live, so leave always finds none and answers Ok(()). Remove when a client test runs a Meetup against the harness server."
-
-
 [[mutant]]
 name = "crates/pingers-client/src/real/meetups.rs: replace Meetups::pushed -> Result<(), ClientError> with Ok(())"
 reason = "equivalent in the client tests: without a harness server no Meetup goes live, so a push never names a live Meetup and there is no log to read. What it calls is pinned by pingers-meetup-session (a_push_has_an_offline_member_read_the_log_at_once). Remove when a client test runs a Meetup against the harness server."
-
-[[mutant]]
-name = "crates/pingers-meetup-session/src/live.rs: replace Driver::command -> Result<Option<Ended>, SessionError> with Ok(None)"
-reason = "caught by a hang, which cargo-mutants reports as a timeout: the mutant drops every command and its reply, so every handle call in the tests waits forever"
 
 [[mutant]]
 name = "crates/pingers-wake/src/push_priority.rs: replace | with ^ in PriorityWindow::record"
@@ -164,48 +152,60 @@ name = "crates/pingers-server/src/http.rs: replace >= with < in IdleWatch::serve
 reason = "caught as a timeout, not missed: every connection is then closed as soon as it opens, and tests that wait on the manual clock for an answer hang until cargo-mutants gives up"
 
 [[mutant]]
-name = "crates/pingers-wake/src/state.rs: replace < with <= in Board::prune"
-reason = "equivalent: a knock is decided after its record's lease started, so exactly one lease after the decision that lease has expired and its knock mailbox is no longer read; keeping or dropping the decision at that instant cannot be observed (the comment at the call says so)"
+name = "crates/pingers-meetup-session/src/live.rs: replace <impl Drop for MeetupHandle>::drop with ()"
+reason = "equivalent: dropping the handle also drops the only command sender, and the task stops at its next wait when it finds every sender gone (Wake::Command(None)); aborting only makes that immediate"
 
 [[mutant]]
-name = "crates/pingers-client/src/real/sync.rs: replace Net::post_welcome -> Result<(), PortError> with Ok(())"
-reason = "equivalent in the client tests: a Meetup Welcome is posted only after a knock is accepted, and no knock is ever built while Lens::key_package answers Unavailable (WAITING(contracts) in wake_ports.rs). Remove when knocks run between two harness devices."
+name = "crates/pingers-client/src/real/meetup_watch.rs: replace <impl Drop for Watch>::drop with ()"
+reason = "equivalent: a watcher's entry always drops its Meetup handle with it, which ends the session task and closes the event channel the watcher waits on, so the watcher stops on its own; ended_on_its_own then finds no entry and does nothing"
 
 [[mutant]]
-name = "crates/pingers-client/src/real/sync.rs: replace <impl ServerPort for Net>::post_knock -> Result<(), PortError> with Ok(())"
-reason = "equivalent in the client tests: no knock is ever built while Lens::key_package answers Unavailable (WAITING(contracts) in wake_ports.rs), so post_knock is never called. Remove when knocks run between two harness devices."
+name = "crates/pingers-client/src/real/meetup_network.rs: delete match arm SyncError::Status{..} | SyncError::BadResponse{..} | SyncError::RelayKeyMismatch in network_error"
+reason = "equivalent: pingers-meetup-session treats NetworkError::Rejected and Unavailable alike (it drops the input or retries later on either), so mapping every failure to Unavailable changes nothing"
 
 [[mutant]]
-name = "crates/pingers-client/src/real/sync.rs: replace <impl ServerPort for Net>::read_mailbox -> Result<Vec<Vec<u8>>, PortError> with Ok(vec![])"
-reason = "equivalent in the client tests: knock and reply mailboxes stay empty while no knock can be built (Lens::key_package, WAITING(contracts)); reading none and reading nothing are the same. Remove when knocks run between two harness devices."
+name = "crates/pingers-meetup-session/src/live.rs: replace MeetupHandle::send -> Result<(), SessionError> with Ok(())"
+reason = "caught as a timeout, not missed: every command then waits forever for an answer that is never sent, so the first test that acts on a Meetup hangs until cargo-mutants gives up"
 
 [[mutant]]
-name = "crates/pingers-client/src/real/sync.rs: replace <impl ServerPort for Net>::read_mailbox -> Result<Vec<Vec<u8>>, PortError> with Ok(vec![vec![]])"
-reason = "equivalent in the client tests: a post that does not open as a knock or a Welcome is skipped, and no real post can arrive while no knock can be built (Lens::key_package, WAITING(contracts)). Remove when knocks run between two harness devices."
+name = "crates/pingers-meetup-session/src/live.rs: replace Reconnect::delay -> Duration with Default::default()"
+reason = "caught as a timeout, not missed: with no backoff a refused channel is retried in a tight loop on the manual clock, starving the test's own steps until cargo-mutants gives up"
 
 [[mutant]]
-name = "crates/pingers-client/src/real/sync.rs: replace <impl ServerPort for Net>::read_mailbox -> Result<Vec<Vec<u8>>, PortError> with Ok(vec![vec![0]])"
-reason = "equivalent in the client tests: a post that does not open as a knock or a Welcome is skipped, and no real post can arrive while no knock can be built (Lens::key_package, WAITING(contracts)). Remove when knocks run between two harness devices."
+name = "crates/pingers-meetup-session/src/live.rs: replace <= with > in Driver::serve"
+reason = "caught as a timeout, not missed: a dropped channel is then never re-opened, and the tests that wait for it to reconnect hang until cargo-mutants gives up"
 
 [[mutant]]
-name = "crates/pingers-client/src/real/sync.rs: replace <impl ServerPort for Net>::read_mailbox -> Result<Vec<Vec<u8>>, PortError> with Ok(vec![vec![1]])"
-reason = "equivalent in the client tests: a post that does not open as a knock or a Welcome is skipped, and no real post can arrive while no knock can be built (Lens::key_package, WAITING(contracts)). Remove when knocks run between two harness devices."
+name = "crates/pingers-meetup-session/src/live.rs: replace Driver::command -> Result<Option<Ended>, SessionError> with Ok(None)"
+reason = "caught as a timeout, not missed: commands are then never carried out or answered, so the first test that acts on a Meetup hangs until cargo-mutants gives up"
 
 [[mutant]]
-name = "crates/pingers-client/src/real/sync.rs: replace <impl GroupNetwork for GroupLogs>::create_group -> Result<(), NetworkError> with Ok(())"
-reason = "equivalent in the client tests, as Meetups::runtime above: no Meetup is created without an accepted knock. Remove when a client test runs a Meetup against the harness server."
+name = "crates/pingers-meetup-session/src/live.rs: replace Driver::tick -> Result<Option<Ended>, SessionError> with Ok(None)"
+reason = "caught as a timeout, not missed: no frame or timer ever runs, so the tests that wait for the first frames on the channel hang until cargo-mutants gives up"
 
 [[mutant]]
-name = "crates/pingers-client/src/real/sync.rs: replace <impl GroupNetwork for GroupLogs>::post_message -> Result<(), NetworkError> with Ok(())"
-reason = "equivalent in the client tests, as Meetups::runtime above: no Meetup goes live, so no Meetup message is posted. Remove when a client test runs a Meetup against the harness server."
+name = "crates/pingers-meetup-session/src/live.rs: replace == with != in Driver::carry_out_all"
+reason = "caught as a timeout, not missed: proposals are then committed when none wait and never when one does, so the leaver tests wait forever for the commit that removes the leaver"
 
 [[mutant]]
-name = "crates/pingers-client/src/real/sync.rs: replace <impl GroupNetwork for GroupLogs>::fetch_log -> Result<Vec<GroupLogEntry>, NetworkError> with Ok(vec![])"
-reason = "equivalent in the client tests, as Meetups::runtime above: no Meetup goes live, so no Meetup log is read. Remove when a client test runs a Meetup against the harness server."
+name = "crates/pingers-meetup-session/src/live.rs: replace receive -> Result<Option<Vec<u8>>, pingers_transport::TransportError> with Ok(None)"
+reason = "caught as a timeout, not missed: a channel that always reads as closed makes the task reconnect in a loop without ever waiting, starving the tests until cargo-mutants gives up"
 
 [[mutant]]
-name = "crates/pingers-client/src/real/sync.rs: replace <impl GroupNetwork for GroupLogs>::delete_group -> Result<(), NetworkError> with Ok(())"
-reason = "equivalent in the client tests, as Meetups::runtime above: no Meetup goes live, so none is deleted. Remove when a client test runs a Meetup against the harness server."
+name = "crates/pingers-meetup-session/src/state.rs: delete match arm MeetupOutput::End(reason) in Core::carry_out"
+reason = "caught as a timeout, not missed: a Meetup that should end (alone too long, removed) then never does, and the tests that wait for its end hang until cargo-mutants gives up"
+
+[[mutant]]
+name = "crates/pingers-meetup-session/src/live.rs: replace receive -> Result<Option<Vec<u8>>, pingers_transport::TransportError> with Ok(Some(vec![]))"
+reason = "caught as a timeout, not missed: a channel that always yields a frame makes the task loop without ever waiting, starving the tests until cargo-mutants gives up"
+
+[[mutant]]
+name = "crates/pingers-meetup-session/src/live.rs: replace receive -> Result<Option<Vec<u8>>, pingers_transport::TransportError> with Ok(Some(vec![0]))"
+reason = "caught as a timeout, not missed: a channel that always yields a frame makes the task loop without ever waiting, starving the tests until cargo-mutants gives up"
+
+[[mutant]]
+name = "crates/pingers-meetup-session/src/live.rs: replace receive -> Result<Option<Vec<u8>>, pingers_transport::TransportError> with Ok(Some(vec![1]))"
+reason = "caught as a timeout, not missed: a channel that always yields a frame makes the task loop without ever waiting, starving the tests until cargo-mutants gives up"
 
 [[mutant]]
 name = "crates/pingers-crypto/src/checksum.rs: replace | with ^ in ContentDigest::from_hex"

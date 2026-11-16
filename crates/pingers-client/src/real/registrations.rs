@@ -6,16 +6,16 @@
 use pingers_meetup_session::meetup_log_auth_key;
 use pingers_parties::{PartyLifecycle, ProfileChange, ProfilePublication};
 use pingers_proto::{GroupId, ServerId, Subscription, TimeToLive};
-use pingers_store::{MailboxPurpose, Session, WakePushes as StoredPushes};
+use pingers_store::{Session, WakePushes as StoredPushes};
 use pingers_sync::{
-    GroupMembership, Maintained, Maintenance, PoolTarget, Pushes, SyncError, WakeBudget,
+    GroupMembership, Maintained, Maintenance, PoolTarget, Pushes, SyncEngine, SyncError, WakeBudget,
 };
 use pingers_wake::PriorityWindow;
 
 use super::push::TOKEN_LIFETIME;
 use super::records::{self, Key, corrupt};
 use super::servers::Link;
-use super::sync::{KNOCK_POOL, MAILBOX_LIFETIME, Net};
+use super::sync::{MAILBOX_LIFETIME, Net, POOL_ORDER, PoolStep};
 use crate::snapshot::{PushDelivery, PushDowngrade};
 use crate::{ClientError, Unavailable};
 
@@ -159,11 +159,7 @@ impl Net {
         let pushes = self.pushes(&link).await?;
         let groups = self.memberships(server).await?;
         let maintenance = Maintenance {
-            pool: PoolTarget {
-                purpose: MailboxPurpose::Knock,
-                size: KNOCK_POOL,
-                lifetime: TimeToLive::new(MAILBOX_LIFETIME).map_err(|_never| corrupt())?,
-            },
+            pool: Self::pool_short_of_target(&link.engine).await?,
             groups: &groups,
             subscription_lifetime: TimeToLive::new(TOKEN_LIFETIME).map_err(|_never| corrupt())?,
             pushes,
@@ -232,6 +228,28 @@ impl Net {
         }
         self.push(server, outbound);
         self.flush().await
+    }
+
+    /// The pool this wake tops up on `engine`'s server: the first in [`POOL_ORDER`] short of its size (a first knock
+    /// mailbox, a first reply mailbox, then both to full), or the last when all are full.
+    ///
+    /// # Errors
+    ///
+    /// A storage failure.
+    async fn pool_short_of_target(engine: &SyncEngine) -> Result<PoolTarget, ClientError> {
+        let lifetime = TimeToLive::new(MAILBOX_LIFETIME).map_err(|_| corrupt())?;
+        let mut chosen = None;
+        for PoolStep { purpose, size } in POOL_ORDER {
+            chosen = Some(PoolTarget {
+                purpose,
+                size,
+                lifetime,
+            });
+            if engine.pooled_mailboxes(purpose).await? < size {
+                break;
+            }
+        }
+        chosen.ok_or_else(corrupt)
     }
 
     /// One maintenance step on every server right after the token or the setting changed, so

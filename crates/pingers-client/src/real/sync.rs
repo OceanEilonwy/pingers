@@ -19,19 +19,17 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
 use pingers_crypto::LogAuthKeyPair;
-use pingers_meetup_session::{GroupNetwork, NetworkError};
-use pingers_ohttp::BinaryRequest;
+
 use pingers_parties::{LeaveRequest, Outbound, OutgoingCommit, PartiesError, PartyLifecycle};
 use pingers_presence::{MailboxPurpose, OutgoingKnock};
 use pingers_proto::{
-    AppMessage, BoardCursor, BoardPage, CommitRequest, CommitResponse, CreateGroup, Epoch, GroupId,
-    GroupLogEntry, MailboxId, MapHostUrl, Padded, PartyId, SecretText, SequenceNumber, ServerId,
-    SizeClass, SubscriptionId, TimeToLive, WelcomeBytes,
+    BoardCursor, BoardPage, Epoch, GroupId, MailboxId, MapHostUrl, Padded, PartyId, SecretText,
+    SequenceNumber, ServerId, SizeClass, TimeToLive, WelcomeBytes,
 };
 use pingers_store::{MailboxPurpose as StoredPurpose, WakePushes as StoredPushes};
 use pingers_sync::{
-    ApiRequest, Committed, CredentialChoice, Delivered, GroupCall, GroupError, GroupLifetime,
-    GroupSigner, GroupStart, NewLease, PoolTarget, Sending, SyncError, WakeBudget,
+    Committed, CredentialChoice, Delivered, GroupCall, GroupError, GroupLifetime, GroupStart,
+    NewLease, PoolTarget, Sending, SyncError, WakeBudget,
 };
 use pingers_time::{Bucket, UnixSeconds};
 use pingers_wake::ports::{LeaseUpload, ServerPort};
@@ -62,6 +60,38 @@ pub(super) const MAILBOX_LIFETIME: Duration = Duration::from_hours(24);
 /// Rounds of one flush: a request sent in one round can queue another (a settled commit frees
 /// a waiting profile), which the next round sends.
 const FLUSH_ROUNDS: usize = 3;
+
+/// How many reply mailboxes the pool keeps: a wake knocks on at most three matches, each
+/// naming its own reply mailbox (design B.4.4).
+const REPLY_POOL: u32 = 3;
+
+/// One step of the pool refill order: a purpose, and the size to fill its pool to.
+pub(super) struct PoolStep {
+    pub(super) purpose: StoredPurpose,
+    pub(super) size: u32,
+}
+
+/// The order pools are refilled in, one registration per wake: a first knock mailbox (so
+/// this device's records can be knocked on), a first reply mailbox (so it can knock), then
+/// both to their full size.
+pub(super) const POOL_ORDER: [PoolStep; 4] = [
+    PoolStep {
+        purpose: StoredPurpose::Knock,
+        size: 1,
+    },
+    PoolStep {
+        purpose: StoredPurpose::Reply,
+        size: 1,
+    },
+    PoolStep {
+        purpose: StoredPurpose::Knock,
+        size: KNOCK_POOL,
+    },
+    PoolStep {
+        purpose: StoredPurpose::Reply,
+        size: REPLY_POOL,
+    },
+];
 
 /// An invite mailbox outlives the invite (24 hours, pingers-parties' `INVITE_LIFETIME`).
 const INVITE_MAILBOX_LIFETIME: Duration = Duration::from_hours(48);
@@ -225,7 +255,7 @@ impl Net {
         mine.into_iter().map(|waiting| waiting.outbound).collect()
     }
 
-    fn keep_until(&self) -> Sending {
+    pub(super) fn keep_until(&self) -> Sending {
         let now = party_log::now(&self.backend.outside);
         let until = UnixSeconds::new(now.get().saturating_add(KEEP_FOR.as_secs()));
         Sending::or_keep_until(until, WakeBudget::UNLIMITED)
@@ -544,7 +574,7 @@ enum Sent {
 }
 
 /// Whether a write went out (`true`), or waits in pingers-sync's queue or was dropped there.
-fn delivered<T>(result: Result<Delivered<T>, SyncError>) -> Result<bool, SyncError> {
+pub(super) fn delivered<T>(result: Result<Delivered<T>, SyncError>) -> Result<bool, SyncError> {
     Ok(match result? {
         Delivered::Done(_) | Delivered::Queued(_) => true,
         Delivered::Dropped(_) => false,
@@ -665,7 +695,12 @@ impl ServerPort for Net {
         )
         .await?
         {
-            Delivered::Done(response) => Ok(response.page),
+            Delivered::Done(response) => {
+                if let Some(page) = &response.page {
+                    self.saw_board(server, page).await;
+                }
+                Ok(response.page)
+            }
             Delivered::Queued(_) | Delivered::Dropped(_) => Err(PortError::Unreachable),
         }
     }
@@ -676,11 +711,13 @@ impl ServerPort for Net {
         cursor: BoardCursor,
     ) -> Result<BoardPage, PortError> {
         let link = self.port_link(server).await?;
-        on(
+        let page = on(
             &link,
             link.engine.board_page(&cursor, WakeBudget::UNLIMITED),
         )
-        .await
+        .await?;
+        self.saw_board(server, &page).await;
+        Ok(page)
     }
 
     async fn post_knock(&self, server: &ServerId, knock: OutgoingKnock) -> Result<(), PortError> {
@@ -909,151 +946,5 @@ impl SyncPort for Sync {
             operators: built_in.and_then(|link| link.operators()),
             push_delivery,
         })
-    }
-}
-
-/// pingers-meetup-session's `GroupNetwork`: every call goes to the server of the Meetup's
-/// Party.
-///
-/// WAITING(pingers-meetup-session): `live_head` hands back a raw `BinaryRequest` for its own
-/// transport, while pingers-sync builds and sends the live request itself (`open_live`); until
-/// the two meet, the live channel is not opened from here.
-pub(crate) struct GroupLogs {
-    pub(crate) net: Arc<Net>,
-    /// The server of the Meetup's Party.
-    pub(crate) server: ServerId,
-}
-
-#[expect(
-    clippy::wildcard_enum_match_arm,
-    reason = "every other failure is the network's or local, to try again later"
-)]
-fn network_error(error: &SyncError) -> NetworkError {
-    match error {
-        SyncError::Status { .. } | SyncError::BadResponse { .. } => NetworkError::Rejected,
-        _ => NetworkError::Unavailable,
-    }
-}
-
-impl GroupLogs {
-    async fn link(&self, _group: &GroupId) -> Result<Arc<Link>, NetworkError> {
-        self.net
-            .link(&self.server)
-            .await
-            .map_err(|_unknown| NetworkError::Unavailable)
-    }
-}
-
-#[async_trait]
-impl GroupNetwork for GroupLogs {
-    async fn create_group(&self, request: CreateGroup) -> Result<(), NetworkError> {
-        let link = self.link(&request.group_id).await?;
-        let start = GroupStart {
-            lifetime: GroupLifetime::Meetup,
-            epoch: Epoch::new(1),
-        };
-        let result = link
-            .engine
-            .create_group(&request, start, WakeBudget::UNLIMITED)
-            .await;
-        link.observe(&result);
-        result.map_err(|error| network_error(&error))
-    }
-
-    async fn post_commit(
-        &self,
-        group: &GroupId,
-        auth: &LogAuthKeyPair,
-        request: CommitRequest,
-    ) -> Result<CommitResponse, NetworkError> {
-        let link = self.link(group).await?;
-        let engine = &link.engine;
-        let signer = GroupSigner {
-            key: auth,
-            now: engine.corrected_now(),
-        };
-        let request =
-            ApiRequest::commit(group, &request, &signer).map_err(|error| network_error(&error))?;
-        let result = async {
-            let route = request.route();
-            engine
-                .send(request, Sending::or_drop(WakeBudget::UNLIMITED))
-                .await?
-                .answered(route)?
-                .decode::<CommitResponse>()
-        }
-        .await;
-        link.observe(&result);
-        result.map_err(|error| network_error(&error))
-    }
-
-    async fn post_message(
-        &self,
-        group: &GroupId,
-        auth: &LogAuthKeyPair,
-        message: AppMessage,
-    ) -> Result<(), NetworkError> {
-        let link = self.link(group).await?;
-        let call = GroupCall { group, key: auth };
-        let result = delivered(
-            link.engine
-                .post_group_message(call, &message, self.net.keep_until())
-                .await,
-        );
-        link.observe(&result);
-        match result {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(NetworkError::Unavailable),
-            Err(error) => Err(network_error(&error)),
-        }
-    }
-
-    async fn fetch_log(
-        &self,
-        group: &GroupId,
-        auth: &LogAuthKeyPair,
-        after: Option<SequenceNumber>,
-    ) -> Result<Vec<GroupLogEntry>, NetworkError> {
-        let link = self.link(group).await?;
-        let mut entries: Vec<GroupLogEntry> = Vec::new();
-        let mut cursor = after;
-        loop {
-            let call = GroupCall { group, key: auth };
-            let result = link
-                .engine
-                .read_group_messages(call, cursor, WakeBudget::UNLIMITED)
-                .await;
-            link.observe(&result);
-            let page = result.map_err(|error| network_error(&error))?;
-            // Pages follow each other until one comes back empty.
-            let Some(last) = page.messages.last().map(|entry| entry.sequence) else {
-                return Ok(entries);
-            };
-            entries.extend(page.messages);
-            cursor = Some(last);
-        }
-    }
-
-    async fn delete_group(
-        &self,
-        group: &GroupId,
-        auth: &LogAuthKeyPair,
-    ) -> Result<(), NetworkError> {
-        let link = self.link(group).await?;
-        let result = link
-            .engine
-            .delete_group(GroupCall { group, key: auth }, WakeBudget::UNLIMITED)
-            .await;
-        link.observe(&result);
-        result.map_err(|error| network_error(&error))
-    }
-
-    fn live_head(
-        &self,
-        _group: &GroupId,
-        _auth: &LogAuthKeyPair,
-        _subscription: Option<SubscriptionId>,
-    ) -> Result<BinaryRequest, NetworkError> {
-        Err(NetworkError::Unavailable)
     }
 }

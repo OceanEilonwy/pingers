@@ -24,8 +24,9 @@ use pingers_store::{
 };
 use pingers_time::{Clock, UnixSeconds};
 use pingers_wake::{
-    GeofenceEvent, GeofenceTransition as WakeTransition, MailboxReads, PushReason, WakeEnv,
-    WakeInput as PipelineInput, WakeNotice, WakeReport, WakeSettings, WakeState, WakeTrigger,
+    FIX_MAX_AGE, GeofenceEvent, GeofenceTransition as WakeTransition, MailboxReads, PushReason,
+    WakeEnv, WakeInput as PipelineInput, WakeNotice, WakeReport, WakeSettings, WakeState,
+    WakeTrigger,
 };
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -82,6 +83,14 @@ impl Wake {
         self.last.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// The last fix the shell delivered, if it is younger than pingers-wake's `FIX_MAX_AGE`.
+    fn fresh_fix(&self) -> Option<Fix> {
+        let now = self.backend.outside.clock.now();
+        self.last()
+            .1
+            .filter(|fix| now.saturating_duration_since(fix.taken_at) <= FIX_MAX_AGE)
+    }
+
     /// Runs one pipeline wake and stores the state after it.
     pub(crate) async fn pipeline(
         &self,
@@ -106,6 +115,7 @@ impl Wake {
         let device = Device::new(
             Arc::clone(&self.platform),
             stored.device.pause_in_focus == PauseInFocus::Off,
+            self.fresh_fix(),
         );
         let time = Time {
             clock: Arc::clone(&self.backend.outside.clock),
@@ -198,7 +208,7 @@ impl WakePort for Wake {
         let trigger = match input {
             WakeInput::Fix(fix) => {
                 self.last().1 = Some(fix);
-                self.meetups.own_fix(fix).await?;
+                self.meetups.own_fix(fix).await;
                 WakeTrigger::Fix(fix)
             }
             WakeInput::Geofence { region, transition } => WakeTrigger::Geofence(GeofenceEvent {
@@ -220,12 +230,12 @@ impl WakePort for Wake {
             }
             WakeInput::FocusChanged(_focus) => WakeTrigger::FocusChanged,
             WakeInput::Foreground(Foreground::Visible) => {
-                self.meetups.screen(MeetupScreen::Open).await?;
+                self.meetups.screen(MeetupScreen::Open).await;
                 opened = true;
                 WakeTrigger::Opened
             }
             WakeInput::Foreground(Foreground::Hidden) => {
-                self.meetups.screen(MeetupScreen::Closed).await?;
+                self.meetups.screen(MeetupScreen::Closed).await;
                 return Ok(WakeOutcome::default());
             }
         };

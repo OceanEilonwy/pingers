@@ -704,26 +704,27 @@ impl ApiRequest {
         .signed(signer)
     }
 
-    /// `POST /v1/groups/{id}/live?sub=<sub_id>`: the head of the chunked live channel.
+    /// `POST /v1/groups/{id}/live?sub=<sub_id>`: the head of the chunked live channel. The
+    /// subscription is the device's own in the group, so the server skips its push while the
+    /// channel is open; a device without one (wake-up pushes off) leaves `sub` out.
     ///
     /// # Errors
     ///
     /// [`SyncError::Crypto`] if signing fails.
     pub fn live(
         group: &GroupId,
-        subscription: &SubscriptionId,
+        subscription: Option<&SubscriptionId>,
         signer: &GroupSigner<'_>,
     ) -> Result<Self, SyncError> {
-        Self::new(
-            Route::Live,
-            "POST",
-            format!(
-                "/v1/groups/{}/live?sub={}",
-                id_hex(group.as_bytes()),
+        let group = id_hex(group.as_bytes());
+        let path = match subscription {
+            Some(subscription) => format!(
+                "/v1/groups/{group}/live?sub={}",
                 id_hex(subscription.as_bytes())
             ),
-        )
-        .signed(signer)
+            None => format!("/v1/groups/{group}/live"),
+        };
+        Self::new(Route::Live, "POST", path).signed(signer)
     }
 }
 

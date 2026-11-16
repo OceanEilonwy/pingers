@@ -662,6 +662,49 @@ async fn subscribers_see_each_published_snapshot() -> Result<(), TestError> {
     Ok(())
 }
 
+/// What the live Meetups raise on their own is published before the shell hears of it, and
+/// events that arrive together are passed on together, once each.
+#[tokio::test]
+async fn meetup_events_republish_the_snapshot_then_tell_the_shell_once_each()
+-> Result<(), TestError> {
+    let rig = rig().await?;
+    let meetup = GroupId::from_bytes([7; 32]);
+    rig.fakes.set_meetups(MeetupsSection {
+        alert: Some(meetup),
+        ..MeetupsSection::default()
+    });
+    let reads = rig.fakes.section_reads();
+    let moved = ClientEvent::PeerLocation {
+        meetup,
+        peer: LeafIndex::new(1),
+    };
+    rig.fakes.raise(ClientEvent::MeetupMessage(meetup));
+    rig.fakes.raise(moved);
+    rig.fakes.raise(ClientEvent::MeetupMessage(meetup));
+    let mut ticks = tokio::time::interval(Duration::from_millis(10));
+    let heard = tokio::time::timeout(Duration::from_secs(10), async {
+        while rig.events.events().len() < 2 {
+            ticks.tick().await;
+        }
+    })
+    .await;
+    assert!(heard.is_ok());
+    assert_eq!(
+        rig.events.events(),
+        vec![
+            RecordedEvent::MeetupMessage { meetup },
+            RecordedEvent::PeerLocation {
+                meetup,
+                peer: LeafIndex::new(1)
+            },
+        ]
+    );
+    // One snapshot for the batch, published before the events.
+    assert_eq!(rig.fakes.section_reads(), reads.saturating_add(4));
+    assert_eq!(rig.client.snapshot().alert, Some(meetup));
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_push_priority_report_raises_the_notice_pingers_sync_returns() -> Result<(), TestError> {
     use pingers_wake::PushPriority;

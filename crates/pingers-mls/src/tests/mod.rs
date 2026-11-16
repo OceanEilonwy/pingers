@@ -78,8 +78,20 @@ impl Device {
         grant_key: &GrantPublicKey,
         rng: &mut ChaCha20Rng,
     ) -> Result<KeyPackageBytes, MlsError> {
+        self.meetup_key_package_with(grant_key, None, rng)
+    }
+
+    pub(crate) fn meetup_key_package_with(
+        &self,
+        grant_key: &GrantPublicKey,
+        subscription: Option<&pingers_proto::SubscriptionId>,
+        rng: &mut ChaCha20Rng,
+    ) -> Result<KeyPackageBytes, MlsError> {
         self.context().create_key_package(
-            KeyPackagePurpose::Meetup { grant_key },
+            KeyPackagePurpose::Meetup {
+                grant_key,
+                subscription,
+            },
             CipherSuitePolicy::Classical,
             rng,
         )

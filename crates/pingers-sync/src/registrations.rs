@@ -58,7 +58,8 @@ pub enum Pushes {
 pub struct Maintenance<'groups> {
     /// What the registrations should carry.
     pub pushes: Pushes,
-    /// The knock mailbox pool to keep filled when no registration is stale.
+    /// The mailbox pool to keep filled when no registration is stale (the client names the
+    /// knock or reply pool that is short).
     pub pool: PoolTarget,
     /// Every group this device is in (Parties and live Meetups). A stored subscription for a
     /// group not listed is forgotten; a listed group without one gets one.
