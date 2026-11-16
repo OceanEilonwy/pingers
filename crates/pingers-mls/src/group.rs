@@ -1023,7 +1023,6 @@ impl<S: MlsStorage> Group<'_, S, Meetup> {
             })
             .collect()
     }
-
 }
 
 /// Builds, signs and stages a commit on `group`.
