@@ -44,6 +44,10 @@ pub enum DeliveryError {
     /// The channel has stored [`crate::STORED_LIVE_FRAMES_PER_BUCKET`] frames this bucket.
     #[error("live channel over its stored-frame allowance")]
     LiveRateLimited,
+    /// A live channel's request was signed with the key of an epoch that a commit has ended
+    /// since. HTTP 403: the member attaches again with the next epoch's key.
+    #[error("the epoch that authorised the channel has ended")]
+    EpochEnded,
     /// No live channel with this id is attached to the group.
     #[error("no such live channel")]
     UnknownChannel,

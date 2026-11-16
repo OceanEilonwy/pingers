@@ -3,7 +3,9 @@
 //! exchange to `/v1/groups/{id}/live?sub=` is attached with `open_live` after the Grp and Anon
 //! checks, its frames go through `live_frame` to the group's other channels, and it is
 //! detached with `close_live` when the member's stream ends. Deleting or expiring the group
-//! drops the registry's handle, which ends the exchange.
+//! drops the registry's handle, which ends the exchange; so does the commit that ends the epoch
+//! whose key the channel attached with (it is the channel's last frame, and the member attaches
+//! again with the next key).
 //!
 //! Each request chunk carries one pingers-proto `LiveFrame` in its canonical encoding; a chunk
 //! that does not decode is dropped. The same bytes are forwarded to the other members.
@@ -17,7 +19,7 @@ use pingers_ohttp::BinaryRequest;
 use pingers_proto::{GroupId, SubscriptionId, WireDecode as _};
 use tokio::sync::mpsc;
 
-use crate::groups::{Anon, FromChannel, authorise, forward_frame, status_of};
+use crate::groups::{FromChannel, authorise_current, forward_frame, status_of};
 use crate::wire::{hex_array, query};
 use crate::{LIVE_BUFFER, LiveFrame, Shared};
 
@@ -66,9 +68,9 @@ fn attach(
     shared: &Shared,
     head: &BinaryRequest,
 ) -> Result<(Attached, mpsc::Receiver<LiveFrame>), StatusCode> {
-    // The head of a live exchange has no body of its own: it signs an empty one.
-    let (group, _anon) =
-        authorise(shared, head, &[], Anon::NotRequired).map_err(|reply| reply.status)?;
+    // The head of a live exchange has no body of its own: it signs an empty one. The channel
+    // is attached under the epoch whose key signed it, and ends with that epoch.
+    let (group, epoch) = authorise_current(shared, head, &[]).map_err(|reply| reply.status)?;
     let subscription = match query(&head.path, "sub") {
         None => None,
         Some(text) => Some(SubscriptionId::from_bytes(
@@ -78,7 +80,14 @@ fn attach(
     let (sender, outbound) = mpsc::channel(LIVE_BUFFER);
     let channel = shared
         .groups
-        .open_live(&group, subscription, sender)
+        .open_live(
+            &group,
+            pingers_delivery::LiveAttach {
+                epoch,
+                subscription,
+            },
+            sender,
+        )
         .map_err(|error| status_of(&error))?;
     if let Some(subscription) = subscription {
         shared.live_channels.insert(group, subscription, channel);

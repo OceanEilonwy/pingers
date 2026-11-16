@@ -8,7 +8,7 @@ use std::sync::{Arc, Barrier};
 
 use pingers_crypto::push_bind_for_subscription;
 use pingers_delivery::{
-    CommitOutcome, Delivery, DeliveryError, DeliveryStore, GroupLifetime, GroupStart,
+    CommitOutcome, Delivery, DeliveryError, DeliveryStore, GroupLifetime, GroupStart, LiveAttach,
     MAX_LIVE_CHANNELS_PER_GROUP, MAX_QUIET_DELAY, MAX_SUBSCRIPTION_LIFETIME,
     MAX_SUBSCRIPTIONS_PER_GROUP, MEETUP_IDLE_LIFETIME, MemoryDeliveryStore, PAGE_ENTRIES,
     PARTY_IDLE_LIFETIME, PastAuthKey, Reader, STORED_LIVE_FRAMES_PER_BUCKET, Wake,
@@ -347,7 +347,14 @@ fn ephemeral_message_is_forwarded_live_but_not_stored_or_pushed(
     store: impl DeliveryStore,
 ) -> Result<(), TestError> {
     let world = World::new(store, &[1])?;
-    let channel = world.delivery.open_live(&world.group, None, 40)?;
+    let channel = world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(0),
+            subscription: None,
+        },
+        40,
+    )?;
     let posted = world.post(0, Mode::Ephemeral, Some(Urgency::Alert))?;
     assert_eq!(posted.sequence, None);
     assert!(posted.wakes.is_empty());
@@ -404,9 +411,14 @@ fn subscriptions_on_a_live_channel_are_not_pushed(
     store: impl DeliveryStore,
 ) -> Result<(), TestError> {
     let world = World::new(store, &[1, 2])?;
-    let _channel = world
-        .delivery
-        .open_live(&world.group, Some(sub_id(1)), 10)?;
+    let _channel = world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(0),
+            subscription: Some(sub_id(1)),
+        },
+        10,
+    )?;
     let (_, wakes, targets) =
         accepted(world.commit(0, Urgency::Alert)?).ok_or(TestError::Conflict)?;
     assert_eq!(woken(&wakes), BTreeSet::from([sub_id(2)]));
@@ -566,9 +578,30 @@ fn a_wake_is_due_only_while_its_subscription_stands(
 
 fn live_frame_goes_to_the_other_channels(store: impl DeliveryStore) -> Result<(), TestError> {
     let world = World::new(store, &[])?;
-    let sender = world.delivery.open_live(&world.group, None, 1)?;
-    let _second = world.delivery.open_live(&world.group, None, 2)?;
-    let _third = world.delivery.open_live(&world.group, None, 3)?;
+    let sender = world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(0),
+            subscription: None,
+        },
+        1,
+    )?;
+    let _second = world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(0),
+            subscription: None,
+        },
+        2,
+    )?;
+    let _third = world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(0),
+            subscription: None,
+        },
+        3,
+    )?;
     let location = world.delivery.live_frame(
         &world.group,
         sender,
@@ -596,8 +629,22 @@ fn live_frame_goes_to_the_other_channels(store: impl DeliveryStore) -> Result<()
 
 fn closed_channel_gets_nothing_and_cannot_send(store: impl DeliveryStore) -> Result<(), TestError> {
     let world = World::new(store, &[])?;
-    let first = world.delivery.open_live(&world.group, None, 1)?;
-    let second = world.delivery.open_live(&world.group, None, 2)?;
+    let first = world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(0),
+            subscription: None,
+        },
+        1,
+    )?;
+    let second = world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(0),
+            subscription: None,
+        },
+        2,
+    )?;
     world.delivery.close_live(&world.group, first)?;
     assert_eq!(world.delivery.live_channels(&world.group)?, 1);
     let posted = world.post(0, Mode::Ephemeral, None)?;
@@ -624,11 +671,32 @@ fn a_removal_closes_the_removed_members_live_channel(
     store: impl DeliveryStore,
 ) -> Result<(), TestError> {
     let world = World::new(store, &[1, 2])?;
-    let removed = world.delivery.open_live(&world.group, Some(sub_id(1)), 1)?;
-    let _staying = world.delivery.open_live(&world.group, Some(sub_id(2)), 2)?;
-    let _anonymous = world.delivery.open_live(&world.group, None, 3)?;
-    // A losing commit closes nothing.
     let _won = world.commit(0, Urgency::Quiet)?;
+    let removed = world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(1),
+            subscription: Some(sub_id(1)),
+        },
+        1,
+    )?;
+    let _staying = world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(1),
+            subscription: Some(sub_id(2)),
+        },
+        2,
+    )?;
+    let _anonymous = world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(1),
+            subscription: None,
+        },
+        3,
+    )?;
+    // A losing commit closes nothing.
     let lost = world.commit_with(CommitRequest {
         subscriptions_removed: vec![sub_id(1)],
         ..commit_request(0, Urgency::Quiet)
@@ -639,10 +707,12 @@ fn a_removal_closes_the_removed_members_live_channel(
         subscriptions_removed: vec![sub_id(1)],
         ..commit_request(1, Urgency::Quiet)
     })?;
-    let (_, _, targets) = accepted(outcome).ok_or(TestError::Conflict)?;
-    // The commit goes to the others only, and the removed member can send nothing more.
+    let (_, wakes, targets) = accepted(outcome).ok_or(TestError::Conflict)?;
+    // The commit goes to the others only, as the last frame of their epoch's channels; the
+    // ones that got it are not pushed as well, and the removed member can send nothing more.
     assert_eq!(targets, vec![2, 3]);
-    assert_eq!(world.delivery.live_channels(&world.group)?, 2);
+    assert!(wakes.is_empty());
+    assert_eq!(world.delivery.live_channels(&world.group)?, 0);
     let frame = LiveFrame {
         epoch: Epoch::new(1),
         body: body(1),
@@ -652,6 +722,70 @@ fn a_removal_closes_the_removed_members_live_channel(
         world.delivery.live_frame(&world.group, removed, frame),
         Err(DeliveryError::UnknownChannel)
     ));
+    Ok(())
+}
+
+/// A member removed by a commit that does not name its subscription (it attached without
+/// `?sub=`, or under a made-up one) loses its channel with the epoch: the commit is its last
+/// frame, it cannot inject frames afterwards, and it cannot keep the group alive.
+fn a_removed_members_channel_ends_with_its_epoch(
+    store: impl DeliveryStore,
+) -> Result<(), TestError> {
+    let world = World::new(store, &[2])?;
+    let removed = world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(0),
+            subscription: None,
+        },
+        1,
+    )?;
+    let staying = world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(0),
+            subscription: None,
+        },
+        2,
+    )?;
+    let (_, _, targets) = accepted(world.commit(0, Urgency::Quiet)?).ok_or(TestError::Conflict)?;
+    assert_eq!(targets, vec![1, 2]);
+    assert_eq!(world.delivery.live_channels(&world.group)?, 0);
+    let frame = |delivery| LiveFrame {
+        epoch: Epoch::new(1),
+        body: body(1),
+        delivery,
+    };
+    for mode in [Mode::Stored, Mode::Ephemeral] {
+        assert!(matches!(
+            world
+                .delivery
+                .live_frame(&world.group, removed, frame(mode)),
+            Err(DeliveryError::UnknownChannel)
+        ));
+    }
+    assert!(matches!(
+        world
+            .delivery
+            .live_frame(&world.group, staying, frame(Mode::Ephemeral)),
+        Err(DeliveryError::UnknownChannel)
+    ));
+    assert_eq!(world.log()?, vec![(1, 0, ContentType::Commit)]);
+    // Attaching again needs the next epoch's key: the old one's epoch has ended.
+    assert!(matches!(
+        world.delivery.open_live(
+            &world.group,
+            LiveAttach {
+                epoch: Epoch::new(0),
+                subscription: None
+            },
+            1
+        ),
+        Err(DeliveryError::EpochEnded)
+    ));
+    // Its frames kept nothing alive: the group expires an idle lifetime after the commit.
+    world.clock.advance(MEETUP_IDLE_LIFETIME);
+    assert_eq!(world.delivery.expire_idle()?, vec![world.group]);
     Ok(())
 }
 
@@ -728,15 +862,36 @@ fn a_group_has_a_bounded_number_of_live_channels(
     let mut channels = Vec::new();
     for handle in 0..MAX_LIVE_CHANNELS_PER_GROUP {
         let handle = u32::try_from(handle).map_err(|_| TestError::Thread)?;
-        channels.push(world.delivery.open_live(&world.group, None, handle)?);
+        channels.push(world.delivery.open_live(
+            &world.group,
+            LiveAttach {
+                epoch: Epoch::new(0),
+                subscription: None,
+            },
+            handle,
+        )?);
     }
     assert!(matches!(
-        world.delivery.open_live(&world.group, None, 9_999),
+        world.delivery.open_live(
+            &world.group,
+            LiveAttach {
+                epoch: Epoch::new(0),
+                subscription: None
+            },
+            9_999
+        ),
         Err(DeliveryError::TooManyChannels)
     ));
     let closed = channels.pop().ok_or(TestError::Thread)?;
     world.delivery.close_live(&world.group, closed)?;
-    world.delivery.open_live(&world.group, None, 9_999)?;
+    world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(0),
+            subscription: None,
+        },
+        9_999,
+    )?;
     Ok(())
 }
 
@@ -744,7 +899,14 @@ fn a_live_channel_stores_a_bounded_number_of_frames_per_bucket(
     store: impl DeliveryStore,
 ) -> Result<(), TestError> {
     let world = World::new(store, &[])?;
-    let channel = world.delivery.open_live(&world.group, None, 1)?;
+    let channel = world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(0),
+            subscription: None,
+        },
+        1,
+    )?;
     let frame = |delivery| LiveFrame {
         epoch: Epoch::new(0),
         body: body(1),
@@ -783,7 +945,14 @@ fn live_channel_needs_an_existing_group(store: impl DeliveryStore) -> Result<(),
     let world = World::new(store, &[])?;
     let other = GroupId::from_bytes([9; 32]);
     assert!(matches!(
-        world.delivery.open_live(&other, None, 1),
+        world.delivery.open_live(
+            &other,
+            LiveAttach {
+                epoch: Epoch::new(0),
+                subscription: None
+            },
+            1
+        ),
         Err(DeliveryError::UnknownGroup)
     ));
     Ok(())
@@ -793,7 +962,14 @@ fn live_channel_needs_an_existing_group(store: impl DeliveryStore) -> Result<(),
 
 fn idle_group_expires_after_two_hours(store: impl DeliveryStore) -> Result<(), TestError> {
     let world = World::new(store, &[1])?;
-    let _channel = world.delivery.open_live(&world.group, Some(sub_id(1)), 5)?;
+    let _channel = world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(0),
+            subscription: Some(sub_id(1)),
+        },
+        5,
+    )?;
     world
         .clock
         .advance(MEETUP_IDLE_LIFETIME.saturating_sub(Duration::from_secs(1)));
@@ -840,7 +1016,14 @@ fn reads_and_live_channels_postpone_expiry(store: impl DeliveryStore) -> Result<
     world.clock.advance(Duration::from_hours(1));
     let _state = world.delivery.state(&world.group, Reader::Current)?;
     world.clock.advance(Duration::from_hours(1));
-    let channel = world.delivery.open_live(&world.group, None, 1)?;
+    let channel = world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(0),
+            subscription: None,
+        },
+        1,
+    )?;
     world.clock.advance(Duration::from_hours(1));
     let _frame = world.delivery.live_frame(
         &world.group,
@@ -910,7 +1093,19 @@ fn party_groups_stay_idle_for_half_a_year(store: impl DeliveryStore) -> Result<(
                 .post(&party, message, &mut seeded_rng(4))
                 .map(drop)?)
         },
-        &|| Ok(world.delivery.open_live(&party, None, 1).map(drop)?),
+        &|| {
+            Ok(world
+                .delivery
+                .open_live(
+                    &party,
+                    LiveAttach {
+                        epoch: Epoch::new(1),
+                        subscription: None,
+                    },
+                    1,
+                )
+                .map(drop)?)
+        },
     ];
     for activity in activities {
         world.clock.advance(almost);
@@ -1128,7 +1323,14 @@ fn delete_removes_the_group_and_closes_its_channels(
     store: impl DeliveryStore,
 ) -> Result<(), TestError> {
     let world = World::new(store, &[1])?;
-    let _channel = world.delivery.open_live(&world.group, None, 1)?;
+    let _channel = world.delivery.open_live(
+        &world.group,
+        LiveAttach {
+            epoch: Epoch::new(0),
+            subscription: None,
+        },
+        1,
+    )?;
     world.delivery.delete_group(&world.group)?;
     assert_eq!(world.delivery.live_channels(&world.group)?, 0);
     assert!(matches!(
@@ -1318,6 +1520,7 @@ for_each_store!(
     live_frame_goes_to_the_other_channels,
     closed_channel_gets_nothing_and_cannot_send,
     a_removal_closes_the_removed_members_live_channel,
+    a_removed_members_channel_ends_with_its_epoch,
     a_group_holds_a_bounded_number_of_subscriptions,
     a_group_has_a_bounded_number_of_live_channels,
     a_live_channel_stores_a_bounded_number_of_frames_per_bucket,

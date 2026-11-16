@@ -57,8 +57,10 @@ design B.5, B.6, B.6.1, G.4 to G.7).
   at the MLS layer or is ignored by the session.
 - **Channel**: re-opened at once after a drop, then after 1 s doubling to 60 s; the failure
   count resets only when a frame arrives (a gateway that ends every exchange at once does not
-  cause a tight loop). After every (re)open the group log is read from the last sequence seen:
-  missed chat and commits, and a newcomer's snapshot. Entries of earlier epochs do not open,
+  cause a tight loop). After every (re)open, and after every refused open, the group log is read
+  from the last sequence seen: missed chat and commits, and a newcomer's snapshot. The server
+  ends each channel with the commit that ends its epoch (design B.4.9); a device that missed that
+  commit is refused until the log read has brought it. Entries of earlier epochs do not open,
   so a late joiner gets no history.
 - **Cadence**: `MeetupScreen::Open` sends `Cadence(Live)`, `Closed` sends `Cadence(Background)`.
   Nothing asks other members to go live.

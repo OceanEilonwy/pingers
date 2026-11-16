@@ -748,7 +748,7 @@ async fn run_blocking<T: Send + 'static>(
 /// Whether the group log must be read before the next wait.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CatchUp {
-    /// Read it: the channel (re)opened, or a commit lost a race.
+    /// Read it: the channel (re)opened or was refused, or a commit lost a race.
     Due,
     /// Nothing missed.
     Done,
@@ -1079,13 +1079,15 @@ impl Driver {
                 .open_live(&self.group, &auth, self.subscription),
         )
         .await;
-        match opened {
-            Ok(channel) => {
-                self.channel = Some(channel);
-                self.reconnect.at = None;
-                self.catch_up = CatchUp::Due;
-            }
-            Err(_) => self.schedule_reconnect(),
+        // Read the log either way. A channel lasts one epoch: one refused after a commit this
+        // device missed (its frame did not fit the closing channel) is attached again only once
+        // the log, which the old key still reads up to that commit, has brought it.
+        self.catch_up = CatchUp::Due;
+        if let Ok(channel) = opened {
+            self.channel = Some(channel);
+            self.reconnect.at = None;
+        } else {
+            self.schedule_reconnect();
         }
         self.refresh();
         Ok(())

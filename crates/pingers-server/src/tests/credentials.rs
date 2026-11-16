@@ -986,13 +986,28 @@ async fn live_channels_fan_out_frames_and_commits_to_the_other_members() -> Test
         assert_eq!(frame.delivery, Mode::Stored);
         assert_eq!(frame.body, MlsMessageBytes::from_bytes(vec![0xC0; 4]));
     }
+    // The commit was the last frame of both channels: they attached in the epoch it ended.
+    ends_after_the_last_payload(&mut a_body, a_decoder).await?;
+    ends_after_the_last_payload(&mut b_body, b_decoder).await?;
+    drop(a_sender);
 
-    // A split channel's uplink: a one-shot request naming A's `sub` reaches B as A's frame.
-    // The commit rotated the key, so requests are now signed with the next one.
+    // The members attach again, signed with the next key that the commit rotated to.
     let creator = Creator {
         key: next,
         ..creator
     };
+    let live_head = |sub: u8| {
+        creator.request(
+            "POST",
+            &format!("/live?sub={}", hex::encode([sub; 16])),
+            Vec::new(),
+        )
+    };
+    let (a_sender, _a_client, _a_body) = open_live_with(&server, &live_head(1)?).await?;
+    let (_b_sender, b_client, mut b_body) = open_live_with(&server, &live_head(2)?).await?;
+    let mut b_decoder = b_client.response_decoder();
+
+    // A split channel's uplink: a one-shot request naming A's `sub` reaches B as A's frame.
     let uplink = LiveFrame {
         epoch: Epoch::new(1),
         body: MlsMessageBytes::from_bytes(vec![0x66; 40]),
@@ -1040,6 +1055,70 @@ async fn a_removal_commit_ends_the_removed_members_live_channel() -> TestResult 
     let mut decoder = staying_client.response_decoder();
     let payload = next_payload(&mut staying_body, &mut decoder).await?;
     assert_eq!(LiveFrame::decode(&payload)?.delivery, Mode::Stored);
+    server.stop().await
+}
+
+/// A member removed by a commit that does not name its subscription (it attached without
+/// `?sub=`) still loses its channel: the commit is the channel's last frame, the channel then
+/// ends, and it cannot attach again or send an uplink frame with the old key. (That its frames
+/// keep nothing alive is pingers-delivery's `a_removed_members_channel_ends_with_its_epoch`.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_removed_members_open_channel_is_closed_and_cannot_inject_frames() -> TestResult {
+    let server = started(DeliveryLive).await?;
+    let wallet = Wallet::fetch(&server, 1, 1).await?;
+    let creator = create_group(&server, &wallet, 33).await?;
+    let old = creator.request("POST", "/live", Vec::new())?;
+    let (removed_sender, mut removed_client, mut removed_body) =
+        open_live_with(&server, &old).await?;
+    let next = LogAuthKeyPair::from_bytes(Zeroizing::new([34; 32]));
+    let committed = call(
+        &server,
+        &creator.request("POST", "/commit", commit_body(0, &next)?)?,
+    )
+    .await?;
+    assert_eq!(committed.status.get(), 200);
+    let mut decoder = removed_client.response_decoder();
+    let last = next_payload(&mut removed_body, &mut decoder).await?;
+    assert_eq!(LiveFrame::decode(&last)?.delivery, Mode::Stored);
+    ends_after_the_last_payload(&mut removed_body, decoder).await?;
+
+    // Frames sent on the ended exchange go nowhere: a member on the next epoch hears nothing.
+    let staying = Creator {
+        key: next,
+        ..creator
+    };
+    let (_sender, staying_client, mut staying_body) =
+        open_live_with(&server, &staying.request("POST", "/live", Vec::new())?).await?;
+    let frame = LiveFrame {
+        epoch: Epoch::new(0),
+        body: MlsMessageBytes::from_bytes(vec![0x77; 40]),
+        delivery: Mode::Stored,
+    }
+    .encode()?;
+    let _ignored = removed_sender.send(Bytes::from(
+        removed_client.seal_chunk(&frame, ChunkPosition::NonFinal)?,
+    ));
+    let mut staying_decoder = staying_client.response_decoder();
+    let heard =
+        tokio::time::timeout(STEP, next_payload(&mut staying_body, &mut staying_decoder)).await;
+    // Nothing arrives before the wait runs out (next_payload's own read times out first).
+    assert!(
+        !matches!(heard, Ok(Ok(_))),
+        "the removed member's frame was forwarded"
+    );
+
+    // The old key opens no channel and sends no uplink frame.
+    let removed = Creator {
+        key: LogAuthKeyPair::from_bytes(Zeroizing::new([33; 32])),
+        ..staying
+    };
+    let again = call(&server, &removed.request("POST", "/live", Vec::new())?).await?;
+    assert_eq!(again.status.get(), 403);
+    let uplink = call(&server, &removed.request("POST", "/live?sub=00", frame)?).await?;
+    assert_eq!(uplink.status.get(), 403);
+    let read = call(&server, &removed.request("GET", "/msgs", Vec::new())?).await?;
+    assert_eq!(read.status.get(), 200);
+    assert_eq!(GroupMessages::decode(&read.body)?.messages.len(), 1);
     server.stop().await
 }
 
@@ -1122,4 +1201,20 @@ async fn the_sweep_deletes_idle_meetup_groups() -> TestResult {
     .await;
     assert!(matches!(deleted, Ok(Ok(()))));
     server.stop().await
+}
+
+/// Reads a live response, whose decoder has already opened its payloads, to its end: nothing
+/// but keep-alives may come before the final chunk.
+async fn ends_after_the_last_payload(
+    body: &mut axum::body::Body,
+    mut decoder: pingers_ohttp::ResponseChunkDecoder,
+) -> TestResult {
+    while let Some(bytes) = tokio::time::timeout(STEP, next_data(body)).await?? {
+        for chunk in decoder.feed(&bytes)? {
+            assert!(chunk.payload.is_empty() || chunk.payload == crate::KEEP_ALIVE_CHUNK);
+        }
+    }
+    let last = decoder.finish()?;
+    assert!(last.is_none_or(|chunk| chunk.position == ChunkPosition::Final));
+    Ok(())
 }

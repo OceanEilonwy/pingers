@@ -14,9 +14,10 @@ use pingers_proto::{
 use pingers_time::{Clock, UnixSeconds};
 use rand_core::CryptoRng;
 
-use crate::live::{Admitted, ChannelId, LiveRegistry, StoredAllowance};
+use crate::live::{Admitted, ChannelId, FrameCheck, LiveRegistry, NewChannel, StoredAllowance};
 use crate::store::{
-    CommitWrite, DeliveryStore, NewCommit, NewEntry, NewGroup, PastAuthKey, StoredSubscription,
+    CommitWrite, DeliveryStore, GroupHead, NewCommit, NewEntry, NewGroup, PastAuthKey,
+    StoredSubscription,
 };
 use crate::{DeliveryError, GroupLifetime, GroupStart};
 
@@ -298,10 +299,23 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         match write {
             CommitWrite::Appended { sequence } => {
                 self.live.close_subscriptions(group, &removed)?;
+                // Members on a channel of the ended epoch get the commit there, not pushed.
+                let wakes = self.wakes(
+                    group,
+                    WakeRule {
+                        connected_in: request.epoch,
+                        urgency: request.wake,
+                    },
+                    rng,
+                )?;
+                // Every channel attached in the epoch this commit ended gets it as its last
+                // frame and is closed: its members attach again with the next key, which a
+                // member removed without naming its subscription does not have.
+                let targets = self.live.end_epoch(group, next_epoch)?;
                 Ok(CommitOutcome::Accepted {
                     sequence,
-                    wakes: self.wakes(group, request.wake, rng)?,
-                    targets: self.live.targets(group, None)?,
+                    wakes,
+                    targets,
                 })
             }
             CommitWrite::EpochTaken { head_epoch } => Ok(CommitOutcome::Conflict { head_epoch }),
@@ -322,41 +336,49 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         message: AppMessage,
         rng: &mut impl CryptoRng,
     ) -> Result<Posted<T>, DeliveryError> {
-        let now = self.clock.now();
         let delivery = message.delivery;
+        let head = self.store.head(group)?;
         let sequence = self.record(
             group,
+            &head,
             Incoming {
                 epoch: message.epoch,
                 body: message.body,
                 delivery,
             },
-            now,
         )?;
         let wakes = match (delivery, message.wake) {
-            (DeliveryMode::Stored, Some(urgency)) => self.wakes(group, urgency, rng)?,
+            (DeliveryMode::Stored, Some(urgency)) => self.wakes(
+                group,
+                WakeRule {
+                    connected_in: head.head_epoch,
+                    urgency,
+                },
+                rng,
+            )?,
             (DeliveryMode::Stored, None) | (DeliveryMode::Ephemeral, _) => Vec::new(),
         };
         Ok(Posted {
             sequence,
             wakes,
-            targets: self.live.targets(group, None)?,
+            targets: self.live.targets(group, None, head.head_epoch)?,
         })
     }
 
-    /// Stores a stored message or touches the group for an ephemeral one.
+    /// Stores a stored message or touches the group for an ephemeral one, `head` being the
+    /// group's head as read before.
     fn record(
         &self,
         group: &GroupId,
+        head: &GroupHead,
         incoming: Incoming,
-        now: UnixSeconds,
     ) -> Result<Option<SequenceNumber>, DeliveryError> {
+        let now = self.clock.now();
         let Incoming {
             epoch,
             body,
             delivery,
         } = incoming;
-        let head = self.store.head(group)?;
         if epoch > head.head_epoch {
             return Err(DeliveryError::FutureEpoch {
                 epoch,
@@ -373,16 +395,20 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         }
     }
 
-    /// The wake rule (design D): every unexpired subscription not attached to a live channel,
-    /// with the request's urgency; `Quiet` ones get a random delay.
+    /// The wake rule (design D): every unexpired subscription not attached to a live channel of
+    /// epoch `rule.connected_in`, with the request's urgency; `Quiet` ones get a random delay.
     fn wakes(
         &self,
         group: &GroupId,
-        urgency: Urgency,
+        rule: WakeRule,
         rng: &mut impl CryptoRng,
     ) -> Result<Vec<Wake>, DeliveryError> {
+        let WakeRule {
+            connected_in,
+            urgency,
+        } = rule;
         let now = self.clock.now();
-        let connected = self.live.connected(group)?;
+        let connected = self.live.connected(group, connected_in)?;
         Ok(self
             .store
             .live_subscriptions(group, now)?
@@ -480,6 +506,21 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
     /// [`DeliveryError::UnknownGroup`]; storage errors.
     pub fn auth_key(&self, group: &GroupId) -> Result<GroupAuthKey, DeliveryError> {
         Ok(self.store.head(group)?.auth_key)
+    }
+
+    /// The key that `Grp` requests to this group must be signed with now, with the epoch it
+    /// belongs to, read together: what a live channel records when it attaches
+    /// ([`Delivery::open_live`]).
+    ///
+    /// # Errors
+    ///
+    /// [`DeliveryError::UnknownGroup`]; storage errors.
+    pub fn current_auth(&self, group: &GroupId) -> Result<PastAuthKey, DeliveryError> {
+        let head = self.store.head(group)?;
+        Ok(PastAuthKey {
+            epoch: head.head_epoch,
+            key: head.auth_key,
+        })
     }
 
     /// The keys of the group's earlier epochs with their epochs, newest first. A request
@@ -586,23 +627,41 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         Ok(expired)
     }
 
-    /// `POST /v1/groups/{id}/live?sub=<sub_id>`: attaches a live channel. While attached,
-    /// `subscription` is not pushed.
+    /// `POST /v1/groups/{id}/live?sub=<sub_id>`: attaches a live channel whose request was
+    /// signed with the log-auth key of `attach.epoch` ([`Delivery::current_auth`]). While
+    /// attached, `attach.subscription` is not pushed. The channel lasts until the commit that
+    /// ends its epoch, which is its last frame.
     ///
     /// # Errors
     ///
-    /// [`DeliveryError::UnknownGroup`]; [`DeliveryError::TooManyChannels`] if the group has
-    /// [`MAX_LIVE_CHANNELS_PER_GROUP`] open; storage errors.
+    /// [`DeliveryError::UnknownGroup`]; [`DeliveryError::EpochEnded`] if a commit has ended
+    /// the epoch since the signature was checked; [`DeliveryError::TooManyChannels`] if the group
+    /// has [`MAX_LIVE_CHANNELS_PER_GROUP`] open; storage errors.
     pub fn open_live(
         &self,
         group: &GroupId,
-        subscription: Option<SubscriptionId>,
+        attach: LiveAttach,
         sender: T,
     ) -> Result<ChannelId, DeliveryError> {
+        let LiveAttach {
+            epoch,
+            subscription,
+        } = attach;
         let now = self.clock.now();
-        let lifetime = self.store.head(group)?.lifetime;
-        self.store.touch(group, Self::idle_expiry(now, lifetime)?)?;
-        self.live.attach(*group, subscription, sender)
+        let head = self.store.head(group)?;
+        if epoch < head.head_epoch {
+            return Err(DeliveryError::EpochEnded);
+        }
+        self.store
+            .touch(group, Self::idle_expiry(now, head.lifetime)?)?;
+        self.live.attach(
+            *group,
+            NewChannel {
+                epoch,
+                subscription,
+                sender,
+            },
+        )
     }
 
     /// Detaches a live channel when its exchange ends.
@@ -628,7 +687,9 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
     ///
     /// # Errors
     ///
-    /// [`DeliveryError::UnknownChannel`] if `from` is not attached to the group;
+    /// [`DeliveryError::UnknownChannel`] if `from` is not attached to the group, or attached in
+    /// an epoch a commit has ended (it is then detached: the frame is neither stored nor
+    /// forwarded, and does not count as activity);
     /// [`DeliveryError::LiveRateLimited`] for a stored frame over the channel's
     /// [`STORED_LIVE_FRAMES_PER_BUCKET`] (it is neither stored nor forwarded);
     /// [`DeliveryError::UnknownGroup`]; [`DeliveryError::FutureEpoch`]; storage errors.
@@ -646,25 +707,53 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
             }),
             DeliveryMode::Ephemeral => None,
         };
-        match self.live.admit_frame(group, from, allowance)? {
+        let head = self.store.head(group)?;
+        match self.live.admit_frame(
+            group,
+            from,
+            FrameCheck {
+                head: head.head_epoch,
+                allowance,
+            },
+        )? {
             Admitted::Yes => {}
-            Admitted::UnknownChannel => return Err(DeliveryError::UnknownChannel),
+            Admitted::UnknownChannel | Admitted::EpochEnded => {
+                return Err(DeliveryError::UnknownChannel);
+            }
             Admitted::OverAllowance => return Err(DeliveryError::LiveRateLimited),
         }
         let sequence = self.record(
             group,
+            &head,
             Incoming {
                 epoch: frame.epoch,
                 body: frame.body,
                 delivery: frame.delivery,
             },
-            now,
         )?;
         Ok(Forwarded {
             sequence,
-            targets: self.live.targets(group, Some(from))?,
+            targets: self.live.targets(group, Some(from), head.head_epoch)?,
         })
     }
+}
+
+/// What a live channel attaches under ([`Delivery::open_live`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiveAttach {
+    /// The epoch whose log-auth key signed the request: the channel lasts until the commit
+    /// that ends it.
+    pub epoch: Epoch,
+    /// The subscription named in `?sub=`, not pushed while the channel is attached.
+    pub subscription: Option<SubscriptionId>,
+}
+
+/// Whom a commit or message wakes: subscriptions not on a live channel attached in
+/// `connected_in` or later, with `urgency`.
+#[derive(Clone, Copy)]
+struct WakeRule {
+    connected_in: Epoch,
+    urgency: Urgency,
 }
 
 /// A message arriving by `POST` or on a live channel.

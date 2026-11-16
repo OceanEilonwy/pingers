@@ -42,7 +42,7 @@ pub(crate) fn status_of(error: &DeliveryError) -> StatusCode {
     match error {
         DeliveryError::UnknownGroup | DeliveryError::UnknownChannel => StatusCode::NOT_FOUND,
         DeliveryError::GroupExists => StatusCode::CONFLICT,
-        DeliveryError::LaterEpoch => StatusCode::FORBIDDEN,
+        DeliveryError::LaterEpoch | DeliveryError::EpochEnded => StatusCode::FORBIDDEN,
         DeliveryError::FutureEpoch { .. }
         | DeliveryError::SubscriptionTooLong
         | DeliveryError::TooManySubscriptions => StatusCode::UNPROCESSABLE_ENTITY,
@@ -111,17 +111,29 @@ pub(crate) fn authorise(
     body: &[u8],
     anon: Anon,
 ) -> Result<(GroupId, GroupAnon), Reply> {
-    let group = group_id(&request.path).ok_or_else(bad_request)?;
-    let auth_key = shared
-        .groups
-        .auth_key(&group)
-        .map_err(|error| refused(&error))?;
-    check_signature(shared, request, &[auth_key], body)?;
+    let (group, _epoch) = authorise_current(shared, request, body)?;
     let anon = match anon {
         Anon::Required => admit_group(shared, request, group)?,
         Anon::NotRequired => GroupAnon::Session,
     };
     Ok((group, anon))
+}
+
+/// Checks the signature of a Grp request against the current epoch's key, and returns the
+/// group and that epoch (read with the key, so the two belong together): a live channel
+/// records the epoch, and lasts until the commit that ends it.
+pub(crate) fn authorise_current(
+    shared: &Shared,
+    request: &BinaryRequest,
+    body: &[u8],
+) -> Result<(GroupId, Epoch), Reply> {
+    let group = group_id(&request.path).ok_or_else(bad_request)?;
+    let current = shared
+        .groups
+        .current_auth(&group)
+        .map_err(|error| refused(&error))?;
+    check_signature(shared, request, &[current.key], body)?;
+    Ok((group, current.epoch))
 }
 
 /// As [`authorise`] without the Anon half, accepting earlier epochs' keys too: for log reads
