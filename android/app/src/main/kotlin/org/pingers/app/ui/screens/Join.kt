@@ -257,7 +257,11 @@ private fun JoinHeader(shape: Shape, background: Color, title: String, subtitle:
     }
 }
 
-/** The blue panel with the big join code, as both phones show it. */
+/**
+ * The blue panel with the big join code, as both phones show it. The 16 digits go on two lines
+ * of two groups ("4821 0937" over "5512 6604"), so they stay large enough to read aloud on a
+ * narrow phone.
+ */
 @Composable
 private fun CodePanel(label: String, code: String, warning: String, codeSize: Int, padding: PaddingValues, tag: String) {
     Column(
@@ -265,7 +269,8 @@ private fun CodePanel(label: String, code: String, warning: String, codeSize: In
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(label, style = body(13.sp, 600, Pc.BlueDark))
-        Text(code, style = heading(codeSize.sp, 600, 2.sp), modifier = Modifier.testTag(tag))
+        val lines = code.split(' ').chunked(2).joinToString("\n") { it.joinToString(" ") }
+        Text(lines, style = heading(codeSize.sp, 600, 2.sp), modifier = Modifier.testTag(tag))
         Text(warning, style = body(13.sp, color = Pc.BlueDark, lineHeight = 1.4f))
     }
 }

@@ -268,7 +268,7 @@ mod tests {
             return Err(FixtureError::Missing);
         };
         assert!(
-            matches!(opened, Invitation::Opened { id, name, code } if *id == fixtures::ben_request() && name.as_str() == "Ben" && code.as_str() == "4821 0937 5512")
+            matches!(opened, Invitation::Opened { id, name, code } if *id == fixtures::ben_request() && name.as_str() == "Ben" && code.as_str() == "4821 0937 5512 6604")
         );
         assert!(matches!(
             pending,
@@ -336,7 +336,7 @@ mod tests {
         assert_eq!(view.name.as_str(), "Ben");
         assert_eq!(view.party_name.as_str(), "Climbing crew");
         assert_eq!(view.shared_ago.get(), 2);
-        assert_eq!(view.code.as_str(), "4821 0937 5512");
+        assert_eq!(view.code.as_str(), "4821 0937 5512 6604");
         assert!(matches!(
             join_request(
                 &snapshot,
@@ -365,7 +365,7 @@ mod tests {
     fn asked_to_join_shows_the_code_until_let_in() -> Result<(), FixtureError> {
         let mut snapshot = fixtures::snapshot()?;
         let asked = asked_to_join(&snapshot).ok_or(FixtureError::Missing)?;
-        assert_eq!(asked.code.as_str(), "4821 0937 5512");
+        assert_eq!(asked.code.as_str(), "4821 0937 5512 6604");
         assert_eq!(let_in(&snapshot), None);
         snapshot.joining = None;
         assert_eq!(asked_to_join(&snapshot), None);
@@ -391,7 +391,7 @@ mod tests {
         // Others only: Sam is this device.
         assert_eq!(names, ["Ana", "Chloé", "Ben"]);
         assert_eq!((view.members, view.more_members, view.spots), (6, 2, 3));
-        assert_eq!(view.code.as_str(), "4821 0937 5512");
+        assert_eq!(view.code.as_str(), "4821 0937 5512 6604");
         assert_eq!(view.colour, PartyColour::Blue);
 
         // A Party left since shows nothing.

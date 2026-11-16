@@ -553,7 +553,7 @@ impl fmt::Debug for InviteUrl {
     }
 }
 
-/// The code two people compare when one joins ("4821 0937 5512").
+/// The code two people compare when one joins ("4821 0937 5512 6604").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SafetyCode(String);
 

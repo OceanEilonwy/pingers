@@ -82,22 +82,23 @@ pub fn open_join_request(
 }
 
 /// How many decimal digits a [`JoinCode`] has.
-const JOIN_CODE_DIGITS: usize = 12;
-/// `10^12`: the join code is the MAC's first eight bytes modulo this.
-const JOIN_CODE_MODULUS: u64 = 1_000_000_000_000;
+const JOIN_CODE_DIGITS: usize = 16;
+/// `10^16`: the join code is the MAC's first eight bytes modulo this (a bias below 2^-10
+/// towards low codes, which costs a guesser nothing: one chance in about `10^16` stays).
+const JOIN_CODE_MODULUS: u64 = 10_000_000_000_000_000;
 
-/// The 12-digit code both phones show while someone asks to join (design D, invite flow): the
+/// The 16-digit code both phones show while someone asks to join (design D, invite flow): the
 /// joiner reads it to the inviter, who lets them in only if it matches. It binds the request
 /// to the link's secret and to the joiner's key package, so someone else who opened the link
 /// gets a different code.
 ///
-/// `Display` shows three groups of four digits ("4821 0937 5512"); `Debug` shows nothing.
+/// `Display` shows four groups of four digits ("4821 0937 5512 6604"); `Debug` shows nothing.
 /// Equality is constant-time, as for any MAC.
 #[derive(Clone, Copy)]
 pub struct JoinCode(u64);
 
 impl JoinCode {
-    /// Rebuilds a code from its value, as stored. `None` if it has more than 12 digits.
+    /// Rebuilds a code from its value, as stored. `None` if it has more than 16 digits.
     #[must_use]
     pub const fn from_value(value: u64) -> Option<Self> {
         if value < JOIN_CODE_MODULUS {
@@ -107,13 +108,13 @@ impl JoinCode {
         }
     }
 
-    /// The code as a number below `10^12`, for storage.
+    /// The code as a number below `10^16`, for storage.
     #[must_use]
     pub const fn value(self) -> u64 {
         self.0
     }
 
-    /// The 12 digits, most significant first.
+    /// The 16 digits, most significant first.
     #[must_use]
     pub fn digits(self) -> [u8; JOIN_CODE_DIGITS] {
         let mut digits = [0; JOIN_CODE_DIGITS];
@@ -165,14 +166,14 @@ pub struct JoinKeyPackages<'packages> {
 
 /// The join code for a request: `be64(HMAC-SHA256(HKDF-Expand(invite_secret,
 /// "pingers/v1/join-code", 32), be32(len(classical)) || classical || be32(len(x_wing)) ||
-/// x_wing)[..8]) mod 10^12`, where `x_wing` is empty when the request carries none.
+/// x_wing)[..8]) mod 10^16`, where `x_wing` is empty when the request carries none.
 ///
 /// The joiner computes it when it builds the request and the inviter when it opens it, so both
 /// show it before anyone is let in. It covers both key packages, so whichever one the Party's
 /// suite makes the inviter add is covered. Each carries the joiner's signature and init keys and
 /// is signed by the former, so the code names exactly the leaf the inviter would add.
 /// Someone who intercepted the link cannot read the real joiner's request (only the inviter
-/// holds the invite mailbox's read key), so they can only guess: one chance in `10^12`.
+/// holds the invite mailbox's read key), so they can only guess: one chance in `10^16`.
 ///
 /// # Errors
 ///
@@ -223,15 +224,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stored_codes_must_have_twelve_digits() {
+    fn stored_codes_must_have_sixteen_digits() {
         assert_eq!(
-            JoinCode::from_value(999_999_999_999).map(JoinCode::value),
-            Some(999_999_999_999)
+            JoinCode::from_value(9_999_999_999_999_999).map(JoinCode::value),
+            Some(9_999_999_999_999_999)
         );
         assert!(JoinCode::from_value(JOIN_CODE_MODULUS).is_none());
         assert_eq!(
             JoinCode::from_value(7).map(JoinCode::digits),
-            Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7])
+            Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7])
         );
     }
 

@@ -394,7 +394,7 @@ pub(crate) enum Text {
     StartsWith(String),
     /// Anywhere in it.
     Contains(String),
-    /// A safety code: three groups of four digits.
+    /// A join code: four groups of four digits.
     SafetyCode,
 }
 
@@ -415,7 +415,7 @@ impl fmt::Display for Text {
             Self::Is(text) => write!(formatter, "{text:?}"),
             Self::StartsWith(text) => write!(formatter, "{text:?}…"),
             Self::Contains(text) => write!(formatter, "…{text:?}…"),
-            Self::SafetyCode => write!(formatter, "a 12-digit safety code"),
+            Self::SafetyCode => write!(formatter, "a 16-digit safety code"),
         }
     }
 }
@@ -504,15 +504,15 @@ impl fmt::Display for Find {
     }
 }
 
-/// The 12-digit safety code in `text` ("4821 0937 5512"), digits only.
+/// The 16-digit join code in `text` ("4821 0937 5512 6604"), digits only.
 pub(crate) fn safety_code(text: &str) -> Option<String> {
     let digits: String = text.chars().filter(char::is_ascii_digit).collect();
     let groups: Vec<&str> = text.split_whitespace().collect();
-    let shaped = groups.len() == 3
+    let shaped = groups.len() == 4
         && groups
             .iter()
             .all(|group| group.len() == 4 && group.chars().all(|c| c.is_ascii_digit()));
-    (shaped && digits.len() == 12).then_some(digits)
+    (shaped && digits.len() == 16).then_some(digits)
 }
 
 fn attribute(attributes: &str, name: &str) -> String {
@@ -545,7 +545,7 @@ mod tests {
 
     use super::*;
 
-    const DUMP: &str = r#"<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation="0"><node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="org.pingers.app.foss.debug" content-desc="" enabled="true" bounds="[0,0][1280,2856]"><node index="0" text="Create party" resource-id="new_party_create" class="android.view.View" content-desc="" enabled="false" bounds="[56,2500][1224,2640]" /><node index="1" text="" resource-id="" class="android.widget.EditText" content-desc="Party name" enabled="true" bounds="[56,400][1224,540]" /><node index="2" text="Ana &amp; Ben &quot;crew&quot;" resource-id="" class="android.widget.TextView" content-desc="" enabled="true" bounds="[0,0][0,0]" /><node index="3" text="4821 0937 5512" resource-id="" class="android.widget.TextView" content-desc="" enabled="true" bounds="[10,10][20,20]" /><node index="4" text="Spot name" resource-id="" class="android.widget.TextView" content-desc="" enabled="true" bounds="[60,700][275,740]" /><node index="5" text="" resource-id="" class="android.view.View" content-desc="Spot name" enabled="true" bounds="[60,760][1220,900]" /></node></hierarchy>UI hierchary dumped to: /dev/tty"#;
+    const DUMP: &str = r#"<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation="0"><node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="org.pingers.app.foss.debug" content-desc="" enabled="true" bounds="[0,0][1280,2856]"><node index="0" text="Create party" resource-id="new_party_create" class="android.view.View" content-desc="" enabled="false" bounds="[56,2500][1224,2640]" /><node index="1" text="" resource-id="" class="android.widget.EditText" content-desc="Party name" enabled="true" bounds="[56,400][1224,540]" /><node index="2" text="Ana &amp; Ben &quot;crew&quot;" resource-id="" class="android.widget.TextView" content-desc="" enabled="true" bounds="[0,0][0,0]" /><node index="3" text="4821 0937 5512 6604" resource-id="" class="android.widget.TextView" content-desc="" enabled="true" bounds="[10,10][20,20]" /><node index="4" text="Spot name" resource-id="" class="android.widget.TextView" content-desc="" enabled="true" bounds="[60,700][275,740]" /><node index="5" text="" resource-id="" class="android.view.View" content-desc="Spot name" enabled="true" bounds="[60,760][1220,900]" /></node></hierarchy>UI hierchary dumped to: /dev/tty"#;
 
     #[test]
     fn a_dump_parses_into_nodes_with_unescaped_attributes() -> Result<()> {
@@ -591,11 +591,14 @@ mod tests {
     }
 
     #[test]
-    fn safety_codes_need_three_groups_of_four_digits() {
-        assert_eq!(safety_code("4821 0937 5512"), Some("482109375512".into()));
-        assert_eq!(safety_code("482109375512"), None);
-        assert_eq!(safety_code("4821 0937 551"), None);
-        assert_eq!(safety_code("Code 4821 0937 5512 was checked"), None);
+    fn safety_codes_need_four_groups_of_four_digits() {
+        assert_eq!(
+            safety_code("4821 0937 5512 6604"),
+            Some("4821093755126604".into())
+        );
+        assert_eq!(safety_code("4821093755126604"), None);
+        assert_eq!(safety_code("4821 0937 5512"), None);
+        assert_eq!(safety_code("Code 4821 0937 5512 6604 was checked"), None);
     }
 
     #[test]

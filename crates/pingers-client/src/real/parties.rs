@@ -529,7 +529,7 @@ fn joining(
     }))
 }
 
-/// A join code as both screens show it ("4821 0937 5512").
+/// A join code as both screens show it ("4821 0937 5512 6604").
 fn code_of(code: JoinCode) -> Result<SafetyCode, ClientError> {
     SafetyCode::new(&code.to_string()).map_err(|_never| corrupt())
 }

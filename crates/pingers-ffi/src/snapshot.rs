@@ -474,7 +474,7 @@ mod tests {
         let asked = snapshot()?
             .asked_to_join()
             .ok_or_else(|| CoreError::invalid("not asked"))?;
-        assert_eq!(asked.code, "4821 0937 5512");
+        assert_eq!(asked.code, "4821 0937 5512 6604");
         assert_eq!(asked.withdraw, "Withdraw request");
         assert_eq!(
             snapshot()?

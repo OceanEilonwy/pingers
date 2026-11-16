@@ -749,7 +749,7 @@ fn play(
             .b
             .wait_for(&Find::tag("join_code").or(Text::SafetyCode), NETWORK)?;
         let code = safety_code(node.label())
-            .with_context(|| format!("{:?} is not a 12-digit code", node.label()))?;
+            .with_context(|| format!("{:?} is not a 16-digit code", node.label()))?;
         scene.code_b = Some(code.clone());
         Ok(format!("B's code {code}"))
     })?;
@@ -773,7 +773,7 @@ fn play(
             a.wait_for(&Find::text(Text::Is(format!("{JOINER} asked to join"))), UI)?;
             let node = a.wait_for(&Find::tag("approve_code").or(Text::SafetyCode), UI)?;
             let code = safety_code(node.label())
-                .with_context(|| format!("{:?} is not a 12-digit code", node.label()))?;
+                .with_context(|| format!("{:?} is not a 16-digit code", node.label()))?;
             let expected = scene.code_b.clone().context("no code from B")?;
             if code != expected {
                 bail!("codes differ: A shows {code}, B shows {expected}");

@@ -691,7 +691,7 @@ async fn ask_compare_codes_let_in_then_turn_the_next_one_away() -> Result<(), Te
     // Ben asks to join; his phone shows the code at once, and nothing about the Party.
     ben.client.open_invite(link.url, Name::new("Ben")?).await?;
     let ben_code = asked_code(&ben).ok_or(TestError::Setup("Ben has no code"))?;
-    assert_eq!(ben_code.as_str().len(), 14);
+    assert_eq!(ben_code.as_str().len(), 19);
     assert!(ben.client.snapshot().parties.is_empty());
 
     // A scheduled wake does not read Ana's invites (pushes on); opening the app does: same

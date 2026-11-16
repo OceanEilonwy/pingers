@@ -1,6 +1,6 @@
 {
   "name": "join-code",
-  "description": "Join code shown on both phones while someone asks to join (design D, invite flow): join_code_key = HKDF-Expand(invite_secret, \"pingers/v1/join-code\", 32); mac_input = be32(len(key_package)) || key_package || be32(len(x_wing_key_package)) || x_wing_key_package, where the X-Wing key package is empty (\"\") when the request carries none; mac = HMAC-SHA256(join_code_key, mac_input); code_value = be64(mac[0..8]) mod 10^12, shown as 12 digits in three groups of four, leading zeros kept. Both key packages are exactly as carried in the join request, so the code covers whichever one the inviter adds.",
+  "description": "Join code shown on both phones while someone asks to join (design D, invite flow): join_code_key = HKDF-Expand(invite_secret, \"pingers/v1/join-code\", 32); mac_input = be32(len(key_package)) || key_package || be32(len(x_wing_key_package)) || x_wing_key_package, where the X-Wing key package is empty (\"\") when the request carries none; mac = HMAC-SHA256(join_code_key, mac_input); code_value = be64(mac[0..8]) mod 10^16, shown as 16 digits in four groups of four, leading zeros kept. Both key packages are exactly as carried in the join request, so the code covers whichever one the inviter adds.",
   "vectors": [
     {
       "name": "classical-only",
@@ -13,8 +13,8 @@
         "join_code_key": "d9bc771b06ea32d715ddc0f2254ca82bbfbbb0d681d119f6f0168e188bb9ca07",
         "mac_input": "00000028404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666700000000",
         "mac": "7774bdd6a873b18a911550ad363140eb51bf2ba48ea6f87974664b96cf4f9b6c",
-        "code_value": 517458665866,
-        "code": "5174 5866 5866"
+        "code_value": 7713517458665866,
+        "code": "7713 5174 5866 5866"
       }
     },
     {
@@ -28,8 +28,8 @@
         "join_code_key": "98db6c2ee151e58bcbe229be65d41c651e6c9533b2fdfd8bbebbe2f4893079aa",
         "mac_input": "000000c8000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c700000018909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7",
         "mac": "62d5031d0adb33bdf73b13f92077dd2e1bac7c723922f93b02b43727b61aea98",
-        "code_value": 809027380157,
-        "code": "8090 2738 0157"
+        "code_value": 1601809027380157,
+        "code": "1601 8090 2738 0157"
       }
     },
     {
@@ -43,8 +43,8 @@
         "join_code_key": "8b0018051935c1305c52d26bcd18d69dd6de0622731a029ad39cb2210af5f348",
         "mac_input": "00000002770300000000",
         "mac": "5ad7b917a8f339c5dc67ef5fea865e24131d00d4481e27aae97d1ea7369e4af7",
-        "code_value": 94676203973,
-        "code": "0946 7620 3973"
+        "code_value": 5904094676203973,
+        "code": "5904 0946 7620 3973"
       }
     }
   ]

@@ -751,7 +751,7 @@ mod tests {
         let owner = party(1)?;
         session.parties().insert(&owner)?;
         assert_eq!(session.joined_via().get(&owner.id)?, None);
-        let code = JoinCode::from_value(999_999_999_999).ok_or(StoreError::Internal)?;
+        let code = JoinCode::from_value(9_999_999_999_999_999).ok_or(StoreError::Internal)?;
         let via = JoinedVia {
             inviter: LeafIndex::new(3),
             code,
@@ -761,7 +761,7 @@ mod tests {
         session.with(|connection| {
             connection.execute_batch(
                 "PRAGMA ignore_check_constraints = ON; \
-                 UPDATE joined_via SET join_code = 1000000000000; \
+                 UPDATE joined_via SET join_code = 10000000000000000; \
                  PRAGMA ignore_check_constraints = OFF;",
             )?;
             Ok(())

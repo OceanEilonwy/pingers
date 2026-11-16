@@ -3,7 +3,7 @@
 //! flow A.
 //!
 //! Flow A: the link carries nothing about the Party. The joiner asks to join and both phones
-//! show the same 12-digit join code at once (pingers-crypto's `join_code`, over the invite
+//! show the same 16-digit join code at once (pingers-crypto's `join_code`, over the invite
 //! secret and the joiner's key package). The joiner reads it out; the inviter lets them in
 //! only if it matches, and the link then stops working. The joiner learns the Party's name,
 //! members and Spots from the Welcome and the state snapshot.

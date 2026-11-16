@@ -305,7 +305,7 @@ fn climbing_crew_party() -> Result<Party, FixtureError> {
         join_requests: vec![JoinRequest {
             id: ben_request(),
             name: name("Ben")?,
-            code: SafetyCode::new("4821 0937 5512")?,
+            code: SafetyCode::new("4821 0937 5512 6604")?,
             asked_at: at(19, 25),
             shared_at: at(17, 30),
         }],
@@ -490,7 +490,7 @@ pub fn let_in_snapshot() -> Result<ClientSnapshot, FixtureError> {
     snapshot.joining = Some(Joining::LetIn {
         party: climbing_crew(),
         inviter: name("Ana")?,
-        code: SafetyCode::new("4821 0937 5512")?,
+        code: SafetyCode::new("4821 0937 5512 6604")?,
     });
     Ok(snapshot)
 }
@@ -524,7 +524,7 @@ pub fn snapshot() -> Result<ClientSnapshot, FixtureError> {
             messages: 24,
         }),
         joining: Some(Joining::Asked {
-            code: SafetyCode::new("4821 0937 5512")?,
+            code: SafetyCode::new("4821 0937 5512 6604")?,
             asked_at: at(19, 25),
         }),
         display_name: Some(name("Sam")?),

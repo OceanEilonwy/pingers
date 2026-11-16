@@ -20,7 +20,7 @@ pub struct InvitationText {
     pub avatar: Option<String>,
     /// "Ben", or "Invite link".
     pub title: String,
-    /// "Opened the link · compare code 4821 0937 5512", "Not opened yet · expires in 22 h",
+    /// "Opened the link · compare code 4821 0937 5512 6604", "Not opened yet · expires in 22 h",
     /// "Joined · code verified".
     pub status: String,
     /// "Link shared 2 h ago", for a pending invite.
@@ -109,7 +109,7 @@ pub struct JoinRequestText {
     pub subtitle: String,
     /// "Ask Ben to read their code. It should be:".
     pub ask: String,
-    /// "4821 0937 5512".
+    /// "4821 0937 5512 6604".
     pub code: String,
     /// "A different code means someone else opened your link. Don't let them in."
     pub warning: String,
@@ -267,7 +267,7 @@ pub struct AskedToJoinText {
     pub subtitle: String,
     /// "Read this code to them, in person or on a call".
     pub read_code: String,
-    /// "4821 0937 5512".
+    /// "4821 0937 5512 6604".
     pub code: String,
     /// "If their code is different, someone else may have your link. Tell them not to let you
     /// in."
@@ -315,7 +315,7 @@ pub struct LetInText {
     pub more: Option<String>,
     /// "6 members · 3 spots".
     pub counts: String,
-    /// "Code 4821 0937 5512 was checked before Ana let you in. You can see it again in the
+    /// "Code 4821 0937 5512 6604 was checked before Ana let you in. You can see it again in the
     /// Party's security details."
     pub checked: String,
     /// "Open Climbing crew".
@@ -396,7 +396,7 @@ mod tests {
         assert_eq!(
             rows,
             [
-                ("Ben", "Opened the link · compare code 4821 0937 5512"),
+                ("Ben", "Opened the link · compare code 4821 0937 5512 6604"),
                 ("Invite link", "Not opened yet · expires in 22 h"),
                 ("Chloé", "Joined · code verified"),
             ]
@@ -457,7 +457,7 @@ mod tests {
             "Climbing crew · from the link you shared 2 h ago"
         );
         assert_eq!(text.ask, "Ask Ben to read their code. It should be:");
-        assert_eq!(text.code, "4821 0937 5512");
+        assert_eq!(text.code, "4821 0937 5512 6604");
         assert_eq!(
             text.warning,
             "A different code means someone else opened your link. Don't let them in."
@@ -549,7 +549,7 @@ mod tests {
             text.read_code,
             "Read this code to them, in person or on a call"
         );
-        assert_eq!(text.code, "4821 0937 5512");
+        assert_eq!(text.code, "4821 0937 5512 6604");
         assert_eq!(
             text.warning,
             "If their code is different, someone else may have your link. Tell them not to let \
@@ -578,7 +578,7 @@ mod tests {
         assert_eq!(text.counts, "6 members · 3 spots");
         assert_eq!(
             text.checked,
-            "Code 4821 0937 5512 was checked before Ana let you in. You can see it again in the \
+            "Code 4821 0937 5512 6604 was checked before Ana let you in. You can see it again in the \
              Party's security details."
         );
         assert_eq!(

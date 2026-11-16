@@ -922,7 +922,7 @@ pub struct JoinRequestView {
     pub subtitle: String,
     /// "Ask Ben to read their code. It should be:".
     pub ask: String,
-    /// "4821 0937 5512".
+    /// "4821 0937 5512 6604".
     pub code: String,
     /// "A different code means someone else opened your link. Don't let them in."
     pub warning: String,
@@ -1051,7 +1051,7 @@ pub struct AskedToJoinView {
     pub subtitle: String,
     /// "Read this code to them, in person or on a call".
     pub read_code: String,
-    /// "4821 0937 5512".
+    /// "4821 0937 5512 6604".
     pub code: String,
     /// "If their code is different, someone else may have your link. Tell them not to let you
     /// in."
@@ -1099,7 +1099,7 @@ pub struct LetInView {
     pub more: Option<String>,
     /// "6 members · 3 spots".
     pub counts: String,
-    /// "Code 4821 0937 5512 was checked before Ana let you in. …"
+    /// "Code 4821 0937 5512 6604 was checked before Ana let you in. …"
     pub checked: String,
     /// "Open Climbing crew".
     pub open: String,
