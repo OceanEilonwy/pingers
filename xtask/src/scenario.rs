@@ -866,13 +866,33 @@ fn install_pingers(device: &Device, apk: &Path) -> Result<()> {
     device.shell("logcat -c")?;
     device.geo_fix(AWAY)?;
     device.shell(&format!("am start -W -n {ACTIVITY}"))?;
-    device
-        .wait_for(
-            &Find::tag("home_new_party").or(Text::Is("New party".into())),
-            UI,
-        )
-        .context("Home did not appear after launch")?;
-    Ok(())
+    through_first_run(device).context("Home did not appear after launch")
+}
+
+/// First run (design canvas `SetupWelcome`, `SetupBackground`) comes before Home on a fresh
+/// install. `adb install -g` has granted every permission it asks for, so each step's main
+/// button only moves on; it is tapped until Home shows.
+fn through_first_run(device: &Device) -> Result<()> {
+    let home = Find::tag("home_new_party").or(Text::Is("New party".into()));
+    let setup = Find::tag("setup_continue");
+    let deadline = Deadline::after(UI);
+    loop {
+        let screen = device.screen()?;
+        if screen.find(&home).is_some() {
+            return Ok(());
+        }
+        if deadline.passed() {
+            bail!(
+                "{device}: no {home} or {setup} within {} s; the screen shows: {}",
+                UI.as_secs(),
+                screen.summary()
+            );
+        }
+        if let Some(button) = screen.find(&setup) {
+            device.tap(button)?;
+        }
+        pause(Duration::from_millis(500));
+    }
 }
 
 /// Opens `link` as a tap in another app would: a browsable VIEW intent naming no package, so
