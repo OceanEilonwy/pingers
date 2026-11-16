@@ -583,10 +583,7 @@ fn play(
                 &Find::tag("invite_verify").or(Text::Is("Verify".into())),
                 NETWORK,
             )?;
-            a.wait_for(
-                &Find::text(Text::Is(format!("{JOINER} asked to join"))),
-                UI,
-            )?;
+            a.wait_for(&Find::text(Text::Is(format!("{JOINER} asked to join"))), UI)?;
             let node = a.wait_for(&Find::tag("approve_code").or(Text::SafetyCode), UI)?;
             let code = safety_code(node.label())
                 .with_context(|| format!("{:?} is not a 12-digit code", node.label()))?;
