@@ -794,6 +794,16 @@ fn play(
                 latitude: B_INSIDE.latitude + nudge,
                 longitude: B_INSIDE.longitude,
             })?;
+            // An emulator has no Wi-Fi or cell location, so the OS geofences (which ride on the
+            // low-power location a real phone always has) only see a fix when Pingers asks
+            // for one. Opening the app at the Spot, as a person arriving would, runs a wake
+            // that asks; once a minute until the Meetup shows.
+            if round.is_multiple_of(12) {
+                for device in [&scene.a, &scene.b] {
+                    device.shell("input keyevent KEYCODE_HOME")?;
+                    device.shell(&format!("am start -W -n {}/{ACTIVITY}", scene.package))?;
+                }
+            }
             let on_a = scene.a.screen()?.find(&signal).is_some();
             let on_b = scene.b.screen()?.find(&signal).is_some();
             if on_a && on_b {
