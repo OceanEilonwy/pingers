@@ -86,6 +86,7 @@ one Kotlin caller today.
 | `ui/screens/Onboarding.kt` | First run, and the first-phone setup link's step in its layout. Their words come from the core. |
 | `ui/screens/Join.kt` | Join flow A: Open invite, Asked to join, You're in, and "Ben asked to join" on the inviter's phone. Their words all come from the core. |
 | `CoPresenceNotifier.kt` | The co-presence alert as a real notification with "Open meetup" and "Hide me here". |
+| `NotificationActions.kt` | `NotificationTrampoline`, the non-exported activity every notification action (open the Meetup, hide me here, You're in) goes through; MainActivity is exported and acts on no extra. |
 | `CoreInfo.kt` | The calls into the Rust core so far (`coreVersion`, `currentBucket`), for the Security screen. |
 | `Heading.kt` | Compass heading from the rotation-vector sensor. |
 | `Words.kt` | Joins strings from `strings.xml` (name lists, directions, areas). |

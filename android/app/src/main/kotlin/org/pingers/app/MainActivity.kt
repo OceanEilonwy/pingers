@@ -242,16 +242,19 @@ private fun App(repo: PingersRepository, nav: Navigator, pending: Intent?, varia
         // Debug builds only: `--es map_host https://10.0.2.2:9446` points maps at a host on the
         // development machine, such as the local stack's (android/docs/maps.md, "Testing").
         if (debuggable(context) && intent.hasExtra(EXTRA_MAP_HOST)) maps.setHostOverride(intent.getStringExtra(EXTRA_MAP_HOST))
+        // A notification's action comes only from NotificationTrampoline, in this process; this
+        // activity is exported, so no extra of the intent itself is ever taken for one.
+        val action = NotificationActions.take()
         when {
-            intent.getStringExtra(CoPresenceNotifier.EXTRA_ACTION) == CoPresenceNotifier.OPEN_MEETUP -> {
+            action == NotificationAction.OPEN_MEETUP -> {
                 repo.dismissAlert()
                 nav.reset(Route.Meetup)
             }
-            intent.getStringExtra(CoPresenceNotifier.EXTRA_ACTION) == CoPresenceNotifier.HIDE_ME -> {
+            action == NotificationAction.HIDE_ME -> {
                 repo.hideMeHere()
                 nav.reset(Route.Home)
             }
-            intent.getStringExtra(Notifications.EXTRA_OPEN) == Notifications.OPEN_LET_IN -> {
+            action == NotificationAction.OPEN_LET_IN -> {
                 Notifications.cancelLetIn(context)
                 nav.reset(Route.LetIn)
             }
@@ -278,7 +281,6 @@ private fun App(repo: PingersRepository, nav: Navigator, pending: Intent?, varia
                     nav.reset(it)
                 }
         }
-        if (intent.hasExtra(CoPresenceNotifier.EXTRA_ACTION)) CoPresenceNotifier.cancel(context)
         consumed()
     }
 

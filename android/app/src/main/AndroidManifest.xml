@@ -71,6 +71,18 @@
             </intent-filter>
         </activity>
 
+        <!-- Every notification action (open the Meetup, hide me here, You're in) starts this
+             non-exported activity, which hands the action to MainActivity inside the app.
+             MainActivity is exported and browsable, so it acts on no extra of its own intent
+             (NotificationActions.kt). -->
+        <activity
+            android:name=".NotificationTrampoline"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <!-- Platform layer. The flavours add their geofence receiver (gms: Geofencing API,
              foss: proximity alerts) and, in gms, the FCM service. -->
         <service

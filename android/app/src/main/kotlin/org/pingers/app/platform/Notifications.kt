@@ -12,6 +12,8 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import org.pingers.app.NotificationAction
+import org.pingers.app.NotificationActions
 import org.pingers.app.R
 
 /** The platform layer's notification channels, and posting what the core returns from a push. */
@@ -29,12 +31,6 @@ object Notifications {
 
     /** You're in's notification ("Ana let you in"); one at a time, a later one replaces it. */
     const val LET_IN_ID = 0x4C45_5449 // "LETI"
-
-    /** The extra on a notification's intent saying which screen to open. */
-    const val EXTRA_OPEN = "org.pingers.app.OPEN"
-
-    /** [EXTRA_OPEN]'s value for You're in. */
-    const val OPEN_LET_IN = "let-in"
 
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -97,12 +93,7 @@ object Notifications {
     fun letIn(context: Context, title: String, body: String) {
         if (!canPost(context)) return
         ensureChannels(context)
-        val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
-            ?.putExtra(EXTRA_OPEN, OPEN_LET_IN)
-            ?.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        val open = launch?.let {
-            PendingIntent.getActivity(context, LET_IN_ID, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        }
+        val open = NotificationActions.pendingIntent(context, NotificationAction.OPEN_LET_IN, LET_IN_ID)
         val n = NotificationCompat.Builder(context, CHANNEL_ALERTS)
             .setSmallIcon(R.drawable.ic_stat_pingers)
             .setColor(ContextCompat.getColor(context, R.color.blue))
@@ -139,14 +130,8 @@ object Notifications {
     }
 
     /** Opens the Meetup screen, as the co-presence alert's "Open meetup" does. */
-    private fun openMeetup(context: Context, code: Int): PendingIntent = PendingIntent.getActivity(
-        context,
-        code,
-        Intent(context, org.pingers.app.MainActivity::class.java)
-            .putExtra(org.pingers.app.CoPresenceNotifier.EXTRA_ACTION, org.pingers.app.CoPresenceNotifier.OPEN_MEETUP)
-            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
-        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-    )
+    private fun openMeetup(context: Context, code: Int): PendingIntent =
+        NotificationActions.pendingIntent(context, NotificationAction.OPEN_MEETUP, code)
 
     private fun openApp(context: Context): PendingIntent? {
         val launch = context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return null

@@ -3,9 +3,7 @@ package org.pingers.app
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
@@ -22,9 +20,6 @@ import org.pingers.app.data.CoPresenceAlert
 object CoPresenceNotifier {
     private const val CHANNEL = "meetups"
     private const val ID = 1
-    const val EXTRA_ACTION = "org.pingers.app.ACTION"
-    const val OPEN_MEETUP = "open-meetup"
-    const val HIDE_ME = "hide-me"
 
     /** Whether the runtime permission must be asked for first (Android 13 and up). */
     val needsPermission: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
@@ -53,9 +48,9 @@ object CoPresenceNotifier {
             .setCategory(NotificationCompat.CATEGORY_SOCIAL)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
-            .setContentIntent(intent(context, OPEN_MEETUP, 1))
-            .addAction(0, context.getString(R.string.alert_open), intent(context, OPEN_MEETUP, 1))
-            .addAction(0, context.getString(R.string.alert_hide), intent(context, HIDE_ME, 2))
+            .setContentIntent(NotificationActions.pendingIntent(context, NotificationAction.OPEN_MEETUP, 1))
+            .addAction(0, context.getString(R.string.alert_open), NotificationActions.pendingIntent(context, NotificationAction.OPEN_MEETUP, 1))
+            .addAction(0, context.getString(R.string.alert_hide), NotificationActions.pendingIntent(context, NotificationAction.HIDE_ME, 2))
             .build()
         try {
             NotificationManagerCompat.from(context).notify(ID, n)
@@ -65,13 +60,4 @@ object CoPresenceNotifier {
     }
 
     fun cancel(context: Context) = NotificationManagerCompat.from(context).cancel(ID)
-
-    private fun intent(context: Context, action: String, code: Int): PendingIntent = PendingIntent.getActivity(
-        context,
-        code,
-        Intent(context, MainActivity::class.java)
-            .putExtra(EXTRA_ACTION, action)
-            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
-        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-    )
 }
