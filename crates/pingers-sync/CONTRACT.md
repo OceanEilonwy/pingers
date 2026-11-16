@@ -115,7 +115,8 @@ the natural way to write it, the second is the style guide's secret hygiene (§8
 
 - **`maintain_push_registrations`** with **`Maintenance`** `{ pool, groups, subscription_lifetime,
   pushes }` and **`GroupMembership`**: the wake's one push registration. Forgets subscriptions of
-  groups not listed (no request), refills an empty pool first, else seals the most urgent stale
+  groups not listed (no request), puts a group's missing subscription (or, with `Pushes::Off`, removes
+  one) first, then refills an empty pool, else seals the most urgent stale
   registration again in place (`PUT /v1/mailboxes/{id}/push`, `PUT /v1/groups/{id}/subs/{id}`),
   adds a missing group subscription, or clears pushes with **`Pushes::Off`**; with nothing stale it
   tops the pool up. **`Pushes::Unknown`** touches no seal. Answers **`Maintained`**.
