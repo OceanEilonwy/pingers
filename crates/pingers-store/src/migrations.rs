@@ -184,6 +184,10 @@ mod tests {
             VALUES (1, 41, zeroblob(32), 8, NULL, NULL);
         INSERT INTO prover_self_test (singleton, parameters, verdict, first_ms, median_ms, p95_ms, timed, tested_at)
             VALUES (1, 'rln-v1', 0, 900, 400, 600, 5, 1000);
+        INSERT INTO party_config (party_id, server, suite, custom_relays)
+            VALUES (x'03030303030303030303030303030303', 'https://built-in.example', 1, 0);
+        INSERT INTO party_join (reply_mailbox, payload, display_name, sub_id, key_package, x_wing_key_package, asked_at)
+            VALUES (zeroblob(16), x'80', 'Ben', NULL, x'01', NULL, 900);
     ";
 
     #[test]
@@ -248,6 +252,20 @@ mod tests {
         );
         // The self-test tests this device's prover, not a server: it stays device-wide.
         assert!(session.prover_self_test().load()?.is_some());
+        // The Party's server is kept once, in its row; its configuration reads it there.
+        let config = session
+            .party_configs()
+            .get(&party.id)?
+            .ok_or(StoreError::NotFound {
+                table: "party_config",
+            })?;
+        assert_eq!(config.server, built_in);
+        assert_eq!(config.suite, crate::PartySuite::QuantumResistant);
+        // A join in progress from before links carried key pins is dropped.
+        let joins: i64 = session.with(|connection| {
+            Ok(connection.query_row("SELECT count(*) FROM party_join", [], |row| row.get(0))?)
+        })?;
+        assert_eq!(joins, 0);
         Ok(())
     }
 

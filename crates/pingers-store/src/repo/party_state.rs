@@ -557,8 +557,19 @@ mod tests {
         let owner = party(1)?;
         session.parties().insert(&owner)?;
         assert_eq!(session.party_configs().get(&owner.id)?, None);
+        // A Party lives on one server, kept in its row: a configuration naming another is refused.
+        let elsewhere = PartyConfig {
+            server: ServerId::new("https://elsewhere.example".into())?,
+            suite: PartySuite::Classical,
+            relays: RelayList::ServerDefault,
+        };
+        assert!(matches!(
+            session.party_configs().put(&owner.id, &elsewhere),
+            Err(StoreError::ServerMismatch)
+        ));
+        assert_eq!(session.party_configs().get(&owner.id)?, None);
         let custom = PartyConfig {
-            server: ServerId::new("https://pingers.example".into())?,
+            server: owner.server.clone(),
             suite: PartySuite::QuantumResistant,
             relays: RelayList::Custom(vec![
                 RelayUrl::new("https://b.example".into())?,
@@ -676,7 +687,7 @@ mod tests {
             session.party_configs().put(
                 &owner.id,
                 &PartyConfig {
-                    server: ServerId::new("https://pingers.example".into())?,
+                    server: owner.server.clone(),
                     suite: PartySuite::Classical,
                     relays: RelayList::Custom(vec![RelayUrl::new("https://r.example".into())?]),
                 },
