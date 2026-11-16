@@ -74,6 +74,9 @@ use crate::wait::{Deadline, pause};
 const ACTIVITY: &str = "org.pingers.app.MainActivity";
 /// The host of the stack's server as the emulators reach it (its invite links' host).
 const STACK_HOST: &str = "10.0.2.2";
+/// The landing page's title (pingers-server's assets/landing.html), which Chrome shows in the dump
+/// even when none of the page reaches it.
+const LANDING_TITLE: &str = "Pingers invite";
 /// The browser on the Play images.
 const CHROME: &str = "com.android.chrome";
 /// The ntfy app, the UnifiedPush distributor on the emulators.
@@ -1467,14 +1470,16 @@ fn through_landing_page(device: &Device, link: &str) -> Result<String> {
             device.tap(button)?;
             tapped_open = true;
         } else if screen
-            .find(&Find::text(Text::StartsWith(
-                "Don't have Pingers yet".into(),
-            )))
+            .find(
+                &Find::text(Text::StartsWith("Don't have Pingers yet".into()))
+                    .or(Text::Is(LANDING_TITLE.into())),
+            )
             .is_some()
         {
             // The page is up but its script has not shown the button: right after the
-            // certificate warning, Chrome may have loaded the page without it. Once a while,
-            // load the link again.
+            // certificate warning, Chrome may have loaded the page without it. Or the page is up
+            // (its title shows) but none of it reaches the dump, as while Chrome's first-run
+            // tip about the address bar covers it. Once a while, load the link again.
             let reload = *page_without_button.get_or_insert_with(|| Deadline::after(UI));
             if reload.passed() {
                 device.shell(&format!(
