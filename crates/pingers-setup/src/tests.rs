@@ -273,7 +273,7 @@ fn served_keys() -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {
 async fn fake_text() -> Result<String, Box<dyn std::error::Error>> {
     let config = fakes().await?.config;
     Ok(format!(
-        "listen = \"127.0.0.1:9475\"\ndomain = \"example.invalid\"\n\
+        "listen = \"127.0.0.1:9479\"\ndomain = \"example.invalid\"\n\
          server_id = \"https://pingers.example.invalid\"\n\
          ohttp_relay_url = \"https://ohttp.example.invalid/ohttp\"\n\
          push_relay_url = \"https://push.example.invalid\"\nmap_host = \"https://maps.example.invalid\"\n\

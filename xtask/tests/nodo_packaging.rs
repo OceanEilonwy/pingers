@@ -100,7 +100,7 @@ fn every_manifest_passes_the_feeds_install_review() -> TestResult {
         if id == "pingers" {
             // The setup page is no web site: only nodo's helper reads it, on loopback.
             assert!(manifest.web.is_empty());
-            assert_eq!(port, 9475);
+            assert_eq!(port, 9479);
             continue;
         }
         // Every service listens on loopback only, behind Caddy, and its health check is its
@@ -713,14 +713,14 @@ fn the_owner_page_is_the_setup_apps_own_loopback_port() -> TestResult {
     let page = manifest.owner_page.ok_or("pingers has no [owner_page]")?;
     assert_eq!(
         page.url,
-        format!("http://127.0.0.1:9475{}", pingers_setup::OWNER_PATH)
+        format!("http://127.0.0.1:9479{}", pingers_setup::OWNER_PATH)
     );
     assert!(
         manifest
             .network
             .inbound
             .iter()
-            .any(|inbound| inbound.port == 9475)
+            .any(|inbound| inbound.port == 9479)
     );
     // Its config, holding the code, is rendered into memory: the app has a secret of its own.
     assert!(

@@ -14,14 +14,14 @@ use async_trait::async_trait;
 use pingers_client::ports::{
     AllowListChange, ClientEvent, JoinDecision, MapDownload, MapHosts, MapRoute, MapsPort,
     MeetupsPort, MeetupsSection, PartiesPort, PartiesSection, PartyDraft, PipelineSection,
-    ServerSection, SettingChange, SetupCheck, SetupOutcome, SpotDraft, SyncPort, WakeInput,
-    WakeOutcome, WakePort,
+    ServerProbe, ServerSection, SettingChange, SetupCheck, SetupOutcome, SpotDraft, SyncPort,
+    WakeInput, WakeOutcome, WakePort,
 };
 use pingers_client::snapshot::{
     DailyWindow, HideTrail, Host, InviteLink, InviteUrl, Name, PauseInFocus, QuietHoursPreference,
     RelayStatus, SafetyCode, Settings, SnapshotError, Toggle, WakePushes,
 };
-use pingers_client::{ClientError, Crates, PushTokens};
+use pingers_client::{ClientError, Crates, PushTokens, Unavailable};
 use pingers_gate::{FocusState, GateDecision, GateError, LocationSharing, MinuteOfDay};
 use pingers_map_downloads::catalog::Catalog;
 use pingers_map_downloads::install::DownloadProgress;
@@ -29,7 +29,7 @@ use pingers_map_downloads::{MapsError, RegionManifest};
 use pingers_meetup::{LocationAnswer, LocationVisibility, MeetPointDraft};
 use pingers_proto::{
     ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, PartyId, SecretText,
-    SetupPayload, SpotId,
+    ServerId, SetupPayload, SpotId,
 };
 use pingers_time::UnixSeconds;
 
@@ -82,8 +82,6 @@ pub enum CrateCall {
     SetAlwaysAllow(PartyId, LeafIndex, AllowListChange),
     SafetyCode(PartyId, LeafIndex),
     MarkChecked(PartyId, LeafIndex),
-    /// The code, exposed: the fake keeps no secrets.
-    RegisterWithCode(String),
     /// The link's server.
     CheckSetupLink(String),
     /// The link's server and code, exposed.
@@ -92,6 +90,10 @@ pub enum CrateCall {
     SetWakePushes(WakePushes, Option<PushTokens>),
     ReportPushPriority(pingers_wake::PushPriority, pingers_wake::PushPriority),
     CheckReachability,
+    ProbeServer(String),
+    TrustServer(ServerId),
+    /// The server (`None`: built in) and the code, exposed: the fake keeps no secrets.
+    SubmitRegistrationCode(Option<ServerId>, String),
     Wake(WakeInput),
     ChangeSetting(SettingChange),
     SendChat(GroupId, ChatBody, Option<ChatMessageId>),
@@ -122,6 +124,7 @@ struct State {
     pipeline: PipelineSection,
     server: ServerSection,
     meetups: MeetupsSection,
+    probe: Option<ServerProbe>,
     section_reads: usize,
     /// Where [`FakeCrates::raise`] sends the Meetup events the client forwards.
     raised: tokio::sync::mpsc::UnboundedSender<ClientEvent>,
@@ -188,6 +191,7 @@ impl FakeCrates {
                 push_delivery: pingers_client::snapshot::PushDelivery::Full,
             },
             meetups: MeetupsSection::default(),
+            probe: None,
             section_reads: 0,
             raised: raised_sender,
             raised_receiver: Some(raised_receiver),
@@ -249,6 +253,11 @@ impl FakeCrates {
     /// pingers-sync's section from now on.
     pub fn set_server(&self, section: ServerSection) {
         self.lock().server = section;
+    }
+
+    /// What `probe_server` answers from now on (`None`: an unknown server).
+    pub fn set_probe(&self, probe: Option<ServerProbe>) {
+        self.lock().probe = probe;
     }
 
     /// What every later `report_push_priority` answers (`None` until set).
@@ -511,8 +520,23 @@ impl SyncPort for FakeCrates {
         self.answer(CrateName::Sync, CrateCall::CheckReachability, relay)
     }
 
-    async fn register_with_code(&self, code: SecretText) -> Result<(), ClientError> {
-        let call = CrateCall::RegisterWithCode(code.expose().to_owned());
+    /// Answers the probe [`FakeCrates::set_probe`] last set.
+    async fn probe_server(&self, address: String) -> Result<ServerProbe, ClientError> {
+        let probe = self.lock().probe.clone();
+        self.answer(CrateName::Sync, CrateCall::ProbeServer(address), ())?;
+        probe.ok_or_else(|| Unavailable::UnknownServer.into())
+    }
+
+    async fn trust_server(&self, server: ServerId) -> Result<(), ClientError> {
+        self.answer(CrateName::Sync, CrateCall::TrustServer(server), ())
+    }
+
+    async fn submit_registration_code(
+        &self,
+        server: Option<ServerId>,
+        code: SecretText,
+    ) -> Result<(), ClientError> {
+        let call = CrateCall::SubmitRegistrationCode(server, code.expose().to_owned());
         self.answer(CrateName::Sync, call, ())
     }
 

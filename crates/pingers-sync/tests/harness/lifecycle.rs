@@ -33,7 +33,8 @@ async fn a_mailbox_the_server_already_forgot_is_forgotten_locally() -> TestResul
     };
     // Delete it on the server behind the engine's back.
     let stored = device
-        .session()?
+        .scoped()?
+        .server()?
         .mailboxes()
         .get(&mailbox)?
         .ok_or(TestError::Unexpected("not stored"))?;
@@ -48,7 +49,14 @@ async fn a_mailbox_the_server_already_forgot_is_forgotten_locally() -> TestResul
     assert_eq!(deleted.status(), 204);
 
     device.engine.delete_mailbox(&mailbox, budget).await?;
-    assert!(device.session()?.mailboxes().get(&mailbox)?.is_none());
+    assert!(
+        device
+            .scoped()?
+            .server()?
+            .mailboxes()
+            .get(&mailbox)?
+            .is_none()
+    );
     Ok(())
 }
 
@@ -91,7 +99,14 @@ async fn expired_mailboxes_and_subscriptions_are_forgotten() -> TestResult {
             .await?,
         1
     );
-    assert!(device.session()?.subscriptions().get(&group)?.is_none());
+    assert!(
+        device
+            .scoped()?
+            .server()?
+            .subscriptions()
+            .get(&group)?
+            .is_none()
+    );
     Ok(())
 }
 

@@ -134,6 +134,8 @@ interface PingersRepository {
     /** Advanced was opened: check the server and relay are reachable. */
     fun openAdvanced()
     fun setServer(url: String)
+    /** "Trust this server's keys" on New party, for the server typed in and looked up. */
+    fun trustServerKeys()
     fun setRelay(url: String)
     fun setPushRelay(choice: PushRelayChoice)
     fun setPostQuantum(on: Boolean)

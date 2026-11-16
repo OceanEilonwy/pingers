@@ -4,7 +4,7 @@
 use pingers_screens::common::{PartyColour, PrivacyLevel};
 use pingers_screens::party::{
     Advanced, CodeAnswer, DraftPrivacy, NewParty, Overlap, PartyCode, PartyView, Reachability,
-    SpotShape,
+    ServerKeys, SpotShape,
 };
 
 use crate::Language;
@@ -69,6 +69,8 @@ pub struct NewPartyText {
     pub another_detail: String,
     /// "pingers.example.org", the address field's placeholder.
     pub another_placeholder: String,
+    /// Another server's keys, once looked up: what to compare and the button to trust them.
+    pub keys: Option<ServerKeysText>,
     /// "Advanced".
     pub advanced: String,
     /// "Relays and encryption · Full privacy".
@@ -77,6 +79,34 @@ pub struct NewPartyText {
     pub later: String,
     /// "Create party".
     pub create: String,
+}
+
+/// Another server's keys on New party, in words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerKeysText {
+    /// "Its key: 1a2b 3c4d … Check it with whoever runs the server.", or "Keys trusted".
+    pub line: String,
+    /// "Trust this server's keys", while they wait for the user.
+    pub trust: Option<String>,
+}
+
+/// Another server's keys, in words; `None` before they are looked up.
+#[must_use]
+pub fn server_keys(language: Language, keys: &ServerKeys) -> Option<ServerKeysText> {
+    let Language::English = language;
+    match keys {
+        ServerKeys::NotLookedUp => None,
+        ServerKeys::ToTrust { fingerprint } => Some(ServerKeysText {
+            line: format!(
+                "Its key: {fingerprint}. If you can, check it with whoever runs the server."
+            ),
+            trust: Some("Trust this server's keys".into()),
+        }),
+        ServerKeys::Trusted => Some(ServerKeysText {
+            line: "Keys trusted. Pingers will refuse this server if they change.".into(),
+            trust: None,
+        }),
+    }
 }
 
 /// The Advanced screen, in words.
@@ -210,6 +240,10 @@ pub fn new_party(language: Language, view: &NewParty) -> NewPartyText {
         another: ANOTHER.into(),
         another_detail: "Enter its address, like pingers.example.org".into(),
         another_placeholder: "pingers.example.org".into(),
+        keys: view
+            .server_keys
+            .as_ref()
+            .and_then(|keys| server_keys(language, keys)),
         advanced: "Advanced".into(),
         advanced_detail: format!("Relays and encryption · {}", privacy.level),
         later: "You'll invite people and add Spots once the party is created.".into(),
@@ -402,7 +436,7 @@ mod tests {
     use pingers_screens::common::{DraftText, Operator};
     use pingers_screens::fixtures::{self, FixtureError};
     use pingers_screens::party::{
-        CodeAnswer, PartyDraft, PushRelayChoice, ServerChoice, ServiceDraft,
+        CodeAnswer, PartyDraft, PushRelayChoice, ServerChoice, ServerKeys, ServiceDraft,
         advanced as advanced_screen, new_party as new_party_screen, party as party_screen,
         party_code as party_code_screen,
     };
@@ -422,6 +456,7 @@ mod tests {
                 host: DraftText::new("pingers.flat7.org".into()),
                 check: Reachability::Reachable(Operator::new("Flat 7")?),
             },
+            server_keys: ServerKeys::NotLookedUp,
             relay: ServiceDraft {
                 host: DraftText::new("relay.quietpath.net".into()),
                 check: Reachability::Checking,
@@ -430,6 +465,37 @@ mod tests {
             push_relay_operator: Some(Operator::new("Pingers")?),
             post_quantum: PostQuantum::Off,
         })
+    }
+
+    #[test]
+    fn another_server_s_keys_are_shown_then_trusted() -> Result<(), FixtureError> {
+        let mut another = draft()?;
+        another.server_choice = ServerChoice::Another;
+        assert_eq!(
+            new_party(EN, &new_party_screen(&another, WakePushes::On)).keys,
+            None
+        );
+        another.server_keys = ServerKeys::ToTrust {
+            fingerprint: "1a2b 3c4d".into(),
+        };
+        let shown = new_party(EN, &new_party_screen(&another, WakePushes::On))
+            .keys
+            .ok_or(FixtureError::Missing)?;
+        assert!(shown.line.contains("1a2b 3c4d"));
+        assert_eq!(shown.trust.as_deref(), Some("Trust this server's keys"));
+        another.server_keys = ServerKeys::Trusted;
+        let trusted = new_party(EN, &new_party_screen(&another, WakePushes::On))
+            .keys
+            .ok_or(FixtureError::Missing)?;
+        assert!(trusted.line.starts_with("Keys trusted"));
+        assert_eq!(trusted.trust, None);
+        // The app's server has no step.
+        another.server_choice = ServerChoice::BuiltIn;
+        assert_eq!(
+            new_party(EN, &new_party_screen(&another, WakePushes::On)).keys,
+            None
+        );
+        Ok(())
     }
 
     #[test]

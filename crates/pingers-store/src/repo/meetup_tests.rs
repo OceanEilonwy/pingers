@@ -215,6 +215,9 @@ fn an_ended_meetups_keys_are_nowhere_in_the_database() -> Result<(), TestError> 
     let path = directory.file("store.db");
     let database = Database::open(&path, key(1))?;
     let session = database.session()?;
+    session.servers().put(&crate::test_support::server_record(
+        crate::test_support::TEST_SERVER,
+    )?)?;
     let owner = party(1)?;
     session.parties().insert(&owner)?;
     let ended = meetup(&owner.id, 0x5a);
@@ -555,9 +558,10 @@ fn ending_a_meetup_forgets_its_subscription() -> Result<(), TestError> {
     session.parties().insert(&owner)?;
     let ended = meetup(&owner.id, 1);
     let other = meetup(&owner.id, 2);
+    let server = fixture.server()?;
     for (meetup, fill) in [(&ended, 1_u8), (&other, 2)] {
         session.meetups().start(meetup)?;
-        session.subscriptions().put(&crate::StoredSubscription {
+        server.subscriptions().put(&crate::StoredSubscription {
             group: meetup.group,
             id: pingers_proto::SubscriptionId::from_bytes([fill; 16]),
             handle: pingers_proto::PushHandle::from_bytes([fill; 8]),
@@ -566,7 +570,7 @@ fn ending_a_meetup_forgets_its_subscription() -> Result<(), TestError> {
         })?;
     }
     session.meetups().end(&ended.group)?;
-    assert!(session.subscriptions().get(&ended.group)?.is_none());
-    assert!(session.subscriptions().get(&other.group)?.is_some());
+    assert!(server.subscriptions().get(&ended.group)?.is_none());
+    assert!(server.subscriptions().get(&other.group)?.is_some());
     Ok(())
 }

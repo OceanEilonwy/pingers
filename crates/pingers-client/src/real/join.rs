@@ -24,13 +24,14 @@ use pingers_parties::{
     PartiesError, PartyLifecycle,
 };
 use pingers_proto::{
-    DisplayName, MailboxId, MailboxMessage, PartyId, SequenceNumber, Subscription, TimeToLive,
-    WireDecode as _, WireEncode,
+    DisplayName, MailboxId, MailboxMessage, PartyId, SequenceNumber, ServerId, Subscription,
+    TimeToLive, WireDecode as _, WireEncode,
 };
 use pingers_store::MailboxPurpose;
-use pingers_sync::{GroupCall, PoolTarget, SyncError, WakeBudget};
+use pingers_sync::{CodeSource, GroupCall, PoolTarget, SyncError, WakeBudget};
 
 use super::records::{self, Key, corrupt};
+use super::servers::Link;
 use super::sync::Net;
 use crate::ports::{ClientEvent, JoinDecision};
 use crate::snapshot::{InviteUrl, Name};
@@ -43,30 +44,30 @@ const PARTY_SUBSCRIPTION: Duration = super::push::TOKEN_LIFETIME;
 /// A reply mailbox lives a day: as long as the invite it answers.
 const REPLY_LIFETIME: Duration = Duration::from_hours(24);
 
-/// An invite mailbox lives as long as the invite it serves.
-const INVITE_MAILBOX_LIFETIME: Duration = pingers_parties::INVITE_LIFETIME;
-
-/// Posts a join request for `link` under `name` ("Ask to join"). With wake-up pushes off, or
-/// on but without the platform's push token yet, the request carries no subscription: the join
-/// still works, and the device reads its reply mailbox itself ([`poll`]).
+/// Posts a join request for `link` under `name` ("Ask to join"), on the server the link names.
+/// With wake-up pushes off, or on but without the platform's push token yet, the request carries
+/// no subscription: the join still works, and the device reads its reply mailbox itself
+/// ([`poll`]).
 ///
 /// # Errors
 ///
-/// [`ClientError::Parties`] for a bad or expired link; [`ClientError::Sync`].
+/// [`ClientError::Parties`] for a bad or expired link; [`ClientError::Server`] (`KeyMismatch`)
+/// if the server's keys are not the ones the link pins; [`ClientError::Sync`].
 pub(crate) async fn open_invite(net: &Net, link: InviteUrl, name: Name) -> Result<(), ClientError> {
-    let engine = net.engine()?;
+    let link = InviteLink::from_text(link.as_str().to_owned());
+    let payload = link.payload()?;
+    // The link names the Party's server and the keys the inviter trusts for it: a server this
+    // device has not used is recorded with those pins, and refused if its keys differ.
+    let server = net.invite_link(&payload).await?;
     // A registration code in the link is for the first registration on the link's own server
     // (design B.1): offered before the reply mailbox needs a credential.
-    if let Ok(payload) = InviteLink::from_text(link.as_str().to_owned()).payload()
-        && let Some(code) = payload.registration_code
-        && payload.server == engine.server()
-    {
-        net.offer_invite_code(code).await?;
-    } else {
-        net.ready().await?;
+    match payload.registration_code {
+        Some(code) => server.offer_code(code, CodeSource::Invite).await?,
+        None => server.account().await?,
     }
-    let subscription = match net.ensure_wake_push().await {
-        Ok(()) => engine
+    let subscription = match net.ensure_wake_push(&server.server).await {
+        Ok(()) => server
+            .engine
             .party_subscription(TimeToLive::new(PARTY_SUBSCRIPTION).map_err(|_never| corrupt())?)?,
         // No wake-ups (pushes off, or no token from the platform yet): the join still works;
         // the device then reads its reply mailbox on its own wakes and while it waits on screen.
@@ -75,54 +76,54 @@ pub(crate) async fn open_invite(net: &Net, link: InviteUrl, name: Name) -> Resul
         }
         Err(error) => return Err(error),
     };
-    let link = InviteLink::from_text(link.as_str().to_owned());
     let display_name = DisplayName::new(name.as_str().to_owned()).map_err(PartiesError::Proto)?;
-    let prepared = match prepare(net, &link, &display_name, subscription.as_ref()).await {
+    let asking = Asking {
+        server: &server.server,
+        link: &link,
+        name: &display_name,
+        subscription: subscription.as_ref(),
+    };
+    let prepared = match prepare(net, &asking).await {
         Err(ClientError::Parties(PartiesError::NoPooledMailbox)) => {
-            refill(net, MailboxPurpose::Reply, REPLY_LIFETIME).await?;
-            prepare(net, &link, &display_name, subscription.as_ref()).await?
+            refill_reply_pool(&server).await?;
+            prepare(net, &asking).await?
         }
         other => other?,
     };
-    net.push([prepared]);
+    net.push(&server.server, [prepared]);
     net.flush().await
 }
 
-/// Registers an invite mailbox if none is pooled, for a new invite link.
-///
-/// # Errors
-///
-/// [`ClientError::Sync`].
-pub(crate) async fn refill_invite_pool(net: &Net) -> Result<(), ClientError> {
-    refill(net, MailboxPurpose::Invite, INVITE_MAILBOX_LIFETIME).await
-}
-
-/// Registers one mailbox for `purpose`'s pool if it is empty.
-async fn refill(net: &Net, purpose: MailboxPurpose, lifetime: Duration) -> Result<(), ClientError> {
+/// Registers one reply mailbox on `link`'s server if its pool is empty.
+async fn refill_reply_pool(link: &Link) -> Result<(), ClientError> {
     let target = PoolTarget {
-        purpose,
+        purpose: MailboxPurpose::Reply,
         size: 1,
-        lifetime: TimeToLive::new(lifetime).map_err(|_never| corrupt())?,
+        lifetime: TimeToLive::new(REPLY_LIFETIME).map_err(|_never| corrupt())?,
     };
-    let refilled = net
-        .engine()?
+    let refilled = link
+        .engine
         .refill_mailbox_pool(&target, WakeBudget::UNLIMITED)
         .await;
-    net.observe(&refilled);
+    link.observe(&refilled);
     let _registered: pingers_sync::PoolRefill = refilled?;
     Ok(())
 }
 
-/// pingers-parties' join request, and the join recorded with its subscription.
-async fn prepare(
-    net: &Net,
-    link: &InviteLink,
-    name: &DisplayName,
-    subscription: Option<&Subscription>,
-) -> Result<pingers_parties::Outbound, ClientError> {
-    let link = InviteLink::from_text(link.as_str().to_owned());
-    let name = name.clone();
-    let subscription = subscription.cloned();
+/// What a join request is made from.
+struct Asking<'values> {
+    server: &'values ServerId,
+    link: &'values InviteLink,
+    name: &'values DisplayName,
+    subscription: Option<&'values Subscription>,
+}
+
+/// pingers-parties' join request, and the join recorded with its server and subscription.
+async fn prepare(net: &Net, asking: &Asking<'_>) -> Result<pingers_parties::Outbound, ClientError> {
+    let link = InviteLink::from_text(asking.link.as_str().to_owned());
+    let name = asking.name.clone();
+    let subscription = asking.subscription.cloned();
+    let server = asking.server.clone();
     net.backend
         .store(move |session, clock, rng| {
             session.transaction(|session| {
@@ -141,6 +142,7 @@ async fn prepare(
                 )?;
                 records::write(session, &Key::PendingJoin, |writer| {
                     writer.fixed(prepared.join.reply_mailbox().as_bytes());
+                    writer.text(server.as_str());
                     writer.option(encoded.as_deref(), super::records::Writer::fixed);
                 })?;
                 Ok(prepared.outbound)
@@ -149,9 +151,10 @@ async fn prepare(
         .await
 }
 
-/// The join this device started, and its subscription.
+/// The join this device started, the server it asked on, and its subscription.
 struct Pending {
     join: JoinId,
+    server: ServerId,
     subscription: Option<Subscription>,
 }
 
@@ -160,11 +163,13 @@ async fn pending(net: &Net) -> Result<Option<Pending>, ClientError> {
         .store(|session, _clock, _rng| {
             records::read(session, &Key::PendingJoin, |reader| {
                 let reply = MailboxId::from_bytes(reader.fixed()?);
+                let server = ServerId::new(reader.text()?).map_err(|_bad| corrupt())?;
                 let subscription = reader.option(|reader| {
                     Subscription::decode(&reader.rest()).map_err(|_bad| corrupt())
                 })?;
                 Ok(Pending {
                     join: JoinId::for_reply_mailbox(reply),
+                    server,
                     subscription,
                 })
             })
@@ -190,7 +195,8 @@ pub(crate) async fn waits_unannounced(net: &Net) -> Result<bool, ClientError> {
 ///
 /// [`ClientError::Parties`] (`UnknownJoin`) with no join under way; a storage failure.
 pub(crate) async fn withdraw(net: &Net) -> Result<(), ClientError> {
-    let join = pending(net).await?.ok_or(PartiesError::UnknownJoin)?.join;
+    let asked = pending(net).await?.ok_or(PartiesError::UnknownJoin)?;
+    let join = asked.join;
     let outbound = net
         .backend
         .store(move |session, clock, rng| {
@@ -201,7 +207,7 @@ pub(crate) async fn withdraw(net: &Net) -> Result<(), ClientError> {
             })
         })
         .await?;
-    net.push(outbound);
+    net.push(&asked.server, outbound);
     net.flush().await
 }
 
@@ -231,16 +237,20 @@ pub(crate) async fn decide(
     let join = JoinId::for_reply_mailbox(request);
     match decision {
         JoinDecision::Admit => {
+            let server = net.party_server(party).await?;
             let admission = net
                 .backend
                 .store(move |session, clock, rng| {
                     Ok(PartyLifecycle::new(session, clock).approve_join(&party, join, rng)?)
                 })
                 .await?;
-            net.push([
-                pingers_parties::Outbound::Commit(admission.commit),
-                admission.close_invite,
-            ]);
+            net.push(
+                &server,
+                [
+                    pingers_parties::Outbound::Commit(admission.commit),
+                    admission.close_invite,
+                ],
+            );
             net.flush().await
         }
         JoinDecision::Refuse => {
@@ -256,20 +266,21 @@ pub(crate) async fn decide(
 /// An open invite and where to resume reading its mailbox.
 struct OpenInvite {
     party: PartyId,
+    server: ServerId,
     invite: InviteId,
     after: Option<SequenceNumber>,
 }
 
 /// Reads what joins wait for: posts to this device's open invites, and the Welcome for the
-/// join it asked for. Keeps an invite mailbox pooled if this device is in a Party. Returns
-/// the events to raise.
+/// join it asked for. Keeps an invite mailbox pooled on each server this device has a Party
+/// on. Returns the events to raise.
 ///
 /// # Errors
 ///
 /// A storage failure; network failures leave the reads for the next wake.
 pub(crate) async fn poll(net: &Net) -> Result<Vec<ClientEvent>, ClientError> {
     let mut events = Vec::new();
-    let (invites, in_a_party) = net
+    let (invites, servers) = net
         .backend
         .store(|session, clock, _rng| {
             let lifecycle = PartyLifecycle::new(session, clock);
@@ -280,17 +291,24 @@ pub(crate) async fn poll(net: &Net) -> Result<Vec<ClientEvent>, ClientError> {
                     if summary.status == InviteStatus::Open {
                         open.push(OpenInvite {
                             party: party.id,
+                            server: party.server.clone(),
                             invite: summary.invite,
                             after: lifecycle.invite_read_position(summary.invite)?,
                         });
                     }
                 }
             }
-            Ok((open, !parties.is_empty()))
+            let mut servers: Vec<ServerId> = Vec::new();
+            for party in parties {
+                if !servers.contains(&party.server) {
+                    servers.push(party.server);
+                }
+            }
+            Ok((open, servers))
         })
         .await?;
     for open in invites {
-        let read = transient(read(net, &open.invite.mailbox(), open.after).await)?;
+        let read = transient(read(net, &open.server, &open.invite.mailbox(), open.after).await)?;
         for message in read.unwrap_or_default() {
             events.extend(receive(net, &open, message).await?);
         }
@@ -299,8 +317,9 @@ pub(crate) async fn poll(net: &Net) -> Result<Vec<ClientEvent>, ClientError> {
         events.push(ClientEvent::PartiesChanged);
         events.push(event);
     }
-    if in_a_party {
-        transient(refill_invite_pool(net).await)?;
+    // One invite mailbox pooled on each server with a Party, for the next link there.
+    for server in &servers {
+        transient(net.refill_invite_pool(server).await)?;
     }
     Ok(events)
 }
@@ -316,14 +335,16 @@ fn transient<T>(result: Result<T, ClientError>) -> Result<Option<T>, ClientError
 
 async fn read(
     net: &Net,
+    server: &ServerId,
     mailbox: &MailboxId,
     after: Option<SequenceNumber>,
 ) -> Result<Vec<MailboxMessage>, ClientError> {
-    let read = net
-        .engine()?
+    let link = net.link(server).await?;
+    let read = link
+        .engine
         .read_mailbox(mailbox, after, WakeBudget::UNLIMITED)
         .await;
-    net.observe(&read);
+    link.observe(&read);
     Ok(read?.messages)
 }
 
@@ -354,11 +375,17 @@ async fn receive(
 /// Completes the recorded join if its Welcome has arrived; `None` while the inviter has not
 /// let this device in.
 async fn complete(net: &Net) -> Result<Option<ClientEvent>, ClientError> {
-    let Some(Pending { join, subscription }) = pending(net).await? else {
+    let Some(Pending {
+        join,
+        server,
+        subscription,
+    }) = pending(net).await?
+    else {
         return Ok(None);
     };
-    let engine = net.engine()?;
-    let Some(welcome) = read(net, &join.reply_mailbox(), None)
+    let link = net.link(&server).await?;
+    let engine = &link.engine;
+    let Some(welcome) = read(net, &server, &join.reply_mailbox(), None)
         .await?
         .into_iter()
         .next()
@@ -378,7 +405,7 @@ async fn complete(net: &Net) -> Result<Option<ClientEvent>, ClientError> {
         key: &access.auth,
     };
     let state = engine.group_state(call, WakeBudget::UNLIMITED).await;
-    net.observe(&state);
+    link.observe(&state);
     let arrived = ArrivedWelcome {
         join,
         welcome,
@@ -403,7 +430,7 @@ async fn complete(net: &Net) -> Result<Option<ClientEvent>, ClientError> {
             .await
             .map_err(|error: SyncError| ClientError::Sync(error))?;
     }
-    net.push(joined.outbound);
+    net.push(&server, joined.outbound);
     net.flush().await?;
     Ok(Some(ClientEvent::LetIn(joined.party)))
 }

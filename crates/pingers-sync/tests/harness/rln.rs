@@ -212,7 +212,8 @@ async fn the_main_app_proves_and_the_real_server_accepts_it() -> TestResult {
     // The message id was reserved before sending: the bucket has seven left.
     let mut left = 0;
     while device
-        .session()?
+        .scoped()?
+        .server()?
         .rln_counters()
         .reserve(RlnScope::Mailbox, world.clock.now().bucket())?
         .is_some()
@@ -240,7 +241,11 @@ async fn a_reused_nullifier_is_refused_with_403() -> TestResult {
         world.clock.now().get().saturating_add(900),
     ));
     assert!(after > bucket);
-    device.session()?.rln_counters().delete_before(after)?;
+    device
+        .scoped()?
+        .server()?
+        .rln_counters()
+        .delete_before(after)?;
     let reused = device
         .engine
         .register_mailbox(&knock_mailbox()?, WakeBudget::UNLIMITED)
@@ -377,7 +382,8 @@ async fn a_removed_leaf_falls_back_to_tokens_and_is_replaced() -> TestResult {
     // The account's leaf is replaced behind this device's back (as after a reinstall that
     // kept the account): the server zeroes the device's leaf at the next root.
     let stored = device
-        .session()?
+        .scoped()?
+        .server()?
         .account()
         .bearer()?
         .ok_or(TestError::Unexpected("no bearer"))?;
@@ -528,5 +534,55 @@ async fn one_self_test_runs_at_a_time_and_only_in_the_main_app() -> TestResult {
         extension.engine.start_prover_self_test().await?,
         SelfTestStart::NotDue
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_local_tree_that_no_longer_matches_is_fetched_again_whole() -> TestResult {
+    let world = World::start()?;
+    let device = proving_device(&world).await?;
+    // A stored leaf goes wrong (a bad write, a bug): the copy no longer reproduces the root.
+    {
+        let scoped = device.scoped()?;
+        let server = scoped.server()?;
+        let leaves = server.rln_tree().leaves()?;
+        let first = leaves.first().ok_or(TestError::Unexpected("no leaves"))?;
+        server.rln_tree().set_leaf(&pingers_store::TreeLeaf {
+            position: first.position,
+            value: pingers_anon::LeafValue::from_bytes([7; 32]),
+        })?;
+    }
+    // A new process reads the copy from the store; at the next root it is fetched again from
+    // the start instead of failing.
+    let device = world.restart(device)?;
+    next_hour(&world);
+    let refreshed = refresh(&device).await?;
+    assert!(refreshed.added >= 1, "the whole tree came again");
+    register_mailbox(&device).await?;
+    assert_eq!(last_scheme(&device).as_deref(), Some("PingersRln"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_self_test_stops_with_the_last_engine_that_shares_it() -> TestResult {
+    let world = World::start()?;
+    let device = world.device()?;
+    assert_eq!(
+        device.engine.start_prover_self_test().await?,
+        SelfTestStart::Started
+    );
+    // The process's engines go (the app is closed): the test stops and records nothing, so the
+    // next process tests again rather than trusting a half-run test.
+    let device = world.restart(device)?;
+    let waited = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if device.engine.prover_standing().await? != SelfTestStanding::Due {
+                return Ok::<_, TestError>(());
+            }
+            real_pause().await;
+        }
+    })
+    .await;
+    assert!(waited.is_err(), "a stopped self-test recorded a result");
     Ok(())
 }

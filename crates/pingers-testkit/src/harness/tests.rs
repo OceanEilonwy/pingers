@@ -150,6 +150,7 @@ mod running {
         for address in [
             endpoints.server,
             endpoints.ohttp_relay,
+            endpoints.ohttp_relay_https,
             endpoints.push_relay,
         ] {
             assert!(
@@ -298,6 +299,105 @@ mod running {
             Some(super::super::HARNESS_MAP_HOST)
         );
         harness.shutdown();
+        Ok(())
+    }
+
+    /// Fetches `/v1/params` through the harness's HTTPS relay front, as a client that added
+    /// the server by its address does: an OHTTP-encapsulated `GET` to `relay_url`.
+    async fn params_through_relay(
+        endpoints: &super::super::Endpoints,
+        relay_url: &str,
+        seed: u64,
+    ) -> Result<pingers_proto::Params, Box<dyn std::error::Error + Send + Sync>> {
+        use pingers_proto::WireDecode as _;
+
+        let key_config = KeyConfig::decode(&endpoints.ohttp_key_config)?;
+        let inner = BinaryRequest {
+            method: "GET".to_owned(),
+            path: "/v1/params".to_owned(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        let encapsulated = encapsulate_request(&key_config, &inner, &mut seeded_rng(seed))?;
+        let answer = push_client(endpoints)?
+            .post(relay_url)
+            .header(CONTENT_TYPE.as_str(), "message/ohttp-req")
+            .body(encapsulated.message)
+            .send()
+            .await?;
+        if answer.status().as_u16() != 200 {
+            return Err(format!("relay answered {}", answer.status()).into());
+        }
+        let sealed = answer.bytes().await?;
+        let opened = encapsulated.response_context.open(&sealed)?;
+        if opened.status.get() != 200 {
+            return Err(format!("server answered {}", opened.status.get()).into());
+        }
+        Ok(pingers_proto::Params::decode(&opened.body)?)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_parameters_fetched_through_the_https_relay_list_that_relay() -> TestResult {
+        let harness = InProcessHarness::start(&HarnessConfig::default())?;
+        let endpoints = harness.endpoints().clone();
+        let relay_url = format!("https://{}/ohttp", endpoints.ohttp_relay_https);
+        let params = params_through_relay(&endpoints, &relay_url, 3).await?;
+        assert_eq!(
+            params
+                .ohttp_relays
+                .iter()
+                .map(pingers_proto::RelayUrl::as_str)
+                .collect::<Vec<_>>(),
+            vec![relay_url.as_str()]
+        );
+        // Without an operator the origin is published.
+        assert_eq!(params.server_operator, endpoints.server_id);
+
+        // The key config is served through the HTTPS front too.
+        let config = push_client(&endpoints)?
+            .get(format!(
+                "https://{}/v1/ohttp/config",
+                endpoints.ohttp_relay_https
+            ))
+            .send()
+            .await?;
+        assert_eq!(config.status().as_u16(), 200);
+        assert_eq!(config.bytes().await?.to_vec(), endpoints.ohttp_key_config);
+        harness.shutdown();
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn two_harnesses_run_at_once_with_their_own_keys_and_names() -> TestResult {
+        let start = |seed: u64, operator: &str| {
+            InProcessHarness::start(&HarnessConfig {
+                seed,
+                operator: Some(operator.to_owned()),
+                ..HarnessConfig::default()
+            })
+        };
+        let first = start(11, "Server A")?;
+        let second = start(12, "Server B")?;
+        let (a, b) = (first.endpoints().clone(), second.endpoints().clone());
+        assert_ne!(a.ohttp_key_config, b.ohttp_key_config);
+        assert_ne!(a.server_id, b.server_id);
+        assert_ne!(a.ohttp_relay_https, b.ohttp_relay_https);
+
+        // Each answers through its own relay with its own name and relay.
+        for (endpoints, operator) in [(&a, "Server A"), (&b, "Server B")] {
+            let relay_url = format!("https://{}/ohttp", endpoints.ohttp_relay_https);
+            let params = params_through_relay(endpoints, &relay_url, 4).await?;
+            assert_eq!(params.server_operator, operator);
+            assert_eq!(
+                params
+                    .ohttp_relays
+                    .first()
+                    .map(pingers_proto::RelayUrl::as_str),
+                Some(relay_url.as_str())
+            );
+        }
+        first.shutdown();
+        second.shutdown();
         Ok(())
     }
 

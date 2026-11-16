@@ -27,7 +27,9 @@ use pingers_proto::{
     GroupId, MessageAccepted, PrivacyPassKeys, RegisterRequest, RegisterResponse, SecretText,
     SequenceNumber, ServerId, Subscription, SubscriptionId, WireDecode, WireEncode,
 };
-use pingers_store::{Database, DatabaseKey, Session, TokenKeyId};
+use pingers_store::{
+    Database, DatabaseKey, ServerRecord, ServerSession, ServerTrust, Session, TokenKeyId,
+};
 use pingers_sync::{
     CommitAttempts, CredentialPolicy, ProcessRole, ProverStatus, QueueCapacity, SelfTestPlan,
     SyncEngine, SyncError, SyncParts, SyncSettings, TokenIssuer, TokenStock, WakeBudget,
@@ -393,8 +395,10 @@ impl Transport for Link {
 /// A device's own identified route: the real direct transport over HTTPS to the harness
 /// server's TLS front, trusting only the test CA. Records each path it carried.
 pub(crate) struct Direct {
-    direct: DirectTransport,
+    transport: DirectTransport,
     seen: Mutex<Vec<String>>,
+    /// A path answered `500` here instead of being sent.
+    failing: Mutex<Option<String>>,
 }
 
 impl Direct {
@@ -402,17 +406,23 @@ impl Direct {
         let endpoints = world.harness.endpoints();
         let roots = TlsRoots::from_der(&certificates_from_pem(&endpoints.push_relay_ca)?)?;
         Ok(Self {
-            direct: DirectTransport::new(
+            transport: DirectTransport::new(
                 &DirectConfig::new(endpoints.server_id.clone(), roots),
                 Arc::new(world.clock.clone()),
             )?,
             seen: Mutex::new(Vec::new()),
+            failing: Mutex::new(None),
         })
     }
 
     /// The paths sent so far, oldest first, and forgets them.
     pub(crate) fn take_seen(&self) -> Vec<String> {
         std::mem::take(&mut *lock(&self.seen))
+    }
+
+    /// Answers `path` with `500` from now on (`None`: send everything).
+    pub(crate) fn fail(&self, path: Option<&str>) {
+        *lock(&self.failing) = path.map(str::to_owned);
     }
 }
 
@@ -424,14 +434,17 @@ impl Transport for Direct {
         request: BinaryRequest,
     ) -> Result<BinaryResponse, TransportError> {
         lock(&self.seen).push(request.path.clone());
-        self.direct.request(class, request).await
+        if lock(&self.failing).as_deref() == Some(request.path.as_str()) {
+            return response(500, Vec::new());
+        }
+        self.transport.request(class, request).await
     }
 
     async fn stream(
         &self,
         request: BinaryRequest,
     ) -> Result<Box<dyn DuplexStream>, TransportError> {
-        self.direct.stream(request).await
+        self.transport.stream(request).await
     }
 
     fn kind(&self) -> TransportKind {
@@ -869,6 +882,14 @@ impl World {
                 [u8::try_from(number % 200).unwrap_or(1); 32],
             )),
         )?;
+        database.session()?.servers().put(&ServerRecord {
+            server: self.server_id.clone(),
+            ohttp_relays: Vec::new(),
+            push_relay: None,
+            gateway_pins: Vec::new(),
+            push_relay_pins: Vec::new(),
+            trust: ServerTrust::BuiltIn,
+        })?;
         let database = Arc::new(database);
         let router = Router::new(Routes {
             anonymous: link.clone(),
@@ -885,6 +906,7 @@ impl World {
                 clock: Arc::new(self.clock.clone()),
                 timer: Arc::new(self.clock.clone()),
                 rng: Box::new(seeded_rng(seed)),
+                self_test: pingers_sync::SelfTestSlot::default(),
             },
             SyncSettings {
                 server: self.server_id.clone(),
@@ -906,6 +928,19 @@ impl World {
             role,
             stock,
         })
+    }
+}
+
+/// A store session and the server whose rows a check reads.
+pub(crate) struct Scoped {
+    session: Session,
+    server: ServerId,
+}
+
+impl Scoped {
+    /// The server's rows.
+    pub(crate) fn server(&self) -> Result<ServerSession<'_>, TestError> {
+        Ok(self.session.server(&self.server)?)
     }
 }
 
@@ -931,6 +966,14 @@ impl Device {
     /// A store session of the test's own, for a check between engine steps.
     pub(crate) fn session(&self) -> Result<Session, TestError> {
         Ok(self.database.session()?)
+    }
+
+    /// A store session for checks of the harness server's rows.
+    pub(crate) fn scoped(&self) -> Result<Scoped, TestError> {
+        Ok(Scoped {
+            session: self.database.session()?,
+            server: self.engine.server(),
+        })
     }
 
     /// Fills the token stock.

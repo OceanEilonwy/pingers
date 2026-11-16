@@ -98,6 +98,8 @@ fn storage_error(error: &StoreError) -> StorageError {
         | StoreError::OutOfRange { .. }
         | StoreError::NotFound { .. }
         | StoreError::InvalidText { .. }
+        | StoreError::UnknownServer
+        | StoreError::ServerMismatch
         | StoreError::Internal => StorageError::Failed,
         StoreError::WrongKey
         | StoreError::Busy

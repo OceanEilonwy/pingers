@@ -10,19 +10,25 @@ use crate::codec::{
     read_array, read_optional_array, read_optional_time, read_secret, read_time, time,
 };
 use crate::repo::expect_one;
-use crate::{Session, StoreError};
+use crate::server::Scope;
+use crate::{ServerSession, StoreError};
 
-impl Session {
-    /// This device's anonymous mailboxes (`mailbox` table).
+impl ServerSession<'_> {
+    /// This device's anonymous mailboxes on this server (`mailbox` table).
     #[must_use]
     pub fn mailboxes(&self) -> Mailboxes<'_> {
-        Mailboxes { session: self }
+        Mailboxes {
+            session: self.scope(),
+        }
     }
 
-    /// This device's sealed-push subscriptions, one per group (`subscription` table).
+    /// This device's sealed-push subscriptions in this server's groups, one per group
+    /// (`subscription` table).
     #[must_use]
     pub fn subscriptions(&self) -> Subscriptions<'_> {
-        Subscriptions { session: self }
+        Subscriptions {
+            session: self.scope(),
+        }
     }
 }
 
@@ -133,7 +139,7 @@ impl Mailbox {
 
 /// Repository for the `mailbox` table.
 pub struct Mailboxes<'session> {
-    session: &'session Session,
+    session: Scope<'session>,
 }
 
 const MAILBOX_COLUMNS: &str =
@@ -185,7 +191,8 @@ impl Mailboxes<'_> {
         self.session.with(|connection| {
             connection.execute(
                 "INSERT INTO mailbox (mailbox_id, read_key, purpose, state, has_push, handle, \
-                 expires_at, seal, sealed_until) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 expires_at, seal, sealed_until, server_key) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     mailbox.id().as_bytes(),
                     mailbox.read_key.expose_bytes(),
@@ -196,6 +203,7 @@ impl Mailboxes<'_> {
                     time(mailbox.expires_at, "mailbox.expires_at")?,
                     seal,
                     sealed_until,
+                    self.session.key(),
                 ],
             )?;
             Ok(())
@@ -224,8 +232,11 @@ impl Mailboxes<'_> {
         self.session.with(|connection| {
             connection
                 .query_row(
-                    &format!("SELECT {MAILBOX_COLUMNS} FROM mailbox WHERE {column} = ?1"),
-                    [value],
+                    &format!(
+                        "SELECT {MAILBOX_COLUMNS} FROM mailbox \
+                         WHERE {column} = ?1 AND server_key = ?2"
+                    ),
+                    params![value, self.session.key()],
                     |row| Ok(mailbox_from_row(row)),
                 )
                 .optional()?
@@ -250,13 +261,14 @@ impl Mailboxes<'_> {
                     .query_row(
                         &format!(
                             "SELECT {MAILBOX_COLUMNS} FROM mailbox WHERE purpose = ?1 \
-                             AND state = ?2 AND expires_at > ?3 \
+                             AND state = ?2 AND expires_at > ?3 AND server_key = ?4 \
                              ORDER BY expires_at DESC, mailbox_id LIMIT 1"
                         ),
                         params![
                             purpose.code(),
                             MailboxState::Pooled.code(),
-                            time(now, "now")?
+                            time(now, "now")?,
+                            session.key()
                         ],
                         |row| Ok(mailbox_from_row(row)),
                     )
@@ -285,11 +297,12 @@ impl Mailboxes<'_> {
         self.session.with(|connection| {
             let count: i64 = connection.query_row(
                 "SELECT count(*) FROM mailbox WHERE purpose = ?1 AND state = ?2 \
-                 AND expires_at > ?3",
+                 AND expires_at > ?3 AND server_key = ?4",
                 params![
                     purpose.code(),
                     MailboxState::Pooled.code(),
-                    time(now, "now")?
+                    time(now, "now")?,
+                    self.session.key()
                 ],
                 |row| row.get(0),
             )?;
@@ -299,7 +312,7 @@ impl Mailboxes<'_> {
         })
     }
 
-    /// Every unexpired mailbox, for the device's push maintenance (pingers-sync).
+    /// Every unexpired mailbox on this server, for the device's push maintenance (pingers-sync).
     ///
     /// # Errors
     ///
@@ -307,9 +320,13 @@ impl Mailboxes<'_> {
     pub fn live(&self, now: UnixSeconds) -> Result<Vec<Mailbox>, StoreError> {
         self.session.with(|connection| {
             let mut statement = connection.prepare(&format!(
-                "SELECT {MAILBOX_COLUMNS} FROM mailbox WHERE expires_at > ?1 ORDER BY mailbox_id"
+                "SELECT {MAILBOX_COLUMNS} FROM mailbox WHERE expires_at > ?1 AND server_key = ?2 \
+                 ORDER BY mailbox_id"
             ))?;
-            let rows = statement.query_map([time(now, "now")?], |row| Ok(mailbox_from_row(row)))?;
+            let rows = statement
+                .query_map(params![time(now, "now")?, self.session.key()], |row| {
+                    Ok(mailbox_from_row(row))
+                })?;
             let mut mailboxes = Vec::new();
             for row in rows {
                 mailboxes.push(row??);
@@ -336,13 +353,14 @@ impl Mailboxes<'_> {
             expect_one(
                 connection.execute(
                     "UPDATE mailbox SET has_push = ?2, handle = ?3, seal = ?4, sealed_until = ?5 \
-                     WHERE mailbox_id = ?1",
+                     WHERE mailbox_id = ?1 AND server_key = ?6",
                     params![
                         id.as_bytes(),
                         i64::from(push.is_some()),
                         push.as_ref().map(PushHandle::as_bytes),
                         seal,
                         sealed_until,
+                        self.session.key(),
                     ],
                 )?,
                 "mailbox",
@@ -359,8 +377,8 @@ impl Mailboxes<'_> {
         self.session.with(|connection| {
             expect_one(
                 connection.execute(
-                    "UPDATE mailbox SET state = ?2 WHERE mailbox_id = ?1",
-                    params![id.as_bytes(), state.code()],
+                    "UPDATE mailbox SET state = ?2 WHERE mailbox_id = ?1 AND server_key = ?3",
+                    params![id.as_bytes(), state.code(), self.session.key()],
                 )?,
                 "mailbox",
             )
@@ -375,7 +393,10 @@ impl Mailboxes<'_> {
     pub fn delete(&self, id: &MailboxId) -> Result<(), StoreError> {
         self.session.with(|connection| {
             expect_one(
-                connection.execute("DELETE FROM mailbox WHERE mailbox_id = ?1", [id.as_bytes()])?,
+                connection.execute(
+                    "DELETE FROM mailbox WHERE mailbox_id = ?1 AND server_key = ?2",
+                    params![id.as_bytes(), self.session.key()],
+                )?,
                 "mailbox",
             )
         })
@@ -389,8 +410,8 @@ impl Mailboxes<'_> {
     pub fn delete_expired(&self, now: UnixSeconds) -> Result<usize, StoreError> {
         self.session.with(|connection| {
             Ok(connection.execute(
-                "DELETE FROM mailbox WHERE expires_at <= ?1",
-                [time(now, "now")?],
+                "DELETE FROM mailbox WHERE expires_at <= ?1 AND server_key = ?2",
+                params![time(now, "now")?, self.session.key()],
             )?)
         })
     }
@@ -414,7 +435,7 @@ pub struct StoredSubscription {
 
 /// Repository for the `subscription` table.
 pub struct Subscriptions<'session> {
-    session: &'session Session,
+    session: Scope<'session>,
 }
 
 const SUBSCRIPTION_COLUMNS: &str = "group_id, sub_id, handle, expires_at, seal, sealed_until";
@@ -440,7 +461,7 @@ impl Subscriptions<'_> {
         self.session.with(|connection| {
             connection.execute(
                 "INSERT OR REPLACE INTO subscription (group_id, sub_id, handle, expires_at, seal, \
-                 sealed_until) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                 sealed_until, server_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     subscription.group.as_bytes(),
                     subscription.id.as_bytes(),
@@ -448,6 +469,7 @@ impl Subscriptions<'_> {
                     time(subscription.expires_at, "subscription.expires_at")?,
                     seal,
                     sealed_until,
+                    self.session.key(),
                 ],
             )?;
             Ok(())
@@ -480,8 +502,11 @@ impl Subscriptions<'_> {
         self.session.with(|connection| {
             connection
                 .query_row(
-                    &format!("SELECT {SUBSCRIPTION_COLUMNS} FROM subscription WHERE {column} = ?1"),
-                    [value],
+                    &format!(
+                        "SELECT {SUBSCRIPTION_COLUMNS} FROM subscription \
+                         WHERE {column} = ?1 AND server_key = ?2"
+                    ),
+                    params![value, self.session.key()],
                     |row| Ok(subscription_from_row(row)),
                 )
                 .optional()?
@@ -489,7 +514,7 @@ impl Subscriptions<'_> {
         })
     }
 
-    /// Every subscription, for the device's push maintenance (pingers-sync).
+    /// Every subscription on this server, for the device's push maintenance (pingers-sync).
     ///
     /// # Errors
     ///
@@ -497,9 +522,11 @@ impl Subscriptions<'_> {
     pub fn all(&self) -> Result<Vec<StoredSubscription>, StoreError> {
         self.session.with(|connection| {
             let mut statement = connection.prepare(&format!(
-                "SELECT {SUBSCRIPTION_COLUMNS} FROM subscription ORDER BY group_id"
+                "SELECT {SUBSCRIPTION_COLUMNS} FROM subscription WHERE server_key = ?1 \
+                 ORDER BY group_id"
             ))?;
-            let rows = statement.query_map([], |row| Ok(subscription_from_row(row)))?;
+            let rows =
+                statement.query_map([self.session.key()], |row| Ok(subscription_from_row(row)))?;
             let mut subscriptions = Vec::new();
             for row in rows {
                 subscriptions.push(row??);
@@ -516,8 +543,8 @@ impl Subscriptions<'_> {
     pub fn delete(&self, group: &GroupId) -> Result<(), StoreError> {
         self.session.with(|connection| {
             connection.execute(
-                "DELETE FROM subscription WHERE group_id = ?1",
-                [group.as_bytes()],
+                "DELETE FROM subscription WHERE group_id = ?1 AND server_key = ?2",
+                params![group.as_bytes(), self.session.key()],
             )?;
             Ok(())
         })
@@ -531,8 +558,8 @@ impl Subscriptions<'_> {
     pub fn delete_expired(&self, now: UnixSeconds) -> Result<usize, StoreError> {
         self.session.with(|connection| {
             Ok(connection.execute(
-                "DELETE FROM subscription WHERE expires_at <= ?1",
-                [time(now, "now")?],
+                "DELETE FROM subscription WHERE expires_at <= ?1 AND server_key = ?2",
+                params![time(now, "now")?, self.session.key()],
             )?)
         })
     }
@@ -581,7 +608,8 @@ mod tests {
     #[test]
     fn mailboxes_round_trip_by_id_and_handle() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let mailboxes = fixture.session.mailboxes();
+        let server = fixture.server()?;
+        let mailboxes = server.mailboxes();
         let with_push = mailbox(1, MailboxPurpose::Reply, 500);
         let mut without_push = mailbox(2, MailboxPurpose::Invite, 600);
         without_push.push = None;
@@ -605,7 +633,8 @@ mod tests {
     #[test]
     fn take_pooled_hands_out_the_longest_lived_unexpired_mailbox_once() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let mailboxes = fixture.session.mailboxes();
+        let server = fixture.server()?;
+        let mailboxes = server.mailboxes();
         let now = UnixSeconds::new(1_000);
         mailboxes.insert(&mailbox(1, MailboxPurpose::Knock, 1_500))?;
         mailboxes.insert(&mailbox(2, MailboxPurpose::Knock, 2_000))?;
@@ -633,7 +662,8 @@ mod tests {
     #[test]
     fn mailbox_state_and_deletion() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let mailboxes = fixture.session.mailboxes();
+        let server = fixture.server()?;
+        let mailboxes = server.mailboxes();
         let kept = mailbox(1, MailboxPurpose::Knock, 100);
         let expiring = mailbox(2, MailboxPurpose::Knock, 50);
         let doomed = mailbox(3, MailboxPurpose::Knock, 200);
@@ -665,14 +695,14 @@ mod tests {
     fn a_mailbox_whose_id_does_not_match_its_key_is_corrupt() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
         let stored = mailbox(1, MailboxPurpose::Knock, 100);
-        fixture.session.mailboxes().insert(&stored)?;
+        fixture.server()?.mailboxes().insert(&stored)?;
         fixture.session.with(|connection| {
             connection.execute("UPDATE mailbox SET read_key = zeroblob(32)", [])?;
             Ok(())
         })?;
         assert!(matches!(
             fixture
-                .session
+                .server()?
                 .mailboxes()
                 .by_handle(&PushHandle::from_bytes([1; 8])),
             Err(StoreError::Corrupt {
@@ -692,7 +722,8 @@ mod tests {
     #[test]
     fn live_mailboxes_carry_their_seal_and_a_replaced_push_is_stored() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let mailboxes = fixture.session.mailboxes();
+        let server = fixture.server()?;
+        let mailboxes = server.mailboxes();
         let mut sealed = mailbox(1, MailboxPurpose::Knock, 500);
         sealed.seal = Some(stamp(1, 900));
         let expired = mailbox(2, MailboxPurpose::Reply, 100);
@@ -736,13 +767,14 @@ mod tests {
         let fixture = Fixture::new()?;
         let mut sealed = mailbox(1, MailboxPurpose::Knock, 500);
         sealed.seal = Some(stamp(1, 900));
-        fixture.session.mailboxes().insert(&sealed)?;
+        let server = fixture.server()?;
+        server.mailboxes().insert(&sealed)?;
         fixture.session.with(|connection| {
             connection.execute("UPDATE mailbox SET sealed_until = NULL", [])?;
             Ok(())
         })?;
         assert!(matches!(
-            fixture.session.mailboxes().get(&sealed.id()),
+            server.mailboxes().get(&sealed.id()),
             Err(StoreError::Corrupt {
                 field: "mailbox.seal"
             })
@@ -763,7 +795,8 @@ mod tests {
     #[test]
     fn subscriptions_round_trip_renew_and_expire() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let subscriptions = fixture.session.subscriptions();
+        let server = fixture.server()?;
+        let subscriptions = server.subscriptions();
         let first = subscription(1, 100);
         let second = subscription(2, 300);
         subscriptions.put(&first)?;

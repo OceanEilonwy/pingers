@@ -42,7 +42,7 @@ fn with_a_configuration_it_serves_the_page() -> TestResult {
     let port = TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
     let dev = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/nodo/dev");
     let text = std::fs::read_to_string(dev.join("setup.toml"))?
-        .replace("127.0.0.1:9475", &format!("127.0.0.1:{port}"))
+        .replace("127.0.0.1:9479", &format!("127.0.0.1:{port}"))
         // Nothing listens for these here: the page says so instead of failing.
         .replace("127.0.0.1:9471", "127.0.0.1:1")
         .replace("127.0.0.1:9472", "127.0.0.1:1")

@@ -217,15 +217,16 @@ mod tests {
 
     fn count(session: &Session) -> Result<i64, StoreError> {
         session.with(|connection| {
-            Ok(connection.query_row("SELECT count(*) FROM board_seen", [], |row| row.get(0))?)
+            Ok(connection
+                .query_row("SELECT count(*) FROM own_group_entry", [], |row| row.get(0))?)
         })
     }
 
-    fn insert(session: &Session, b0: i64) -> Result<(), StoreError> {
+    fn insert(session: &Session, sequence: i64) -> Result<(), StoreError> {
         session.with(|connection| {
             connection.execute(
-                "INSERT INTO board_seen (b0, segment_sha256) VALUES (?1, zeroblob(32))",
-                [b0],
+                "INSERT INTO own_group_entry (group_id, sequence) VALUES (zeroblob(32), ?1)",
+                [sequence],
             )?;
             Ok(())
         })

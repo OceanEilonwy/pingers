@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The first-phone setup link on the real crates against the in-process harness: a fresh
-//! client checks a link (sending nothing), then uses it to register with the link's code.
-//! Each outcome, the pin rules for builds with and without pins, the push relay's first-use
-//! pins taken from the link, a refused code that is not sent again, and an account made
-//! already.
+//! client checks a link (sending nothing), then uses it to register with the link's code on
+//! the server the link names. Each outcome, the pin rules for builds with and without pins (a
+//! build without them keeps the link's), a link for a server the build is not for, a refused
+//! code that is not sent again, and an account made already.
 #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
 use std::path::PathBuf;
@@ -19,7 +19,7 @@ use pingers_crypto::key_config_hash;
 use pingers_proto::{
     KeyConfigHash, PushRelayKeyConfig, PushRelayKeyId, SecretText, ServerId, SetupPayload,
 };
-use pingers_store::{AccountRegistration, Database, DatabaseKey};
+use pingers_store::{AccountRegistration, Database, DatabaseKey, ServerRecord, ServerTrust};
 use pingers_testkit::{FakePlatform, HarnessConfig, InProcessHarness, RecordingEvents};
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng as _;
@@ -49,8 +49,6 @@ enum TestError {
 
 const KEY: [u8; 32] = [8; 32];
 const CODE: &str = "first-owner-0123456789";
-/// Where pingers-client keeps the push relay's first-use pins.
-const PIN_RECORD: &[u8] = b"pingers-client/v1/push-relay-pin";
 /// How long a step may take in real time; a hang fails the test instead of stalling it.
 const STEP: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -209,19 +207,32 @@ async fn use_link(client: &Client, link: SetupPayload) -> Result<SetupOutcome, T
         .map_err(TestError::from)
 }
 
-fn registration(path: &std::path::Path) -> Result<AccountRegistration, TestError> {
-    let database = Database::open(path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
-    Ok(database.session()?.account().registration()?)
+fn open_database(path: &std::path::Path) -> Result<Database, TestError> {
+    Ok(Database::open(
+        path,
+        DatabaseKey::from_bytes(Zeroizing::new(KEY)),
+    )?)
 }
 
-fn recorded_push_relay_pins(path: &std::path::Path) -> Result<Option<Vec<u8>>, TestError> {
-    let database = Database::open(path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
-    Ok(pingers_mls::MlsStorage::read(&database.session()?, PIN_RECORD)?.map(|pins| pins.to_vec()))
+/// This device's account registration on `server`.
+fn registration(path: &std::path::Path, server: &str) -> Result<AccountRegistration, TestError> {
+    let server = ServerId::new(server.to_owned())?;
+    Ok(open_database(path)?
+        .session()?
+        .server(&server)?
+        .account()
+        .registration()?)
+}
+
+/// The server row this device keeps for `server`, if any.
+fn recorded(path: &std::path::Path, server: &str) -> Result<Option<ServerRecord>, TestError> {
+    let server = ServerId::new(server.to_owned())?;
+    Ok(open_database(path)?.session()?.servers().get(&server)?)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_build_without_pins_registers_with_the_link_and_takes_its_push_relay_pins()
--> Result<(), TestError> {
+async fn a_build_without_pins_registers_with_the_link_and_keeps_its_pins() -> Result<(), TestError>
+{
     let harness = harness()?;
     let keys = served(&harness)?;
     let dir = TestDir::new()?;
@@ -237,50 +248,40 @@ async fn a_build_without_pins_registers_with_the_link_and_takes_its_push_relay_p
         }
     );
     assert!(matches!(
-        registration(&dir.database())?,
+        registration(&dir.database(), &server)?,
         AccountRegistration::Pending { code: None }
     ));
 
     assert_eq!(use_link(&client, link.clone()).await?, SetupOutcome::SetUp);
     assert!(matches!(
-        registration(&dir.database())?,
+        registration(&dir.database(), &server)?,
         AccountRegistration::Registered { code: Some(code) } if code.expose() == CODE
     ));
-    // The link's push relay pins are the first-use pins now, in its order.
-    let mut expected = keys.push_relay.as_bytes().to_vec();
-    expected.extend_from_slice(stranger().as_bytes());
-    assert_eq!(recorded_push_relay_pins(&dir.database())?, Some(expected));
+    // The server is recorded with the link's pins, as an invite's server is.
+    let row = recorded(&dir.database(), &server)?.ok_or(TestError::Setup("no server row"))?;
+    assert_eq!(row.gateway_pins, link.gateway_pins);
+    assert_eq!(row.push_relay_pins, link.push_relay_pins);
+    assert_eq!(row.trust, ServerTrust::Invite);
 
     // Opened again, the link finds the account made: nothing is offered.
     assert_eq!(
         client.check_setup_link(&link).await?,
         SetupCheck::AlreadySetUp
     );
-    assert_eq!(use_link(&client, link).await?, SetupOutcome::AlreadySetUp);
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn learned_push_relay_pins_are_kept() -> Result<(), TestError> {
-    let harness = harness()?;
-    let keys = served(&harness)?;
-    let dir = TestDir::new()?;
-    let learned = [0x44_u8; 32];
-    {
-        let database = Database::open(
-            &dir.database(),
-            DatabaseKey::from_bytes(Zeroizing::new(KEY)),
-        )?;
-        pingers_mls::MlsStorage::write(&database.session()?, PIN_RECORD, &learned)?;
-    }
-    let client = open(instance(&harness, FIRST_USE)?, dir.database()).await?;
-    let server = harness.endpoints().server_id.clone();
-    let link = link(&server, CODE, keys.gateway, keys.push_relay)?;
-    assert_eq!(use_link(&client, link).await?, SetupOutcome::SetUp);
     assert_eq!(
-        recorded_push_relay_pins(&dir.database())?,
-        Some(learned.to_vec())
+        use_link(&client, link.clone()).await?,
+        SetupOutcome::AlreadySetUp
     );
+
+    // A new process of the same build keeps the link's pins rather than the build's none.
+    drop(client);
+    let again = open(instance(&harness, FIRST_USE)?, dir.database()).await?;
+    assert_eq!(
+        again.check_setup_link(&link).await?,
+        SetupCheck::AlreadySetUp
+    );
+    let row = recorded(&dir.database(), &server)?.ok_or(TestError::Setup("no server row"))?;
+    assert_eq!(row.gateway_pins, link.gateway_pins);
     Ok(())
 }
 
@@ -305,12 +306,13 @@ async fn a_build_without_pins_sends_no_code_when_the_relay_serves_another_key()
             server: host(&harness)?
         }
     );
-    // The code was neither offered nor sent, and no push relay pin was taken from the link.
+    // The code was neither offered nor sent, and no pin was taken from the link.
     assert!(matches!(
-        registration(&dir.database())?,
+        registration(&dir.database(), &server)?,
         AccountRegistration::Pending { code: None }
     ));
-    assert_eq!(recorded_push_relay_pins(&dir.database())?, None);
+    let row = recorded(&dir.database(), &server)?.ok_or(TestError::Setup("no server row"))?;
+    assert!(row.gateway_pins.is_empty());
     Ok(())
 }
 
@@ -362,12 +364,11 @@ async fn a_build_with_pins_takes_only_a_link_whose_served_keys_it_pins() -> Resu
         }
     );
     assert!(matches!(
-        registration(&dir.database())?,
+        registration(&dir.database(), &server)?,
         AccountRegistration::Pending { code: None }
     ));
 
-    // Both served keys pinned: the account is made, and nothing is recorded as a first-use
-    // pin, since the build has pins.
+    // Both served keys pinned: the account is made, and the build's pins stay.
     let pinned = link(&server, CODE, keys.gateway, keys.push_relay)?;
     assert_eq!(
         client.check_setup_link(&pinned).await?,
@@ -375,10 +376,12 @@ async fn a_build_with_pins_takes_only_a_link_whose_served_keys_it_pins() -> Resu
     );
     assert_eq!(use_link(&client, pinned).await?, SetupOutcome::SetUp);
     assert!(matches!(
-        registration(&dir.database())?,
+        registration(&dir.database(), &server)?,
         AccountRegistration::Registered { code: Some(code) } if code.expose() == CODE
     ));
-    assert_eq!(recorded_push_relay_pins(&dir.database())?, None);
+    let row = recorded(&dir.database(), &server)?.ok_or(TestError::Setup("no server row"))?;
+    assert_eq!(row.gateway_pins, vec![keys.gateway, stranger()]);
+    assert_eq!(row.trust, ServerTrust::BuiltIn);
     Ok(())
 }
 
@@ -400,7 +403,7 @@ async fn a_refused_code_is_not_sent_again() -> Result<(), TestError> {
         SetupOutcome::Refused
     );
     assert!(matches!(
-        registration(&dir.database())?,
+        registration(&dir.database(), &server)?,
         AccountRegistration::Refused { code: Some(code) } if code.expose() == "reset-since-0123456789"
     ));
     // With the server gone, the same link still answers Refused, not Unreachable: it is known
@@ -434,37 +437,82 @@ async fn a_link_with_another_code_is_offered_after_a_refusal() -> Result<(), Tes
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_link_for_another_server_names_both_and_sends_nothing() -> Result<(), TestError> {
-    let harness = harness()?;
-    let keys = served(&harness)?;
-    let dir = TestDir::new()?;
-    let client = open(instance(&harness, FIRST_USE)?, dir.database()).await?;
-    let elsewhere = link(
-        "https://other.example:8443",
-        CODE,
-        keys.gateway,
-        keys.push_relay,
+/// A pinned build of server A and a second harness, server B, that takes [`CODE`]; the
+/// client trusts both test CAs, as a debug build's extra CA bundle does.
+async fn built_for_a_with_b(
+    dir: &TestDir,
+) -> Result<(InProcessHarness, InProcessHarness, Client), TestError> {
+    let config = HarnessConfig::default();
+    let a = InProcessHarness::start(&HarnessConfig {
+        registration_codes: vec!["a-code-0123456789".to_owned()],
+        ..config.clone()
+    })?;
+    let b = InProcessHarness::start(&HarnessConfig {
+        seed: 2,
+        clock: config.clock.clone(),
+        registration_codes: vec![CODE.to_owned()],
+        ..HarnessConfig::default()
+    })?;
+    let keys = served(&a)?;
+    let mut build = instance(
+        &a,
+        BuildPins {
+            gateway: Some(KeyPins::new([keys.gateway])?),
+            push_relay: Some(KeyPins::new([keys.push_relay])?),
+        },
     )?;
-    let expected = (host(&harness)?, Host::new("other.example:8443")?);
+    build.trust = Trust::from_pem(&format!(
+        "{}\n{}",
+        a.endpoints().push_relay_ca,
+        b.endpoints().push_relay_ca
+    ))?;
+    let client = open(build, dir.database()).await?;
+    Ok((a, b, client))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_link_for_another_server_registers_there_with_its_pins() -> Result<(), TestError> {
+    let dir = TestDir::new()?;
+    let (a, b, client) = built_for_a_with_b(&dir).await?;
+    let keys = served(&b)?;
+    let server_b = b.endpoints().server_id.clone();
+    let link = link(&server_b, CODE, keys.gateway, keys.push_relay)?;
     assert_eq!(
-        client.check_setup_link(&elsewhere).await?,
-        SetupCheck::OtherServer {
-            app: expected.0.clone(),
-            link: expected.1.clone(),
-        }
+        client.check_setup_link(&link).await?,
+        SetupCheck::Ready { server: host(&b)? }
     );
-    assert_eq!(
-        use_link(&client, elsewhere).await?,
-        SetupOutcome::OtherServer {
-            app: expected.0,
-            link: expected.1,
-        }
-    );
+    assert_eq!(use_link(&client, link.clone()).await?, SetupOutcome::SetUp);
+    // The account is made on server B, with B's own engine; the app's server is untouched.
     assert!(matches!(
-        registration(&dir.database())?,
+        registration(&dir.database(), &server_b)?,
+        AccountRegistration::Registered { code: Some(code) } if code.expose() == CODE
+    ));
+    assert!(matches!(
+        registration(&dir.database(), &a.endpoints().server_id)?,
         AccountRegistration::Pending { code: None }
     ));
+    let row = recorded(&dir.database(), &server_b)?.ok_or(TestError::Setup("no server row"))?;
+    assert_eq!(row.gateway_pins, link.gateway_pins);
+    assert_eq!(row.trust, ServerTrust::Invite);
+    assert_eq!(
+        client.check_setup_link(&link).await?,
+        SetupCheck::AlreadySetUp
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_link_for_another_server_whose_keys_differ_sends_nothing() -> Result<(), TestError> {
+    let dir = TestDir::new()?;
+    let (_a, b, client) = built_for_a_with_b(&dir).await?;
+    let keys = served(&b)?;
+    let server_b = b.endpoints().server_id.clone();
+    let link = link(&server_b, CODE, stranger(), keys.push_relay)?;
+    assert_eq!(
+        use_link(&client, link).await?,
+        SetupOutcome::ServerKeysDiffer { server: host(&b)? }
+    );
+    assert_eq!(recorded(&dir.database(), &server_b)?, None);
     Ok(())
 }
 
@@ -490,9 +538,9 @@ async fn an_unreachable_server_is_reported_and_tried_again_only_when_asked() -> 
             }
         );
     }
-    // The gateway key could not be met, so the code was not offered.
+    // The server's keys could not be met, so the code was not offered.
     assert!(matches!(
-        registration(&dir.database())?,
+        registration(&dir.database(), &server)?,
         AccountRegistration::Pending { code: None }
     ));
     Ok(())
@@ -521,7 +569,7 @@ async fn a_pinned_build_offline_keeps_the_code_for_the_next_tap() -> Result<(), 
     ));
     // The build's pins vouched for the link, so its code waits for the next registration.
     assert!(matches!(
-        registration(&dir.database())?,
+        registration(&dir.database(), &server)?,
         AccountRegistration::Pending { code: Some(code) } if code.expose() == CODE
     ));
     Ok(())

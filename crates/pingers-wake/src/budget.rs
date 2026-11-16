@@ -23,6 +23,29 @@ impl<'timer, T: Timer> Budget<'timer, T> {
         }
     }
 
+    /// The same budget, for a step that shares the whole of it.
+    pub(crate) const fn whole(&self) -> Self {
+        Self {
+            timer: self.timer,
+            deadline: self.deadline,
+        }
+    }
+
+    /// An equal share of what is left, for one of `shares` steps that run one after another:
+    /// time an earlier share does not use flows to the later ones. Never ends after `self`.
+    pub(crate) fn share(&self, shares: usize) -> Self {
+        let now = self.timer.now();
+        let left = self.deadline.saturating_duration_since(now);
+        let share = u32::try_from(shares)
+            .ok()
+            .and_then(|shares| left.checked_div(shares))
+            .unwrap_or(left);
+        Self {
+            timer: self.timer,
+            deadline: now.saturating_add(share).min(self.deadline),
+        }
+    }
+
     /// Whether the budget is spent.
     pub(crate) fn exhausted(&self) -> bool {
         self.timer.now() >= self.deadline

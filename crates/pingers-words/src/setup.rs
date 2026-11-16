@@ -161,15 +161,6 @@ pub fn setup_link(language: Language, view: &SetupLink) -> SetupLinkText {
             "The server didn't accept this code".to_owned(),
             format!("It may have been reset since the setup page showed it. {SCAN_AGAIN}"),
         ),
-        SetupLink::OtherServer { app, link } => (
-            "This app is set up for another server".to_owned(),
-            format!(
-                "This link is for {link}, but this app works with {app}. Install the Pingers app \
-                 made for {link}, then scan the code again.",
-                link = link.as_str(),
-                app = app.as_str(),
-            ),
-        ),
         SetupLink::BuildKeysDiffer { server } => (
             "This app doesn't have your server's keys yet".to_owned(),
             format!(
@@ -319,18 +310,6 @@ mod tests {
         assert_eq!(refused.heading, "The server didn't accept this code");
         assert!(refused.body.ends_with(SCAN_AGAIN));
         assert_eq!(refused.primary.as_deref(), Some("Close"));
-        let other = setup_link(
-            EN,
-            &SetupLink::OtherServer {
-                app: server.clone(),
-                link: host("friends.example")?,
-            },
-        );
-        assert_eq!(
-            other.body,
-            "This link is for friends.example, but this app works with pingers.example.org. \
-             Install the Pingers app made for friends.example, then scan the code again."
-        );
         let keys = setup_link(
             EN,
             &SetupLink::BuildKeysDiffer {

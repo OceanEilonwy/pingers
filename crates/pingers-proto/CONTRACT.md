@@ -180,6 +180,12 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
 - Vectors `invite-payload-encoding`, `join-request-encoding` and `invite-post-encoding`; fuzz
   targets `invite_payload`, `join_request` and `invite_post`. The files come from `cargo xtask vectors`
   (`xtask/src/vectors/proto/invite.rs`).
+- **Key pins in the link** (added 2026-11-14, v1-multiserver): the payload is `[server, invite
+  mailbox, invite secret, inviter fingerprint, expires, gateway pins, push relay pins]` plus the
+  code: seven or eight elements. `gateway_pins` (1 to `MAX_PINS` = 4 `KeyConfigHash`es) and
+  `push_relay_pins` (0 to 4) are the hashes the inviter trusts for the Party's server, so a joiner
+  new to the server pins them rather than whatever key it is first shown (owner decision:
+  nothing is pinned on first use).
 
 ### First-phone setup link (added 2026-11-16, v1-setup)
 

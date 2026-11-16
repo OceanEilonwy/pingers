@@ -6,7 +6,7 @@ use pingers_geo::{
     SpotPresence, exit_buffer,
 };
 use pingers_presence::{LEASE_BUCKETS, LEASE_DURATION, OwnRecords, SpotRef};
-use pingers_proto::{Epoch, Lease, MailboxId, PartyId, RecordRandomness};
+use pingers_proto::{Epoch, Lease, MailboxId, PartyId, RecordRandomness, ServerId};
 use pingers_time::{Bucket, UnixSeconds};
 
 use crate::ports::PartyInfo;
@@ -122,6 +122,22 @@ pub struct SpotSnapshot {
     pub presence: PresenceSnapshot,
 }
 
+/// What the wake remembers of one server's blind board: the leases the server may hold, the
+/// knocks sent and decided through its mailboxes, and the last upload to it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoardSnapshot {
+    /// The server the board lives on.
+    pub server: ServerId,
+    /// Leases the server may hold.
+    pub leases: Vec<LiveLease>,
+    /// Knocks sent within the last lease.
+    pub sent_knocks: Vec<SentKnock>,
+    /// Knocks decided within the last lease.
+    pub decided_knocks: Vec<DecidedKnock>,
+    /// The last successful upload to this board.
+    pub last_upload: Option<UnixSeconds>,
+}
+
 /// Everything pingers-client stores between processes. It holds no coordinates: the last fix
 /// and the geofence anchor are not kept, so a restarted process takes a fresh fix.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -130,18 +146,97 @@ pub struct WakeSnapshot {
     pub spots: Vec<SpotSnapshot>,
     /// The exclusion trail.
     pub last_in_zone: Option<UnixSeconds>,
-    /// Leases the server may hold.
-    pub leases: Vec<LiveLease>,
-    /// Knocks sent within the last lease.
-    pub sent_knocks: Vec<SentKnock>,
-    /// Knocks decided within the last lease.
-    pub decided_knocks: Vec<DecidedKnock>,
-    /// The last successful upload.
-    pub last_upload: Option<UnixSeconds>,
+    /// One entry per server whose board this device uses, or may still hold a lease or wait
+    /// for a Welcome on.
+    pub boards: Vec<BoardSnapshot>,
     /// The newest epoch seen per Party.
     pub epochs: Vec<KnownEpoch>,
     /// Peer activity per Spot.
     pub peer_activity: Vec<PeerActivity>,
+}
+
+/// One server's board, as a wake works on it. A board round takes it out of [`WakeState`]
+/// and always puts it back.
+pub(crate) struct Board {
+    pub(crate) server: ServerId,
+    pub(crate) leases: Vec<LiveLease>,
+    pub(crate) sent_knocks: Vec<SentKnock>,
+    pub(crate) decided_knocks: Vec<DecidedKnock>,
+    pub(crate) last_upload: Option<UnixSeconds>,
+}
+
+impl Board {
+    /// A board this device has never used.
+    pub(crate) const fn new(server: ServerId) -> Self {
+        Self {
+            server,
+            leases: Vec::new(),
+            sent_knocks: Vec::new(),
+            decided_knocks: Vec::new(),
+            last_upload: None,
+        }
+    }
+
+    fn restore(snapshot: BoardSnapshot) -> Self {
+        Self {
+            server: snapshot.server,
+            leases: snapshot.leases,
+            sent_knocks: snapshot.sent_knocks,
+            decided_knocks: snapshot.decided_knocks,
+            last_upload: snapshot.last_upload,
+        }
+    }
+
+    fn snapshot(&self) -> BoardSnapshot {
+        BoardSnapshot {
+            server: self.server.clone(),
+            leases: self.leases.clone(),
+            sent_knocks: self.sent_knocks.clone(),
+            decided_knocks: self.decided_knocks.clone(),
+            last_upload: self.last_upload,
+        }
+    }
+
+    /// Forgets leases and decisions older than a lease.
+    fn prune(&mut self, now: UnixSeconds) {
+        let bucket = now.bucket();
+        self.leases.retain(|lease| lease.live_at(bucket));
+        // A knock is decided after its record's lease started, so one lease after the decision
+        // that lease has expired and its mailbox is no longer read: where exactly the cut-off
+        // falls (`<` or `<=`) cannot be observed.
+        self.decided_knocks
+            .retain(|decided| now.saturating_duration_since(decided.at) < LEASE_DURATION);
+    }
+
+    /// Whether the board still matters without a Party on it: a lease the server may hold (a
+    /// knock on its records must be answered) or a knock whose Welcome may still come.
+    pub(crate) fn holds_something(&self) -> bool {
+        !self.leases.is_empty()
+            || self
+                .sent_knocks
+                .iter()
+                .any(|sent| sent.status == KnockStatus::Waiting)
+    }
+
+    /// Every record of every live lease.
+    pub(crate) fn own_records(&self) -> OwnRecords {
+        OwnRecords::new(
+            self.leases
+                .iter()
+                .flat_map(|lease| lease.slots.iter().map(|slot| slot.randomness))
+                .collect(),
+        )
+    }
+
+    /// The newest lease's real record for `spot`, for the tie-break field of a knock.
+    pub(crate) fn own_record_for(&self, spot: SpotRef) -> Option<RecordRandomness> {
+        self.leases.last().and_then(|lease| {
+            lease
+                .real_records()
+                .find(|(_slot, real)| real.spot == spot)
+                .map(|(slot, _real)| slot.randomness)
+        })
+    }
 }
 
 /// Whether an `Inside` Spot has been confirmed by this process.
@@ -210,10 +305,7 @@ pub struct WakeState {
     restored: Vec<SpotSnapshot>,
     pub(crate) trail: ExclusionTrail,
     pub(crate) last_fix: Option<Fix>,
-    pub(crate) leases: Vec<LiveLease>,
-    pub(crate) sent_knocks: Vec<SentKnock>,
-    pub(crate) decided_knocks: Vec<DecidedKnock>,
-    pub(crate) last_upload: Option<UnixSeconds>,
+    pub(crate) boards: Vec<Board>,
     pub(crate) epochs: Vec<KnownEpoch>,
     pub(crate) peer_activity: Vec<PeerActivity>,
     pub(crate) geofences: Option<GeofenceAnchor>,
@@ -234,10 +326,7 @@ impl WakeState {
             restored: Vec::new(),
             trail: ExclusionTrail::new(),
             last_fix: None,
-            leases: Vec::new(),
-            sent_knocks: Vec::new(),
-            decided_knocks: Vec::new(),
-            last_upload: None,
+            boards: Vec::new(),
             epochs: Vec::new(),
             peer_activity: Vec::new(),
             geofences: None,
@@ -251,10 +340,7 @@ impl WakeState {
         Self {
             restored: snapshot.spots,
             trail: ExclusionTrail::restore(snapshot.last_in_zone),
-            leases: snapshot.leases,
-            sent_knocks: snapshot.sent_knocks,
-            decided_knocks: snapshot.decided_knocks,
-            last_upload: snapshot.last_upload,
+            boards: snapshot.boards.into_iter().map(Board::restore).collect(),
             epochs: snapshot.epochs,
             peer_activity: snapshot.peer_activity,
             ..Self::new()
@@ -276,10 +362,7 @@ impl WakeState {
         WakeSnapshot {
             spots,
             last_in_zone: self.trail.last_in_zone(),
-            leases: self.leases.clone(),
-            sent_knocks: self.sent_knocks.clone(),
-            decided_knocks: self.decided_knocks.clone(),
-            last_upload: self.last_upload,
+            boards: self.boards.iter().map(Board::snapshot).collect(),
             epochs: self.epochs.clone(),
             peer_activity: self.peer_activity.clone(),
         }
@@ -328,15 +411,32 @@ impl WakeState {
         }
     }
 
-    /// Forgets leases, knocks and decisions older than a lease.
+    /// Forgets every board's leases and decisions older than a lease.
     pub(crate) fn prune(&mut self, now: UnixSeconds) {
-        let bucket = now.bucket();
-        self.leases.retain(|lease| lease.live_at(bucket));
-        // A knock is decided after its record's lease started, so one lease after the decision
-        // that lease has expired and its mailbox is no longer read: where exactly the cut-off
-        // falls (`<` or `<=`) cannot be observed.
-        self.decided_knocks
-            .retain(|decided| now.saturating_duration_since(decided.at) < LEASE_DURATION);
+        for board in &mut self.boards {
+            board.prune(now);
+        }
+    }
+
+    /// Takes `server`'s board out for a round, or a fresh one if this device never used it.
+    /// The round gives it back with [`WakeState::put_board`].
+    pub(crate) fn take_board(&mut self, server: &ServerId) -> Board {
+        match self.boards.iter().position(|board| board.server == *server) {
+            Some(index) => self.boards.swap_remove(index),
+            None => Board::new(server.clone()),
+        }
+    }
+
+    /// Gives a board back after its round.
+    pub(crate) fn put_board(&mut self, board: Board) {
+        self.boards.push(board);
+    }
+
+    /// Forgets boards with no Party, no lease the server may hold and no knock waiting for a
+    /// Welcome: nothing on them needs reading or answering any more.
+    pub(crate) fn drop_idle_boards(&mut self, servers_in_use: &[ServerId]) {
+        self.boards
+            .retain(|board| servers_in_use.contains(&board.server) || board.holds_something());
     }
 
     /// Feeds one input to every Spot, or to one Spot, and collects the changes.
@@ -369,26 +469,6 @@ impl WakeState {
     /// The tracked Spot, if any.
     pub(crate) fn spot(&self, spot: SpotRef) -> Option<&TrackedSpot> {
         self.spots.iter().find(|tracked| tracked.spot == spot)
-    }
-
-    /// Every record of every live lease.
-    pub(crate) fn own_records(&self) -> OwnRecords {
-        OwnRecords::new(
-            self.leases
-                .iter()
-                .flat_map(|lease| lease.slots.iter().map(|slot| slot.randomness))
-                .collect(),
-        )
-    }
-
-    /// The newest lease's real record for `spot`, for the tie-break field of a knock.
-    pub(crate) fn own_record_for(&self, spot: SpotRef) -> Option<RecordRandomness> {
-        self.leases.last().and_then(|lease| {
-            lease
-                .real_records()
-                .find(|(_slot, real)| real.spot == spot)
-                .map(|(slot, _real)| slot.randomness)
-        })
     }
 
     /// The last peer activity at `spot`.

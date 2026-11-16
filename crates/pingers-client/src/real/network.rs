@@ -8,20 +8,19 @@ use std::sync::Arc;
 
 use pingers_ohttp::KeyPins;
 use pingers_proto::{SecretText, ServerId};
-use pingers_time::Timer;
 use pingers_transport::{
     DirectConfig, DirectTransport, KeyPin, OhttpConfig, OhttpTransport, Relay, Router, Routes,
     TlsRoots, Transport, certificates_from_pem,
 };
 
 use pingers_proto::AnonymousCredential;
-use pingers_store::Database;
+use pingers_store::{ServerRecord, ServerTrust};
 use pingers_sync::{
     CommitAttempts, CredentialPolicy, ProcessRole, ProverStatus, QueueCapacity, SyncEngine,
     SyncParts, SyncSettings, TokenStock,
 };
 
-use super::Outside;
+use super::{Backend, Outside};
 use crate::ClientError;
 
 /// Where this device's server, OHTTP relay and push relay are, and the keys they must have.
@@ -79,69 +78,118 @@ impl Trust {
     }
 }
 
-/// The relay's origin from the instance's setting, which may name the origin or, as servers
+/// The relay's origin from a server's relay setting, which may name the origin or, as servers
 /// advertise it (`ohttp_relay_urls`) and deployments configure it, the relay URL ending in
 /// `/ohttp`: both mean the same relay, never `.../ohttp/ohttp`.
-fn relay_origin(setting: &str) -> &str {
+pub(crate) fn relay_origin(setting: &str) -> &str {
     let trimmed = setting.trim_end_matches('/');
     trimmed.strip_suffix("/ohttp").unwrap_or(trimmed)
 }
 
-/// The router over the instance: anonymous and stream requests through the OHTTP relay,
-/// identified requests direct to the server.
-pub(crate) fn router(
-    instance: &Instance,
-    timer: Arc<dyn Timer>,
+impl Instance {
+    /// The built-in server as the store keeps it: its relay, push relay and the build's pins,
+    /// refreshed from the build at every start.
+    #[must_use]
+    pub fn record(&self) -> ServerRecord {
+        ServerRecord {
+            server: self.server.clone(),
+            ohttp_relays: vec![self.relay.clone()],
+            push_relay: self.push_relay.clone(),
+            gateway_pins: self
+                .gateway_pins
+                .as_ref()
+                .map(|pins| pins.hashes().to_vec())
+                .unwrap_or_default(),
+            push_relay_pins: self
+                .push_relay_pins
+                .as_ref()
+                .map(|pins| pins.hashes().to_vec())
+                .unwrap_or_default(),
+            trust: ServerTrust::BuiltIn,
+        }
+    }
+}
+
+/// The direct route to `server`, for identified requests (and the one direct fetch of a new
+/// server's parameters, pingers-sync's `params_direct`).
+pub(crate) fn direct(
+    server: &ServerId,
+    trust: &Trust,
     outside: &Outside,
 ) -> Result<Arc<dyn Transport>, ClientError> {
-    let origin = relay_origin(&instance.relay);
-    let relay = Relay::new(
-        &format!("{origin}/ohttp"),
-        &format!("{origin}/v1/ohttp/config"),
-    )?;
-    let pin = instance
-        .gateway_pins
-        .clone()
-        .map_or(KeyPin::FirstUse, KeyPin::Pinned);
-    let roots = instance.trust.roots()?;
+    Ok(Arc::new(DirectTransport::new(
+        &DirectConfig::new(server.as_str().to_owned(), trust.roots()?),
+        Arc::clone(&outside.timer),
+    )?))
+}
+
+/// The router to one server: anonymous and stream requests through its OHTTP relays (most
+/// preferred first), identified requests direct. `pin` is what the gateway key must match:
+/// the server's pins, or first use only while a new server is being looked at before the
+/// user trusts it (nothing is recorded then).
+/// Which server a router reaches, through which relays, under which pin.
+pub(crate) struct Route<'route> {
+    pub(crate) server: &'route ServerId,
+    pub(crate) relays: &'route [String],
+    pub(crate) pin: KeyPin,
+}
+
+pub(crate) fn router(
+    route: Route<'_>,
+    trust: &Trust,
+    outside: &Outside,
+) -> Result<Arc<dyn Transport>, ClientError> {
+    let Route {
+        server,
+        relays,
+        pin,
+    } = route;
+    let relays = relays
+        .iter()
+        .map(|setting| {
+            let origin = relay_origin(setting);
+            Relay::new(
+                &format!("{origin}/ohttp"),
+                &format!("{origin}/v1/ohttp/config"),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let ohttp: Arc<dyn Transport> = Arc::new(OhttpTransport::new(
-        OhttpConfig::new(vec![relay], pin, roots.clone()),
-        Arc::clone(&timer),
+        OhttpConfig::new(relays, pin, trust.roots()?),
+        Arc::clone(&outside.timer),
         (outside.rng)(),
     )?);
-    let direct = DirectTransport::new(
-        &DirectConfig::new(instance.server.as_str().to_owned(), roots),
-        timer,
-    )?;
     Ok(Arc::new(Router::new(Routes {
         anonymous: Arc::clone(&ohttp),
-        identified: Arc::new(direct),
+        identified: direct(server, trust, outside)?,
         stream: ohttp,
     })?))
 }
 
-/// pingers-sync's engine over the instance, for the whole process.
+/// pingers-sync's engine for one server, for the whole process. The server needs a row in the
+/// store before the engine reads or writes anything.
 ///
 /// Credentials start as Privacy Pass only until the server's `/v1/params` say what it accepts
 /// (read before credentials are prepared, `sync.rs`). The prover is allowed: pingers-sync proves
 /// only once its self-test has passed and the leaf is in an accepted root (design B.4.8), and
 /// uses Privacy Pass otherwise.
 pub(crate) fn engine(
-    instance: &Instance,
+    server: &ServerId,
     transport: Arc<dyn Transport>,
-    database: &Arc<Database>,
-    outside: &Outside,
+    backend: &Backend,
 ) -> Result<Arc<SyncEngine>, ClientError> {
+    let outside = &backend.outside;
     Ok(Arc::new(SyncEngine::new(
         SyncParts {
             transport,
-            database: Arc::clone(database),
+            database: Arc::clone(&backend.database),
             clock: Arc::clone(&outside.clock),
             timer: Arc::clone(&outside.timer),
             rng: (outside.rng)(),
+            self_test: backend.self_test.clone(),
         },
         SyncSettings {
-            server: instance.server.clone(),
+            server: server.clone(),
             role: ProcessRole::MainApp,
             credentials: CredentialPolicy {
                 accepted: vec![AnonymousCredential::PrivacyPass],

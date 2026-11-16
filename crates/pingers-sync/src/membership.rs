@@ -22,12 +22,11 @@ use std::collections::BTreeSet;
 use pingers_anon::{LeafUpdate, LeafValue, MembershipRoot, MembershipTree};
 use pingers_proto::{HourlyRoot, MembershipIndex, MembershipLeaves, RootEpoch};
 use pingers_store::{
-    PATH_LENGTH, RlnIdentity, Session, StoredPath, TreeLeaf, TreePosition, TreeState,
+    PATH_LENGTH, RlnIdentity, ServerSession, StoredPath, TreeLeaf, TreePosition, TreeState,
 };
 use pingers_time::UnixSeconds;
 
 use crate::credential::root_epoch;
-use crate::engine::blocking;
 use crate::{ApiRequest, SyncEngine, SyncError, WakeBudget};
 
 /// What a membership refresh did.
@@ -94,10 +93,9 @@ impl SyncEngine {
         budget: WakeBudget,
     ) -> Result<Option<MembershipRefresh>, SyncError> {
         let now = self.now();
-        let state = blocking(&self.database, |session| {
-            Ok(session.rln_tree_state().load()?)
-        })
-        .await?;
+        let state = self
+            .blocking(|session| Ok(session.rln_tree_state().load()?))
+            .await?;
         if !refresh_due(state.as_ref(), now) {
             return Ok(None);
         }
@@ -129,7 +127,7 @@ impl SyncEngine {
     /// Drops the local copy, in the store and in memory.
     async fn forget_tree(&self) -> Result<(), SyncError> {
         drop(self.take_tree_cache());
-        blocking(&self.database, |session| {
+        self.blocking(|session| {
             session.transaction(|session| {
                 session.rln_tree().clear()?;
                 session.rln_tree_state().clear()?;
@@ -142,10 +140,9 @@ impl SyncEngine {
     async fn refresh_pass(&self, budget: WakeBudget) -> Result<Pass, SyncError> {
         let fetched = self.fetch_leaves(budget).await?;
         let cache = self.take_tree_cache();
-        let (pass, cache) = blocking(&self.database, move |session| {
-            apply_fetched(session, &fetched, cache)
-        })
-        .await?;
+        let (pass, cache) = self
+            .blocking(move |session| apply_fetched(session, &fetched, cache))
+            .await?;
         self.put_tree_cache(cache);
         Ok(pass)
     }
@@ -153,10 +150,9 @@ impl SyncEngine {
     /// Fetches pages from the end of the copy until one comes back empty, storing each page's
     /// leaves as it arrives.
     async fn fetch_leaves(&self, budget: WakeBudget) -> Result<Fetched, SyncError> {
-        let start = blocking(&self.database, |session| {
-            Ok(session.rln_tree().leaf_count()?)
-        })
-        .await?;
+        let start = self
+            .blocking(|session| Ok(session.rln_tree().leaf_count()?))
+            .await?;
         let mut fetched = Fetched {
             start,
             appended: Vec::new(),
@@ -192,10 +188,8 @@ impl SyncEngine {
             fetched
                 .appended
                 .extend(leaves.iter().map(|leaf| leaf.value));
-            blocking(&self.database, move |session| {
-                Ok(session.rln_tree().set_leaves(&leaves)?)
-            })
-            .await?;
+            self.blocking(move |session| Ok(session.rln_tree().set_leaves(&leaves)?))
+                .await?;
             after = next;
         }
     }
@@ -204,7 +198,7 @@ impl SyncEngine {
 /// Applies a pass to the copy: zeroes in the store, the tree (from the cache, or rebuilt from
 /// the stored leaves), the root check, and the recorded state.
 fn apply_fetched(
-    session: &Session,
+    session: &ServerSession<'_>,
     fetched: &Fetched,
     cache: Option<TreeCache>,
 ) -> Result<(Pass, Option<TreeCache>), SyncError> {
@@ -303,7 +297,7 @@ fn apply_fetched(
 
 /// This device's path in `tree`, if its leaf is there and not zeroed.
 fn own_path(
-    session: &Session,
+    session: &ServerSession<'_>,
     tree: &MembershipTree,
     identity: Option<&RlnIdentity>,
 ) -> Result<Option<StoredPath>, SyncError> {

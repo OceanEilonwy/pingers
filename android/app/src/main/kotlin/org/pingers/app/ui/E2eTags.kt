@@ -112,6 +112,8 @@ object E2eTags {
     const val NEW_PARTY_BUILT_IN = "new_party_built_in"
     const val NEW_PARTY_ANOTHER = "new_party_another"
     const val NEW_PARTY_SERVER = "new_party_server"
+    /** New party: "Trust this server's keys" for another server. */
+    const val NEW_PARTY_TRUST_KEYS = "new_party_trust_keys"
     /** "This server needs a code": the code field and "Create party" / "Try again". */
     const val PARTY_CODE_FIELD = "party_code_field"
     const val PARTY_CODE_CREATE = "party_code_create"

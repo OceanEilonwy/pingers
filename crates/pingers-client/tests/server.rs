@@ -12,12 +12,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use pingers_client::ports::PartyDraft;
 use pingers_client::snapshot::{Name, PartyColour, PostQuantum, RelayStatus, WakePushes};
-use pingers_client::{Client, ClientConfig, ClientError, Crates, Instance, Outside, Trust};
+use pingers_client::{
+    Client, ClientConfig, ClientError, Crates, Instance, KeyPins, Outside, Trust,
+};
 use pingers_crypto::{PushRelayPublicKey, PushSealFingerprint, push_seal_fingerprint};
 use pingers_ohttp::BinaryRequest;
 use pingers_parties::PartyLifecycle;
 use pingers_proto::{
-    GroupMessages, InvitePayload, PushPlatform, PushToken, SecretText, ServerId, WireDecode as _,
+    GroupMessages, InvitePayload, KeyConfigHash, PushPlatform, PushToken, SecretText, ServerId,
+    WireDecode as _,
 };
 use pingers_store::{AccountRegistration, Database, DatabaseKey, MailboxPurpose, Session};
 use pingers_sync::{ApiRequest, GroupSigner};
@@ -88,7 +91,7 @@ impl Drop for TestDir {
 }
 
 /// The instance a debug build pointed at the harness would carry: the server's HTTPS origin
-/// with the harness CA as its only trust root, the relay, the push relay, first-use pins and
+/// with the harness CA as its only trust root, the relay, the push relay, the build's pins and
 /// `PINGERS_DEV_REGISTRATION_CODE`.
 fn instance(harness: &InProcessHarness, code: Option<&str>) -> Result<Instance, TestError> {
     let endpoints = harness.endpoints();
@@ -97,11 +100,37 @@ fn instance(harness: &InProcessHarness, code: Option<&str>) -> Result<Instance, 
         // As deployments configure it (PINGERS_OHTTP_RELAY): the relay URL, not its origin.
         relay: format!("http://{}/ohttp", endpoints.ohttp_relay),
         push_relay: Some(format!("https://{}", endpoints.push_relay)),
-        gateway_pins: None,
-        push_relay_pins: None,
+        gateway_pins: Some(KeyPins::from(pingers_crypto::key_config_hash(
+            &endpoints.ohttp_key_config,
+        ))),
+        push_relay_pins: Some(push_relay_pins(endpoints)?),
         trust: Trust::from_pem(&endpoints.push_relay_ca)?,
         registration_code: code.map(|code| SecretText::new(code.to_owned())),
     })
+}
+
+/// The build's pins for the harness push relay: its published key and, when one is scheduled,
+/// the next, as an official build pins both keys a relay announces.
+fn push_relay_pins(endpoints: &pingers_testkit::Endpoints) -> Result<KeyPins, TestError> {
+    let mut hashes = vec![push_relay_pin(&endpoints.push_relay_key, 1)?];
+    if let Some(next) = &endpoints.push_relay_next_key {
+        hashes.push(push_relay_pin(next, 2)?);
+    }
+    KeyPins::new(hashes).map_err(|_bad| TestError::Setup("push relay pins"))
+}
+
+/// The hash of a harness push relay key config.
+fn push_relay_pin(key: &[u8], key_id: u8) -> Result<KeyConfigHash, TestError> {
+    let public_key: [u8; 32] = key
+        .try_into()
+        .map_err(|_length| TestError::Setup("push relay key length"))?;
+    Ok(pingers_crypto::key_config_hash(
+        &pingers_proto::PushRelayKeyConfig {
+            key_id: pingers_proto::PushRelayKeyId::new(key_id),
+            public_key,
+        }
+        .to_bytes(),
+    ))
 }
 
 async fn open(
@@ -245,6 +274,7 @@ async fn a_fresh_client_registers_gets_tokens_creates_a_party_and_a_mailbox()
     let party = tokio::time::timeout(
         STEP,
         client.create_party(PartyDraft {
+            server: None,
             name: Name::new("Climbing")?,
             my_name: Name::new("Ana")?,
             colour: PartyColour::Blue,
@@ -256,26 +286,32 @@ async fn a_fresh_client_registers_gets_tokens_creates_a_party_and_a_mailbox()
 
     let database = Database::open(&path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
     let session = database.session()?;
+    let scoped = session.server(&ServerId::new(harness.endpoints().server_id.clone())?)?;
     // The account was made, and registered with the build's code.
-    let identity = session
-        .identity()
-        .load()?
-        .ok_or(TestError::Setup("no account"))?;
-    assert_eq!(identity.server.as_str(), harness.endpoints().server_id);
+    assert!(session.identity().load()?.is_some(), "the account");
+    assert_eq!(
+        session
+            .servers()
+            .server_pin(&ServerId::new(harness.endpoints().server_id.clone())?)?,
+        Some(pingers_crypto::key_config_hash(
+            &harness.endpoints().ohttp_key_config
+        ))
+    );
     assert!(matches!(
-        session.account().registration()?,
+        scoped.account().registration()?,
         AccountRegistration::Registered { code: Some(code) } if code.expose() == CODE
     ));
-    assert!(session.account().bearer()?.is_some());
-    assert!(session.rln_identity().load()?.is_some(), "membership leaf");
+    assert!(scoped.account().bearer()?.is_some());
+    assert!(scoped.rln_identity().load()?.is_some(), "membership leaf");
     // A full batch of tokens, less the one the group creation spent.
-    assert_eq!(session.privacy_pass_tokens().count()?, 299);
+    assert_eq!(scoped.privacy_pass_tokens().count()?, 299);
 
     // The server holds the Party's group.
     let (status, body) = group_log(&harness, &clock, &session, &party).await?;
     assert_eq!(status, 200, "the group exists on the server");
     let _log = GroupMessages::decode(&body)?;
     // A session holds the store's cross-process lock: the client needs it back.
+    drop(scoped);
     drop(session);
 
     // A wake registers a knock mailbox for the pool.
@@ -283,19 +319,20 @@ async fn a_fresh_client_registers_gets_tokens_creates_a_party_and_a_mailbox()
         .await
         .map_err(|_elapsed| TestError::Setup("the wake did not finish"))??;
     let session = database.session()?;
+    let scoped = session.server(&ServerId::new(harness.endpoints().server_id.clone())?)?;
     assert_eq!(
-        session
+        scoped
             .mailboxes()
             .pooled_count(MailboxPurpose::Knock, clock.now())?,
         1
     );
     // The wake also uploaded its lease: one token for the board sync, one for the mailbox.
-    assert!(session.board_upload().last()?.is_some());
-    assert_eq!(session.privacy_pass_tokens().count()?, 297);
+    assert!(scoped.board_upload().last()?.is_some());
+    assert_eq!(scoped.privacy_pass_tokens().count()?, 297);
 
     // An invite this device makes passes its registration code on. The invite mailbox is put
     // in the pool by hand: refilling it is the invite flow's part.
-    session.mailboxes().insert(&pingers_store::Mailbox {
+    scoped.mailboxes().insert(&pingers_store::Mailbox {
         read_key: pingers_crypto::MailboxReadKey::from_bytes(Zeroizing::new([9; 32])),
         purpose: MailboxPurpose::Invite,
         state: pingers_store::MailboxState::Pooled,
@@ -306,6 +343,7 @@ async fn a_fresh_client_registers_gets_tokens_creates_a_party_and_a_mailbox()
             .checked_add(std::time::Duration::from_hours(48))
             .ok_or(TestError::Setup("time"))?,
     })?;
+    drop(scoped);
     drop(session);
     let link = client.create_invite(party).await?;
     let payload = pingers_parties::InviteLink::from_text(link.url.as_str().to_owned()).payload()?;
@@ -337,6 +375,10 @@ async fn an_invite_links_registration_code_registers_the_joiner() -> Result<(), 
             .now()
             .checked_add(std::time::Duration::from_hours(1))
             .ok_or(TestError::Setup("time"))?,
+        gateway_pins: vec![pingers_crypto::key_config_hash(
+            &harness.endpoints().ohttp_key_config,
+        )],
+        push_relay_pins: Vec::new(),
         registration_code: Some(SecretText::new(CODE.to_owned())),
     })?;
     // Opening the link registers the account with the link's code first; the join then goes
@@ -353,12 +395,13 @@ async fn an_invite_links_registration_code_registers_the_joiner() -> Result<(), 
     assert!(opened.is_ok(), "{opened:?}");
     let database = Database::open(&path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
     let session = database.session()?;
+    let scoped = session.server(&ServerId::new(harness.endpoints().server_id.clone())?)?;
     assert!(matches!(
-        session.account().registration()?,
+        scoped.account().registration()?,
         AccountRegistration::Registered { code: Some(code) } if code.expose() == CODE
     ));
     // The day's 300 tokens, less the reply mailbox's registration and the join request.
-    assert_eq!(session.privacy_pass_tokens().count()?, 298);
+    assert_eq!(scoped.privacy_pass_tokens().count()?, 298);
     Ok(())
 }
 
@@ -391,21 +434,24 @@ fn seals(path: &std::path::Path, now: UnixSeconds) -> Result<Vec<PushSealFingerp
     let database = Database::open(path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
     let session = database.session()?;
     let mut seals = Vec::new();
-    for subscription in session.subscriptions().all()? {
-        seals.push(
-            subscription
-                .seal
-                .ok_or(TestError::Setup("unsealed"))?
-                .fingerprint,
-        );
-    }
-    for mailbox in session.mailboxes().live(now)? {
-        seals.push(
-            mailbox
-                .seal
-                .ok_or(TestError::Setup("unsealed"))?
-                .fingerprint,
-        );
+    for record in session.servers().list()? {
+        let server = session.server(&record.server)?;
+        for subscription in server.subscriptions().all()? {
+            seals.push(
+                subscription
+                    .seal
+                    .ok_or(TestError::Setup("unsealed"))?
+                    .fingerprint,
+            );
+        }
+        for mailbox in server.mailboxes().live(now)? {
+            seals.push(
+                mailbox
+                    .seal
+                    .ok_or(TestError::Setup("unsealed"))?
+                    .fingerprint,
+            );
+        }
     }
     Ok(seals)
 }
@@ -451,6 +497,7 @@ async fn a_new_token_and_a_relay_rotation_reach_every_registration() -> Result<(
             my_name: Name::new("Ana")?,
             colour: PartyColour::Blue,
             post_quantum: PostQuantum::Off,
+            server: None,
         }),
     )
     .await
@@ -459,13 +506,6 @@ async fn a_new_token_and_a_relay_rotation_reach_every_registration() -> Result<(
     steps(&client, 1).await?;
     let first = fingerprint(&old_key, "https://up.invalid/a")?;
     assert_eq!(seals(&path, clock.now())?, vec![first, first]);
-    // A build without pins took the published key and the announced next one as its pins.
-    let database = Database::open(&path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
-    let pins =
-        pingers_mls::MlsStorage::read(&database.session()?, b"pingers-client/v1/push-relay-pin")?
-            .map(|pins| pins.len());
-    drop(database);
-    assert_eq!(pins, Some(64));
 
     // A new token: the empty reply pool is filled first (a knock needs a reply mailbox now),
     // sealed with it; then the subscription and the knock mailbox are sealed again, one step
@@ -524,6 +564,7 @@ async fn with_wake_pushes_off_new_mailboxes_carry_no_push() -> Result<(), TestEr
             my_name: Name::new("Ana")?,
             colour: PartyColour::Blue,
             post_quantum: PostQuantum::Off,
+            server: None,
         }),
     )
     .await
@@ -533,9 +574,64 @@ async fn with_wake_pushes_off_new_mailboxes_carry_no_push() -> Result<(), TestEr
     client.set_wake_pushes(WakePushes::NoWakePushes).await?;
     client.on_wake().await?;
     let database = Database::open(&path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
-    let mailboxes = database.session()?.mailboxes().live(clock.now())?;
+    let session = database.session()?;
+    let mailboxes = session
+        .server(&ServerId::new(harness.endpoints().server_id.clone())?)?
+        .mailboxes()
+        .live(clock.now())?;
     assert!(!mailboxes.is_empty());
     assert!(mailboxes.iter().all(|mailbox| mailbox.push.is_none()));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn once_the_platform_drops_its_token_new_mailboxes_carry_no_push() -> Result<(), TestError> {
+    let config = HarnessConfig {
+        registration_codes: vec![CODE.to_owned()],
+        ..HarnessConfig::default()
+    };
+    let clock = config.clock.clone();
+    let harness = InProcessHarness::start(&config)?;
+    let server = ServerId::new(harness.endpoints().server_id.clone())?;
+    let dir = TestDir::new()?;
+    let path = dir.0.join("pingers.db");
+    let platform = FakePlatform::new(clock.clone());
+    platform.set_push_registration(Some(token("https://up.invalid/a")));
+    let build = Build {
+        code: Some(CODE),
+        platform: platform.clone(),
+    };
+    let client = open_on(&harness, &clock, path.clone(), build).await?;
+    client.set_wake_pushes(WakePushes::On).await?;
+    tokio::time::timeout(
+        STEP,
+        client.create_party(PartyDraft {
+            name: Name::new("Climbing")?,
+            my_name: Name::new("Ana")?,
+            colour: PartyColour::Blue,
+            post_quantum: PostQuantum::Off,
+            server: None,
+        }),
+    )
+    .await
+    .map_err(|_elapsed| TestError::Setup("creating the Party did not finish"))??;
+    let live = || -> Result<Vec<pingers_store::Mailbox>, TestError> {
+        let database = Database::open(&path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+        let session = database.session()?;
+        Ok(session.server(&server)?.mailboxes().live(clock.now())?)
+    };
+    let before: Vec<_> = live()?.iter().map(pingers_store::Mailbox::id).collect();
+    // The platform takes its token back (UnifiedPush unregistered): nothing new is sealed to
+    // it, so the next wake's pool mailbox carries no push.
+    platform.set_push_registration(None);
+    client.push_tokens_changed().await?;
+    client.on_wake().await?;
+    let added: Vec<_> = live()?
+        .into_iter()
+        .filter(|mailbox| !before.contains(&mailbox.id()))
+        .collect();
+    assert!(!added.is_empty(), "the wake filled the pool");
+    assert!(added.iter().all(|mailbox| mailbox.push.is_none()));
     Ok(())
 }
 
@@ -557,6 +653,7 @@ async fn a_new_display_name_is_published_to_existing_parties() -> Result<(), Tes
             my_name: Name::new("Ana")?,
             colour: PartyColour::Blue,
             post_quantum: PostQuantum::Off,
+            server: None,
         }),
     )
     .await

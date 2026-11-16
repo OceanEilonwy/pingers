@@ -33,8 +33,6 @@ pub(crate) enum Key<'id> {
     DisplayName,
     /// The map host the server last advertised.
     ServerMapHost,
-    /// The push relay key config hash taken on first use, for a build without pins.
-    PushRelayPin,
     /// The join this device started from an invite link: its reply mailbox and subscription.
     PendingJoin,
     /// FCM's priority downgrades of the last high-priority pushes (pingers-wake's
@@ -63,7 +61,6 @@ impl Key<'_> {
             }
             Self::DisplayName => key.extend_from_slice(b"display-name"),
             Self::ServerMapHost => key.extend_from_slice(b"server-map-host"),
-            Self::PushRelayPin => key.extend_from_slice(b"push-relay-pin"),
             Self::PendingJoin => key.extend_from_slice(b"pending-join"),
             Self::PushPriority => key.extend_from_slice(b"push-priority"),
             Self::MapHostPin => key.extend_from_slice(b"map-host-pin"),

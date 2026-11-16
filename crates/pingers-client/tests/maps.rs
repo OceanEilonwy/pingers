@@ -137,7 +137,10 @@ async fn open(
         server: ServerId::new(endpoints.server_id.clone())?,
         relay: format!("http://{}/ohttp", endpoints.ohttp_relay),
         push_relay: None,
-        gateway_pins: None,
+        // Official builds pin their built-in server's gateway key at build time.
+        gateway_pins: Some(pingers_ohttp::KeyPins::from(
+            pingers_crypto::key_config_hash(&endpoints.ohttp_key_config),
+        )),
         push_relay_pins: None,
         trust: Trust::from_pem(&endpoints.push_relay_ca)?,
         registration_code: None,

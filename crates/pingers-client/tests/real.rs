@@ -13,7 +13,9 @@ use pingers_client::ports::{PartyDraft, SettingChange, SpotDraft};
 use pingers_client::snapshot::{
     InviteStatus, Me, Name, PartyColour, PostQuantum, RelayStatus, SnapshotError, WakePushes,
 };
-use pingers_client::{Client, ClientConfig, ClientError, Crates, Outside, Unavailable};
+use pingers_client::{
+    Client, ClientConfig, ClientError, Crates, Instance, KeyPins, Outside, Trust, Unavailable,
+};
 use pingers_crypto::{AccountSigningKey, MailboxReadKey, account_id};
 use pingers_gate::{GateDecision, LocationSharing, SuppressReason};
 use pingers_geo::{Circle, Coordinate, Fence, Fix, GeoError, Meters};
@@ -82,6 +84,20 @@ struct Rig {
 
 /// A store with an account and one pooled invite mailbox (pingers-sync would register both),
 /// then the client opened on the real crates over it.
+/// The built-in server: pinned, behind a relay on a reserved name that never resolves, so
+/// every request waits as it would without a network.
+fn unreachable() -> Result<Instance, TestError> {
+    Ok(Instance {
+        server: ServerId::new("https://pingers.test".to_owned())?,
+        relay: "https://relay.invalid".to_owned(),
+        push_relay: None,
+        gateway_pins: Some(KeyPins::from(KeyConfigHash::from_bytes([3; 32]))),
+        push_relay_pins: None,
+        trust: Trust::Mozilla,
+        registration_code: None,
+    })
+}
+
 async fn rig() -> Result<Rig, TestError> {
     let dir = TestDir::new()?;
     let clock = test_clock();
@@ -96,17 +112,19 @@ async fn rig() -> Result<Rig, TestError> {
         session.identity().save(&Identity {
             account: account_id(&signing_key.public_key()),
             signing_key,
-            server: ServerId::new("https://pingers.test".to_owned())?,
-            server_pin: KeyConfigHash::from_bytes([3; 32]),
         })?;
-        session.mailboxes().insert(&Mailbox {
-            read_key: MailboxReadKey::generate(&mut rng),
-            purpose: MailboxPurpose::Invite,
-            state: MailboxState::Pooled,
-            push: None,
-            seal: None,
-            expires_at: UnixSeconds::new(clock.now().get().saturating_add(7 * 86_400)),
-        })?;
+        session.servers().put(&unreachable()?.record())?;
+        session
+            .server(&unreachable()?.server)?
+            .mailboxes()
+            .insert(&Mailbox {
+                read_key: MailboxReadKey::generate(&mut rng),
+                purpose: MailboxPurpose::Invite,
+                state: MailboxState::Pooled,
+                push: None,
+                seal: None,
+                expires_at: UnixSeconds::new(clock.now().get().saturating_add(7 * 86_400)),
+            })?;
     }
     let platform = FakePlatform::new(clock.clone());
     platform
@@ -130,11 +148,18 @@ async fn rig() -> Result<Rig, TestError> {
     let client = Client::open_with(
         ClientConfig {
             database: dir.database(),
-            instance: None,
+            instance: Some(unreachable()?),
         },
         Arc::new(platform.clone()),
         Arc::new(RecordingEvents::new()),
-        move |database| Crates::real(database, crates_platform, outside, None),
+        move |database| {
+            Crates::real(
+                database,
+                crates_platform,
+                outside,
+                Some(&unreachable().map_err(|_bad| ClientError::Internal)?),
+            )
+        },
     )
     .await?;
     Ok(Rig {
@@ -156,6 +181,7 @@ fn spot_fence() -> Result<Fence, GeoError> {
 async fn party_with_spot(client: &Client) -> Result<(), TestError> {
     let party = client
         .create_party(PartyDraft {
+            server: None,
             name: Name::new("Climbing crew")?,
             my_name: Name::new("Sam")?,
             colour: PartyColour::Teal,
@@ -186,6 +212,7 @@ async fn a_party_its_spot_and_an_invite_show_in_the_snapshot() -> Result<(), Tes
     let party = rig
         .client
         .create_party(PartyDraft {
+            server: None,
             name: Name::new("Climbing crew")?,
             my_name: Name::new("Sam")?,
             colour: PartyColour::Teal,

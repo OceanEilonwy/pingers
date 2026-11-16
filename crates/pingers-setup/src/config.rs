@@ -3,7 +3,7 @@
 //! four services it references:
 //!
 //! ```toml
-//! listen = "127.0.0.1:9475"                  # loopback only: nodo's helper reads the page
+//! listen = "127.0.0.1:9479"                  # loopback only: nodo's helper reads the page
 //! domain = "example.org"                     # the owner's domain (pingers-push-relay.domain)
 //! server_id = "https://pingers.example.org"  # pingers-server's public addresses
 //! ohttp_relay_url = "https://ohttp.example.org/ohttp"
@@ -261,7 +261,7 @@ pub(crate) mod tests {
 
     /// A file as nodo renders it for `example.org`.
     pub(crate) fn file() -> String {
-        "listen = \"127.0.0.1:9475\"\ndomain = \"example.org\"\n\
+        "listen = \"127.0.0.1:9479\"\ndomain = \"example.org\"\n\
          server_id = \"https://pingers.example.org\"\n\
          ohttp_relay_url = \"https://ohttp.example.org/ohttp\"\n\
          push_relay_url = \"https://push.example.org\"\nmap_host = \"https://maps.example.org\"\n\
@@ -302,7 +302,7 @@ pub(crate) mod tests {
     #[test]
     fn bad_fields_are_named_and_values_never_shown() {
         let cases = [
-            ("127.0.0.1:9475", "0.0.0.0:9475", "listen"),
+            ("127.0.0.1:9479", "0.0.0.0:9479", "listen"),
             ("domain = \"example.org\"", "domain = \"example\"", "domain"),
             (
                 "https://push.example.org",
@@ -335,7 +335,7 @@ pub(crate) mod tests {
             Config::parse(&unknown),
             Err(ConfigError::Syntax(_))
         ));
-        let quoted = file().replace("listen = \"127.0.0.1:9475\"", "listen = \"secret-value\"");
+        let quoted = file().replace("listen = \"127.0.0.1:9479\"", "listen = \"secret-value\"");
         let message = Config::parse(&quoted)
             .map(|_| ())
             .err()

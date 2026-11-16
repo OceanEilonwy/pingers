@@ -435,6 +435,33 @@ mirror_enum!(
     }
 );
 
+/// Another server's keys on New party: looked up with `probe_server`, trusted with
+/// `trust_server` ("Trust this server's keys").
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum ServerKeysDraft {
+    /// Not looked up yet.
+    NotLookedUp,
+    /// Looked up; `ServerLook::gateway_key` waits for the user.
+    ToTrust {
+        /// The fingerprint shown.
+        fingerprint: String,
+    },
+    /// Trusted (or `ServerLook::known`).
+    Trusted,
+}
+
+impl From<&ServerKeysDraft> for screens::party::ServerKeys {
+    fn from(keys: &ServerKeysDraft) -> Self {
+        match keys {
+            ServerKeysDraft::NotLookedUp => Self::NotLookedUp,
+            ServerKeysDraft::ToTrust { fingerprint } => Self::ToTrust {
+                fingerprint: fingerprint.clone(),
+            },
+            ServerKeysDraft::Trusted => Self::Trusted,
+        }
+    }
+}
+
 /// What New party and Advanced have so far.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct PartyDraft {
@@ -448,6 +475,8 @@ pub struct PartyDraft {
     pub built_in: String,
     /// The server.
     pub server: ServiceDraft,
+    /// Another server's keys.
+    pub server_keys: ServerKeysDraft,
     /// The privacy relay.
     pub relay: ServiceDraft,
     /// The push relay.
@@ -468,6 +497,7 @@ impl TryFrom<&PartyDraft> for screens::party::PartyDraft {
             server_choice: draft.server_choice.into(),
             built_in: screens::common::Host::new(&draft.built_in)?,
             server: (&draft.server).try_into()?,
+            server_keys: (&draft.server_keys).into(),
             relay: (&draft.relay).try_into()?,
             push_relay: match &draft.push_relay {
                 PushRelayChoice::Official => screens::party::PushRelayChoice::Official,
@@ -526,6 +556,10 @@ pub struct NewPartyView {
     pub server_choice: ServerChoice,
     /// The server as typed.
     pub server: String,
+    /// Another server's keys: "Its key: 1a2b …", once looked up.
+    pub keys_line: Option<String>,
+    /// "Trust this server's keys", while they wait for the user.
+    pub keys_trust: Option<String>,
     /// How private it would be.
     pub privacy: DraftPrivacy,
     /// Whether Create is enabled.
@@ -570,6 +604,7 @@ pub struct NewPartyText {
 impl From<screens::party::NewParty> for NewPartyView {
     fn from(view: screens::party::NewParty) -> Self {
         let text = pingers_words::party::new_party(LANGUAGE, &view);
+        let keys = text.keys.clone();
         Self {
             name: view.name.as_str().to_owned(),
             colour: view.colour.into(),
@@ -594,6 +629,8 @@ impl From<screens::party::NewParty> for NewPartyView {
                 later: text.later,
                 create: text.create,
             },
+            keys_line: keys.as_ref().map(|keys| keys.line.clone()),
+            keys_trust: keys.and_then(|keys| keys.trust),
             server: view.server.as_str().to_owned(),
             privacy: view.privacy.into(),
             can_create: view.can_create,

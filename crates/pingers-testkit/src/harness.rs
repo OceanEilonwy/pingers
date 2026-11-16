@@ -23,6 +23,15 @@
 //! direct transport (which takes only `https://`) reaches it when it trusts that CA; the plain
 //! listener ([`Endpoints::server`]) stays for [`send_direct`].
 //!
+//! The OHTTP relay has a TLS front from the same CA too ([`Endpoints::ohttp_relay_https`]),
+//! and the server advertises it in `/v1/params` as its only OHTTP relay
+//! (`https://<address>/ohttp`), so a client that adds the server by its address alone finds
+//! the relay there; the plain relay listener ([`Endpoints::ohttp_relay`]) stays for clients
+//! configured with it directly. `/v1/params` also publishes [`HarnessConfig::operator`].
+//!
+//! Several harnesses can run at once in one process, each with its own ports, runtime thread
+//! and test CA; give them different seeds for different keys. Server ids differ by port.
+//!
 //! Without the feature `start` returns [`HarnessError::NotWired`], so crates that only need
 //! the fake platform do not compile the server.
 //!
@@ -69,6 +78,10 @@ pub struct HarnessConfig {
     /// The operator's registration codes (design B.1): empty, the server takes any
     /// registration; otherwise `POST /v1/accounts` must present one of them.
     pub registration_codes: Vec<String>,
+    /// Who runs the server, as `/v1/params` publishes it (`server_operator`): `None` publishes
+    /// the server's origin, as pingers-server does by default. Give two harnesses different
+    /// names to tell them apart.
+    pub operator: Option<String>,
     /// Schedules a second push relay key (key id 2, from its own seed) to be published from
     /// this time, for rotation tests ([`Endpoints::push_relay_next_key`]). `None`: one key.
     pub push_relay_next_key_at: Option<UnixSeconds>,
@@ -83,13 +96,15 @@ pub struct HarnessConfig {
 }
 
 impl Default for HarnessConfig {
-    /// The [test clock](crate::test_clock), seed 0, loopback.
+    /// The [test clock](crate::test_clock), seed 0, loopback, open registration, the origin
+    /// as operator.
     fn default() -> Self {
         Self {
             clock: test_clock(),
             seed: 0,
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
             registration_codes: Vec::new(),
+            operator: None,
             push_relay_next_key_at: None,
             map_host_gateway: None,
             #[cfg(feature = "harness")]
@@ -111,8 +126,12 @@ pub struct Endpoints {
     /// the relay forwards to.
     pub gateway: SocketAddr,
     /// The OHTTP relay clients send anonymous requests to (`POST /ohttp`, and
-    /// `GET /v1/ohttp/config` for the key config).
+    /// `GET /v1/ohttp/config` for the key config), over plain HTTP/2.
     pub ohttp_relay: SocketAddr,
+    /// The same OHTTP relay behind TLS with a certificate from the test CA
+    /// ([`Endpoints::push_relay_ca`]). The server advertises `https://<this address>/ohttp` in
+    /// `/v1/params` (`ohttp_relays`), as a server a client adds by its address does.
+    pub ohttp_relay_https: SocketAddr,
     /// The push relay the server forwards sealed pushes to (HTTPS).
     pub push_relay: SocketAddr,
     /// The test CA that issued the push relay's certificate, in PEM: trust it to call the

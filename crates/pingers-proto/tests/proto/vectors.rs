@@ -88,6 +88,24 @@ fn text(vector: &Vector, field: &'static str) -> Result<String, TestError> {
         .ok_or_else(|| field_error(vector, field))
 }
 
+/// A JSON array of hex-encoded 32-byte key config hashes.
+fn pins(vector: &Vector, field: &'static str) -> Result<Vec<KeyConfigHash>, TestError> {
+    vector
+        .inputs
+        .get(field)
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| field_error(vector, field))?
+        .iter()
+        .map(|pin| {
+            pin.as_str()
+                .and_then(|text| hex::decode(text).ok())
+                .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+                .map(KeyConfigHash::from_bytes)
+                .ok_or_else(|| field_error(vector, field))
+        })
+        .collect()
+}
+
 fn bucket(vector: &Vector, field: &'static str) -> Result<Bucket, TestError> {
     Bucket::from_index(number(vector, field)?)
         .map_err(ProtoError::Bucket)
@@ -534,6 +552,8 @@ fn invite_payload_vectors() -> Result<(), TestError> {
                     "inviter_fingerprint",
                 )?),
                 expires: UnixSeconds::new(number(vector, "expires")?),
+                gateway_pins: pins(vector, "gateway_pins")?,
+                push_relay_pins: pins(vector, "push_relay_pins")?,
                 registration_code: vector
                     .inputs
                     .get("registration_code")

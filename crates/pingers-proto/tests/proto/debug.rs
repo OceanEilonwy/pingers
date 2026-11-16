@@ -142,12 +142,22 @@ fn structs_holding_secrets_compare_every_field() -> Result<(), ProtoError> {
         invite_secret: SecretBytes::new([2; 32]),
         inviter_fingerprint: InviterFingerprint::from_bytes([3; 8]),
         expires: UnixSeconds::new(4),
+        gateway_pins: vec![pingers_proto::KeyConfigHash::from_bytes([5; 32])],
+        push_relay_pins: Vec::new(),
         registration_code: Some(SecretText::new(String::from("code"))),
     };
     assert_eq!(invite, invite.clone());
     let variants = [
         InvitePayload {
             server: ServerId::new(String::from("https://b.example"))?,
+            ..invite.clone()
+        },
+        InvitePayload {
+            gateway_pins: vec![pingers_proto::KeyConfigHash::from_bytes([6; 32])],
+            ..invite.clone()
+        },
+        InvitePayload {
+            push_relay_pins: vec![pingers_proto::KeyConfigHash::from_bytes([6; 32])],
             ..invite.clone()
         },
         InvitePayload {

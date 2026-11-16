@@ -19,6 +19,10 @@ struct Invite<'fields> {
     server: &'fields str,
     secret: &'fields [u8],
     expires: u32,
+    /// The server's gateway key config hashes: 1 to 4.
+    gateway_pins: &'fields [Vec<u8>],
+    /// Its push relay's key config hashes: 0 to 4.
+    push_relay_pins: &'fields [Vec<u8>],
     registration_code: Option<&'fields str>,
 }
 
@@ -31,8 +35,8 @@ impl Invite<'_> {
         ramp(0x08, 8)
     }
 
-    /// `[server, mailbox, secret, fingerprint, expires]`, then the registration code only when
-    /// there is one.
+    /// `[server, mailbox, secret, fingerprint, expires, gateway pins, push relay pins]`, then the
+    /// registration code only when there is one.
     fn fields(&self) -> Vec<Vec<u8>> {
         let mut fields = vec![
             text(self.server),
@@ -40,6 +44,8 @@ impl Invite<'_> {
             bytes(self.secret),
             bytes(&Self::fingerprint()),
             uint(u64::from(self.expires)),
+            array_of(self.gateway_pins.iter().map(|pin| bytes(pin)).collect()),
+            array_of(self.push_relay_pins.iter().map(|pin| bytes(pin)).collect()),
         ];
         fields.extend(self.registration_code.map(text));
         fields
@@ -57,6 +63,8 @@ impl Invite<'_> {
             ("invite_secret".to_owned(), hex(self.secret)),
             ("inviter_fingerprint".to_owned(), hex(&Self::fingerprint())),
             ("expires".to_owned(), Json::from(i64::from(self.expires))),
+            ("gateway_pins".to_owned(), pins(self.gateway_pins)),
+            ("push_relay_pins".to_owned(), pins(self.push_relay_pins)),
         ];
         pairs.extend(
             self.registration_code
@@ -66,13 +74,27 @@ impl Invite<'_> {
     }
 }
 
+/// Pins as a JSON array of hex strings.
+fn pins(pins: &[Vec<u8>]) -> Json {
+    Json::Array(pins.iter().map(|pin| hex(pin)).collect())
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "every case of the vector file, side by side"
+)]
 fn invite_payload() -> Result<VectorFile> {
     let secret = ramp(0xa0, 32);
+    let gateway = [ramp(0xc0, 32), ramp(0xe0, 32)];
+    let push_relay = [ramp(0x70, 32)];
+    let five: Vec<Vec<u8>> = (0..5).map(|index| ramp(index, 32)).collect();
     let short_secret = prefix(&secret, 31)?;
     let invite = |expires: u32| Invite {
         server: "https://pingers.example",
         secret: &secret,
         expires,
+        gateway_pins: &gateway,
+        push_relay_pins: &push_relay,
         registration_code: None,
     };
     let link = invite(1_800_604_800);
@@ -85,7 +107,19 @@ fn invite_payload() -> Result<VectorFile> {
         registration_code: Some(""),
         ..link
     };
-    let seven_elements = versioned(array_of([with_code.fields(), vec![uint(0)]].concat()));
+    let without_push_pins = Invite {
+        push_relay_pins: &[],
+        ..earlier
+    };
+    let no_gateway_pins = Invite {
+        gateway_pins: &[],
+        ..link
+    };
+    let too_many_pins = Invite {
+        gateway_pins: &five,
+        ..link
+    };
+    let nine_elements = versioned(array_of([with_code.fields(), vec![uint(0)]].concat()));
     // The layout before join flow A: a use count (1, single use) after the expiry.
     let old_layout = versioned(array_of([link.fields(), vec![uint(1)]].concat()));
     let http_server = Invite {
@@ -98,7 +132,7 @@ fn invite_payload() -> Result<VectorFile> {
     };
     proto_file(
         "invite-payload-encoding",
-        "Invite link fragment payload (https://<host>/j#v1.<base64url(this)>) as canonical CBOR: [server, invite mailbox, invite secret, inviter fingerprint, expires, registration code (text; present only when the inviter passes one on, so the array has 5 elements without it and 6 with it)] (design D, invite flow; join flow A: nothing about the Party, and no use count, since every invite waits for the inviter and stops after the first joiner is let in; design B.1 registration codes). An empty registration code is refused.",
+        "Invite link fragment payload (https://<host>/j#v1.<base64url(this)>) as canonical CBOR: [server, invite mailbox, invite secret, inviter fingerprint, expires, gateway pins (array of 1 to 4 SHA-256 key config hashes of the server's OHTTP gateway), push relay pins (array of 0 to 4 hashes of its push relay's key config), registration code (text; present only when the inviter passes one on, so the array has 7 elements without it and 8 with it)] (design D, invite flow; join flow A: nothing about the Party, and no use count, since every invite waits for the inviter and stops after the first joiner is let in; design B.1 registration codes; B.12 key pinning: a joiner new to the server pins the inviter's hashes, never the first key it sees). An empty registration code is refused.",
         vec![
             case(
                 "link",
@@ -121,8 +155,23 @@ fn invite_payload() -> Result<VectorFile> {
                 error("OutOfRange"),
             ),
             case(
-                "seven-elements",
-                object! { "encoding": hex(&seven_elements) },
+                "without-push-relay-pins",
+                without_push_pins.inputs(),
+                object! { "encoding": hex(&without_push_pins.encode()) },
+            ),
+            case(
+                "no-gateway-pins",
+                object! { "encoding": hex(&no_gateway_pins.encode()) },
+                error("OutOfRange"),
+            ),
+            case(
+                "five-gateway-pins",
+                object! { "encoding": hex(&too_many_pins.encode()) },
+                error("OutOfRange"),
+            ),
+            case(
+                "nine-elements",
+                object! { "encoding": hex(&nine_elements) },
                 error("Cbor"),
             ),
             case(

@@ -136,7 +136,7 @@ phone), and debug builds also take `--es variant <names>` (comma-separated) to p
 | `pending` | Home's "Waiting to be let in" row (HomePendingJoin) |
 | `noname` | Open invite before a name is set, with the name field (JoinA1) |
 | `background`, `notifications` | First run's step 2 or 3 (`--es screen Setup`, real or fake) |
-| `setup=working`, `done`, `already`, `refused`, `other`, `keys`, `server-keys`, `offline`, `broken` | The first-phone setup link's step in that state (`--es screen SetupLink`, fake only); without it, the question, whose "Set up" ends set up after a moment (or offline with `setup=offline`) |
+| `setup=working`, `done`, `already`, `refused`, `keys`, `server-keys`, `offline`, `broken` | The first-phone setup link's step in that state (`--es screen SetupLink`, fake only); without it, the question, whose "Set up" ends set up after a moment (or offline with `setup=offline`) |
 
 ```sh
 adb shell am start -n org.pingers.app.debug/org.pingers.app.MainActivity --ez fake true --es screen PartySettings --es variant shared

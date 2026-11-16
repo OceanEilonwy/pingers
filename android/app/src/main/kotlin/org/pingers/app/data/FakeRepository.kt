@@ -431,6 +431,8 @@ class FakeRepository(
         checkServer(1200)
     }
 
+    override fun trustServerKeys() = _newParty.update { it.copy(keysTrust = null) }
+
     override fun setRelay(url: String) {
         _advanced.update { it.copy(relay = url) }
         checkRelay(1200)
@@ -455,7 +457,6 @@ class FakeRepository(
         "done" -> SetupLinkState.SetUp
         "already" -> SetupLinkState.AlreadySetUp
         "refused" -> SetupLinkState.Refused
-        "other" -> SetupLinkState.OtherServer(fakeServer, "friends.example")
         "keys" -> SetupLinkState.BuildKeysDiffer(fakeServer)
         "server-keys" -> SetupLinkState.ServerKeysDiffer(fakeServer)
         "offline" -> SetupLinkState.Unreachable(fakeServer)

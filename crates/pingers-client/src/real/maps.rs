@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! [`MapsPort`] over pingers-map-downloads: the chain gets the server's map host from
+//! [`MapsPort`] over pingers-map-downloads. Maps are a device setting, so they follow the app's
+//! built-in server whatever servers the Parties are on: the chain gets its map host from
 //! [`Net`], direct downloads use a public HTTPS client trusting the instance's roots, relayed
-//! ones go through the instance's router, and the map host gateway key pinned on first use is
-//! a record in the store.
+//! ones go through the built-in server's router, and the map host gateway key pinned on first
+//! use is a record in the store.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -49,15 +50,16 @@ impl Maps {
         })
     }
 
-    /// The route for `route`: direct, or through the relay to the server's map host. `None`
-    /// for the relay without an instance.
+    /// The route for `route`: direct, or through the built-in server's relay to its map host.
+    /// `None` for the relay without a built-in server.
     async fn fetch(&self, route: MapRoute) -> Result<Option<Arc<dyn MapFetch>>, ClientError> {
         Ok(match route {
             MapRoute::Direct => Some(self.direct.clone()),
-            MapRoute::Relay => match &self.backend.transport {
-                None => None,
-                Some(transport) => Some(Arc::new(RelayFetch::new(RelayParts {
-                    transport: Arc::clone(transport),
+            MapRoute::Relay => match self.net.servers.built_in_link().await {
+                Err(ClientError::Unavailable(_)) => None,
+                Err(error) => return Err(error),
+                Ok(link) => Some(Arc::new(RelayFetch::new(RelayParts {
+                    transport: Arc::clone(&link.transport),
                     server_host: self.net.map_host().await?,
                     pins: Arc::new(StoredPins(Arc::clone(&self.backend))),
                     rng: (self.backend.outside.rng)(),
@@ -70,13 +72,15 @@ impl Maps {
 #[async_trait]
 impl MapsPort for Maps {
     async fn catalog(&self, hosts: MapHosts, route: MapRoute) -> Result<Catalog, ClientError> {
-        // The server's parameters, read through the relay once per process (anonymous and
-        // public: they say nothing about the device), so a fresh install knows its server's
-        // map host; offline or unreachable, the host last recorded.
-        let server = match self.net.server_params().await {
-            Ok(params) => params.map_host,
-            Err(_unreachable) => self.net.map_host().await?,
-        };
+        // The built-in server's parameters, read through its relay once per process (anonymous
+        // and public: they say nothing about the device) and its map host recorded, so a fresh
+        // install knows it; offline or unreachable, the host last recorded.
+        if let Err(error @ (ClientError::Store(_) | ClientError::Records(_))) =
+            self.net.built_in_params().await
+        {
+            return Err(error);
+        }
+        let server = self.net.map_host().await?;
         let chain = HostChain::new(
             hosts.user_override.as_ref(),
             server.as_ref(),

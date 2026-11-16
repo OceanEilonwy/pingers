@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! cargo xtask local-stack [--dir <dir>] [--packs <dir>] [--ntfy <binary>] [--caddy <binary>]
-//!                         [--fresh] [--prepare-only]
+//!                         [--fresh] [--prepare-only] [--second-server]
 //!                         [--fcm-service-account <key.json> --fcm-project <id>]
 //! ```
 //!
@@ -20,7 +20,7 @@
 //! | pingers-push-relay | 127.0.0.1:9472 | `https://10.0.2.2:9445` |
 //! | pingers-ohttp-relay | 127.0.0.1:9473 | `https://10.0.2.2:9444/ohttp` |
 //! | pingers-map-host | 127.0.0.1:9474 | `https://10.0.2.2:9446` |
-//! | pingers (the setup page) | 127.0.0.1:9475 | not at all: `curl http://127.0.0.1:9475/owner` |
+//! | pingers (the setup page) | 127.0.0.1:9479 | not at all: `curl http://127.0.0.1:9479/owner` |
 //! | ntfy (UnifiedPush) | 127.0.0.1:8099 | `http://127.0.0.1:8099` through `adb reverse` |
 //! | TLS front | 127.0.0.1:9443 to 9446 | |
 //!
@@ -37,6 +37,27 @@
 //! of map packs (`pingers-tiles cut` output) copied into the map host's directory once;
 //! without it the map host serves an empty catalog. ntfy is `--ntfy`, `$PINGERS_NTFY` or
 //! `ntfy` on the `PATH`; without it there is no UnifiedPush.
+//!
+//! # `--second-server`
+//!
+//! For Parties on different servers, a second pingers-server ("server B") runs too, with its
+//! own fresh keys (`config/second-server.toml`), databases (`data/second-server/`) and ports,
+//! and its own pingers-ohttp-relay (`config/second-relay.toml`) forwarding to B's gateway:
+//!
+//! | Process | Listens on | Reached by the emulator as |
+//! |---|---|---|
+//! | pingers-server B (API, gateway) | 127.0.0.1:9475, :9476 | `https://10.0.2.2:9447` |
+//! | pingers-ohttp-relay B | 127.0.0.1:9477 | `https://10.0.2.2:9448/ohttp` |
+//!
+//! Both are behind the same TLS front (the stack's `caddy.json` gains two sites copied from
+//! A's, so Caddy and `cargo xtask tls-front` serve them alike) and the same dev CA. B
+//! advertises its own relay in `/v1/params`, the same push relay and map host as A, and the
+//! operator [`SECOND_OPERATOR`]. The push relay lists B as a second allowed server with a
+//! credential of its own. B requires a registration code of its own, so an app can exercise
+//! "code required" and "code refused"; A is unchanged. B's origin, relay, pins and code are
+//! written to `<dir>/second-server.env`, in `app.env`'s names. `--fresh` regenerates B too.
+//!
+//! # FCM
 //!
 //! FCM is opt-in and has no default: `--fcm-service-account` names a Firebase service account
 //! key file, outside the repository and the stack directory, and `--fcm-project` its project
@@ -67,6 +88,19 @@ const FRONT_SERVER: u16 = 9443;
 const FRONT_OHTTP: u16 = 9444;
 const FRONT_PUSH: u16 = 9445;
 const FRONT_MAPS: u16 = 9446;
+/// Server B's TLS front ports (`--second-server`): its API and its OHTTP relay.
+const FRONT_SECOND_SERVER: u16 = 9447;
+const FRONT_SECOND_OHTTP: u16 = 9448;
+/// Server B's own ports on loopback: API, gateway, OHTTP relay.
+const SECOND_SERVER_PORT: u16 = 9475;
+const SECOND_GATEWAY_PORT: u16 = 9476;
+const SECOND_RELAY_PORT: u16 = 9477;
+/// The setup page (crate pingers-setup), off server B's ports; the same port as on the appliance.
+const SETUP_PAGE_PORT: u16 = 9479;
+/// Who runs server B, as its `/v1/params` publishes it.
+pub(crate) const SECOND_OPERATOR: &str = "Second server (local)";
+/// Server B's name in the push relay's `[[servers]]`.
+const SECOND_PUSH_SERVER_ID: &str = "local-second";
 /// ntfy's port, on loopback here and (through `adb reverse`) on each emulator.
 pub(crate) const NTFY_PORT: u16 = 8099;
 
@@ -95,6 +129,8 @@ pub(crate) struct StackOptions {
     pub(crate) fresh: bool,
     /// Write keys and configurations, print the pins, and stop there.
     pub(crate) prepare_only: bool,
+    /// Also run server B with its own OHTTP relay.
+    pub(crate) second_server: bool,
     /// A Firebase service account key file the push relay reads in place, to send FCM.
     /// Opt-in and never defaulted: without it the local push relay has no FCM.
     pub(crate) fcm_service_account: Option<PathBuf>,
@@ -129,6 +165,7 @@ impl StackOptions {
             "--caddy" => self.caddy = Some(PathBuf::from(rest.next()?)),
             "--fresh" => self.fresh = true,
             "--prepare-only" => self.prepare_only = true,
+            "--second-server" => self.second_server = true,
             "--fcm-service-account" => {
                 self.fcm_service_account = Some(PathBuf::from(rest.next()?));
             }
@@ -227,6 +264,19 @@ impl Layout {
     fn ntfy_config(&self) -> PathBuf {
         self.config().join("ntfy.yml")
     }
+    fn second_server_config(&self) -> PathBuf {
+        self.config().join("second-server.toml")
+    }
+    fn second_relay_config(&self) -> PathBuf {
+        self.config().join("second-relay.toml")
+    }
+    fn second_data(&self) -> PathBuf {
+        self.data().join("second-server")
+    }
+    /// Server B's values, one `NAME=value` per line, in `app.env`'s names.
+    pub(crate) fn second_server_env(&self) -> PathBuf {
+        self.root.join("second-server.env")
+    }
     /// The dev CA's certificate, for `PINGERS_EXTRA_CA`.
     pub(crate) fn ca_pem(&self) -> PathBuf {
         self.ca().join("ca.pem")
@@ -241,6 +291,7 @@ pub(crate) struct Prepared {
     binaries: PathBuf,
     ntfy: Option<PathBuf>,
     caddy: Option<PathBuf>,
+    second_server: bool,
 }
 
 /// `cargo xtask local-stack`.
@@ -281,6 +332,18 @@ pub(crate) fn run(workspace: &Path, options: &StackOptions) -> Result<Outcome> {
 }
 
 /// Whether the TLS front of a stack already answers on this machine.
+/// Whether server B and its relay answer behind the TLS front.
+pub(crate) fn second_front_is_up() -> bool {
+    [FRONT_SECOND_SERVER, FRONT_SECOND_OHTTP]
+        .into_iter()
+        .all(|port| answers(loopback(port)))
+}
+
+/// Server B's plain API listener, where its `/metrics` answers loopback callers.
+pub(crate) fn second_server_api() -> SocketAddr {
+    loopback(SECOND_SERVER_PORT)
+}
+
 pub(crate) fn front_is_up() -> bool {
     [FRONT_SERVER, FRONT_OHTTP, FRONT_PUSH, FRONT_MAPS]
         .into_iter()
@@ -290,9 +353,17 @@ pub(crate) fn front_is_up() -> bool {
 /// Whether any port a stack listens on answers: a stack still starting (ntfy first) holds
 /// some before its front is up.
 pub(crate) fn any_port_is_taken() -> bool {
-    [FRONT_SERVER, FRONT_OHTTP, FRONT_PUSH, FRONT_MAPS, NTFY_PORT]
-        .into_iter()
-        .any(|port| answers(loopback(port)))
+    [
+        FRONT_SERVER,
+        FRONT_OHTTP,
+        FRONT_PUSH,
+        FRONT_MAPS,
+        NTFY_PORT,
+        FRONT_SECOND_SERVER,
+        FRONT_SECOND_OHTTP,
+    ]
+    .into_iter()
+    .any(|port| answers(loopback(port)))
 }
 
 /// Builds the binaries and writes every key, configuration and the app's variables.
@@ -315,6 +386,7 @@ pub(crate) fn prepare(workspace: &Path, options: &StackOptions) -> Result<Prepar
             }
         }
         let _ignored = fs::remove_file(layout.app_env());
+        let _ignored = fs::remove_file(layout.second_server_env());
     }
     for dir in [
         layout.config(),
@@ -349,7 +421,11 @@ pub(crate) fn prepare(workspace: &Path, options: &StackOptions) -> Result<Prepar
         &layout.setup_config(),
         &setup_config(&dev, &registration_code)?,
     )?;
-    fs::write(layout.caddy_config(), caddy_config(&dev, &layout)?)?;
+    let mut caddy_text = caddy_config(&dev, &layout)?;
+    if options.second_server {
+        caddy_text = with_second_server_sites(&caddy_text)?;
+    }
+    fs::write(layout.caddy_config(), caddy_text)?;
     fs::write(layout.ntfy_config(), ntfy_config(&layout))?;
     copy_packs(options, &layout)?;
 
@@ -367,6 +443,10 @@ pub(crate) fn prepare(workspace: &Path, options: &StackOptions) -> Result<Prepar
         "local-stack: app build variables in {}",
         layout.app_env().display()
     )?;
+    drop(stdout);
+    if options.second_server {
+        prepare_second_server(&dev, &binaries, &layout)?;
+    }
 
     let ntfy = options
         .ntfy
@@ -379,7 +459,67 @@ pub(crate) fn prepare(workspace: &Path, options: &StackOptions) -> Result<Prepar
         binaries,
         ntfy,
         caddy,
+        second_server: options.second_server,
     })
+}
+
+/// Writes server B's configuration and relay, adds B to the push relay's servers, and writes
+/// `second-server.env`. Keys of an earlier run are reused while B's configuration and its push
+/// relay entry are both there.
+fn prepare_second_server(dev: &Path, binaries: &Path, layout: &Layout) -> Result<()> {
+    fs::create_dir_all(layout.second_data())?;
+    let push_relay = Zeroizing::new(
+        fs::read_to_string(layout.push_relay_config())
+            .with_context(|| layout.push_relay_config().display().to_string())?,
+    );
+    let code = if layout.second_server_config().is_file() && has_second_server(&push_relay)? {
+        writeln!(
+            io::stdout(),
+            "local-stack: reusing server B's keys in {}",
+            layout.second_server_config().display()
+        )?;
+        // As for server A: the keys stay, the rest follows the template.
+        let server = refreshed_server_config(dev, layout, Shape::Second)?;
+        write_secret_file(&layout.second_server_config(), &server)?;
+        read_registration_code(&layout.second_server_config())?
+    } else {
+        let credential = keygen(binaries, "pingers-push-relay", &["keygen"])?;
+        write_secret_file(
+            &layout.push_relay_config(),
+            &with_second_server(&push_relay, &credential)?,
+        )?;
+        let code = keygen(binaries, "pingers-push-relay", &["keygen"])?;
+        let server = server_config(
+            dev,
+            &ServerSecrets {
+                binaries,
+                credential: &credential,
+                registration_code: &code,
+            },
+            &layout.second_data(),
+            Shape::Second,
+        )?;
+        write_secret_file(&layout.second_server_config(), &server)?;
+        writeln!(
+            io::stdout(),
+            "local-stack: new keys for server B in {}",
+            layout.second_server_config().display()
+        )?;
+        code
+    };
+    fs::write(layout.second_relay_config(), second_relay_config(dev)?)?;
+    let pins = crate::pins::run(&layout.second_server_config(), &layout.push_relay_config())?;
+    write_secret_file(
+        &layout.second_server_env(),
+        &second_server_env(layout, &pins, &code),
+    )?;
+    writeln!(
+        io::stdout(),
+        "local-stack: server B ({SECOND_OPERATOR}) at https://{HOST_FROM_EMULATOR}:{FRONT_SECOND_SERVER}, \
+         relay https://{HOST_FROM_EMULATOR}:{FRONT_SECOND_OHTTP}/ohttp; its values in {}",
+        layout.second_server_env().display()
+    )?;
+    Ok(())
 }
 
 /// Writes the push relay and server configurations with fresh keys, unless an earlier run
@@ -393,7 +533,7 @@ fn write_keys(dev: &Path, binaries: &Path, layout: &Layout) -> Result<Zeroizing<
         )?;
         // The keys stay; the rest follows the template, so a setting added there (such as
         // [app_links] or the map host gateway) reaches a stack made before it.
-        let server = refreshed_server_config(dev, layout)?;
+        let server = refreshed_server_config(dev, layout, Shape::First)?;
         write_secret_file(&layout.server_config(), &server)?;
         return read_registration_code(&layout.server_config());
     }
@@ -408,7 +548,8 @@ fn write_keys(dev: &Path, binaries: &Path, layout: &Layout) -> Result<Zeroizing<
             credential: &credential,
             registration_code: &code,
         },
-        layout,
+        &layout.data(),
+        Shape::First,
     )?;
     write_secret_file(&layout.server_config(), &server)?;
     writeln!(
@@ -468,7 +609,11 @@ pub(crate) fn start(prepared: &Prepared) -> Result<Supervisor> {
             layout.map_host_config(),
             vec![loopback(9474)],
         ),
-        ("pingers", layout.setup_config(), vec![loopback(9475)]),
+        (
+            "pingers",
+            layout.setup_config(),
+            vec![loopback(SETUP_PAGE_PORT)],
+        ),
     ];
     for (name, config, ready) in services {
         supervisor.start(&Service {
@@ -478,10 +623,12 @@ pub(crate) fn start(prepared: &Prepared) -> Result<Supervisor> {
             ready,
         })?;
     }
-    let front_ready = [FRONT_SERVER, FRONT_OHTTP, FRONT_PUSH, FRONT_MAPS]
-        .into_iter()
-        .map(loopback)
-        .collect::<Vec<_>>();
+    let mut front_ports = vec![FRONT_SERVER, FRONT_OHTTP, FRONT_PUSH, FRONT_MAPS];
+    if prepared.second_server {
+        start_second_server(prepared, &mut supervisor)?;
+        front_ports.extend([FRONT_SECOND_SERVER, FRONT_SECOND_OHTTP]);
+    }
+    let front_ready = front_ports.into_iter().map(loopback).collect::<Vec<_>>();
     if let Some(caddy) = &prepared.caddy {
         supervisor.start(&Service {
             name: "caddy",
@@ -508,6 +655,34 @@ pub(crate) fn start(prepared: &Prepared) -> Result<Supervisor> {
     Ok(supervisor)
 }
 
+/// Starts server B and its OHTTP relay.
+fn start_second_server(prepared: &Prepared, supervisor: &mut Supervisor) -> Result<()> {
+    let layout = &prepared.layout;
+    let second = [
+        (
+            "pingers-server-second",
+            "pingers-server",
+            layout.second_server_config(),
+            vec![loopback(SECOND_SERVER_PORT), loopback(SECOND_GATEWAY_PORT)],
+        ),
+        (
+            "pingers-ohttp-relay-second",
+            "pingers-ohttp-relay",
+            layout.second_relay_config(),
+            vec![loopback(SECOND_RELAY_PORT)],
+        ),
+    ];
+    for (name, binary, config, ready) in second {
+        supervisor.start(&Service {
+            name,
+            program: prepared.binaries.join(binary),
+            arguments: vec![config.into_os_string()],
+            ready,
+        })?;
+    }
+    Ok(())
+}
+
 /// The app's build variables, as `NAME=value` lines (also the format of `app.env`).
 fn app_env(layout: &Layout, pins: &str, registration_code: &str) -> Zeroizing<String> {
     let host = HOST_FROM_EMULATOR;
@@ -532,8 +707,13 @@ fn app_env(layout: &Layout, pins: &str, registration_code: &str) -> Zeroizing<St
 /// # Errors
 ///
 /// When the file cannot be read or a line is not `NAME=value`.
-pub(crate) fn read_app_env(layout: &Layout) -> Result<Vec<(String, Zeroizing<String>)>> {
-    let path = layout.app_env();
+/// The `NAME=value` lines of an app environment file (`app.env`, `second-server.env`).
+///
+/// # Errors
+///
+/// When the file cannot be read or a line is not `NAME=value`.
+pub(crate) fn read_env_file(path: &Path) -> Result<Vec<(String, Zeroizing<String>)>> {
+    let path = path.to_path_buf();
     let text = Zeroizing::new(
         fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?,
     );
@@ -718,14 +898,28 @@ struct ServerSecrets<'values> {
     registration_code: &'values str,
 }
 
-/// The dev server configuration with fresh gateway keys, the push relay's credential (its key
-/// the server learns from the relay itself), a registration code, and its databases in the stack's data directory.
+/// Which of the stack's servers a configuration is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shape {
+    /// Server A: the dev template's addresses as they are.
+    First,
+    /// Server B: its own ports, origin, relay and operator ([`make_second_server`]).
+    Second,
+}
+
+/// The dev server configuration with fresh gateway keys, the push relay's credential (the
+/// server learns its key from the relay itself), a registration code, and its databases in
+/// `data`.
 fn server_config(
     dev: &Path,
     secrets: &ServerSecrets<'_>,
-    layout: &Layout,
+    data: &Path,
+    shape: Shape,
 ) -> Result<Zeroizing<String>> {
-    let mut table = server_template(dev, layout)?;
+    let mut table = server_template(dev, data)?;
+    if shape == Shape::Second {
+        make_second_server(&mut table)?;
+    }
     table.insert(
         "registration_codes".to_owned(),
         Value::Array(vec![Value::String(secrets.registration_code.to_owned())]),
@@ -740,8 +934,177 @@ fn server_config(
     Ok(with_header(&table))
 }
 
+/// Turns the dev server template into server B's: its own listen and gateway ports, origin,
+/// advertised OHTTP relay and operator. The push relay and map host stay A's.
+fn make_second_server(table: &mut Table) -> Result<()> {
+    let host = HOST_FROM_EMULATOR;
+    for (field, value) in [
+        ("listen", format!("127.0.0.1:{SECOND_SERVER_PORT}")),
+        ("server_id", format!("https://{host}:{FRONT_SECOND_SERVER}")),
+        ("server_operator", SECOND_OPERATOR.to_owned()),
+    ] {
+        table.insert(field.to_owned(), Value::String(value));
+    }
+    table.insert(
+        "ohttp_relay_urls".to_owned(),
+        Value::Array(vec![Value::String(format!(
+            "https://{host}:{FRONT_SECOND_OHTTP}/ohttp"
+        ))]),
+    );
+    table_mut(table, "ohttp")?.insert(
+        "listen".to_owned(),
+        Value::String(format!("127.0.0.1:{SECOND_GATEWAY_PORT}")),
+    );
+    Ok(())
+}
+
+/// Server B's OHTTP relay: the dev relay template forwarding to B's gateway.
+fn second_relay_config(dev: &Path) -> Result<String> {
+    let mut table = parse_template(&dev.join("relay.toml"))?;
+    for (field, value) in [
+        ("listen", format!("127.0.0.1:{SECOND_RELAY_PORT}")),
+        (
+            "gateway",
+            format!("http://127.0.0.1:{SECOND_GATEWAY_PORT}/ohttp"),
+        ),
+        (
+            "gateway_key_config",
+            format!("http://127.0.0.1:{SECOND_GATEWAY_PORT}/v1/ohttp/config"),
+        ),
+    ] {
+        if !table.contains_key(field) {
+            bail!("packaging/nodo/dev/relay.toml no longer has {field}");
+        }
+        table.insert(field.to_owned(), Value::String(value));
+    }
+    Ok(with_header(&table).to_string())
+}
+
+/// Whether a push relay configuration lists server B.
+fn has_second_server(push_relay: &str) -> Result<bool> {
+    let table = Zeroizing::new(push_relay.to_owned()).parse::<Table>()?;
+    Ok(table
+        .get("servers")
+        .and_then(Value::as_array)
+        .is_some_and(|servers| servers.iter().any(is_second_server)))
+}
+
+fn is_second_server(server: &Value) -> bool {
+    server.get("server_id").and_then(Value::as_str) == Some(SECOND_PUSH_SERVER_ID)
+}
+
+/// The push relay configuration with server B allowed, with `credential` (replacing an earlier
+/// entry for B); the other servers and keys are kept.
+fn with_second_server(push_relay: &str, credential: &str) -> Result<Zeroizing<String>> {
+    let mut table = Zeroizing::new(push_relay.to_owned()).parse::<Table>()?;
+    let servers = entries_mut(&mut table, "servers")?;
+    let limit = servers
+        .first()
+        .and_then(|first| first.get("pushes_per_minute"))
+        .cloned()
+        .context("the push relay's first server has no pushes_per_minute")?;
+    servers.retain(|server| !is_second_server(server));
+    let mut entry = Table::new();
+    entry.insert(
+        "server_id".to_owned(),
+        Value::String(SECOND_PUSH_SERVER_ID.to_owned()),
+    );
+    entry.insert(
+        "credential".to_owned(),
+        Value::String(credential.to_owned()),
+    );
+    entry.insert("pushes_per_minute".to_owned(), limit);
+    servers.push(Value::Table(entry));
+    Ok(with_header(&table))
+}
+
+/// Server B's values for an app or a test, as `NAME=value` lines in `app.env`'s names.
+fn second_server_env(layout: &Layout, pins: &str, registration_code: &str) -> Zeroizing<String> {
+    let host = HOST_FROM_EMULATOR;
+    let mut text = Zeroizing::new(format!(
+        "# Written by `cargo xtask local-stack --second-server`: server B of this local stack.\n\
+         PINGERS_SERVER_HOST=https://{host}:{FRONT_SECOND_SERVER}\n\
+         PINGERS_OHTTP_RELAY=https://{host}:{FRONT_SECOND_OHTTP}/ohttp\n\
+         PINGERS_SERVER_OPERATOR={SECOND_OPERATOR}\n\
+         PINGERS_PUSH_RELAY=https://{host}:{FRONT_PUSH}\n\
+         PINGERS_MAP_HOST=https://{host}:{FRONT_MAPS}\n\
+         PINGERS_EXTRA_CA={}\n",
+        layout.ca_pem().display()
+    ));
+    text.push_str(pins);
+    text.push_str("PINGERS_DEV_REGISTRATION_CODE=");
+    text.push_str(registration_code);
+    text.push('\n');
+    text
+}
+
+/// A Caddy JSON configuration of the dev shape with server B's two sites added: copies of
+/// A's `server` and `ohttp` sites on B's front ports, forwarding to B's API and relay.
+///
+/// # Errors
+///
+/// When the configuration is not JSON or lacks either site or its upstream.
+pub(crate) fn with_second_server_sites(caddy: &str) -> Result<String> {
+    let mut config: serde_json::Value = serde_json::from_str(caddy)?;
+    let servers = config
+        .pointer_mut("/apps/http/servers")
+        .and_then(serde_json::Value::as_object_mut)
+        .context("caddy.json has no apps.http.servers")?;
+    for (from, to, front, upstream) in [
+        (
+            "server",
+            "second-server",
+            FRONT_SECOND_SERVER,
+            SECOND_SERVER_PORT,
+        ),
+        (
+            "ohttp",
+            "second-ohttp",
+            FRONT_SECOND_OHTTP,
+            SECOND_RELAY_PORT,
+        ),
+    ] {
+        let mut site = servers
+            .get(from)
+            .cloned()
+            .with_context(|| format!("caddy.json has no {from} site"))?;
+        let listen = site.get_mut("listen").context("a site has no listen")?;
+        *listen = serde_json::json!([format!("127.0.0.1:{front}")]);
+        let mut dials = 0_usize;
+        for route in site
+            .get_mut("routes")
+            .and_then(serde_json::Value::as_array_mut)
+            .with_context(|| format!("the {from} site has no routes"))?
+        {
+            for handler in route
+                .get_mut("handle")
+                .and_then(serde_json::Value::as_array_mut)
+                .into_iter()
+                .flatten()
+            {
+                for target in handler
+                    .get_mut("upstreams")
+                    .and_then(serde_json::Value::as_array_mut)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(dial) = target.get_mut("dial") {
+                        *dial = serde_json::Value::String(format!("127.0.0.1:{upstream}"));
+                        dials = dials.saturating_add(1);
+                    }
+                }
+            }
+        }
+        if dials == 0 {
+            bail!("the {from} site forwards nowhere");
+        }
+        servers.insert(to.to_owned(), site);
+    }
+    Ok(serde_json::to_string_pretty(&config)?)
+}
+
 /// The dev server template with its databases in the stack's data directory.
-fn server_template(dev: &Path, layout: &Layout) -> Result<Table> {
+fn server_template(dev: &Path, data: &Path) -> Result<Table> {
     let mut table = parse_template(&dev.join("server.toml"))?;
     for (field, file) in [
         ("delivery_db", "groups.sqlite"),
@@ -750,28 +1113,36 @@ fn server_template(dev: &Path, layout: &Layout) -> Result<Table> {
     ] {
         table.insert(
             field.to_owned(),
-            Value::String(layout.data().join(file).display().to_string()),
+            Value::String(data.join(file).display().to_string()),
         );
     }
     Ok(table)
 }
 
-/// The dev server template again, with the secrets of the stack's existing configuration
-/// (registration code, gateway keys, the push relay's credential and pin) carried over.
-fn refreshed_server_config(dev: &Path, layout: &Layout) -> Result<Zeroizing<String>> {
-    let existing = parse_template(&layout.server_config())?;
+/// The dev server template again (made into server B's for [`Shape::Second`]), with the secrets
+/// of that server's existing configuration (registration code, gateway keys, the push relay's
+/// credential and pin) carried over.
+fn refreshed_server_config(dev: &Path, layout: &Layout, shape: Shape) -> Result<Zeroizing<String>> {
+    let (path, data) = match shape {
+        Shape::First => (layout.server_config(), layout.data()),
+        Shape::Second => (layout.second_server_config(), layout.second_data()),
+    };
+    let existing = parse_template(&path)?;
     let kept = |key: &str| {
         existing
             .get(key)
             .cloned()
-            .with_context(|| format!("{} has no {key}", layout.server_config().display()))
+            .with_context(|| format!("{} has no {key}", path.display()))
     };
     let keys = existing
         .get("ohttp")
         .and_then(|ohttp| ohttp.get("keys"))
         .cloned()
-        .with_context(|| format!("{} has no [[ohttp.keys]]", layout.server_config().display()))?;
-    let mut table = server_template(dev, layout)?;
+        .with_context(|| format!("{} has no [[ohttp.keys]]", path.display()))?;
+    let mut table = server_template(dev, &data)?;
+    if shape == Shape::Second {
+        make_second_server(&mut table)?;
+    }
     table.insert("registration_codes".to_owned(), kept("registration_codes")?);
     table.insert("push_relays".to_owned(), kept("push_relays")?);
     table_mut(&mut table, "ohttp")?.insert("keys".to_owned(), keys);
@@ -979,7 +1350,7 @@ mod tests {
         let layout = Layout::new(root.clone());
         fs::create_dir_all(layout.config())?;
         // A stack made before [app_links]: its own keys, no such table.
-        let mut old = server_template(&dev, &layout)?;
+        let mut old = server_template(&dev, &layout.data())?;
         old.remove("app_links");
         old.insert(
             "registration_codes".to_owned(),
@@ -992,7 +1363,7 @@ mod tests {
             set_secret(relay, "credential", "kept-credential")?;
         }
         write_secret_file(&layout.server_config(), &with_header(&old))?;
-        let refreshed = refreshed_server_config(&dev, &layout)?;
+        let refreshed = refreshed_server_config(&dev, &layout, Shape::First)?;
         fs::remove_dir_all(&root)?;
         assert!(refreshed.contains("[app_links]"));
         for kept in ["kept-code", "kept-gateway-key", "kept-credential"] {
@@ -1084,6 +1455,166 @@ mod tests {
         ] {
             assert!(text.contains(name), "{name}");
         }
+    }
+
+    fn dev() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../packaging/nodo/dev")
+    }
+
+    fn text<'table>(table: &'table Table, field: &str) -> Option<&'table str> {
+        table.get(field).and_then(Value::as_str)
+    }
+
+    #[test]
+    fn the_second_server_flag_is_an_option() {
+        assert_eq!(
+            StackOptions::parse(&strings(&["--second-server", "--fresh"])),
+            Some(StackOptions {
+                second_server: true,
+                fresh: true,
+                ..StackOptions::default()
+            })
+        );
+    }
+
+    #[test]
+    fn server_b_has_its_own_ports_origin_relay_and_operator() -> Result<()> {
+        let template = parse_template(&dev().join("server.toml"))?;
+        let mut table = template.clone();
+        make_second_server(&mut table)?;
+        assert_eq!(text(&table, "listen"), Some("127.0.0.1:9475"));
+        assert_eq!(text(&table, "server_id"), Some("https://10.0.2.2:9447"));
+        assert_eq!(text(&table, "server_operator"), Some(SECOND_OPERATOR));
+        assert_eq!(
+            table.get("ohttp_relay_urls"),
+            Some(&Value::Array(vec![Value::String(
+                "https://10.0.2.2:9448/ohttp".to_owned()
+            )]))
+        );
+        assert_eq!(
+            table
+                .get("ohttp")
+                .and_then(|ohttp| ohttp.get("listen"))
+                .and_then(Value::as_str),
+            Some("127.0.0.1:9476")
+        );
+        // The publisher's push relay and map host are A's.
+        for field in ["map_host", "push_relays", "registration_codes"] {
+            assert_eq!(table.get(field), template.get(field), "{field}");
+        }
+        // A's ports are not B's.
+        assert_ne!(text(&template, "listen"), text(&table, "listen"));
+        Ok(())
+    }
+
+    #[test]
+    fn server_b_relay_forwards_to_b_gateway() -> Result<()> {
+        let table = second_relay_config(&dev())?.parse::<Table>()?;
+        assert_eq!(text(&table, "listen"), Some("127.0.0.1:9477"));
+        assert_eq!(text(&table, "gateway"), Some("http://127.0.0.1:9476/ohttp"));
+        assert_eq!(
+            text(&table, "gateway_key_config"),
+            Some("http://127.0.0.1:9476/v1/ohttp/config")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_push_relay_allows_server_b_with_its_own_credential() -> Result<()> {
+        let template = fs::read_to_string(dev().join("push-relay.toml"))?;
+        assert!(!has_second_server(&template)?);
+        let once = with_second_server(&template, "first-credential")?;
+        assert!(has_second_server(&once)?);
+        // Again: B's entry is replaced, not repeated; A's stays first.
+        let twice = with_second_server(&once, "second-credential")?;
+        let table = twice.parse::<Table>()?;
+        let servers = table
+            .get("servers")
+            .and_then(Value::as_array)
+            .context("servers")?;
+        let ids: Vec<_> = servers
+            .iter()
+            .filter_map(|server| server.get("server_id").and_then(Value::as_str))
+            .collect();
+        assert_eq!(ids, vec!["local", SECOND_PUSH_SERVER_ID]);
+        assert_eq!(
+            servers
+                .get(1)
+                .and_then(|server| server.get("credential"))
+                .and_then(Value::as_str),
+            Some("second-credential")
+        );
+        // A's credential (the first server's) is unchanged.
+        assert_eq!(*relay_credential(&twice)?, *relay_credential(&template)?);
+        // The keys are kept.
+        assert_eq!(
+            crate::pins::push_relay_pins(&twice)?,
+            crate::pins::push_relay_pins(&template)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn second_server_env_lists_b_values() {
+        let layout = Layout::new(PathBuf::from("/stack"));
+        let text = second_server_env(
+            &layout,
+            "PINGERS_GATEWAY_KEY_PINS=a,b\nPINGERS_PUSH_RELAY_KEY_PINS=c,d\n",
+            "b-code",
+        );
+        for line in [
+            "PINGERS_SERVER_HOST=https://10.0.2.2:9447",
+            "PINGERS_OHTTP_RELAY=https://10.0.2.2:9448/ohttp",
+            "PINGERS_SERVER_OPERATOR=Second server (local)",
+            "PINGERS_PUSH_RELAY=https://10.0.2.2:9445",
+            "PINGERS_MAP_HOST=https://10.0.2.2:9446",
+            "PINGERS_EXTRA_CA=/stack/ca/ca.pem",
+            "PINGERS_GATEWAY_KEY_PINS=a,b",
+            "PINGERS_PUSH_RELAY_KEY_PINS=c,d",
+            "PINGERS_DEV_REGISTRATION_CODE=b-code",
+        ] {
+            assert!(text.lines().any(|candidate| candidate == line), "{line}");
+        }
+    }
+
+    #[test]
+    fn the_front_gains_server_b_sites_and_keeps_a() -> Result<()> {
+        let layout = Layout::new(PathBuf::from("/stack"));
+        let plain = caddy_config(&dev(), &layout)?;
+        let with_b: serde_json::Value = serde_json::from_str(&with_second_server_sites(&plain)?)?;
+        let plain: serde_json::Value = serde_json::from_str(&plain)?;
+        for site in ["server", "ohttp", "push", "maps"] {
+            let pointer = format!("/apps/http/servers/{site}");
+            assert_eq!(with_b.pointer(&pointer), plain.pointer(&pointer), "{site}");
+        }
+        for (site, listen, dial) in [
+            ("second-server", "127.0.0.1:9447", "127.0.0.1:9475"),
+            ("second-ohttp", "127.0.0.1:9448", "127.0.0.1:9477"),
+        ] {
+            let base = format!("/apps/http/servers/{site}");
+            assert_eq!(
+                with_b
+                    .pointer(&format!("{base}/listen/0"))
+                    .and_then(serde_json::Value::as_str),
+                Some(listen)
+            );
+            let routes = with_b
+                .pointer(&format!("{base}/routes"))
+                .and_then(serde_json::Value::as_array)
+                .context("routes")?;
+            let dials: Vec<_> = routes
+                .iter()
+                .filter_map(|route| route.pointer("/handle/0/upstreams/0/dial"))
+                .filter_map(serde_json::Value::as_str)
+                .collect();
+            assert_eq!(dials, vec![dial], "{site}");
+        }
+        // B's server hides its gateway and metrics like A's.
+        assert_eq!(
+            with_b.pointer("/apps/http/servers/second-server/routes/0"),
+            plain.pointer("/apps/http/servers/server/routes/0")
+        );
+        Ok(())
     }
 
     #[test]

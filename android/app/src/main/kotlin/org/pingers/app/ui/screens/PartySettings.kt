@@ -112,7 +112,10 @@ fun PartySettingsScreen(state: PartySettingsView?, repo: PingersRepository, nav:
         Heading(state.operatorsHeading)
         PrivacyBanner(state) { nav.go(Route.Wakeups) }
         Card(Modifier.padding(top = 10.dp)) {
-            ServiceRow(state.server)
+            ServiceRow(state.server) {
+                // How this phone came to trust this Party's server keys.
+                Text(state.keys, style = body(12.sp, color = Pc.Muted), modifier = Modifier.padding(top = 2.dp))
+            }
             RowDivider()
             ServiceRow(state.relay) {
                 state.relayCheck?.let { check ->

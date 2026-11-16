@@ -97,15 +97,8 @@ pub enum SetupLink {
     AlreadySetUp,
     /// The server refused this code (now, or before: then it was not sent again).
     Refused,
-    /// The link is for another server than the app's.
-    OtherServer {
-        /// The app's server.
-        app: Host,
-        /// The link's server.
-        link: Host,
-    },
-    /// The build pins keys and the link's are not among them: an app build made before the
-    /// appliance's pins were copied into it.
+    /// This device pins the server's keys already and the link's are not among them: for the
+    /// app's own server, a build made before the appliance's pins were copied into it.
     BuildKeysDiffer {
         /// The server.
         server: Host,
@@ -143,7 +136,6 @@ impl SetupLink {
             SetupCheck::Ready { server } => Self::Confirm { server },
             SetupCheck::AlreadySetUp => Self::AlreadySetUp,
             SetupCheck::Refused => Self::Refused,
-            SetupCheck::OtherServer { app, link } => Self::OtherServer { app, link },
             SetupCheck::BuildKeysDiffer { server } => Self::BuildKeysDiffer { server },
             // SetupCheck is non-exhaustive: a check this version does not know stops the step.
             _ => Self::Broken,
@@ -157,7 +149,6 @@ impl SetupLink {
             SetupOutcome::SetUp => Self::SetUp,
             SetupOutcome::AlreadySetUp => Self::AlreadySetUp,
             SetupOutcome::Refused => Self::Refused,
-            SetupOutcome::OtherServer { app, link } => Self::OtherServer { app, link },
             SetupOutcome::BuildKeysDiffer { server } => Self::BuildKeysDiffer { server },
             SetupOutcome::ServerKeysDiffer { server } => Self::ServerKeysDiffer { server },
             SetupOutcome::Unreachable { server } => Self::Unreachable { server },
@@ -177,7 +168,6 @@ impl SetupLink {
             Self::SetUp
             | Self::AlreadySetUp
             | Self::Refused
-            | Self::OtherServer { .. }
             | Self::BuildKeysDiffer { .. }
             | Self::ServerKeysDiffer { .. }
             | Self::Broken => Some(SetupLinkAction::Leave),
@@ -246,10 +236,6 @@ mod tests {
             SetupCheck::BuildKeysDiffer {
                 server: server.clone(),
             },
-            SetupCheck::OtherServer {
-                app: server.clone(),
-                link: host("other.example")?,
-            },
         ] {
             let link = SetupLink::checked(stop);
             assert_eq!(link.primary(), Some(SetupLinkAction::Leave), "{link:?}");
@@ -262,20 +248,9 @@ mod tests {
     fn every_check_and_outcome_becomes_its_own_state()
     -> Result<(), pingers_client::snapshot::SnapshotError> {
         let server = host("pingers.example")?;
-        let other = host("other.example")?;
         let checks = [
             (SetupCheck::AlreadySetUp, SetupLink::AlreadySetUp),
             (SetupCheck::Refused, SetupLink::Refused),
-            (
-                SetupCheck::OtherServer {
-                    app: server.clone(),
-                    link: other.clone(),
-                },
-                SetupLink::OtherServer {
-                    app: server.clone(),
-                    link: other.clone(),
-                },
-            ),
             (
                 SetupCheck::BuildKeysDiffer {
                     server: server.clone(),
@@ -292,16 +267,6 @@ mod tests {
             (SetupOutcome::SetUp, SetupLink::SetUp),
             (SetupOutcome::AlreadySetUp, SetupLink::AlreadySetUp),
             (SetupOutcome::Refused, SetupLink::Refused),
-            (
-                SetupOutcome::OtherServer {
-                    app: server.clone(),
-                    link: other.clone(),
-                },
-                SetupLink::OtherServer {
-                    app: server.clone(),
-                    link: other,
-                },
-            ),
             (
                 SetupOutcome::BuildKeysDiffer {
                     server: server.clone(),

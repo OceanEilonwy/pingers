@@ -21,7 +21,6 @@ use pingers_proto::{
 use pingers_store::{TokenKeyId, TokenLedger, UnspentToken};
 use pingers_time::UnixSeconds;
 
-use crate::engine::blocking;
 use crate::{ApiRequest, Route, SyncEngine, SyncError, WakeBudget};
 
 /// The daily limit assumed before the server's parameters have been read (design B.4.8: 300).
@@ -222,16 +221,14 @@ impl SyncEngine {
     ///
     /// [`SyncError::Store`].
     pub async fn token_count(&self) -> Result<u32, SyncError> {
-        blocking(&self.database, |session| {
-            Ok(session.privacy_pass_tokens().count()?)
-        })
-        .await
+        self.blocking(|session| Ok(session.privacy_pass_tokens().count()?))
+            .await
     }
 
     /// The token ledger: the stored one, or a fresh one with the design's limit.
     pub(crate) async fn token_ledger(&self) -> Result<TokenLedger, SyncError> {
         let today = issuance_day(self.now());
-        blocking(&self.database, move |session| {
+        self.blocking(move |session| {
             Ok(session.token_allowance().load()?.unwrap_or(TokenLedger {
                 daily_limit: DEFAULT_DAILY_LIMIT.get(),
                 day: today,
@@ -242,10 +239,8 @@ impl SyncEngine {
     }
 
     async fn save_ledger(&self, ledger: TokenLedger) -> Result<(), SyncError> {
-        blocking(&self.database, move |session| {
-            Ok(session.token_allowance().save(&ledger)?)
-        })
-        .await
+        self.blocking(move |session| Ok(session.token_allowance().save(&ledger)?))
+            .await
     }
 
     /// Records the daily limit the server advertises (`Params.privacy_pass_daily_limit`).
@@ -296,15 +291,16 @@ impl SyncEngine {
                         u16::try_from(tokens.len()).map_err(|_| SyncError::OutOfRange("tokens"))?;
                     let ledger = after_issuance(ledger, today, added);
                     let key_id = issuer.key_id;
-                    let held = blocking(&self.database, move |session| {
-                        session.transaction(|session| {
-                            let repository = session.privacy_pass_tokens();
-                            repository.add(&tokens, &key_id)?;
-                            session.token_allowance().save(&ledger)?;
-                            Ok::<_, SyncError>(repository.count()?)
+                    let held = self
+                        .blocking(move |session| {
+                            session.transaction(|session| {
+                                let repository = session.privacy_pass_tokens();
+                                repository.add(&tokens, &key_id)?;
+                                session.token_allowance().save(&ledger)?;
+                                Ok::<_, SyncError>(repository.count()?)
+                            })
                         })
-                    })
-                    .await?;
+                        .await?;
                     return Ok(Refill::Fetched { added, held });
                 }
                 Issuance::Refused(allowance) => {

@@ -149,6 +149,10 @@ data class NewPartyState(
     val error: String? = null,
     /** The app's own server, or another one typed in. */
     val serverChoice: ServerChoice = ServerChoice.BUILT_IN,
+    /** Another server's key to compare, once looked up, or "Keys trusted". */
+    val keysLine: String? = null,
+    /** "Trust this server's keys", while its keys wait for the user. */
+    val keysTrust: String? = null,
     /** Every word on the screen (pingers-words); null until the core has answered. */
     val text: NewPartyText? = null,
 )

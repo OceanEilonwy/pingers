@@ -15,21 +15,28 @@ use crate::codec::{
     from_int, narrow, read_array, read_optional_array, read_secret, read_secret_blob, read_time,
     time, to_int,
 };
-use crate::{Session, StoreError};
+use crate::server::Scope;
+use crate::{ServerSession, Session, StoreError};
 
-impl Session {
-    /// Anonymous requests waiting for a later wake (`request_queue` table).
+impl ServerSession<'_> {
+    /// Anonymous requests to this server waiting for a later wake (`request_queue` table).
     #[must_use]
     pub fn request_queue(&self) -> RequestQueue<'_> {
-        RequestQueue { session: self }
+        RequestQueue {
+            session: self.scope(),
+        }
     }
 
-    /// The last board upload's lease id and revoke key (`board_upload` table).
+    /// The last upload to this server's board: its lease id and revoke key (`board_upload`).
     #[must_use]
     pub fn board_upload(&self) -> BoardUploads<'_> {
-        BoardUploads { session: self }
+        BoardUploads {
+            session: self.scope(),
+        }
     }
+}
 
+impl Session {
     /// Log positions of group entries this device stored (`own_group_entry` table).
     #[must_use]
     pub fn own_group_entries(&self) -> OwnGroupEntries<'_> {
@@ -123,7 +130,7 @@ pub enum Pushed {
 
 /// Repository for the `request_queue` table: oldest first, bounded by a [`QueueCapacity`].
 pub struct RequestQueue<'session> {
-    session: &'session Session,
+    session: Scope<'session>,
 }
 
 fn queued_from_row(row: &Row<'_>) -> Result<QueuedRequest, StoreError> {
@@ -154,17 +161,19 @@ impl RequestQueue<'_> {
         self.session.transaction(|session| {
             session.with(|connection| {
                 let dropped = connection.execute(
-                    "DELETE FROM request_queue WHERE position NOT IN \
-                     (SELECT position FROM request_queue ORDER BY position DESC LIMIT ?1)",
-                    [kept],
+                    "DELETE FROM request_queue WHERE server_key = ?2 AND position NOT IN \
+                     (SELECT position FROM request_queue WHERE server_key = ?2 \
+                     ORDER BY position DESC LIMIT ?1)",
+                    params![kept, session.key()],
                 )?;
                 connection.execute(
-                    "INSERT INTO request_queue (group_id, keep_until, request) \
-                     VALUES (?1, ?2, ?3)",
+                    "INSERT INTO request_queue (group_id, keep_until, request, server_key) \
+                     VALUES (?1, ?2, ?3, ?4)",
                     params![
                         entry.group.as_ref().map(GroupId::as_bytes),
                         keep_until,
                         entry.request.expose_bytes(),
+                        session.key(),
                     ],
                 )?;
                 Ok(if dropped == 0 {
@@ -187,9 +196,9 @@ impl RequestQueue<'_> {
             connection
                 .query_row(
                     "DELETE FROM request_queue WHERE position = \
-                     (SELECT min(position) FROM request_queue) \
+                     (SELECT min(position) FROM request_queue WHERE server_key = ?1) \
                      RETURNING position, group_id, keep_until, request",
-                    [],
+                    [self.session.key()],
                     |row| Ok(queued_from_row(row)),
                 )
                 .optional()?
@@ -208,13 +217,14 @@ impl RequestQueue<'_> {
         let keep_until = time(entry.keep_until, "request_queue.keep_until")?;
         self.session.with(|connection| {
             connection.execute(
-                "INSERT INTO request_queue (position, group_id, keep_until, request) \
-                 VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO request_queue (position, group_id, keep_until, request, \
+                 server_key) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
                     entry.position,
                     entry.group.as_ref().map(GroupId::as_bytes),
                     keep_until,
                     entry.request.expose_bytes(),
+                    self.session.key(),
                 ],
             )?;
             Ok(())
@@ -229,7 +239,10 @@ impl RequestQueue<'_> {
     pub fn drop_expired(&self, now: UnixSeconds) -> Result<usize, StoreError> {
         let now = time(now, "request_queue.keep_until")?;
         self.session.with(|connection| {
-            Ok(connection.execute("DELETE FROM request_queue WHERE keep_until < ?1", [now])?)
+            Ok(connection.execute(
+                "DELETE FROM request_queue WHERE keep_until < ?1 AND server_key = ?2",
+                params![now, self.session.key()],
+            )?)
         })
     }
 
@@ -240,8 +253,11 @@ impl RequestQueue<'_> {
     /// [`StoreError::Database`] if the query fails.
     pub fn count(&self) -> Result<usize, StoreError> {
         self.session.with(|connection| {
-            let count: i64 =
-                connection.query_row("SELECT count(*) FROM request_queue", [], |row| row.get(0))?;
+            let count: i64 = connection.query_row(
+                "SELECT count(*) FROM request_queue WHERE server_key = ?1",
+                [self.session.key()],
+                |row| row.get(0),
+            )?;
             narrow(count, "request_queue count")
         })
     }
@@ -260,7 +276,7 @@ pub struct LastUpload {
 /// Separate from [`crate::Leases`], which keeps the whole lease with each slot's Spot and
 /// knock mailbox: only pingers-wake knows those, while the upload is pingers-sync's.
 pub struct BoardUploads<'session> {
-    session: &'session Session,
+    session: Scope<'session>,
 }
 
 impl BoardUploads<'_> {
@@ -272,9 +288,13 @@ impl BoardUploads<'_> {
     pub fn remember(&self, upload: &LastUpload) -> Result<(), StoreError> {
         self.session.with(|connection| {
             connection.execute(
-                "INSERT OR REPLACE INTO board_upload (singleton, lease_id, revoke_key) \
-                 VALUES (1, ?1, ?2)",
-                params![upload.lease.as_bytes(), upload.revoke_key.expose_bytes()],
+                "INSERT OR REPLACE INTO board_upload (server_key, lease_id, revoke_key) \
+                 VALUES (?1, ?2, ?3)",
+                params![
+                    self.session.key(),
+                    upload.lease.as_bytes(),
+                    upload.revoke_key.expose_bytes()
+                ],
             )?;
             Ok(())
         })
@@ -288,22 +308,26 @@ impl BoardUploads<'_> {
     pub fn last(&self) -> Result<Option<LastUpload>, StoreError> {
         self.session.with(|connection| {
             connection
-                .query_row("SELECT lease_id, revoke_key FROM board_upload", [], |row| {
-                    Ok((|| {
-                        Ok::<_, StoreError>(LastUpload {
-                            lease: LeaseId::from_bytes(read_array(
-                                row,
-                                0,
-                                "board_upload.lease_id",
-                            )?),
-                            revoke_key: RevokeKey::from_bytes(read_secret(
-                                row,
-                                1,
-                                "board_upload.revoke_key",
-                            )?),
-                        })
-                    })())
-                })
+                .query_row(
+                    "SELECT lease_id, revoke_key FROM board_upload WHERE server_key = ?1",
+                    [self.session.key()],
+                    |row| {
+                        Ok((|| {
+                            Ok::<_, StoreError>(LastUpload {
+                                lease: LeaseId::from_bytes(read_array(
+                                    row,
+                                    0,
+                                    "board_upload.lease_id",
+                                )?),
+                                revoke_key: RevokeKey::from_bytes(read_secret(
+                                    row,
+                                    1,
+                                    "board_upload.revoke_key",
+                                )?),
+                            })
+                        })())
+                    },
+                )
                 .optional()?
                 .transpose()
         })

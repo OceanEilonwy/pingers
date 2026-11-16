@@ -68,7 +68,7 @@ All listeners are on loopback:
 | 9472 | pingers-push-relay (HTTP/1.1) | Caddy, for `push.example.org`; pingers-server |
 | 9473 | pingers-ohttp-relay (h2c) | Caddy, for `ohttp.example.org` |
 | 9474 | pingers-map-host (HTTP/1.1; `POST /ohttp` is its own OHTTP gateway) | Caddy, for `maps.example.org`; pingers-server (map downloads through the relay) |
-| 9475 | pingers, the setup page (HTTP/1.1, only `GET /owner`) | nodo's helper, for the owner; not a web site |
+| 9479 | pingers, the setup page (HTTP/1.1, only `GET /owner`) | nodo's helper, for the owner; not a web site |
 
 ```
 phone ──TLS 1.3, X25519MLKEM768──▶ [router :443] ──▶ nodo Caddy (ACME certificates)
@@ -85,7 +85,7 @@ Firewall, from the manifests and the references between settings: pingers-server
 outbound access at all and reaches only 9472, by referencing the push relay's `server-url`, and
 9474, by referencing the map host's `gateway-url`.
 pingers-ohttp-relay reaches only 9471, by referencing the server's `gateway-url`. Caddy reaches
-only the web upstreams, so it cannot reach 9471 or 9475. pingers (the setup page) reaches 9471
+only the web upstreams, so it cannot reach 9471 or 9479. pingers (the setup page) reaches 9471
 (the gateway's two key configs, by referencing `gateway-key-config-url`), 9472 (the push
 relay's published and next keys, `server-url`) and 9474 (the map catalog, `gateway-url`), and
 has `outbound = "internet"` for its checks of the four public names from the appliance; it
@@ -185,11 +185,13 @@ reaches phones:
   as invite links: the payload (pingers-proto's `SetupPayload`) carries the server, the code and
   both pin sets the appliance computed from its own keys, served key first. The owner scans it
   with the phone's camera; App Links (or the `/j` landing page) open the app on a confirm step,
-  "Set up Pingers on this phone", and the app registers with the code. The app first checks the
-  link: it must name the server the build was made for, and its served pins must be among the
-  build's pins (a build without pins instead checks the gateway key it meets against the link
-  before sending the code, and takes the link's push relay pins as its own). Release builds
-  accept it. A debug build made with `PINGERS_DEV_REGISTRATION_CODE=<code>` still works for
+  "Set up Pingers on this phone", and the app registers with the code on the server the link
+  names, with that server's own account (the app keeps one per server). The app first checks
+  the link: if it knows that server already (the one the build was made for, or one recorded
+  earlier) the link's served pins must be among the pins it keeps; a server it does not know yet
+  (another server, or the build's own in a build without pins) is recorded with the link's
+  pins, as an invite's server is, once the keys it serves match them, and keeps them. Release
+  builds accept it. A debug build made with `PINGERS_DEV_REGISTRATION_CODE=<code>` still works for
   tests.
 - **Everyone else** gets it in the invite link: a phone that registered with a code puts it in
   every invite it makes, and the friend's phone presents it when it opens the link. So the code
@@ -441,7 +443,7 @@ tests, `crates/pingers-e2e`, and the push relay's ntfy script.
    `push-relay.toml`, `relay.toml`, `map-host.toml`. Cut the Melbourne CBD test pack into
    `target/dev-stack/maps` first. Then the setup page,
    `cargo run --release -p pingers-setup -- packaging/nodo/dev/setup.toml`;
-   `curl -s http://127.0.0.1:9475/owner` prints the page as JSON, with the first-phone link of
+   `curl -s http://127.0.0.1:9479/owner` prints the page as JSON, with the first-phone link of
    this stack (its public checks have nothing to reach and say so).
 3. `caddy run --config packaging/nodo/dev/caddy.json` puts Caddy in front exactly as nodo-web
    does (N1): h2c and `flush_interval: -1` for the server (9443) and relay (9444), HTTP/1.1
@@ -459,6 +461,23 @@ tests, `crates/pingers-e2e`, and the push relay's ntfy script.
    in place and never copied; there is no default): create a Party, join by invite, define a Spot, walk both in with
    `adb -s emulator-5554 emu geo fix <lon> <lat>`, and expect the knock, the Meetup with a live
    channel both ways, and chat.
+
+`cargo xtask local-stack` does steps 1 to 3 in one command with fresh keys outside the
+repository, and writes step 4's variables to `<dir>/app.env` (see `xtask/src/stack.rs`).
+
+**Parties on two servers.** `cargo xtask local-stack --second-server` also runs a second
+pingers-server ("server B", operator "Second server (local)") with its own keys, databases and
+its own pingers-ohttp-relay, behind the same TLS front and dev CA: the emulator reaches B at
+`https://10.0.2.2:9447` and its relay at `https://10.0.2.2:9448/ohttp` (B listens on
+127.0.0.1:9475, its gateway on :9476, its relay on :9477). B's `/v1/params` lists its own relay,
+and the same push relay and map host as server A; the push relay allows B with a credential of
+its own. B requires a registration code of its own, so "code required" and "code refused" can be
+tried against it; A is unchanged. B's origin, relay, gateway and push relay pins, CA and code are
+in `<dir>/second-server.env`, under `app.env`'s variable names. `--fresh` regenerates B too. To
+check B by hand: `curl --cacert <dir>/ca/ca.pem https://127.0.0.1:9447/v1/params` answers, and
+`curl -s --cacert <dir>/ca/ca.pem https://127.0.0.1:9448/v1/ohttp/config | openssl dgst -sha256
+-binary | basenc --base64url | tr -d =` prints B's served gateway pin, the first of
+`PINGERS_GATEWAY_KEY_PINS` in `second-server.env`.
 
 **Tier 2: the real packages in nodo's x86-kvm VM** (`scripts/dev-vm.sh up` in a nodo checkout
 with bundles and owner pages): build x86_64 packages, sign a test feed with a throwaway key, copy it into the

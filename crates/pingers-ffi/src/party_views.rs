@@ -71,6 +71,10 @@ pub struct PartySettingsView {
     pub wakeups_link: Option<String>,
     /// The server row.
     pub server: ServiceRowView,
+    /// "Server keys from your invite link": how this phone came to trust them.
+    pub keys: String,
+    /// The same, as a value.
+    pub keys_trusted: crate::servers::KeysTrusted,
     /// The privacy relay row.
     pub relay: ServiceRowView,
     /// "Your server answered through it · 2 min ago", once checked.
@@ -237,6 +241,8 @@ impl Snapshot {
             consequence_bold: consequence.as_ref().map(|it| it.bold.clone()),
             consequence_after: consequence.as_ref().map(|it| it.after.clone()),
             wakeups_link: consequence.and_then(|it| it.wakeups_link),
+            keys: text.keys,
+            keys_trusted: view.keys.into(),
             server: text.server.into(),
             relay: text.relay.into(),
             relay_check_ok: text.relay_check.as_ref().is_some_and(|check| check.ok),

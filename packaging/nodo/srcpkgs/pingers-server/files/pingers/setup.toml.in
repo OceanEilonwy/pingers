@@ -1,7 +1,7 @@
 # The setup page's configuration, rendered by nodo from the settings of pingers and of the four
 # services it references: change them in nodo-tui, not here. The format is
 # crates/pingers-setup/src/config.rs.
-listen = "127.0.0.1:9475"
+listen = "127.0.0.1:9479"
 domain = "$(pingers-push-relay.domain)"
 server_id = "$(pingers-server.server-id)"
 ohttp_relay_url = "$(pingers-server.ohttp-relay-url)"

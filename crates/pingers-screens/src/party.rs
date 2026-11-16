@@ -140,6 +140,22 @@ pub enum ServerChoice {
     Another,
 }
 
+/// Another server's keys on New party: the explicit "Trust this server's keys" step. The
+/// first time this device uses a server not built in, its keys are trusted only once the user
+/// says so; nothing is pinned on first use.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ServerKeys {
+    /// Not looked up yet (nothing typed, or still looking).
+    NotLookedUp,
+    /// Looked up: its gateway key, as a fingerprint to compare, waits for the user.
+    ToTrust {
+        /// The key's fingerprint ("1a2b 3c4d …").
+        fingerprint: String,
+    },
+    /// Trusted, now or before (a server this device already uses).
+    Trusted,
+}
+
 /// New party and Advanced, as filled in so far.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartyDraft {
@@ -153,6 +169,8 @@ pub struct PartyDraft {
     pub built_in: Host,
     /// The server.
     pub server: ServiceDraft,
+    /// Another server's keys; ignored for the app's server, which the build pins.
+    pub server_keys: ServerKeys,
     /// The privacy relay.
     pub relay: ServiceDraft,
     /// The push relay.
@@ -191,9 +209,12 @@ pub struct NewParty {
     pub built_in: Host,
     /// The server, as typed.
     pub server: DraftText,
+    /// Another server's keys, while "Another server" is chosen.
+    pub server_keys: Option<ServerKeys>,
     /// How private the setup is.
     pub privacy: DraftPrivacy,
-    /// Whether "Create party" is enabled: a name, and server and relay reachable.
+    /// Whether "Create party" is enabled: a name, server and relay reachable, and another
+    /// server's keys trusted.
     pub can_create: bool,
 }
 
@@ -251,10 +272,14 @@ pub fn new_party(draft: &PartyDraft, wake_pushes: WakePushes) -> NewParty {
         server_choice: draft.server_choice,
         built_in: draft.built_in.clone(),
         server: draft.server.host.clone(),
+        server_keys: (draft.server_choice == ServerChoice::Another)
+            .then(|| draft.server_keys.clone()),
         privacy: draft_privacy(draft, wake_pushes),
         can_create: draft.name.name().is_some()
             && reachable(&draft.server)
-            && reachable(&draft.relay),
+            && reachable(&draft.relay)
+            && (draft.server_choice == ServerChoice::BuiltIn
+                || draft.server_keys == ServerKeys::Trusted),
     }
 }
 
@@ -434,6 +459,7 @@ mod tests {
                 host: DraftText::new("pingers.flat7.org".into()),
                 check: Reachability::Reachable(operator("Flat 7")?),
             },
+            server_keys: ServerKeys::Trusted,
             relay: ServiceDraft {
                 host: DraftText::new("relay.quietpath.net".into()),
                 check: Reachability::Reachable(operator("Quietpath")?),
@@ -456,6 +482,25 @@ mod tests {
         );
         assert!(screen.can_create);
         assert_eq!(screen.server.as_str(), "pingers.flat7.org");
+        Ok(())
+    }
+
+    #[test]
+    fn another_server_needs_its_keys_trusted_before_create() -> Result<(), ScreenError> {
+        let mut draft = draft()?;
+        draft.server_keys = ServerKeys::ToTrust {
+            fingerprint: "1a2b 3c4d".into(),
+        };
+        let screen = new_party(&draft, WakePushes::On);
+        assert!(!screen.can_create, "keys shown, not yet trusted");
+        assert_eq!(screen.server_keys, Some(draft.server_keys.clone()));
+        draft.server_keys = ServerKeys::NotLookedUp;
+        assert!(!new_party(&draft, WakePushes::On).can_create);
+        // The app's server is pinned by the build: no step, whatever the field holds.
+        draft.server_choice = ServerChoice::BuiltIn;
+        let built_in = new_party(&draft, WakePushes::On);
+        assert!(built_in.can_create);
+        assert_eq!(built_in.server_keys, None);
         Ok(())
     }
 

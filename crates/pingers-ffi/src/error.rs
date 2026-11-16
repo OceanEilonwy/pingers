@@ -39,6 +39,15 @@ pub enum CoreError {
         /// Why.
         reason: String,
     },
+    /// A server could not be used, or asks for a registration code: `issue` says which screen
+    /// to show.
+    #[error("{reason}")]
+    Server {
+        /// Which.
+        issue: crate::servers::ServerIssue,
+        /// What to tell the user, in words.
+        reason: String,
+    },
     /// The chosen server makes accounts only with a registration code ("This server needs a
     /// code"); no Party was created.
     #[error("{reason}")]

@@ -332,6 +332,6 @@ private fun SetupLinkState.look(): Triple<ImageVector, Color, Color> = when (thi
     is SetupLinkState.Confirm, is SetupLinkState.Working -> Triple(PIcons.ShieldCheck, Pc.BlueTint, Pc.BlueDark)
     SetupLinkState.SetUp, SetupLinkState.AlreadySetUp -> Triple(PIcons.Check, Pc.BlueTint, Pc.BlueDark)
     is SetupLinkState.Unreachable -> Triple(PIcons.Signal, Pc.OrangeTint, Pc.OrangeText)
-    SetupLinkState.Refused, is SetupLinkState.OtherServer, is SetupLinkState.BuildKeysDiffer,
+    SetupLinkState.Refused, is SetupLinkState.BuildKeysDiffer,
     is SetupLinkState.ServerKeysDiffer, SetupLinkState.Broken -> Triple(PIcons.AlertCircle, Pc.OrangeTint, Pc.OrangeText)
 }

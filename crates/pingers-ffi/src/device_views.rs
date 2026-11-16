@@ -126,14 +126,8 @@ pub enum SetupLinkState {
     AlreadySetUp,
     /// The server refused this code, now or before (then it was not sent again).
     Refused,
-    /// The link is for another server than the app's; nothing was sent.
-    OtherServer {
-        /// The app's server.
-        app_server: String,
-        /// The link's server.
-        link_server: String,
-    },
-    /// The build pins keys and the link's served keys are not among them; nothing was sent.
+    /// This device pins the server's keys already (the build's, for the app's server) and the
+    /// link's served keys are not among them; nothing was sent.
     BuildKeysDiffer {
         /// The server.
         server: String,
@@ -166,10 +160,6 @@ impl From<screens::setup::SetupLink> for SetupLinkState {
             SetupLink::SetUp => Self::SetUp,
             SetupLink::AlreadySetUp => Self::AlreadySetUp,
             SetupLink::Refused => Self::Refused,
-            SetupLink::OtherServer { app, link } => Self::OtherServer {
-                app_server: name(&app),
-                link_server: name(&link),
-            },
             SetupLink::BuildKeysDiffer { server } => Self::BuildKeysDiffer {
                 server: name(&server),
             },
@@ -201,13 +191,6 @@ impl From<SetupLinkState> for screens::setup::SetupLink {
             SetupLinkState::SetUp => Self::SetUp,
             SetupLinkState::AlreadySetUp => Self::AlreadySetUp,
             SetupLinkState::Refused => Self::Refused,
-            SetupLinkState::OtherServer {
-                app_server,
-                link_server,
-            } => match (host(&app_server), host(&link_server)) {
-                (Some(app), Some(link)) => Self::OtherServer { app, link },
-                _ => Self::Broken,
-            },
             SetupLinkState::BuildKeysDiffer { server: text } => {
                 server(&text, |server| Self::BuildKeysDiffer { server })
             }

@@ -199,6 +199,14 @@ fun NewPartyScreen(state: NewPartyState, repo: PingersRepository, nav: Navigator
                     background = Pc.Card, height = 48.dp, placeholder = text.anotherPlaceholder,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Uri),
                 )
+                // The first time this phone uses a server, its keys are trusted only when you say so.
+                state.keysLine?.let { Text(it, style = body(13.sp, color = Pc.Muted, lineHeight = 1.4f)) }
+                state.keysTrust?.let {
+                    PillButton(
+                        it, { repo.trustServerKeys() }, Modifier.testTag(E2eTags.NEW_PARTY_TRUST_KEYS),
+                        background = Pc.Card, content = Pc.Blue, border = Pc.Handle,
+                    )
+                }
             }
         }
         ServerCard(text.advanced, text.advancedDetail, onClick = { nav.go(Route.Advanced) }, privacy = state.privacy)

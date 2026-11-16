@@ -8,31 +8,42 @@ use rusqlite::{OptionalExtension as _, params};
 use zeroize::Zeroizing;
 
 use crate::codec::{bucket, narrow, read_array, read_secret};
-use crate::{Session, StoreError, TokenKeyId, TreeLevel, TreeNodeHash, TreePosition, UnspentToken};
+use crate::server::Scope;
+use crate::{
+    ServerSession, StoreError, TokenKeyId, TreeLevel, TreeNodeHash, TreePosition, UnspentToken,
+};
 
-impl Session {
-    /// Unspent Privacy Pass tokens, shared with background handlers (`pp_token` table).
+impl ServerSession<'_> {
+    /// Unspent Privacy Pass tokens for this server, shared with background handlers (`pp_token` table).
     #[must_use]
     pub fn privacy_pass_tokens(&self) -> PrivacyPassTokens<'_> {
-        PrivacyPassTokens { session: self }
+        PrivacyPassTokens {
+            session: self.scope(),
+        }
     }
 
     /// This device's RLN identity (`rln_identity` table).
     #[must_use]
     pub fn rln_identity(&self) -> RlnIdentities<'_> {
-        RlnIdentities { session: self }
+        RlnIdentities {
+            session: self.scope(),
+        }
     }
 
     /// RLN message ids spent per scope and bucket (`rln_counter` table).
     #[must_use]
     pub fn rln_counters(&self) -> RlnCounters<'_> {
-        RlnCounters { session: self }
+        RlnCounters {
+            session: self.scope(),
+        }
     }
 
     /// The local copy of the RLN membership tree (`rln_tree_leaf`, `rln_tree_node`).
     #[must_use]
     pub fn rln_tree(&self) -> RlnTree<'_> {
-        RlnTree { session: self }
+        RlnTree {
+            session: self.scope(),
+        }
     }
 }
 
@@ -47,7 +58,7 @@ pub struct HeldToken {
 
 /// Repository for the `pp_token` table.
 pub struct PrivacyPassTokens<'session> {
-    session: &'session Session,
+    session: Scope<'session>,
 }
 
 impl PrivacyPassTokens<'_> {
@@ -59,10 +70,15 @@ impl PrivacyPassTokens<'_> {
     pub fn add(&self, tokens: &[UnspentToken], key_id: &TokenKeyId) -> Result<(), StoreError> {
         self.session.transaction(|session| {
             session.with(|connection| {
-                let mut statement =
-                    connection.prepare("INSERT INTO pp_token (token, key_id) VALUES (?1, ?2)")?;
+                let mut statement = connection.prepare(
+                    "INSERT INTO pp_token (server_key, token, key_id) VALUES (?1, ?2, ?3)",
+                )?;
                 for token in tokens {
-                    statement.execute(params![token.as_bytes(), key_id.as_bytes()])?;
+                    statement.execute(params![
+                        session.key(),
+                        token.as_bytes(),
+                        key_id.as_bytes()
+                    ])?;
                 }
                 Ok(())
             })
@@ -80,8 +96,9 @@ impl PrivacyPassTokens<'_> {
             connection
                 .query_row(
                     "DELETE FROM pp_token WHERE token_id = \
-                     (SELECT min(token_id) FROM pp_token) RETURNING token, key_id",
-                    [],
+                     (SELECT min(token_id) FROM pp_token WHERE server_key = ?1) \
+                     RETURNING token, key_id",
+                    [self.session.key()],
                     |row| {
                         Ok((|| {
                             Ok(HeldToken {
@@ -108,7 +125,11 @@ impl PrivacyPassTokens<'_> {
     pub fn count(&self) -> Result<u32, StoreError> {
         self.session.with(|connection| {
             narrow(
-                connection.query_row("SELECT count(*) FROM pp_token", [], |row| row.get(0))?,
+                connection.query_row(
+                    "SELECT count(*) FROM pp_token WHERE server_key = ?1",
+                    [self.session.key()],
+                    |row| row.get(0),
+                )?,
                 "pp_token count",
             )
         })
@@ -125,9 +146,9 @@ impl PrivacyPassTokens<'_> {
             session.with(|connection| {
                 let mut doomed = Vec::new();
                 {
-                    let mut statement =
-                        connection.prepare("SELECT DISTINCT key_id FROM pp_token")?;
-                    let mut rows = statement.query([])?;
+                    let mut statement = connection
+                        .prepare("SELECT DISTINCT key_id FROM pp_token WHERE server_key = ?1")?;
+                    let mut rows = statement.query([session.key()])?;
                     while let Some(row) = rows.next()? {
                         let held: Vec<u8> = row.get(0)?;
                         if !keys
@@ -140,9 +161,10 @@ impl PrivacyPassTokens<'_> {
                 }
                 let mut deleted = 0_usize;
                 for key in doomed {
-                    deleted = deleted.saturating_add(
-                        connection.execute("DELETE FROM pp_token WHERE key_id = ?1", [key])?,
-                    );
+                    deleted = deleted.saturating_add(connection.execute(
+                        "DELETE FROM pp_token WHERE key_id = ?1 AND server_key = ?2",
+                        params![key, session.key()],
+                    )?);
                 }
                 Ok(deleted)
             })
@@ -157,8 +179,8 @@ impl PrivacyPassTokens<'_> {
     pub fn delete_for_key(&self, key_id: &TokenKeyId) -> Result<usize, StoreError> {
         self.session.with(|connection| {
             Ok(connection.execute(
-                "DELETE FROM pp_token WHERE key_id = ?1",
-                [key_id.as_bytes()],
+                "DELETE FROM pp_token WHERE key_id = ?1 AND server_key = ?2",
+                params![key_id.as_bytes(), self.session.key()],
             )?)
         })
     }
@@ -176,7 +198,7 @@ pub struct RlnIdentity {
 
 /// Repository for the `rln_identity` table: one row.
 pub struct RlnIdentities<'session> {
-    session: &'session Session,
+    session: Scope<'session>,
 }
 
 /// The stored columns, before the secret is validated by pingers-anon.
@@ -223,9 +245,14 @@ impl RlnIdentities<'_> {
     fn save_row(&self, row: &RlnIdentityRow) -> Result<(), StoreError> {
         self.session.with(|connection| {
             connection.execute(
-                "INSERT OR REPLACE INTO rln_identity (singleton, sk, leaf_idx, \
-                 live_from_root_epoch) VALUES (1, ?1, ?2, ?3)",
-                params![row.secret.as_slice(), row.leaf.get(), row.live_from.get(),],
+                "INSERT OR REPLACE INTO rln_identity (server_key, sk, leaf_idx, \
+                 live_from_root_epoch) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    self.session.key(),
+                    row.secret.as_slice(),
+                    row.leaf.get(),
+                    row.live_from.get(),
+                ],
             )?;
             Ok(())
         })
@@ -235,8 +262,9 @@ impl RlnIdentities<'_> {
         self.session.with(|connection| {
             connection
                 .query_row(
-                    "SELECT sk, leaf_idx, live_from_root_epoch FROM rln_identity",
-                    [],
+                    "SELECT sk, leaf_idx, live_from_root_epoch FROM rln_identity \
+                     WHERE server_key = ?1",
+                    [self.session.key()],
                     |row| {
                         Ok((|| {
                             Ok(RlnIdentityRow {
@@ -261,7 +289,7 @@ impl RlnIdentities<'_> {
 
 /// Repository for the `rln_counter` table.
 pub struct RlnCounters<'session> {
-    session: &'session Session,
+    session: Scope<'session>,
 }
 
 impl RlnCounters<'_> {
@@ -279,8 +307,9 @@ impl RlnCounters<'_> {
                 let bucket_index = bucket(at, "rln_counter.bucket")?;
                 let next: u8 = connection
                     .query_row(
-                        "SELECT next_message_id FROM rln_counter WHERE scope = ?1 AND bucket = ?2",
-                        params![scope.to_wire(), bucket_index],
+                        "SELECT next_message_id FROM rln_counter \
+                         WHERE scope = ?1 AND bucket = ?2 AND server_key = ?3",
+                        params![scope.to_wire(), bucket_index, session.key()],
                         |row| row.get::<_, i64>(0),
                     )
                     .optional()?
@@ -289,12 +318,13 @@ impl RlnCounters<'_> {
                     return Ok(None);
                 };
                 connection.execute(
-                    "INSERT OR REPLACE INTO rln_counter (scope, bucket, next_message_id) \
-                     VALUES (?1, ?2, ?3)",
+                    "INSERT OR REPLACE INTO rln_counter (scope, bucket, next_message_id, \
+                     server_key) VALUES (?1, ?2, ?3, ?4)",
                     params![
                         scope.to_wire(),
                         bucket_index,
-                        next.saturating_add(1).min(MESSAGE_LIMIT)
+                        next.saturating_add(1).min(MESSAGE_LIMIT),
+                        session.key()
                     ],
                 )?;
                 Ok(Some(id))
@@ -310,8 +340,11 @@ impl RlnCounters<'_> {
     pub fn delete_before(&self, oldest_kept: Bucket) -> Result<usize, StoreError> {
         self.session.with(|connection| {
             Ok(connection.execute(
-                "DELETE FROM rln_counter WHERE bucket < ?1",
-                [bucket(oldest_kept, "rln_counter.bucket")?],
+                "DELETE FROM rln_counter WHERE bucket < ?1 AND server_key = ?2",
+                params![
+                    bucket(oldest_kept, "rln_counter.bucket")?,
+                    self.session.key()
+                ],
             )?)
         })
     }
@@ -328,7 +361,7 @@ pub struct TreeLeaf {
 
 /// Repository for the RLN tree tables: the leaf log and cached interior nodes.
 pub struct RlnTree<'session> {
-    session: &'session Session,
+    session: Scope<'session>,
 }
 
 impl RlnTree<'_> {
@@ -340,8 +373,13 @@ impl RlnTree<'_> {
     pub fn set_leaf(&self, leaf: &TreeLeaf) -> Result<(), StoreError> {
         self.session.with(|connection| {
             connection.execute(
-                "INSERT OR REPLACE INTO rln_tree_leaf (position, value) VALUES (?1, ?2)",
-                params![leaf.position.get(), leaf.value.as_bytes()],
+                "INSERT OR REPLACE INTO rln_tree_leaf (server_key, position, value) \
+                 VALUES (?1, ?2, ?3)",
+                params![
+                    self.session.key(),
+                    leaf.position.get(),
+                    leaf.value.as_bytes()
+                ],
             )?;
             Ok(())
         })
@@ -354,9 +392,11 @@ impl RlnTree<'_> {
     /// [`StoreError::Corrupt`] if a stored value does not decode.
     pub fn leaves(&self) -> Result<Vec<TreeLeaf>, StoreError> {
         self.session.with(|connection| {
-            let mut statement = connection
-                .prepare("SELECT position, value FROM rln_tree_leaf ORDER BY position")?;
-            let rows = statement.query_map([], |row| {
+            let mut statement = connection.prepare(
+                "SELECT position, value FROM rln_tree_leaf WHERE server_key = ?1 \
+                 ORDER BY position",
+            )?;
+            let rows = statement.query_map([self.session.key()], |row| {
                 Ok((|| {
                     Ok(TreeLeaf {
                         position: TreePosition::new(narrow(row.get(0)?, "rln_tree_leaf.position")?),
@@ -374,13 +414,18 @@ impl RlnTree<'_> {
     ///
     /// [`StoreError::Database`] if a write fails; then none is kept.
     pub fn set_leaves(&self, leaves: &[TreeLeaf]) -> Result<(), StoreError> {
-        self.session.transaction(|session| {
-            session.with(|connection| {
+        self.session.transaction(|scope| {
+            scope.with(|connection| {
                 let mut statement = connection.prepare(
-                    "INSERT OR REPLACE INTO rln_tree_leaf (position, value) VALUES (?1, ?2)",
+                    "INSERT OR REPLACE INTO rln_tree_leaf (server_key, position, value) \
+                     VALUES (?1, ?2, ?3)",
                 )?;
                 for leaf in leaves {
-                    statement.execute(params![leaf.position.get(), leaf.value.as_bytes()])?;
+                    statement.execute(params![
+                        scope.key(),
+                        leaf.position.get(),
+                        leaf.value.as_bytes()
+                    ])?;
                 }
                 Ok(())
             })
@@ -395,7 +440,11 @@ impl RlnTree<'_> {
     pub fn leaf_count(&self) -> Result<u32, StoreError> {
         self.session.with(|connection| {
             narrow(
-                connection.query_row("SELECT count(*) FROM rln_tree_leaf", [], |row| row.get(0))?,
+                connection.query_row(
+                    "SELECT count(*) FROM rln_tree_leaf WHERE server_key = ?1",
+                    [self.session.key()],
+                    |row| row.get(0),
+                )?,
                 "rln_tree_leaf count",
             )
         })
@@ -410,8 +459,8 @@ impl RlnTree<'_> {
         self.session.with(|connection| {
             connection
                 .query_row(
-                    "SELECT value FROM rln_tree_leaf WHERE position = ?1",
-                    [position.get()],
+                    "SELECT value FROM rln_tree_leaf WHERE server_key = ?1 AND position = ?2",
+                    params![self.session.key(), position.get()],
                     |row| Ok(read_array(row, 0, "rln_tree_leaf.value").map(LeafValue::from_bytes)),
                 )
                 .optional()?
@@ -426,7 +475,14 @@ impl RlnTree<'_> {
     /// [`StoreError::Database`] if the delete fails.
     pub fn clear(&self) -> Result<(), StoreError> {
         self.session.with(|connection| {
-            connection.execute_batch("DELETE FROM rln_tree_leaf; DELETE FROM rln_tree_node;")?;
+            connection.execute(
+                "DELETE FROM rln_tree_leaf WHERE server_key = ?1",
+                [self.session.key()],
+            )?;
+            connection.execute(
+                "DELETE FROM rln_tree_node WHERE server_key = ?1",
+                [self.session.key()],
+            )?;
             Ok(())
         })
     }
@@ -444,8 +500,14 @@ impl RlnTree<'_> {
     ) -> Result<(), StoreError> {
         self.session.with(|connection| {
             connection.execute(
-                "INSERT OR REPLACE INTO rln_tree_node (level, position, value) VALUES (?1, ?2, ?3)",
-                params![level.get(), position.get(), hash.as_bytes()],
+                "INSERT OR REPLACE INTO rln_tree_node (server_key, level, position, value) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    self.session.key(),
+                    level.get(),
+                    position.get(),
+                    hash.as_bytes()
+                ],
             )?;
             Ok(())
         })
@@ -464,8 +526,9 @@ impl RlnTree<'_> {
         self.session.with(|connection| {
             connection
                 .query_row(
-                    "SELECT value FROM rln_tree_node WHERE level = ?1 AND position = ?2",
-                    params![level.get(), position.get()],
+                    "SELECT value FROM rln_tree_node \
+                     WHERE level = ?1 AND position = ?2 AND server_key = ?3",
+                    params![level.get(), position.get(), self.session.key()],
                     |row| {
                         Ok(read_array(row, 0, "rln_tree_node.value").map(TreeNodeHash::from_bytes))
                     },
@@ -482,7 +545,10 @@ impl RlnTree<'_> {
     /// [`StoreError::Database`] if the delete fails.
     pub fn clear_nodes(&self) -> Result<(), StoreError> {
         self.session.with(|connection| {
-            connection.execute("DELETE FROM rln_tree_node", [])?;
+            connection.execute(
+                "DELETE FROM rln_tree_node WHERE server_key = ?1",
+                [self.session.key()],
+            )?;
             Ok(())
         })
     }
@@ -502,7 +568,8 @@ mod tests {
     #[test]
     fn tokens_are_taken_oldest_first_and_only_once() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let tokens = fixture.session.privacy_pass_tokens();
+        let server = fixture.server()?;
+        let tokens = server.privacy_pass_tokens();
         let old_key = TokenKeyId::from_bytes([1; 32]);
         let new_key = TokenKeyId::from_bytes([2; 32]);
         assert_eq!(tokens.take()?, None);
@@ -526,7 +593,8 @@ mod tests {
     #[test]
     fn only_tokens_of_listed_keys_are_kept() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let tokens = fixture.session.privacy_pass_tokens();
+        let server = fixture.server()?;
+        let tokens = server.privacy_pass_tokens();
         let retired = TokenKeyId::from_bytes([1; 32]);
         let current = TokenKeyId::from_bytes([2; 32]);
         let next = TokenKeyId::from_bytes([3; 32]);
@@ -545,7 +613,8 @@ mod tests {
     #[test]
     fn rln_identity_round_trips_through_pingers_anon() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let identities = fixture.session.rln_identity();
+        let server = fixture.server()?;
+        let identities = server.rln_identity();
         identities.save(&RlnIdentity {
             secret: RlnSecret::from_bytes(Zeroizing::new([6; 32]))?,
             leaf: TreePosition::new(12),
@@ -563,7 +632,8 @@ mod tests {
     #[test]
     fn a_stored_secret_pingers_anon_rejects_is_corrupt() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let identities = fixture.session.rln_identity();
+        let server = fixture.server()?;
+        let identities = server.rln_identity();
         // 0xff..ff is not a canonical BN254 scalar.
         identities.save_row(&RlnIdentityRow {
             secret: Zeroizing::new([0xff; 32]),
@@ -582,7 +652,8 @@ mod tests {
     #[test]
     fn rln_identity_columns_round_trip() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let identities = fixture.session.rln_identity();
+        let server = fixture.server()?;
+        let identities = server.rln_identity();
         assert!(identities.load_row()?.is_none());
         assert!(identities.load()?.is_none());
         identities.save_row(&RlnIdentityRow {
@@ -608,7 +679,8 @@ mod tests {
     #[test]
     fn a_stored_root_epoch_beyond_the_wire_range_is_corrupt() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let identities = fixture.session.rln_identity();
+        let server = fixture.server()?;
+        let identities = server.rln_identity();
         identities.save_row(&RlnIdentityRow {
             secret: Zeroizing::new([6; 32]),
             leaf: TreePosition::new(12),
@@ -637,7 +709,8 @@ mod tests {
     #[test]
     fn message_ids_are_reserved_once_per_scope_and_bucket() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let counters = fixture.session.rln_counters();
+        let server = fixture.server()?;
+        let counters = server.rln_counters();
         let now = Bucket::from_index(100).map_err(|_| StoreError::Busy)?;
         let next = Bucket::from_index(101).map_err(|_| StoreError::Busy)?;
         let mut reserved = Vec::new();
@@ -665,7 +738,8 @@ mod tests {
     #[test]
     fn tree_leaves_and_nodes_round_trip() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let tree = fixture.session.rln_tree();
+        let server = fixture.server()?;
+        let tree = server.rln_tree();
         let second = TreeLeaf {
             position: TreePosition::new(2),
             value: LeafValue::from_bytes([2; 32]),
@@ -699,7 +773,8 @@ mod tests {
     #[test]
     fn leaves_are_set_in_pages_counted_and_cleared() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let tree = fixture.session.rln_tree();
+        let server = fixture.server()?;
+        let tree = server.rln_tree();
         let page: Vec<TreeLeaf> = (0..5_u8)
             .map(|fill| TreeLeaf {
                 position: TreePosition::new(u32::from(fill)),

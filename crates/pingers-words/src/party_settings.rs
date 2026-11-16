@@ -9,7 +9,7 @@ use pingers_screens::party::Overlap;
 use pingers_screens::party_settings::{
     LeaveParty, PartySettings, SafetyCodes, ServiceRow, SharedOperator,
 };
-use pingers_screens::snapshot::{PostQuantum, RelayStatus, SafetyCheck};
+use pingers_screens::snapshot::{KeyTrust, PostQuantum, RelayStatus, SafetyCheck};
 use pingers_time::UnixSeconds;
 
 use crate::Language;
@@ -74,6 +74,8 @@ pub struct PartySettingsText {
     pub consequence: Option<ConsequenceText>,
     /// The server row.
     pub server: ServiceRowText,
+    /// How this phone came to trust the server's keys: "Server keys from your invite link".
+    pub keys: String,
     /// The privacy relay row.
     pub relay: ServiceRowText,
     /// The relay check, once run.
@@ -209,6 +211,17 @@ fn relay_check(
     })
 }
 
+/// How this phone came to trust a Party's server keys, under its server row.
+#[must_use]
+pub fn keys(language: Language, trust: KeyTrust) -> String {
+    let Language::English = language;
+    match trust {
+        KeyTrust::BuiltIn => "Server keys built into the app".into(),
+        KeyTrust::FromInvite => "Server keys from your invite link".into(),
+        KeyTrust::Confirmed => "Server keys you checked and trusted".into(),
+    }
+}
+
 /// The Party settings screen, in words. `now` dates the relay check.
 #[must_use]
 pub fn party_settings(
@@ -246,6 +259,7 @@ pub fn party_settings(
             PrivacyLevel::Full => None,
             PrivacyLevel::Reduced => consequence(language, view, server_operator),
         },
+        keys: keys(language, view.keys),
         server: ServiceRowText {
             title: "Server".into(),
             detail: host(&view.server),
@@ -470,6 +484,22 @@ mod tests {
 
     const EN: Language = Language::English;
     const NOW: UnixSeconds = UnixSeconds::new(10_000);
+
+    #[test]
+    fn each_way_of_trusting_server_keys_has_its_own_words() {
+        let mut seen = vec![
+            keys(EN, KeyTrust::BuiltIn),
+            keys(EN, KeyTrust::FromInvite),
+            keys(EN, KeyTrust::Confirmed),
+        ];
+        assert_eq!(
+            seen.first().map(String::as_str),
+            Some("Server keys built into the app")
+        );
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), 3);
+    }
 
     #[test]
     fn three_operators_read_like_the_canvas() -> Result<(), FixtureError> {

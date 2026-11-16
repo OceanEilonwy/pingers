@@ -23,10 +23,10 @@ use crate::common::{Host, Me, Name, Operator, PartyColour};
 use crate::snapshot::{
     ChatEntry, ChatMessage, ChatReply, ClientSnapshot, DailyWindow, Days, EndedMeetup,
     ExclusionZone, HideTrail, Hosting, Invite, InviteLink, InviteStatus, InviteUrl, JoinRequest,
-    Joining, LocationRequest, MeetPlace, MeetPointSnapshot, Meetup, MeetupPeer, MeetupSelf, Member,
-    OwnPosition, Party, PartyConfig, PauseInFocus, PeerAccess, PostQuantum, PushRelay,
-    PushRelayKind, QuietHoursPreference, RelayStatus, SafetyCheck, SafetyCode, Service, Settings,
-    Spot, Toggle, WakePushes, ZoneId, ZoneParties, ZoneSchedule, ZoneTimes,
+    Joining, KeyTrust, LocationRequest, MeetPlace, MeetPointSnapshot, Meetup, MeetupPeer,
+    MeetupSelf, Member, OwnPosition, Party, PartyConfig, PauseInFocus, PeerAccess, PostQuantum,
+    PushRelay, PushRelayKind, QuietHoursPreference, RelayStatus, SafetyCheck, SafetyCode, Service,
+    Settings, Spot, Toggle, WakePushes, ZoneId, ZoneParties, ZoneSchedule, ZoneTimes,
 };
 
 /// Why a fixture could not be built (it always can; the constructors are fallible).
@@ -232,10 +232,14 @@ fn circle(center: Coordinate, radius: u32) -> Result<Fence, GeoError> {
 /// Never in practice.
 pub fn full_privacy_config() -> Result<PartyConfig, ScreenError> {
     Ok(PartyConfig {
+        origin: pingers_proto::ServerId::new("https://pingers.flat7.org".to_owned())
+            .map_err(|_invalid| ScreenError::InvalidHost)?,
         server: Service {
             host: Host::new("pingers.flat7.org")?,
             operator: Some(Operator::new("Flat 7")?),
         },
+        relay_status: RelayStatus::Reachable,
+        keys: KeyTrust::Confirmed,
         hosting: Hosting::SelfHosted,
         relay: Service {
             host: Host::new("relay.quietpath.net")?,

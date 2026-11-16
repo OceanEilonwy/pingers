@@ -84,12 +84,6 @@ fn the_setup_link_step_says_what_its_buttons_do() {
         server: "pingers.example.org".into(),
     });
     assert_eq!(offline.action, Some(SetupLinkAction::TryAgain));
-    let other = setup_link_view(SetupLinkState::OtherServer {
-        app_server: "pingers.example.org".into(),
-        link_server: "friends.example".into(),
-    });
-    assert!(other.body.contains("friends.example"));
-    assert_eq!(other.action, Some(SetupLinkAction::Leave));
     assert_eq!(
         setup_link_view(SetupLinkState::SetUp).primary.as_deref(),
         Some("Continue")

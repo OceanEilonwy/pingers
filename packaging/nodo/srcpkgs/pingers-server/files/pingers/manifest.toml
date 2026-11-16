@@ -10,7 +10,7 @@ version = "@VERSION@"
 exec = ["bin/pingers"]
 settings = "settings.lua"
 stop_timeout_secs = 10
-health = { tcp = { port = 9475 } }
+health = { tcp = { port = 9479 } }
 
 [config]
 template = "setup.toml.in"
@@ -25,13 +25,13 @@ outbound = "internet"
 
 # The setup page, for nodo's helper only: not a web site, and no other app references it.
 [[network.inbound]]
-port = 9475
+port = 9479
 protocol = "tcp"
 scope = "local"
 
 [owner_page]
 title = "Setup"
-url = "http://127.0.0.1:9475/owner"
+url = "http://127.0.0.1:9479/owner"
 
 [bundle]
 # Installed in this order, each before what references it, then pingers itself.

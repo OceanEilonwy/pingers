@@ -16,8 +16,8 @@ use pingers_gate::{FocusState, GateDecision, LocationSharing, PauseState};
 use pingers_geo::{Fence, Fix};
 use pingers_meetup::{ExactLocation, LocationAnswer, LocationVisibility, MeetPointDraft};
 use pingers_proto::{
-    ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, PartyId, PushHandle,
-    SecretText, SetupPayload, SpotId,
+    ChatBody, ChatMessageId, GroupId, KeyConfigHash, LeafIndex, LocationRequestId, MailboxId,
+    PartyId, PushHandle, SecretText, ServerId, SetupPayload, SpotId,
 };
 
 use crate::snapshot::{
@@ -45,6 +45,10 @@ pub struct Crates {
 /// A new Party (New party screen, Advanced).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartyDraft {
+    /// The server it lives on: `None` for the app's built-in server, or one this device
+    /// knows (from an invite, or looked at and trusted with `probe_server` and
+    /// `trust_server`).
+    pub server: Option<ServerId>,
     /// The Party's name.
     pub name: Name,
     /// The name this device's user goes by in it.
@@ -53,6 +57,35 @@ pub struct PartyDraft {
     pub colour: PartyColour,
     /// Whether it uses the X-Wing suite.
     pub post_quantum: PostQuantum,
+}
+
+/// What looking at a server found, for the user to decide whether to trust its keys (New
+/// party with another server).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerProbe {
+    /// The server.
+    pub server: ServerId,
+    /// Who it declares runs it, if it declares anyone.
+    pub operator: Option<crate::snapshot::Operator>,
+    /// The privacy relay it advertises, which answered.
+    pub relay: crate::snapshot::Host,
+    /// The push relay its wake-up pushes would go through, if any answered.
+    pub push_relay: Option<ProbedPushRelay>,
+    /// The hash of the gateway key it serves: what trusting it pins.
+    pub gateway_key: KeyConfigHash,
+    /// This device already knows (and trusts) the server; nothing needs confirming.
+    pub known: bool,
+}
+
+/// A server's push relay as looked at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProbedPushRelay {
+    /// Where it is.
+    pub host: crate::snapshot::Host,
+    /// Who it declares runs it.
+    pub operator: Option<crate::snapshot::Operator>,
+    /// The hash of its key: what trusting the server pins for it.
+    pub key: KeyConfigHash,
 }
 
 /// A Spot to create (no id) or replace (its id).
@@ -71,28 +104,22 @@ pub struct SpotDraft {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SetupCheck {
-    /// The link is for this app's server, its keys are the build's (or the build pins on first
-    /// use), and this device has no account yet: ask before using it.
+    /// This device has no account on the link's server yet, and keeps no pins for it that the
+    /// link's keys differ from: ask before using it.
     Ready {
         /// The server the account would be made on.
         server: Host,
     },
-    /// This device has its account already; the link's code is not needed.
+    /// This device has its account on the link's server already; the link's code is not needed.
     AlreadySetUp,
     /// The server refused this very code before: it is not sent again. A link with another
     /// code is.
     Refused,
-    /// The link is for a server other than the one this app is built for.
-    OtherServer {
-        /// The app's server.
-        app: Host,
-        /// The link's server.
-        link: Host,
-    },
-    /// The build pins keys, and the link's served gateway or push relay key is not among them:
-    /// this build was made before the appliance's pins were copied into it.
+    /// This device pins the link's server already (the build's pins, or ones recorded earlier),
+    /// and the link's served gateway or push relay key is not among them: for the built-in
+    /// server, this build was made before the appliance's pins were copied into it.
     BuildKeysDiffer {
-        /// The server, which is the app's.
+        /// The link's server.
         server: Host,
     },
 }
@@ -104,25 +131,18 @@ pub enum SetupOutcome {
     /// The account was made with the link's code; credentials were prepared as far as the
     /// network allowed.
     SetUp,
-    /// This device has its account already; nothing was offered.
+    /// This device has its account on the link's server already; nothing was offered.
     AlreadySetUp,
     /// The server refused the code, now or before. It is recorded and not tried again: only a
     /// link with another code is.
     Refused,
-    /// As [`SetupCheck::OtherServer`]: nothing was sent.
-    OtherServer {
-        /// The app's server.
-        app: Host,
-        /// The link's server.
-        link: Host,
-    },
     /// As [`SetupCheck::BuildKeysDiffer`]: nothing was sent.
     BuildKeysDiffer {
         /// The server.
         server: Host,
     },
-    /// The gateway key the relay served is not one of the link's (a build without pins), or
-    /// not one of the build's: the code was not sent.
+    /// The gateway key the relay served is not one of the link's (a server this device did not
+    /// know), or not one of the pins it keeps: the code was not sent.
     ServerKeysDiffer {
         /// The server.
         server: Host,
@@ -422,18 +442,25 @@ pub trait SyncPort: Send + Sync {
     /// configured it answers [`RelayStatus::Unreachable`] without sending anything. The answer
     /// is only the status, with no host, address, timing or server text in it.
     async fn check_reachability(&self) -> Result<RelayStatus, ClientError>;
-    /// Offers a registration code the user typed (New party, "This server needs a code"), and
-    /// registers this device's account with it if it has none yet.
-    ///
-    /// Errors with `ClientError::RegistrationRefused` if the server refused the account.
-    async fn register_with_code(&self, code: SecretText) -> Result<(), ClientError>;
-    /// What a first-phone setup link is to this device (its server, the build's pins, the
-    /// account), read from the instance and the store: nothing is sent.
+    /// Looks at the server at `address` (a host or an `https://` origin): its operator,
+    /// relays and keys. Nothing is recorded.
+    async fn probe_server(&self, address: String) -> Result<ServerProbe, ClientError>;
+    /// Trusts the keys of a server looked at with `probe_server`: the one place a server's
+    /// pins are first recorded.
+    async fn trust_server(&self, server: ServerId) -> Result<(), ClientError>;
+    /// Offers the registration code the user typed for `server` and registers with it.
+    async fn submit_registration_code(
+        &self,
+        server: Option<ServerId>,
+        code: SecretText,
+    ) -> Result<(), ClientError>;
+    /// What a first-phone setup link is to this device (its account on the link's server and the
+    /// pins it keeps for that server), read from the store: nothing is sent.
     async fn check_setup_link(&self, link: &SetupPayload) -> Result<SetupCheck, ClientError>;
-    /// Uses a first-phone setup link: checks it as [`SyncPort::check_setup_link`] does and, in
-    /// a build without gateway pins, the gateway key the relay serves against the link's pins;
-    /// seeds the push relay's first-use pins from it; then offers its code and registers.
-    /// Nothing is sent with the code unless every check passed.
+    /// Uses a first-phone setup link: checks it as [`SyncPort::check_setup_link`] does; records
+    /// the link's server with its pins if this device does not know it (the keys it serves must
+    /// match them); then offers its code and registers on that server. Nothing is sent with the
+    /// code unless every check passed.
     async fn use_setup_link(&self, link: SetupPayload) -> Result<SetupOutcome, ClientError>;
     /// The server status.
     async fn section(&self) -> Result<ServerSection, ClientError>;

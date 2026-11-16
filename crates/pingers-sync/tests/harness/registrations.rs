@@ -174,7 +174,8 @@ async fn subscriptions_are_added_resealed_cleared_and_forgotten() -> TestResult 
     assert_eq!(step(&device, &groups).await?, Maintained::SubscriptionAdded);
     assert!(matches!(step(&device, &groups).await?, Maintained::Pool(_)));
     let added = device
-        .session()?
+        .scoped()?
+        .server()?
         .subscriptions()
         .get(&GROUP)?
         .ok_or(TestError::Unexpected("not recorded"))?;
@@ -189,7 +190,8 @@ async fn subscriptions_are_added_resealed_cleared_and_forgotten() -> TestResult 
         Maintained::SubscriptionResealed
     );
     let resealed = device
-        .session()?
+        .scoped()?
+        .server()?
         .subscriptions()
         .get(&GROUP)?
         .ok_or(TestError::Unexpected("not recorded"))?;
@@ -217,7 +219,14 @@ async fn subscriptions_are_added_resealed_cleared_and_forgotten() -> TestResult 
     // A group this device left: its subscription is forgotten without a request.
     let seen = device.link.seen().len();
     assert_eq!(step(&device, &[]).await?, Maintained::MailboxResealed);
-    assert!(device.session()?.subscriptions().get(&GROUP)?.is_none());
+    assert!(
+        device
+            .scoped()?
+            .server()?
+            .subscriptions()
+            .get(&GROUP)?
+            .is_none()
+    );
     assert_eq!(device.link.seen().len(), seen.saturating_add(1));
     Ok(())
 }
@@ -329,7 +338,8 @@ async fn a_mailbox_the_server_forgot_is_forgotten_instead_of_tried_again() -> Te
         .await?
         .ok_or(TestError::Unexpected("no pooled mailbox"))?;
     let stored = device
-        .session()?
+        .scoped()?
+        .server()?
         .mailboxes()
         .get(&mailbox)?
         .ok_or(TestError::Unexpected("not stored"))?;
@@ -349,7 +359,14 @@ async fn a_mailbox_the_server_forgot_is_forgotten_instead_of_tried_again() -> Te
     // The empty pool comes first; then the forgotten mailbox, once.
     assert!(matches!(step(&device, &[]).await?, Maintained::Pool(_)));
     assert_eq!(step(&device, &[]).await?, Maintained::Forgotten);
-    assert!(device.session()?.mailboxes().get(&mailbox)?.is_none());
+    assert!(
+        device
+            .scoped()?
+            .server()?
+            .mailboxes()
+            .get(&mailbox)?
+            .is_none()
+    );
     assert_eq!(step(&device, &[]).await?, Maintained::UpToDate);
     Ok(())
 }

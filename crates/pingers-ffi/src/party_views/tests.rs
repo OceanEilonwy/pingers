@@ -77,6 +77,7 @@ fn leaving_and_the_code_screen_convert() -> Result<(), CoreError> {
                 operator: "Pingers".into(),
             },
         },
+        server_keys: crate::views::ServerKeysDraft::NotLookedUp,
         relay: ServiceDraft {
             host: "server.pingers.org".into(),
             check: Reachability::Checking,

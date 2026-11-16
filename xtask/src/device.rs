@@ -114,7 +114,16 @@ impl Device {
     pub(crate) fn wait_for(&self, find: &Find, timeout: Duration) -> Result<Node> {
         let deadline = Deadline::after(timeout);
         loop {
-            let screen = self.screen()?;
+            // A dump fails while the screen animates (a progress indicator, a sheet sliding in):
+            // that is a reason to look again, not to give up, until the deadline.
+            let screen = match self.screen() {
+                Ok(screen) => screen,
+                Err(error) if deadline.passed() => return Err(error),
+                Err(_animating) => {
+                    pause(POLL);
+                    continue;
+                }
+            };
             if let Some(node) = screen.find(find) {
                 return Ok(node.clone());
             }

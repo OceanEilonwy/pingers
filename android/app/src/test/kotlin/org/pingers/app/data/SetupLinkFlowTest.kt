@@ -86,7 +86,6 @@ class SetupLinkFlowTest {
         for (stop in listOf(
             SetupLinkState.AlreadySetUp,
             SetupLinkState.Refused,
-            SetupLinkState.OtherServer(server, "friends.example"),
             SetupLinkState.BuildKeysDiffer(server),
             SetupLinkState.Broken,
         )) {

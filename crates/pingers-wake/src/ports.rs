@@ -16,7 +16,7 @@ use pingers_presence::{
 };
 use pingers_proto::{
     BoardCursor, BoardPage, Epoch, GroupId, KeyPackageBytes, LeafIndex, Lease, MailboxId, PartyId,
-    ReadBoard, SizeClass, SpotId, Subscription,
+    ReadBoard, ServerId, SizeClass, SpotId, Subscription,
 };
 use pingers_time::Bucket;
 
@@ -96,6 +96,8 @@ pub struct SpotInfo {
 pub struct PartyInfo {
     /// The Party.
     pub party: PartyId,
+    /// The server the Party lives on: its board, mailboxes and group log.
+    pub server: ServerId,
     /// Its newest processed epoch and how it was reached (for the grace period, B.4.7).
     pub epoch: EpochState,
     /// This device's leaf in the Party group.
@@ -137,45 +139,64 @@ pub struct LeaseUpload {
     pub read: ReadBoard,
 }
 
-/// The server, through pingers-sync (anonymous requests through OHTTP).
+/// The servers, through pingers-sync (anonymous requests through OHTTP). Every call names the
+/// server it is for: each server has its own board, mailboxes, mailbox pool and group logs.
 pub trait ServerPort: Send + Sync {
-    /// Pulls and processes every Party's group log (design B.4.7: before every board sync).
-    fn pull_group_logs(&self) -> impl Future<Output = Result<(), PortError>> + Send;
+    /// Pulls and processes the group log of every Party on `server` (design B.4.7: before
+    /// every board sync).
+    fn pull_group_logs(
+        &self,
+        server: &ServerId,
+    ) -> impl Future<Output = Result<(), PortError>> + Send;
 
-    /// Uploads a lease, replacing the previous one, and returns the first board page if a
-    /// read was asked for.
+    /// Uploads a lease to `server`'s board, replacing this device's previous lease there, and
+    /// returns the first board page if a read was asked for.
     fn upload_lease(
         &self,
+        server: &ServerId,
         upload: LeaseUpload,
     ) -> impl Future<Output = Result<Option<BoardPage>, PortError>> + Send;
 
-    /// The board page at `cursor`.
+    /// The page of `server`'s board at `cursor`.
     fn board_page(
         &self,
+        server: &ServerId,
         cursor: BoardCursor,
     ) -> impl Future<Output = Result<BoardPage, PortError>> + Send;
 
-    /// Posts a knock to its mailbox.
+    /// Posts a knock to its mailbox on `server`.
     fn post_knock(
         &self,
+        server: &ServerId,
         knock: OutgoingKnock,
     ) -> impl Future<Output = Result<(), PortError>> + Send;
 
-    /// Every post in one of this device's mailboxes (pingers-sync holds the read keys).
+    /// Every post in one of this device's mailboxes on `server` (pingers-sync holds the read
+    /// keys).
     fn read_mailbox(
         &self,
+        server: &ServerId,
         mailbox: MailboxId,
     ) -> impl Future<Output = Result<Vec<Vec<u8>>, PortError>> + Send;
 
-    /// Takes a registered mailbox from the pool for `purpose` that lives at least as long as a
-    /// lease starting in `lease_start`, or `None` if the pool has none.
-    fn take_mailbox(&self, purpose: MailboxPurpose, lease_start: Bucket) -> Option<MailboxId>;
+    /// Takes a registered mailbox on `server` from its pool for `purpose` that lives at least
+    /// as long as a lease starting in `lease_start`, or `None` if the pool has none.
+    fn take_mailbox(
+        &self,
+        server: &ServerId,
+        purpose: MailboxPurpose,
+        lease_start: Bucket,
+    ) -> Option<MailboxId>;
 
-    /// Makes at most one push registration (design E.2, F.3): seals one stale mailbox or
-    /// subscription again (a new push token or relay key, pushes switched on or off, a seal
-    /// running out), or else registers one new mailbox for the pool. One per wake, so the
-    /// server cannot group a device's registrations by when they were made.
-    fn maintain_push_registrations(&self) -> impl Future<Output = Result<(), PortError>> + Send;
+    /// Makes at most one push registration on `server` (design E.2, F.3): seals one stale
+    /// mailbox or subscription there again (a new push token or relay key, pushes switched on
+    /// or off, a seal running out), or else registers one new mailbox for its pool. One per
+    /// server per wake, so a server cannot group a device's registrations by when they were
+    /// made.
+    fn maintain_push_registrations(
+        &self,
+        server: &ServerId,
+    ) -> impl Future<Output = Result<(), PortError>> + Send;
 }
 
 /// An accepted knock, for pingers-meetup-session to create or extend the Meetup group and post

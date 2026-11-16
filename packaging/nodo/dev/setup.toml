@@ -2,11 +2,11 @@
 # the shape of packaging/nodo's setup.toml.in, for the local services. Run from the repository
 # root, after the four services:
 #   cargo run --release -p pingers-setup -- packaging/nodo/dev/setup.toml
-#   curl -s http://127.0.0.1:9475/owner
+#   curl -s http://127.0.0.1:9479/owner
 # The page's first-phone link opens the first emulator's app on this stack (the hosts are the
 # dev Caddy's, packaging/nodo/dev/caddy.json, as an emulator sees them). The public checks have
 # nothing to reach and say so.
-listen = "127.0.0.1:9475"
+listen = "127.0.0.1:9479"
 domain = "10.0.2.2"
 server_id = "https://10.0.2.2:9443"
 ohttp_relay_url = "https://10.0.2.2:9444/ohttp"

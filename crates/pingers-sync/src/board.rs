@@ -8,7 +8,6 @@ use pingers_proto::{
 };
 use pingers_store::LastUpload;
 
-use crate::engine::blocking;
 use crate::mailbox::Delivered;
 use crate::{ApiRequest, ClockStatus, Sending, SyncEngine, SyncError, WakeBudget};
 
@@ -61,14 +60,13 @@ impl SyncEngine {
         upload: NewLease,
         budget: WakeBudget,
     ) -> Result<Delivered<BoardSyncResponse>, SyncError> {
-        let replaces = blocking(&self.database, |session| {
-            Ok(session.board_upload().last()?)
-        })
-        .await?
-        .map(|last| LeaseReplacement {
-            lease_id: last.lease,
-            revoke_key: SecretBytes::new(*last.revoke_key.expose_bytes()),
-        });
+        let replaces = self
+            .blocking(|session| Ok(session.board_upload().last()?))
+            .await?
+            .map(|last| LeaseReplacement {
+                lease_id: last.lease,
+                revoke_key: SecretBytes::new(*last.revoke_key.expose_bytes()),
+            });
         let delivered = self
             .board_sync(
                 &BoardSyncRequest {
@@ -84,10 +82,8 @@ impl SyncEngine {
                 lease: response.lease_id,
                 revoke_key: upload.revoke_key,
             };
-            blocking(&self.database, move |session| {
-                Ok(session.board_upload().remember(&last)?)
-            })
-            .await?;
+            self.blocking(move |session| Ok(session.board_upload().remember(&last)?))
+                .await?;
         }
         Ok(delivered)
     }

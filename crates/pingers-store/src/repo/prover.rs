@@ -12,27 +12,35 @@ use pingers_time::UnixSeconds;
 use rusqlite::{OptionalExtension as _, params};
 
 use crate::codec::{from_int, narrow, read_array, read_time, time, to_int};
-use crate::{Session, StoreError, TreePosition};
+use crate::server::Scope;
+use crate::{ServerSession, Session, StoreError, TreePosition};
 
 /// Levels of the membership tree, and so siblings in a Merkle path (design B.4.8: depth 20).
 pub const PATH_LENGTH: usize = 20;
 
-impl Session {
-    /// Which hourly root the local tree copy reproduces, and this device's path in it
-    /// (`rln_tree_state` table).
+impl ServerSession<'_> {
+    /// Which hourly root the local copy of this server's tree reproduces, and this device's
+    /// path in it (`rln_tree_state` table).
     #[must_use]
     pub fn rln_tree_state(&self) -> RlnTreeStates<'_> {
-        RlnTreeStates { session: self }
+        RlnTreeStates {
+            session: self.scope(),
+        }
     }
 
-    /// The server's daily token limit and what this account was issued today (`pp_allowance`
-    /// table).
+    /// This server's daily token limit and what this account was issued today
+    /// (`pp_allowance` table).
     #[must_use]
     pub fn token_allowance(&self) -> TokenAllowances<'_> {
-        TokenAllowances { session: self }
+        TokenAllowances {
+            session: self.scope(),
+        }
     }
+}
 
-    /// The last prover self-test (`prover_self_test` table).
+impl Session {
+    /// The last prover self-test (`prover_self_test` table): device-wide, as it tests this
+    /// device's prover.
     #[must_use]
     pub fn prover_self_test(&self) -> ProverSelfTests<'_> {
         ProverSelfTests { session: self }
@@ -62,9 +70,9 @@ pub struct TreeState {
     pub path: Option<StoredPath>,
 }
 
-/// Repository for `rln_tree_state`: one row.
+/// Repository for `rln_tree_state`: one row per server.
 pub struct RlnTreeStates<'session> {
-    session: &'session Session,
+    session: Scope<'session>,
 }
 
 impl RlnTreeStates<'_> {
@@ -78,9 +86,10 @@ impl RlnTreeStates<'_> {
         self.session.with(|connection| {
             connection.execute(
                 "INSERT OR REPLACE INTO rln_tree_state \
-                 (singleton, root_epoch, root, leaf_count, path_position, path) \
-                 VALUES (1, ?1, ?2, ?3, ?4, ?5)",
+                 (server_key, root_epoch, root, leaf_count, path_position, path) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
+                    self.session.key(),
                     state.root_epoch.get(),
                     state.root.as_bytes(),
                     state.leaf_count,
@@ -102,8 +111,8 @@ impl RlnTreeStates<'_> {
             connection
                 .query_row(
                     "SELECT root_epoch, root, leaf_count, path_position, path \
-                     FROM rln_tree_state",
-                    [],
+                     FROM rln_tree_state WHERE server_key = ?1",
+                    [self.session.key()],
                     |row| {
                         Ok((|| {
                             let position: Option<i64> = row.get(3)?;
@@ -151,7 +160,10 @@ impl RlnTreeStates<'_> {
     /// [`StoreError::Database`] if the delete fails.
     pub fn clear(&self) -> Result<(), StoreError> {
         self.session.with(|connection| {
-            connection.execute("DELETE FROM rln_tree_state", [])?;
+            connection.execute(
+                "DELETE FROM rln_tree_state WHERE server_key = ?1",
+                [self.session.key()],
+            )?;
             Ok(())
         })
     }
@@ -179,9 +191,9 @@ pub struct TokenLedger {
     pub issued: u16,
 }
 
-/// Repository for `pp_allowance`: one row.
+/// Repository for `pp_allowance`: one row per server.
 pub struct TokenAllowances<'session> {
-    session: &'session Session,
+    session: Scope<'session>,
 }
 
 impl TokenAllowances<'_> {
@@ -194,9 +206,9 @@ impl TokenAllowances<'_> {
         let day = to_int(ledger.day, "pp_allowance.day")?;
         self.session.with(|connection| {
             connection.execute(
-                "INSERT OR REPLACE INTO pp_allowance (singleton, daily_limit, day, issued) \
-                 VALUES (1, ?1, ?2, ?3)",
-                params![ledger.daily_limit, day, ledger.issued],
+                "INSERT OR REPLACE INTO pp_allowance (server_key, daily_limit, day, issued) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![self.session.key(), ledger.daily_limit, day, ledger.issued],
             )?;
             Ok(())
         })
@@ -211,8 +223,8 @@ impl TokenAllowances<'_> {
         self.session.with(|connection| {
             connection
                 .query_row(
-                    "SELECT daily_limit, day, issued FROM pp_allowance",
-                    [],
+                    "SELECT daily_limit, day, issued FROM pp_allowance WHERE server_key = ?1",
+                    [self.session.key()],
                     |row| {
                         Ok((|| {
                             Ok(TokenLedger {
@@ -383,7 +395,8 @@ mod tests {
     #[test]
     fn tree_state_round_trips_with_and_without_a_path() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let states = fixture.session.rln_tree_state();
+        let server = fixture.server()?;
+        let states = server.rln_tree_state();
         assert_eq!(states.load()?, None);
         let mut state = TreeState {
             root_epoch: RootEpoch::new(490_000),
@@ -407,7 +420,7 @@ mod tests {
         let fixture = Fixture::new()?;
         let refused = fixture.session.with(|connection| {
             Ok(connection.execute(
-                "INSERT INTO rln_tree_state (singleton, root_epoch, root, leaf_count, \
+                "INSERT INTO rln_tree_state (server_key, root_epoch, root, leaf_count, \
                  path_position, path) VALUES (1, 1, ?1, 1, 0, ?2)",
                 params![[0_u8; 32].as_slice(), [0_u8; 639].as_slice()],
             )?)
@@ -419,7 +432,8 @@ mod tests {
     #[test]
     fn the_token_ledger_round_trips() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let allowances = fixture.session.token_allowance();
+        let server = fixture.server()?;
+        let allowances = server.token_allowance();
         assert_eq!(allowances.load()?, None);
         let ledger = TokenLedger {
             daily_limit: 300,
@@ -428,6 +442,16 @@ mod tests {
         };
         allowances.save(&ledger)?;
         assert_eq!(allowances.load()?, Some(ledger));
+        // Another server keeps its own allowance.
+        fixture
+            .session
+            .servers()
+            .put(&crate::test_support::server_record("https://other.test")?)?;
+        let other = fixture.session.server(&pingers_proto::ServerId::new(
+            "https://other.test".to_owned(),
+        )?)?;
+        assert_eq!(other.token_allowance().load()?, None);
+        assert_eq!(other.rln_tree_state().load()?, None);
         Ok(())
     }
 

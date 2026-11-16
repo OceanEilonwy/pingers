@@ -6,13 +6,17 @@ use pingers_time::UnixSeconds;
 use rusqlite::{OptionalExtension as _, params};
 
 use crate::codec::{read_time, time};
-use crate::{Session, StoreError};
+use crate::server::Scope;
+use crate::{ServerSession, StoreError};
 
-impl Session {
-    /// The account's registration and bearer (`account_registration`, `account_bearer`).
+impl ServerSession<'_> {
+    /// The account's registration and bearer on this server (`account_registration`,
+    /// `account_bearer`).
     #[must_use]
     pub fn account(&self) -> Accounts<'_> {
-        Accounts { session: self }
+        Accounts {
+            session: self.scope(),
+        }
     }
 }
 
@@ -46,7 +50,7 @@ pub struct AccountBearer {
 
 /// Repository for the account tables.
 pub struct Accounts<'session> {
-    session: &'session Session,
+    session: Scope<'session>,
 }
 
 const PENDING: i64 = 0;
@@ -62,9 +66,11 @@ impl Accounts<'_> {
     pub fn registration(&self) -> Result<AccountRegistration, StoreError> {
         self.session.with(|connection| {
             let row = connection
-                .query_row("SELECT state, code FROM account_registration", [], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
-                })
+                .query_row(
+                    "SELECT state, code FROM account_registration WHERE server_key = ?1",
+                    [self.session.key()],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
                 .optional()?;
             let Some((state, code)) = row else {
                 return Ok(AccountRegistration::Pending { code: None });
@@ -94,9 +100,13 @@ impl Accounts<'_> {
         };
         self.session.with(|connection| {
             connection.execute(
-                "INSERT OR REPLACE INTO account_registration (singleton, state, code) \
-                 VALUES (1, ?1, ?2)",
-                params![state, code.as_ref().map(SecretText::expose)],
+                "INSERT OR REPLACE INTO account_registration (server_key, state, code) \
+                 VALUES (?1, ?2, ?3)",
+                params![
+                    self.session.key(),
+                    state,
+                    code.as_ref().map(SecretText::expose)
+                ],
             )?;
             Ok(())
         })
@@ -110,14 +120,18 @@ impl Accounts<'_> {
     pub fn bearer(&self) -> Result<Option<AccountBearer>, StoreError> {
         self.session.with(|connection| {
             connection
-                .query_row("SELECT bearer, expires_at FROM account_bearer", [], |row| {
-                    Ok((|| {
-                        Ok::<_, StoreError>(AccountBearer {
-                            bearer: SecretText::new(row.get(0)?),
-                            expires_at: read_time(row, 1, "account_bearer.expires_at")?,
-                        })
-                    })())
-                })
+                .query_row(
+                    "SELECT bearer, expires_at FROM account_bearer WHERE server_key = ?1",
+                    [self.session.key()],
+                    |row| {
+                        Ok((|| {
+                            Ok::<_, StoreError>(AccountBearer {
+                                bearer: SecretText::new(row.get(0)?),
+                                expires_at: read_time(row, 1, "account_bearer.expires_at")?,
+                            })
+                        })())
+                    },
+                )
                 .optional()?
                 .transpose()
         })
@@ -133,9 +147,9 @@ impl Accounts<'_> {
         let expires_at = time(bearer.expires_at, "account_bearer.expires_at")?;
         self.session.with(|connection| {
             connection.execute(
-                "INSERT OR REPLACE INTO account_bearer (singleton, bearer, expires_at) \
-                 VALUES (1, ?1, ?2)",
-                params![bearer.bearer.expose(), expires_at],
+                "INSERT OR REPLACE INTO account_bearer (server_key, bearer, expires_at) \
+                 VALUES (?1, ?2, ?3)",
+                params![self.session.key(), bearer.bearer.expose(), expires_at],
             )?;
             Ok(())
         })
@@ -148,7 +162,10 @@ impl Accounts<'_> {
     /// [`StoreError::Database`] if the delete fails.
     pub fn forget_bearer(&self) -> Result<(), StoreError> {
         self.session.with(|connection| {
-            connection.execute("DELETE FROM account_bearer", [])?;
+            connection.execute(
+                "DELETE FROM account_bearer WHERE server_key = ?1",
+                [self.session.key()],
+            )?;
             Ok(())
         })
     }
@@ -182,7 +199,8 @@ mod tests {
     #[test]
     fn registration_starts_pending_and_keeps_its_state_and_code() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let accounts = fixture.session.account();
+        let server = fixture.server()?;
+        let accounts = server.account();
         assert_eq!(exposed(&accounts.registration()?), ("pending", None));
         for (registration, expected) in [
             (
@@ -221,12 +239,12 @@ mod tests {
         fixture.session.with(|connection| {
             connection.execute_batch(
                 "PRAGMA ignore_check_constraints = ON; \
-                 INSERT INTO account_registration (singleton, state) VALUES (1, 7);",
+                 INSERT INTO account_registration (server_key, state) VALUES (1, 7);",
             )?;
             Ok(())
         })?;
         assert!(matches!(
-            fixture.session.account().registration(),
+            fixture.server()?.account().registration(),
             Err(StoreError::Corrupt { .. })
         ));
         Ok(())
@@ -235,7 +253,8 @@ mod tests {
     #[test]
     fn the_bearer_is_kept_replaced_and_forgotten() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let accounts = fixture.session.account();
+        let server = fixture.server()?;
+        let accounts = server.account();
         assert!(accounts.bearer()?.is_none());
         accounts.set_bearer(&AccountBearer {
             bearer: SecretText::new("first".to_owned()),

@@ -6,7 +6,7 @@ use super::Client;
 use crate::ClientError;
 use crate::ports::{SettingChange, SetupCheck, SetupOutcome};
 use crate::snapshot::{RelayStatus, WakePushes};
-use pingers_proto::{SecretText, SetupPayload};
+use pingers_proto::SetupPayload;
 
 impl Client {
     /// Changes a device-wide privacy setting.
@@ -23,7 +23,8 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// [`ClientError::Unavailable`] until pingers-sync merges.
+    /// A store failure; turning them on: [`ClientError::Unavailable`] with no push token or
+    /// without any server, and the first server's error when no server could be sealed for.
     pub async fn set_wake_pushes(&self, setting: WakePushes) -> Result<(), ClientError> {
         let tokens = self.platform.push_tokens();
         self.published(self.crates.sync.set_wake_pushes(setting, tokens).await)
@@ -34,7 +35,8 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// [`ClientError::Unavailable`] until pingers-sync merges.
+    /// A store failure; [`ClientError::Unavailable`] without any server; the first server's
+    /// error when no server could be sealed for.
     pub async fn push_tokens_changed(&self) -> Result<(), ClientError> {
         let tokens = self.platform.push_tokens();
         self.published(self.crates.sync.push_tokens_changed(tokens).await)
@@ -46,21 +48,10 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// [`ClientError::Unavailable`] until pingers-sync merges.
+    /// A store failure; a server's error other than an unreachable relay or a key mismatch
+    /// (those are answers, per server, not errors).
     pub async fn check_reachability(&self) -> Result<RelayStatus, ClientError> {
         self.published(self.crates.sync.check_reachability().await)
-            .await
-    }
-
-    /// Registers this device's account with a code the user typed ("This server needs a
-    /// code"), before a new Party is created on the server.
-    ///
-    /// # Errors
-    ///
-    /// [`ClientError::RegistrationRefused`] if the server did not accept it;
-    /// [`ClientError::Unavailable`] without an instance.
-    pub async fn register_with_code(&self, code: SecretText) -> Result<(), ClientError> {
-        self.published(self.crates.sync.register_with_code(code).await)
             .await
     }
 

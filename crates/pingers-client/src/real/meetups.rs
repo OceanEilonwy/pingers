@@ -389,41 +389,74 @@ impl Meetups {
         }
     }
 
-    /// What every Meetup shares. `None` without a configured instance.
-    fn runtime(&self) -> Option<Runtime> {
+    /// What a Meetup of `party` uses: the group calls and live channel of the Party's server.
+    /// `None` if this device cannot reach that server.
+    async fn runtime(&self, party: PartyId) -> Option<Runtime> {
+        let net = &self.shared.net;
+        let server = net.party_server(party).await.ok()?;
+        // A server without a link (no pins) cannot carry a Meetup.
+        net.link(&server).await.ok()?;
         let backend = self.backend();
-        backend.transport.as_ref()?;
         Some(Runtime {
             database: Arc::clone(&backend.database),
-            network: Arc::new(GroupLogs(Arc::clone(&self.shared.net))),
+            network: Arc::new(GroupLogs {
+                net: Arc::clone(net),
+                server,
+            }),
             clock: Arc::clone(&backend.outside.clock),
             timer: Arc::clone(&backend.outside.timer),
         })
     }
 
-    /// This device's subscription for a Meetup, sealed to the push relay; `None` with wake-up
-    /// pushes off, or without a push token.
-    async fn meetup_subscription(&self) -> Option<Subscription> {
+    /// This device's subscription for a Meetup of `party`, sealed to the push relay of the
+    /// Party's server; `None` with wake-up pushes off, without a push token, or without a
+    /// reachable server.
+    async fn meetup_subscription(&self, party: PartyId) -> Option<Subscription> {
         let net = &self.shared.net;
-        net.ensure_wake_push().await.ok()?;
+        let server = net.party_server(party).await.ok()?;
+        net.ensure_wake_push(&server).await.ok()?;
         let lifetime = TimeToLive::new(MEETUP_SUBSCRIPTION).ok()?;
-        net.engine().ok()?.knock_subscription(lifetime).ok()?
+        net.link(&server)
+            .await
+            .ok()?
+            .engine
+            .knock_subscription(lifetime)
+            .ok()?
     }
 
-    /// Records `subscription` as this device's in `group`, so its pushes are recognised.
-    async fn remember(&self, group: GroupId, subscription: Option<&Subscription>) {
-        if let (Some(subscription), Ok(engine)) = (subscription, self.shared.net.engine()) {
+    /// Records `subscription` as this device's in `group`, a Meetup of `party`, on the Party's
+    /// server, so its pushes are recognised.
+    async fn remember(&self, party: PartyId, group: GroupId, subscription: Option<&Subscription>) {
+        let Some(subscription) = subscription else {
+            return;
+        };
+        let net = &self.shared.net;
+        let Ok(server) = net.party_server(party).await else {
+            return;
+        };
+        if let Ok(link) = net.link(&server).await {
             // Best effort: without the record a push for the group reads as unknown, and the
             // live channel carries the Meetup anyway.
-            let _remembered = engine.remember_subscription(&group, subscription).await;
+            let _remembered = link
+                .engine
+                .remember_subscription(&group, subscription)
+                .await;
         }
     }
 
-    /// The closed board segments this device read (`board_seen`), for a Meetup's first
-    /// message. Best effort: none read, or none readable, sends nothing to compare.
-    async fn board_seen(&self) -> Vec<SeenSegment> {
+    /// The closed board segments this device read on the board of `party`'s server
+    /// (`board_seen`), for a Meetup's first message: the other members read the same board.
+    /// Best effort: none read, or none readable, sends nothing to compare.
+    async fn board_seen(&self, party: PartyId) -> Vec<SeenSegment> {
         self.backend()
-            .store(|session, _clock, _rng| Ok(session.board_seen().list()?))
+            .store(move |session, _clock, _rng| {
+                let server = session
+                    .parties()
+                    .get(&party)?
+                    .ok_or(Unavailable::NoMeetup)?
+                    .server;
+                Ok(session.server(&server)?.board_seen().list()?)
+            })
             .await
             .unwrap_or_default()
     }
@@ -443,28 +476,32 @@ impl Meetups {
     /// Creates a Meetup at the key's Spot with the knocker and keeps it live; returns the
     /// Welcome for the knocker.
     async fn create(&self, key: MeetupKey, knocker: AddMember) -> Result<WelcomeBytes, PortError> {
-        let runtime = self.runtime().ok_or(PortError::Unavailable)?;
         let spot = key.id().spot;
-        let suite = self
-            .suite(spot.party)
+        let runtime = self
+            .runtime(spot.party)
             .await
-            .map_err(|_failed| PortError::Unavailable)?;
-        let group = self
+            .ok_or(PortError::Unavailable)?;
+        let (group, suite, server) = self
             .backend()
-            .store(|_session, _clock, rng| {
+            .store(move |session, clock, rng| {
+                let settings = PartyLifecycle::new(session, clock).settings(&spot.party)?;
                 let mut group = [0_u8; GroupId::LENGTH];
                 rng.fill_bytes(&mut group);
-                Ok(GroupId::from_bytes(group))
+                Ok((
+                    GroupId::from_bytes(group),
+                    settings.post_quantum.suite(),
+                    settings.server,
+                ))
             })
             .await
             .map_err(|_failed| PortError::Unavailable)?;
-        // This device's own subscription goes in with the knocker's, so a member's chat or meet
-        // point wakes it while the app is not running (design B.4.9). The knocker's came with
-        // its knock.
+        // This device's own subscription on the Party's server goes in with the knocker's, so a
+        // member's chat or meet point wakes it while the app is not running (design B.4.9). The
+        // knocker's came with its knock.
         let own = self
             .shared
             .net
-            .own_subscription()
+            .own_subscription(&server)
             .await
             .map_err(|_failed| PortError::Unavailable)?;
         let created = create(
@@ -479,7 +516,7 @@ impl Meetups {
                     .chain(own.clone())
                     .collect(),
                 own_subscription: own.as_ref().map(|own| own.id),
-                board_seen: self.board_seen().await,
+                board_seen: self.board_seen(spot.party).await,
                 suite,
             },
             (self.backend().outside.rng)(),
@@ -489,7 +526,7 @@ impl Meetups {
         if let Some(own) = &own {
             self.shared
                 .net
-                .remember_own_subscription(&group, own)
+                .remember_own_subscription(&server, &group, own)
                 .await
                 .map_err(|_failed| PortError::Unavailable)?;
         }
@@ -789,7 +826,7 @@ impl MeetupPort for Meetups {
             .suite(party)
             .await
             .map_err(|_failed| PortError::Unavailable)?;
-        let subscription = self.meetup_subscription().await;
+        let subscription = self.meetup_subscription(party).await;
         let made = knock_key_package(
             &self.backend().database,
             Knocking {
@@ -834,6 +871,7 @@ impl MeetupPort for Meetups {
             knock,
         } = admission;
         let reply_mailbox = knock.knock.reply_mailbox;
+        let key_party = key.id().spot.party;
         let newcomer = AddMember {
             key_package: knock.knock.key_package,
             subscription: knock.knock.meetup_subscription,
@@ -847,7 +885,10 @@ impl MeetupPort for Meetups {
                 .await
                 .map_err(|_failed| PortError::Unavailable)?,
         };
-        self.shared.net.post_welcome(reply_mailbox, welcome).await
+        self.shared
+            .net
+            .post_welcome(key_party, reply_mailbox, welcome)
+            .await
     }
 
     /// Joins from the Welcome with the grant secret kept for the knock answered in the reply
@@ -858,7 +899,8 @@ impl MeetupPort for Meetups {
             reply_mailbox,
             post,
         } = reply;
-        let runtime = self.runtime().ok_or(PortError::Unavailable)?;
+        let party = key.id().spot.party;
+        let runtime = self.runtime(party).await.ok_or(PortError::Unavailable)?;
         let welcome = Padded::from_wire(post)
             .and_then(|padded| padded.payload().map(<[u8]>::to_vec))
             .map(WelcomeBytes::from_bytes)
@@ -886,7 +928,7 @@ impl MeetupPort for Meetups {
                 welcome,
                 grant_key,
                 own_subscription: subscription.as_ref().map(|subscription| subscription.id),
-                board_seen: self.board_seen().await,
+                board_seen: self.board_seen(party).await,
             },
             (self.backend().outside.rng)(),
         )
@@ -897,7 +939,7 @@ impl MeetupPort for Meetups {
             .store(move |session, _clock, _rng| Ok(session.knock_keys().delete(&reply_mailbox)?))
             .await
             .map_err(|_failed| PortError::Unavailable)?;
-        self.remember(group, subscription.as_ref()).await;
+        self.remember(party, group, subscription.as_ref()).await;
         self.shared
             .start(Started {
                 handle: joined.handle,

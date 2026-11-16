@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! pingers-meetup-session's [`GroupNetwork`] over pingers-sync's engine: the Meetup group's
-//! log, and its live channel (chunked OHTTP through the relay, opened by pingers-sync's
-//! `open_live` on the Stream route, never direct).
+//! pingers-meetup-session's [`GroupNetwork`] over pingers-sync's engine of the server the
+//! Meetup's Party lives on: the Meetup group's log, and its live channel (chunked OHTTP through
+//! that server's relay, opened by pingers-sync's `open_live` on the Stream route, never direct).
 
 use std::sync::Arc;
 
@@ -10,17 +10,23 @@ use pingers_crypto::LogAuthKeyPair;
 use pingers_meetup_session::{GroupNetwork, NetworkError};
 use pingers_proto::{
     AppMessage, CommitRequest, CommitResponse, CreateGroup, Epoch, GroupId, GroupLogEntry,
-    SequenceNumber, SubscriptionId,
+    SequenceNumber, ServerId, SubscriptionId,
 };
 use pingers_sync::{
     ApiRequest, GroupCall, GroupLifetime, GroupSigner, GroupStart, Sending, SyncError, WakeBudget,
 };
 use pingers_transport::DuplexStream;
 
+use super::servers::Link;
 use super::sync::{Net, delivered};
 
-/// pingers-meetup-session's `GroupNetwork`.
-pub(crate) struct GroupLogs(pub(crate) Arc<Net>);
+/// pingers-meetup-session's `GroupNetwork` for one Meetup: every call goes to the server of the
+/// Meetup's Party.
+pub(crate) struct GroupLogs {
+    pub(crate) net: Arc<Net>,
+    /// The server of the Meetup's Party.
+    pub(crate) server: ServerId,
+}
 
 #[expect(
     clippy::wildcard_enum_match_arm,
@@ -36,29 +42,37 @@ fn network_error(error: &SyncError) -> NetworkError {
 }
 
 impl GroupLogs {
-    /// A Grp signer with `auth`, at the server-corrected time.
-    fn signer<'key>(&self, auth: &'key LogAuthKeyPair) -> Result<GroupSigner<'key>, NetworkError> {
-        let engine = self.0.engine().map_err(|_none| NetworkError::Unavailable)?;
-        Ok(GroupSigner {
+    /// The link to the Meetup's server; a server this device cannot reach now is unavailable.
+    async fn link(&self) -> Result<Arc<Link>, NetworkError> {
+        self.net
+            .link(&self.server)
+            .await
+            .map_err(|_unknown| NetworkError::Unavailable)
+    }
+
+    /// A Grp signer with `auth`, at `link`'s server-corrected time.
+    fn signer<'key>(link: &Link, auth: &'key LogAuthKeyPair) -> GroupSigner<'key> {
+        GroupSigner {
             key: auth,
-            now: engine.corrected_now(),
-        })
+            now: link.engine.corrected_now(),
+        }
     }
 }
 
 #[async_trait]
 impl GroupNetwork for GroupLogs {
     async fn create_group(&self, request: CreateGroup) -> Result<(), NetworkError> {
-        let engine = self.0.engine().map_err(|_none| NetworkError::Unavailable)?;
+        let link = self.link().await?;
         // The creator's group is at epoch 0 until its first commit (adding the knocker) lands.
         let start = GroupStart {
             lifetime: GroupLifetime::Meetup,
             epoch: Epoch::new(0),
         };
-        let result = engine
+        let result = link
+            .engine
             .create_group(&request, start, WakeBudget::UNLIMITED)
             .await;
-        self.0.observe(&result);
+        link.observe(&result);
         result.map_err(|error| network_error(&error))
     }
 
@@ -68,19 +82,19 @@ impl GroupNetwork for GroupLogs {
         auth: &LogAuthKeyPair,
         request: CommitRequest,
     ) -> Result<CommitResponse, NetworkError> {
-        let engine = self.0.engine().map_err(|_none| NetworkError::Unavailable)?;
-        let request = ApiRequest::commit(group, &request, &self.signer(auth)?)
+        let link = self.link().await?;
+        let request = ApiRequest::commit(group, &request, &Self::signer(&link, auth))
             .map_err(|error| network_error(&error))?;
         let result = async {
             let route = request.route();
-            engine
+            link.engine
                 .send(request, Sending::or_drop(WakeBudget::UNLIMITED))
                 .await?
                 .answered(route)?
                 .decode::<CommitResponse>()
         }
         .await;
-        self.0.observe(&result);
+        link.observe(&result);
         result.map_err(|error| network_error(&error))
     }
 
@@ -90,14 +104,14 @@ impl GroupNetwork for GroupLogs {
         auth: &LogAuthKeyPair,
         message: AppMessage,
     ) -> Result<(), NetworkError> {
-        let engine = self.0.engine().map_err(|_none| NetworkError::Unavailable)?;
+        let link = self.link().await?;
         let call = GroupCall { group, key: auth };
         let result = delivered(
-            engine
-                .post_group_message(call, &message, self.0.keep_until())
+            link.engine
+                .post_group_message(call, &message, self.net.keep_until())
                 .await,
         );
-        self.0.observe(&result);
+        link.observe(&result);
         match result {
             Ok(true) => Ok(()),
             Ok(false) => Err(NetworkError::Unavailable),
@@ -111,15 +125,16 @@ impl GroupNetwork for GroupLogs {
         auth: &LogAuthKeyPair,
         after: Option<SequenceNumber>,
     ) -> Result<Vec<GroupLogEntry>, NetworkError> {
-        let engine = self.0.engine().map_err(|_none| NetworkError::Unavailable)?;
+        let link = self.link().await?;
         let mut entries: Vec<GroupLogEntry> = Vec::new();
         let mut cursor = after;
         loop {
             let call = GroupCall { group, key: auth };
-            let result = engine
+            let result = link
+                .engine
                 .read_group_messages(call, cursor, WakeBudget::UNLIMITED)
                 .await;
-            self.0.observe(&result);
+            link.observe(&result);
             let page = result.map_err(|error| network_error(&error))?;
             // Pages follow each other until one comes back empty.
             let Some(last) = page.messages.last().map(|entry| entry.sequence) else {
@@ -135,11 +150,12 @@ impl GroupNetwork for GroupLogs {
         group: &GroupId,
         auth: &LogAuthKeyPair,
     ) -> Result<(), NetworkError> {
-        let engine = self.0.engine().map_err(|_none| NetworkError::Unavailable)?;
-        let result = engine
+        let link = self.link().await?;
+        let result = link
+            .engine
             .delete_group(GroupCall { group, key: auth }, WakeBudget::UNLIMITED)
             .await;
-        self.0.observe(&result);
+        link.observe(&result);
         result.map_err(|error| network_error(&error))
     }
 
@@ -149,11 +165,11 @@ impl GroupNetwork for GroupLogs {
         auth: &LogAuthKeyPair,
         subscription: Option<SubscriptionId>,
     ) -> Result<Box<dyn DuplexStream>, NetworkError> {
-        let engine = self.0.engine().map_err(|_none| NetworkError::Unavailable)?;
-        let request = ApiRequest::live(group, subscription.as_ref(), &self.signer(auth)?)
+        let link = self.link().await?;
+        let request = ApiRequest::live(group, subscription.as_ref(), &Self::signer(&link, auth))
             .map_err(|error| network_error(&error))?;
-        let result = engine.open_live(request).await;
-        self.0.observe(&result);
+        let result = link.engine.open_live(request).await;
+        link.observe(&result);
         result.map_err(|error| network_error(&error))
     }
 }

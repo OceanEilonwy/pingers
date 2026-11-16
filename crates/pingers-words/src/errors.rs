@@ -5,13 +5,6 @@ use pingers_screens::ScreenError;
 
 use crate::Language;
 
-/// New party on another server, which this version cannot create yet.
-#[must_use]
-pub fn other_server(language: Language) -> String {
-    let Language::English = language;
-    "This version of Pingers can only create Parties on the app's server.".into()
-}
-
 /// The chosen server needs a registration code before it makes an account.
 #[must_use]
 pub fn code_needed(language: Language) -> String {
@@ -53,11 +46,67 @@ pub fn screen_error(language: Language, error: &ScreenError) -> String {
     .into()
 }
 
+/// Why a server could not be used: added by address on New party, or joined through an invite.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ServerRefusal {
+    /// What was typed is not a server address.
+    InvalidAddress,
+    /// The server did not answer.
+    Unreachable,
+    /// The server advertises no privacy relay.
+    NoRelay,
+    /// None of the server's privacy relays answered.
+    RelayUnreachable,
+    /// The server named different relays directly and through its relay.
+    RelaysDiffer,
+    /// The server's keys are not the ones being trusted.
+    KeyMismatch,
+    /// The server was not looked at before being trusted.
+    NotLookedAt,
+}
+
+/// A server refusal, as the user is told it.
+#[must_use]
+pub fn server_refusal(language: Language, refusal: ServerRefusal) -> String {
+    let Language::English = language;
+    match refusal {
+        ServerRefusal::InvalidAddress => "Enter an address like pingers.example.org.",
+        ServerRefusal::Unreachable => "This server didn't answer. Check the address and try again.",
+        ServerRefusal::NoRelay => {
+            "This server doesn't name a privacy relay, so Pingers can't hide your internet \
+             address from it."
+        }
+        ServerRefusal::RelayUnreachable => {
+            "This server's privacy relay didn't answer. Try again later."
+        }
+        ServerRefusal::RelaysDiffer => {
+            "This server named a different privacy relay when asked through its relay. Pingers \
+             won't use it."
+        }
+        ServerRefusal::KeyMismatch => {
+            "This server's keys don't match the ones you were given. Nothing was sent to it."
+        }
+        ServerRefusal::NotLookedAt => "Look up the server again before trusting it.",
+    }
+    .into()
+}
+
 #[cfg(test)]
 mod tests {
     use pingers_geo::GeoError;
 
     use super::*;
+
+    #[test]
+    fn a_refused_code_is_told_apart_from_a_missing_one() {
+        assert_ne!(
+            code_needed(Language::English),
+            code_refused(Language::English)
+        );
+        let say = |refusal| server_refusal(Language::English, refusal);
+        assert!(say(ServerRefusal::KeyMismatch).contains("keys"));
+    }
 
     #[test]
     fn errors_are_said_plainly() {

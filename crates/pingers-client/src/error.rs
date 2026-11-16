@@ -32,6 +32,18 @@ pub enum ClientError {
     /// The instance's relay or server settings do not make a transport.
     #[error("transport")]
     Transport(#[from] pingers_transport::TransportError),
+    /// The server needs a registration code from its operator before it takes this device
+    /// (design B.1): ask the user for one ("This server needs a code") and pass it to
+    /// `submit_registration_code`.
+    #[error("the server needs a registration code")]
+    RegistrationCodeRequired,
+    /// The server refused the registration code offered: nothing was set up, and another code
+    /// can be tried ("Registration code refused").
+    #[error("the server refused the registration code")]
+    RegistrationCodeRefused,
+    /// Adding a server failed; see [`ServerProblem`].
+    #[error("server")]
+    Server(#[from] ServerProblem),
     /// A blocking task panicked.
     #[error("internal")]
     Internal,
@@ -53,10 +65,36 @@ pub enum ClientError {
     /// The call needs a crate or a value that is not wired yet.
     #[error("unavailable")]
     Unavailable(#[from] Unavailable),
-    /// The server refused to make this device's account: it needs a registration code, or
-    /// the one offered is not one it accepts. No Party was created.
-    #[error("registration refused")]
-    RegistrationRefused,
+}
+
+/// Why a server could not be added (New party with another server, or an invite to a server
+/// this device has not used).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, thiserror::Error)]
+#[non_exhaustive]
+pub enum ServerProblem {
+    /// The address is not a server origin (`https://host[:port]`).
+    #[error("not a server address")]
+    InvalidAddress,
+    /// The server did not answer, or answered with something that is not Pingers.
+    #[error("server unreachable")]
+    Unreachable,
+    /// The server advertises no OHTTP relay: the app never talks to a server without one
+    /// (design B.12).
+    #[error("server advertises no privacy relay")]
+    NoRelay,
+    /// None of the server's relays answered.
+    #[error("privacy relay unreachable")]
+    RelayUnreachable,
+    /// The server's relay list said one thing directly and another through the relay.
+    #[error("server gave different relays")]
+    RelaysDiffer,
+    /// The keys the server serves are not the ones being trusted: an invite's pins do not
+    /// match, or the keys changed since they were shown. Shown as the relay key warning.
+    #[error("server keys do not match")]
+    KeyMismatch,
+    /// `trust_server` was called for a server that was not looked at first.
+    #[error("server not looked at")]
+    NotProbed,
 }
 
 /// What an unwired call waits for. Each goes when its crate or value lands.
@@ -80,4 +118,8 @@ pub enum Unavailable {
     /// not need them: a join request then carries no subscription.
     #[error("wake-up pushes are off")]
     WakePushesOff,
+    /// This device knows no such server (or knows it without key pins): look at it and trust
+    /// it first, or open an invite to it.
+    #[error("unknown server")]
+    UnknownServer,
 }

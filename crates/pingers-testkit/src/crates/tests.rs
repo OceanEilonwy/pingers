@@ -59,6 +59,7 @@ fn now<T>(future: impl Future<Output = T>) -> Result<T, TestError> {
 
 fn party_draft() -> Result<PartyDraft, TestError> {
     Ok(PartyDraft {
+        server: None,
         name: Name::new("Climbing crew")?,
         my_name: Name::new("Ana")?,
         colour: PartyColour::Teal,
@@ -131,7 +132,8 @@ fn call_every_port(fakes: &FakeCrates) -> Result<Vec<CrateCall>, TestError> {
     now(sync.push_tokens_changed(Some(tokens())))??;
     now(sync.set_wake_pushes(WakePushes::On, None))??;
     assert_eq!(now(sync.check_reachability())??, RelayStatus::Reachable);
-    now(sync.register_with_code(SecretText::new("otter".into())))??;
+    now(sync.submit_registration_code(None, SecretText::new("otter".into())))??;
+    now(sync.trust_server(other_server()?))??;
     assert_eq!(
         now(wake.run(WakeInput::Scheduled))??,
         WakeOutcome::default()
@@ -169,7 +171,8 @@ fn call_every_port(fakes: &FakeCrates) -> Result<Vec<CrateCall>, TestError> {
         CrateCall::PushTokensChanged(Some(tokens())),
         CrateCall::SetWakePushes(WakePushes::On, None),
         CrateCall::CheckReachability,
-        CrateCall::RegisterWithCode("otter".into()),
+        CrateCall::SubmitRegistrationCode(None, "otter".into()),
+        CrateCall::TrustServer(other_server()?),
         CrateCall::Wake(WakeInput::Scheduled),
         CrateCall::ChangeSetting(change),
         CrateCall::SendChat(MEETUP, body, None),
@@ -179,6 +182,38 @@ fn call_every_port(fakes: &FakeCrates) -> Result<Vec<CrateCall>, TestError> {
         CrateCall::RevokeLocation(MEETUP, PEER),
         CrateCall::LeaveMeetup(MEETUP),
     ])
+}
+
+fn other_server() -> Result<ServerId, TestError> {
+    Ok(ServerId::new("https://b.example".to_owned())?)
+}
+
+#[test]
+fn a_server_is_looked_at_as_the_test_set_it_or_is_unknown() -> TestResult {
+    let fakes = FakeCrates::new()?;
+    let sync = &fakes.crates().sync;
+    assert!(matches!(
+        now(sync.probe_server("b.example".into()))?,
+        Err(ClientError::Unavailable(Unavailable::UnknownServer))
+    ));
+    let probe = ServerProbe {
+        server: other_server()?,
+        operator: None,
+        relay: pingers_client::snapshot::Host::new("relay.b.example")?,
+        push_relay: None,
+        gateway_key: pingers_proto::KeyConfigHash::from_bytes([3; 32]),
+        known: false,
+    };
+    fakes.set_probe(Some(probe.clone()));
+    assert_eq!(now(sync.probe_server("b.example".into()))??, probe);
+    assert_eq!(
+        fakes.calls(),
+        [
+            CrateCall::ProbeServer("b.example".into()),
+            CrateCall::ProbeServer("b.example".into())
+        ]
+    );
+    Ok(())
 }
 
 #[test]

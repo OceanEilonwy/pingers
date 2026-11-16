@@ -5,6 +5,7 @@
 
 mod fakes;
 mod scenarios;
+mod servers;
 mod suppression;
 mod timing;
 
@@ -15,7 +16,7 @@ use pingers_crypto::AccountSigningKey;
 use pingers_gate::{LocationSharing, MinuteOfDay, PauseState, QuietHoursSetting};
 use pingers_geo::{Coordinate, GeofenceCapacity, Meters};
 use pingers_presence::{DataMode, EpochState, EpochTransition, SpotRef};
-use pingers_proto::{CoverReadRatio, Epoch, SizeClass};
+use pingers_proto::{CoverReadRatio, Epoch, ServerId, SizeClass};
 use pingers_testkit::{
     FakePlatform, PartyBuilder, PartyFixture, SpotFixture, TestRng, random_array, seeded_rng,
     test_clock,
@@ -25,8 +26,8 @@ use pingers_time::{Clock, ManualClock, UnixSeconds};
 use self::fakes::{FakeMeetups, FakeParties, FakeServer, RosterMember, World};
 use crate::ports::{PartyInfo, RegionId, SpotInfo};
 use crate::{
-    GeofenceEvent, GeofenceTransition, MailboxReads, WakeEnv, WakeError, WakeInput, WakeReport,
-    WakeSettings, WakeState, WakeTrigger,
+    BoardSnapshot, GeofenceEvent, GeofenceTransition, MailboxReads, WakeEnv, WakeError, WakeInput,
+    WakeReport, WakeSettings, WakeState, WakeTrigger,
 };
 
 /// The budget most tests give a wake (an FCM high-priority message allows about this much).
@@ -46,6 +47,8 @@ enum TestError {
     Geo(#[from] pingers_geo::GeoError),
     #[error(transparent)]
     Gate(#[from] pingers_gate::GateError),
+    #[error(transparent)]
+    Proto(#[from] pingers_proto::ProtoError),
     #[error("missing: {0}")]
     Missing(&'static str),
 }
@@ -55,10 +58,19 @@ fn member_key(index: u8) -> AccountSigningKey {
     AccountSigningKey::generate(&mut seeded_rng(10_u64.saturating_add(u64::from(index))))
 }
 
+/// The origin of the server the town's Party lives on.
+const TOWN_SERVER: &str = "https://town.example";
+
+/// A server origin for a test.
+fn server_id(origin: &str) -> Result<ServerId, TestError> {
+    Ok(ServerId::new(String::from(origin))?)
+}
+
 /// A Party with three Spots north of each other, two members, and the server they share.
 struct Town {
     party: PartyFixture,
     seed: [u8; 32],
+    server: ServerId,
     world: Arc<Mutex<World>>,
     clock: ManualClock,
 }
@@ -87,6 +99,7 @@ impl Town {
         Ok(Self {
             party,
             seed: random_array(&mut rng),
+            server: server_id(TOWN_SERVER)?,
             world: World::shared(),
             clock: test_clock(),
         })
@@ -136,6 +149,7 @@ impl Town {
             .collect();
         let info = PartyInfo {
             party: self.party.id,
+            server: self.server.clone(),
             epoch: self.settled_epoch(),
             own_leaf: member.leaf,
             knock_class: SizeClass::Bytes1024,
@@ -150,9 +164,11 @@ impl Town {
                 .collect(),
         };
         Ok(Phone {
+            home: self.server.clone(),
             platform: FakePlatform::new(self.clock.clone()),
             parties: FakeParties::new(info, self.seed, roster, member_key(index)),
             server: FakeServer::new(
+                self.server.clone(),
                 Arc::clone(&self.world),
                 self.clock.clone(),
                 index.saturating_add(1),
@@ -183,6 +199,8 @@ fn settings() -> Result<WakeSettings, TestError> {
 
 /// One phone: the fakes its ports run on, and its pipeline state.
 struct Phone {
+    /// The town server.
+    home: ServerId,
     platform: FakePlatform,
     parties: FakeParties,
     server: FakeServer,
@@ -236,9 +254,30 @@ impl Phone {
         })
     }
 
-    /// The real records in this phone's newest live lease.
+    /// What this phone remembers of the town server's board (empty if it has no board there).
+    fn board(&self) -> BoardSnapshot {
+        self.board_on(&self.home)
+    }
+
+    /// What this phone remembers of `server`'s board (empty if it has no board there).
+    fn board_on(&self, server: &ServerId) -> BoardSnapshot {
+        self.state
+            .snapshot()
+            .boards
+            .into_iter()
+            .find(|board| board.server == *server)
+            .unwrap_or_else(|| BoardSnapshot {
+                server: server.clone(),
+                leases: Vec::new(),
+                sent_knocks: Vec::new(),
+                decided_knocks: Vec::new(),
+                last_upload: None,
+            })
+    }
+
+    /// The real records in this phone's newest live lease on the town server.
     fn real_records(&self) -> usize {
-        self.state.snapshot().leases.last().map_or(0, |lease| {
+        self.board().leases.last().map_or(0, |lease| {
             lease
                 .slots
                 .iter()

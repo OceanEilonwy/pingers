@@ -10,6 +10,7 @@ mod consent;
 mod meetups;
 mod parties;
 mod pipeline;
+mod servers;
 mod settings;
 
 use std::path::PathBuf;
@@ -158,17 +159,10 @@ pub(crate) async fn assemble(crates: &Crates) -> Result<ClientSnapshot, ClientEr
     let pipeline = crates.wake.section().await?;
     let server = crates.sync.section().await?;
     let meetups = crates.meetups.section().await?;
-    let mut party_list = parties.parties;
-    // Every Party is on the instance's server until Parties can choose their server.
-    if let Some(operators) = &server.operators {
-        for party in &mut party_list {
-            party.config.declare(operators);
-        }
-    }
     Ok(ClientSnapshot {
         settings: pipeline.settings,
         gate: pipeline.gate,
-        parties: party_list,
+        parties: parties.parties,
         zones: pipeline.zones,
         meetups: meetups.meetups,
         alert: meetups.alert,

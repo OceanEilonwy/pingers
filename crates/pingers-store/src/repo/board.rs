@@ -12,28 +12,36 @@ use crate::codec::{
     bucket, read_array, read_bucket, read_optional_array, read_secret, read_time, time,
 };
 use crate::repo::expect_one;
-use crate::{Session, StoreError};
+use crate::server::Scope;
+use crate::{ServerSession, StoreError};
 
 /// How many segment hashes `board_seen` keeps (design C.2: "4 rows").
 pub const SEEN_SEGMENTS_KEPT: usize = 4;
 
-impl Session {
-    /// The current board lease (`lease` and `lease_slot` tables).
+impl ServerSession<'_> {
+    /// The current lease on this server's board (`lease` and `lease_slot` tables).
     #[must_use]
     pub fn leases(&self) -> Leases<'_> {
-        Leases { session: self }
+        Leases {
+            session: self.scope(),
+        }
     }
 
-    /// Knocks this device sent (`knock_out` table).
+    /// Knocks this device sent on this server's board (`knock_out` table).
     #[must_use]
     pub fn knocks_out(&self) -> KnocksOut<'_> {
-        KnocksOut { session: self }
+        KnocksOut {
+            session: self.scope(),
+        }
     }
 
-    /// Board segment hashes seen, for the equivocation check (`board_seen` table).
+    /// Segment hashes seen on this server's board, for the equivocation check
+    /// (`board_seen` table).
     #[must_use]
     pub fn board_seen(&self) -> BoardSeen<'_> {
-        BoardSeen { session: self }
+        BoardSeen {
+            session: self.scope(),
+        }
     }
 }
 
@@ -64,7 +72,7 @@ pub struct StoredLease {
 /// one in the same transaction, so the store never accumulates which Spots this device
 /// announced in past buckets.
 pub struct Leases<'session> {
-    session: &'session Session,
+    session: Scope<'session>,
 }
 
 impl Leases<'_> {
@@ -77,13 +85,15 @@ impl Leases<'_> {
     pub fn replace(&self, lease: &StoredLease) -> Result<(), StoreError> {
         self.session.transaction(|session| {
             session.with(|connection| {
-                connection.execute("DELETE FROM lease", [])?;
+                connection.execute("DELETE FROM lease WHERE server_key = ?1", [session.key()])?;
                 connection.execute(
-                    "INSERT INTO lease (lease_id, b0, revoke_key) VALUES (?1, ?2, ?3)",
+                    "INSERT INTO lease (lease_id, b0, revoke_key, server_key) \
+                     VALUES (?1, ?2, ?3, ?4)",
                     params![
                         lease.id.as_bytes(),
                         bucket(lease.start, "lease.b0")?,
                         lease.revoke_key.expose_bytes(),
+                        session.key(),
                     ],
                 )?;
                 let mut statement = connection.prepare(
@@ -113,15 +123,19 @@ impl Leases<'_> {
     pub fn current(&self) -> Result<Option<StoredLease>, StoreError> {
         self.session.with(|connection| {
             let header = connection
-                .query_row("SELECT lease_id, b0, revoke_key FROM lease", [], |row| {
-                    Ok((|| {
-                        Ok::<_, StoreError>((
-                            LeaseId::from_bytes(read_array(row, 0, "lease.lease_id")?),
-                            read_bucket(row, 1, "lease.b0")?,
-                            RevokeKey::from_bytes(read_secret(row, 2, "lease.revoke_key")?),
-                        ))
-                    })())
-                })
+                .query_row(
+                    "SELECT lease_id, b0, revoke_key FROM lease WHERE server_key = ?1",
+                    [self.session.key()],
+                    |row| {
+                        Ok((|| {
+                            Ok::<_, StoreError>((
+                                LeaseId::from_bytes(read_array(row, 0, "lease.lease_id")?),
+                                read_bucket(row, 1, "lease.b0")?,
+                                RevokeKey::from_bytes(read_secret(row, 2, "lease.revoke_key")?),
+                            ))
+                        })())
+                    },
+                )
                 .optional()?
                 .transpose()?;
             let Some((id, start, revoke_key)) = header else {
@@ -156,7 +170,10 @@ impl Leases<'_> {
     /// [`StoreError::Database`] if the delete fails.
     pub fn clear(&self) -> Result<(), StoreError> {
         self.session.with(|connection| {
-            connection.execute("DELETE FROM lease", [])?;
+            connection.execute(
+                "DELETE FROM lease WHERE server_key = ?1",
+                [self.session.key()],
+            )?;
             Ok(())
         })
     }
@@ -208,7 +225,7 @@ pub struct OutgoingKnock {
 
 /// Repository for the `knock_out` table.
 pub struct KnocksOut<'session> {
-    session: &'session Session,
+    session: Scope<'session>,
 }
 
 fn knock_from_row(row: &Row<'_>) -> Result<OutgoingKnock, StoreError> {
@@ -239,14 +256,15 @@ impl KnocksOut<'_> {
     pub fn insert(&self, knock: &OutgoingKnock) -> Result<(), StoreError> {
         self.session.with(|connection| {
             connection.execute(
-                "INSERT INTO knock_out (spot_id, matched_r, sent_at, state, reply_mailbox) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO knock_out (spot_id, matched_r, sent_at, state, reply_mailbox, \
+                 server_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     knock.spot.as_bytes(),
                     knock.matched.as_bytes(),
                     time(knock.sent_at, "knock_out.sent_at")?,
                     knock.state.code(),
                     knock.reply_mailbox.as_bytes(),
+                    self.session.key(),
                 ],
             )?;
             Ok(())
@@ -267,8 +285,14 @@ impl KnocksOut<'_> {
         self.session.with(|connection| {
             expect_one(
                 connection.execute(
-                    "UPDATE knock_out SET state = ?3 WHERE spot_id = ?1 AND matched_r = ?2",
-                    params![spot.as_bytes(), matched.as_bytes(), state.code()],
+                    "UPDATE knock_out SET state = ?3 \
+                     WHERE spot_id = ?1 AND matched_r = ?2 AND server_key = ?4",
+                    params![
+                        spot.as_bytes(),
+                        matched.as_bytes(),
+                        state.code(),
+                        self.session.key()
+                    ],
                 )?,
                 "knock_out",
             )
@@ -284,9 +308,11 @@ impl KnocksOut<'_> {
         self.session.with(|connection| {
             let mut statement = connection.prepare(
                 "SELECT spot_id, matched_r, sent_at, state, reply_mailbox FROM knock_out \
-                 WHERE state = ?1 ORDER BY sent_at, spot_id, matched_r",
+                 WHERE state = ?1 AND server_key = ?2 ORDER BY sent_at, spot_id, matched_r",
             )?;
-            let rows = statement.query_map([state.code()], |row| Ok(knock_from_row(row)))?;
+            let rows = statement.query_map(params![state.code(), self.session.key()], |row| {
+                Ok(knock_from_row(row))
+            })?;
             rows.map(|row| row?).collect()
         })
     }
@@ -300,8 +326,8 @@ impl KnocksOut<'_> {
     pub fn delete_sent_before(&self, cutoff: UnixSeconds) -> Result<usize, StoreError> {
         self.session.with(|connection| {
             Ok(connection.execute(
-                "DELETE FROM knock_out WHERE sent_at < ?1",
-                [time(cutoff, "cutoff")?],
+                "DELETE FROM knock_out WHERE sent_at < ?1 AND server_key = ?2",
+                params![time(cutoff, "cutoff")?, self.session.key()],
             )?)
         })
     }
@@ -309,7 +335,7 @@ impl KnocksOut<'_> {
 
 /// Repository for the `board_seen` table: the newest [`SEEN_SEGMENTS_KEPT`] segment hashes.
 pub struct BoardSeen<'session> {
-    session: &'session Session,
+    session: Scope<'session>,
 }
 
 impl BoardSeen<'_> {
@@ -324,16 +350,22 @@ impl BoardSeen<'_> {
         self.session.transaction(|session| {
             session.with(|connection| {
                 connection.execute(
-                    "INSERT OR REPLACE INTO board_seen (b0, segment_sha256) VALUES (?1, ?2)",
+                    "INSERT OR REPLACE INTO board_seen (b0, segment_sha256, server_key) \
+                     VALUES (?1, ?2, ?3)",
                     params![
                         bucket(segment.start, "board_seen.b0")?,
-                        segment.hash.as_bytes()
+                        segment.hash.as_bytes(),
+                        session.key()
                     ],
                 )?;
                 connection.execute(
-                    "DELETE FROM board_seen WHERE b0 NOT IN \
-                     (SELECT b0 FROM board_seen ORDER BY b0 DESC LIMIT ?1)",
-                    [i64::try_from(SEEN_SEGMENTS_KEPT).unwrap_or(i64::MAX)],
+                    "DELETE FROM board_seen WHERE server_key = ?2 AND b0 NOT IN \
+                     (SELECT b0 FROM board_seen WHERE server_key = ?2 \
+                     ORDER BY b0 DESC LIMIT ?1)",
+                    params![
+                        i64::try_from(SEEN_SEGMENTS_KEPT).unwrap_or(i64::MAX),
+                        session.key()
+                    ],
                 )?;
                 Ok(())
             })
@@ -347,9 +379,11 @@ impl BoardSeen<'_> {
     /// [`StoreError::Corrupt`] if a stored value does not decode.
     pub fn list(&self) -> Result<Vec<SeenSegment>, StoreError> {
         self.session.with(|connection| {
-            let mut statement =
-                connection.prepare("SELECT b0, segment_sha256 FROM board_seen ORDER BY b0 DESC")?;
-            let rows = statement.query_map([], |row| {
+            let mut statement = connection.prepare(
+                "SELECT b0, segment_sha256 FROM board_seen WHERE server_key = ?1 \
+                 ORDER BY b0 DESC",
+            )?;
+            let rows = statement.query_map([self.session.key()], |row| {
                 Ok((|| {
                     Ok(SeenSegment {
                         start: read_bucket(row, 0, "board_seen.b0")?,
@@ -392,7 +426,8 @@ mod tests {
     #[test]
     fn lease_round_trips_with_slots_in_order() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let leases = fixture.session.leases();
+        let server = fixture.server()?;
+        let leases = server.leases();
         assert!(leases.current()?.is_none());
         let stored = lease(1, 2_000_000)?;
         leases.replace(&stored)?;
@@ -412,7 +447,8 @@ mod tests {
     #[test]
     fn replacing_a_lease_keeps_no_trace_of_the_old_one() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let leases = fixture.session.leases();
+        let server = fixture.server()?;
+        let leases = server.leases();
         leases.replace(&lease(1, 10)?)?;
         leases.replace(&lease(2, 11)?)?;
         assert_eq!(fixture.rows("lease")?, 1);
@@ -440,7 +476,8 @@ mod tests {
     #[test]
     fn knocks_move_between_states() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let knocks = fixture.session.knocks_out();
+        let server = fixture.server()?;
+        let knocks = server.knocks_out();
         let first = knock(1, 100);
         let second = knock(2, 50);
         knocks.insert(&first)?;
@@ -474,7 +511,8 @@ mod tests {
     #[test]
     fn old_knocks_are_pruned_by_send_time() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let knocks = fixture.session.knocks_out();
+        let server = fixture.server()?;
+        let knocks = server.knocks_out();
         knocks.insert(&knock(1, 100))?;
         knocks.insert(&knock(2, 200))?;
         assert_eq!(knocks.delete_sent_before(UnixSeconds::new(100))?, 0);
@@ -493,7 +531,8 @@ mod tests {
     #[test]
     fn board_seen_keeps_the_newest_four() -> Result<(), TestError> {
         let fixture = Fixture::new()?;
-        let seen = fixture.session.board_seen();
+        let server = fixture.server()?;
+        let seen = server.board_seen();
         for start in [3, 1, 5, 2, 4] {
             seen.record(&segment(start, 0)?)?;
         }

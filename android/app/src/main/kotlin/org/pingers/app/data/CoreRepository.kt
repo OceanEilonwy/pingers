@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.res.Resources
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -146,11 +148,16 @@ class CoreRepository(
         builtIn = host(BuildConfig.SERVER_HOST),
         // The instance from the build (CoreHost.instance); checked when New party opens.
         server = uniffi.pingers.ServiceDraft(host(BuildConfig.SERVER_HOST), uniffi.pingers.Reachability.Checking),
+        serverKeys = uniffi.pingers.ServerKeysDraft.NotLookedUp,
         relay = uniffi.pingers.ServiceDraft(host(BuildConfig.OHTTP_RELAY), uniffi.pingers.Reachability.Checking),
         pushRelay = uniffi.pingers.PushRelayChoice.Official,
         pushRelayOperator = null,
         postQuantum = false,
     )
+
+    /** Another server as New party last looked it up, for "Trust this server's keys". */
+    private var lookedUp: uniffi.pingers.ServerLook? = null
+    private var lookUp: Job? = null
 
     private var editingSpot: SpotId? = null
     private var spotDraft = uniffi.pingers.SpotDraft("", uniffi.pingers.ShapeKind.CIRCLE, 150.0, null)
@@ -596,19 +603,19 @@ class CoreRepository(
 
     override fun setServerChoice(choice: ServerChoice) {
         val builtIn = choice == ServerChoice.BUILT_IN
+        lookedUp = null
         partyDraft = partyDraft.copy(
             serverChoice = choice,
-            // The core has no check for a typed server (only the build's instance is checked),
-            // so another server stays unreachable and Create stays off until it can be checked.
+            // Another server is looked up once its address is typed (setServer).
             server = uniffi.pingers.ServiceDraft(
                 if (builtIn) partyDraft.builtIn else "",
                 if (builtIn) uniffi.pingers.Reachability.Checking else uniffi.pingers.Reachability.Unreachable,
             ),
+            serverKeys = uniffi.pingers.ServerKeysDraft.NotLookedUp,
         )
         createError = null
         publishNewParty()
-        // The app's server is checked again; another one once its address is typed.
-        if (choice == ServerChoice.BUILT_IN) checkServices()
+        if (builtIn) checkServices()
     }
 
     override fun setRegistrationCode(code: String) {
@@ -669,6 +676,8 @@ class CoreRepository(
      */
     private fun checkServices() {
         publishNewParty()
+        // Another server was checked when it was looked up (setServer).
+        if (partyDraft.serverChoice == ServerChoice.ANOTHER) return
         call("reachability", onError = { markServices(null) }) { core ->
             val check = core.checkReachability()
             PhoneLog.recordRelayCheck(context)
@@ -686,8 +695,7 @@ class CoreRepository(
         val check = operator?.let { uniffi.pingers.Reachability.Reachable(it) }
             ?: uniffi.pingers.Reachability.Unreachable
         partyDraft = partyDraft.copy(
-            // The check reaches the app's server only; another server has nothing to check it yet.
-            server = if (partyDraft.serverChoice == ServerChoice.BUILT_IN) partyDraft.server.copy(check = check) else partyDraft.server,
+            server = partyDraft.server.copy(check = check),
             relay = partyDraft.relay.copy(check = check),
             pushRelayOperator = snapshot?.pushRelayOperator() ?: partyDraft.pushRelayOperator,
         )
@@ -695,8 +703,58 @@ class CoreRepository(
     }
 
     override fun setServer(url: String) {
-        partyDraft = partyDraft.copy(server = partyDraft.server.copy(host = url))
+        partyDraft = partyDraft.copy(
+            server = partyDraft.server.copy(host = url, check = uniffi.pingers.Reachability.Checking),
+            serverKeys = uniffi.pingers.ServerKeysDraft.NotLookedUp,
+        )
+        lookedUp = null
+        createError = null
         publishNewParty()
+        if (partyDraft.serverChoice != ServerChoice.ANOTHER) return
+        // Looked up once typing pauses: who runs it, its relays, and the keys it serves.
+        // Nothing is recorded until the user trusts the keys.
+        lookUp?.cancel()
+        lookUp = scope.launch {
+            delay(LOOK_UP_PAUSE_MS)
+            val c = core ?: return@launch
+            val look = try {
+                c.probeServer(url)
+            } catch (e: CoreException) {
+                Log.w(TAG, "look up server: ${e.message}")
+                if (partyDraft.server.host == url) {
+                    partyDraft = partyDraft.copy(server = partyDraft.server.copy(check = uniffi.pingers.Reachability.Unreachable))
+                    createError = e.message
+                    publishNewParty()
+                }
+                return@launch
+            }
+            if (partyDraft.server.host != url) return@launch
+            lookedUp = look
+            showLook(look, trusted = look.known)
+        }
+    }
+
+    /** What looking up another server found, on New party and Advanced. */
+    private fun showLook(look: uniffi.pingers.ServerLook, trusted: Boolean) {
+        // The relay publishes no operator of its own: counted as the server's, the cautious reading.
+        val operator = look.operator?.let { uniffi.pingers.Reachability.Reachable(it) }
+            ?: uniffi.pingers.Reachability.Unreachable
+        partyDraft = partyDraft.copy(
+            server = partyDraft.server.copy(host = host(look.server), check = operator),
+            relay = uniffi.pingers.ServiceDraft(look.relay, operator),
+            pushRelayOperator = look.pushRelayOperator ?: partyDraft.pushRelayOperator,
+            serverKeys = if (trusted) uniffi.pingers.ServerKeysDraft.Trusted
+            else uniffi.pingers.ServerKeysDraft.ToTrust(look.gatewayKey),
+        )
+        publishNewParty()
+    }
+
+    override fun trustServerKeys() {
+        val look = lookedUp ?: return
+        call("trust server", onError = { why -> createError = why; publishNewParty() }) { core ->
+            core.trustServer(look.server)
+            showLook(look, trusted = true)
+        }
     }
 
     override fun setRelay(url: String) {
@@ -1027,5 +1085,7 @@ class CoreRepository(
 
     private companion object {
         const val TAG = "CoreRepository"
+        /** How long typing pauses before another server is looked up. */
+        const val LOOK_UP_PAUSE_MS = 800L
     }
 }

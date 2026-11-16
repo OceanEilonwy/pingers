@@ -55,30 +55,44 @@ async fn a_join_goes_ahead_without_a_push_token_and_every_join_needs_a_real_link
     let config = HarnessConfig::default();
     let harness = InProcessHarness::start(&config)?;
     let rig = rig(&harness, &config, harness_pins(&harness)?).await?;
-    let link = pingers_client::snapshot::InviteUrl::new("https://pingers.invalid/j#x")?;
+    let link = harness_link(&harness, &config)?;
     let name = pingers_client::snapshot::Name::new("Bob")?;
-    // No token from the platform yet: the request would go without a subscription (the device
-    // polls instead), so the link is read next, and this one holds no invite.
-    assert!(matches!(
-        rig.client.open_invite(link.clone(), name.clone()).await,
-        Err(ClientError::Parties(_))
-    ));
+    let asked = |rig: &Rig| {
+        matches!(
+            rig.client.snapshot().joining,
+            Some(pingers_client::snapshot::Joining::Asked { .. })
+        )
+    };
+    // No token from the platform yet: the request goes without a subscription (the device reads
+    // its reply mailbox itself); nobody reads this invite mailbox, so the join stays asked.
+    rig.client.open_invite(link.clone(), name.clone()).await?;
+    assert!(asked(&rig));
+    rig.client.withdraw_join().await?;
+    assert_eq!(rig.client.snapshot().joining, None);
     rig.platform.set_push_registration(Some(PushRegistration {
         platform: PushPlatform::UnifiedPush,
         token: PushToken::from_bytes(b"https://push.harness.invalid/up/abc".to_vec()),
     }));
-    // With a token the subscription is sealed to the pinned push relay key; the link is read
-    // next, and this one holds no invite.
-    assert!(matches!(
-        rig.client.open_invite(link, name).await,
-        Err(ClientError::Parties(_))
-    ));
-    // Nothing was started, so there is nothing to withdraw.
+    // With a token the subscription is sealed to the pinned push relay key and the request
+    // goes out the same way.
+    rig.client.open_invite(link, name).await?;
+    assert!(asked(&rig));
+    rig.client.withdraw_join().await?;
+    assert_eq!(rig.client.snapshot().joining, None);
+    // Withdrawn, there is nothing left to withdraw; and a link that is not an invite starts
+    // nothing.
     assert!(matches!(
         rig.client.withdraw_join().await,
         Err(ClientError::Parties(
             pingers_parties::PartiesError::UnknownJoin
         ))
+    ));
+    let bad = pingers_client::snapshot::InviteUrl::new("https://pingers.invalid/j#x")?;
+    assert!(matches!(
+        rig.client
+            .open_invite(bad, pingers_client::snapshot::Name::new("Bob")?)
+            .await,
+        Err(ClientError::Parties(_))
     ));
     Ok(())
 }
@@ -118,10 +132,8 @@ struct Rig {
 /// The pins an official build would carry for the harness: the served key and a next one.
 struct Pins {
     gateway: KeyPins,
-    /// `None`: a build without push relay pins, which pins on first use.
+    /// `None`: a build without push relay pins, which seals no token.
     push_relay: Option<KeyPins>,
-    /// A first-use pin already recorded by an earlier run.
-    recorded: Option<[u8; 32]>,
 }
 
 fn harness_pins(harness: &InProcessHarness) -> Result<Pins, TestError> {
@@ -142,7 +154,6 @@ fn harness_pins(harness: &InProcessHarness) -> Result<Pins, TestError> {
     Ok(Pins {
         gateway: KeyPins::new([key_config_hash(&endpoints.ohttp_key_config), next])?,
         push_relay: Some(KeyPins::new([next, push_hash])?),
-        recorded: None,
     })
 }
 
@@ -170,7 +181,7 @@ enum Account {
     /// Saved in the store before the client opens, as a registered device has it.
     Preset,
     /// None: the client registers one itself on its first credentialed request, trusting
-    /// the harness's HTTPS front and pinning keys on first use.
+    /// the harness's HTTPS front and the build's key pins.
     Register,
 }
 
@@ -207,32 +218,17 @@ async fn rig_as(
         database.session()?.identity().save(&Identity {
             account: account_id(&signing_key.public_key()),
             signing_key,
-            server: server.clone(),
-            server_pin: KeyConfigHash::from_bytes([3; 32]),
         })?;
-        if let Some(pin) = pins.recorded {
-            pingers_mls::MlsStorage::write(&database.session()?, PIN_RECORD, &pin)?;
-        }
     }
-    let instance = match account {
-        Account::Preset => Instance {
-            server,
-            relay: format!("http://{relay}"),
-            push_relay: Some(format!("https://{}/", endpoints.push_relay)),
-            gateway_pins: Some(pins.gateway),
-            push_relay_pins: pins.push_relay,
-            trust: Trust::Mozilla,
-            registration_code: None,
-        },
-        Account::Register => Instance {
-            server,
-            relay: format!("http://{relay}/ohttp"),
-            push_relay: Some(format!("https://{}", endpoints.push_relay)),
-            gateway_pins: None,
-            push_relay_pins: None,
-            trust: Trust::from_pem(&endpoints.push_relay_ca)?,
-            registration_code: None,
-        },
+    // Nothing is pinned on first use: either way the build's pins come with the instance.
+    let instance = Instance {
+        server,
+        relay: format!("http://{relay}"),
+        push_relay: Some(format!("https://{}/", endpoints.push_relay)),
+        gateway_pins: Some(pins.gateway),
+        push_relay_pins: pins.push_relay,
+        trust: Trust::from_pem(&endpoints.push_relay_ca)?,
+        registration_code: None,
     };
     let clock = config.clock.clone();
     let platform = FakePlatform::new(clock.clone());
@@ -333,7 +329,6 @@ async fn unpinned_keys_are_refused_with_first_use_off() -> Result<(), TestError>
         Pins {
             gateway: pins.gateway,
             push_relay: Some(stranger.clone()),
-            recorded: None,
         },
     )
     .await?;
@@ -367,6 +362,19 @@ async fn unpinned_keys_are_refused_with_first_use_off() -> Result<(), TestError>
         gateway_wrong.client.snapshot().relay,
         RelayStatus::KeyMismatch
     );
+    // The user is told, once, after the next wake.
+    gateway_wrong.client.on_wake().await?;
+    assert_eq!(
+        gateway_wrong
+            .events
+            .events()
+            .iter()
+            .filter(
+                |event| event.notice_kind() == Some(pingers_testkit::NoticeKind::RelayKeyMismatch)
+            )
+            .count(),
+        1
+    );
     Ok(())
 }
 
@@ -382,18 +390,40 @@ async fn rig_with_gateway(
         Pins {
             gateway,
             push_relay: pins.push_relay,
-            recorded: None,
         },
     )
     .await
 }
 
-/// Where the client keeps a first-use push relay pin.
+/// Where the client once kept a first-use push relay pin: it never writes one now.
 const PIN_RECORD: &[u8] = b"pingers-client/v1/push-relay-pin";
 
 fn recorded_pin(rig: &Rig) -> Result<Option<Vec<u8>>, TestError> {
     let database = Database::open(&rig.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
     Ok(pingers_mls::MlsStorage::read(&database.session()?, PIN_RECORD)?.map(|pin| pin.to_vec()))
+}
+
+/// An invite link to the harness server whose mailbox nobody reads.
+fn harness_link(
+    harness: &InProcessHarness,
+    config: &HarnessConfig,
+) -> Result<pingers_client::snapshot::InviteUrl, TestError> {
+    let link = pingers_parties::InviteLink::new(&pingers_proto::InvitePayload {
+        server: ServerId::new(harness.endpoints().server_id.clone())?,
+        invite_mailbox: pingers_proto::MailboxId::from_bytes([3; 16]),
+        invite_secret: pingers_proto::SecretBytes::new([4; 32]),
+        inviter_fingerprint: pingers_proto::InviterFingerprint::from_bytes([5; 8]),
+        expires: pingers_time::Clock::now(&config.clock)
+            .checked_add(std::time::Duration::from_hours(1))
+            .ok_or(TestError::Setup("time"))?,
+        gateway_pins: vec![pingers_crypto::key_config_hash(
+            &harness.endpoints().ohttp_key_config,
+        )],
+        push_relay_pins: Vec::new(),
+        registration_code: None,
+    })
+    .map_err(|_bad| TestError::Setup("invite link"))?;
+    Ok(pingers_client::snapshot::InviteUrl::new(link.as_str())?)
 }
 
 fn up_token(rig: &Rig) {
@@ -404,49 +434,27 @@ fn up_token(rig: &Rig) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn without_push_relay_pins_the_first_key_is_recorded_and_then_enforced()
--> Result<(), TestError> {
+async fn without_push_relay_pins_no_token_is_sealed_and_no_key_is_pinned() -> Result<(), TestError>
+{
     let config = HarnessConfig::default();
     let harness = InProcessHarness::start(&config)?;
     let pins = harness_pins(&harness)?;
-    let expected = pins
-        .push_relay
-        .as_ref()
-        .and_then(|pins| pins.hashes().get(1).copied())
-        .ok_or(TestError::Setup("harness pin"))?;
-    let first = rig(
-        &harness,
-        &config,
-        Pins {
-            gateway: pins.gateway.clone(),
-            push_relay: None,
-            recorded: None,
-        },
-    )
-    .await?;
-    up_token(&first);
-    first.client.set_wake_pushes(WakePushes::On).await?;
-    assert_eq!(recorded_pin(&first)?, Some(expected.as_bytes().to_vec()));
-
-    // A recorded pin the relay's key does not match: the key is refused, the pin kept.
-    let tampered = rig(
+    let rig = rig(
         &harness,
         &config,
         Pins {
             gateway: pins.gateway,
             push_relay: None,
-            recorded: Some([7; 32]),
         },
     )
     .await?;
-    up_token(&tampered);
+    up_token(&rig);
+    // Nothing is pinned on first use: with no pins for its key the push relay gets no token.
     assert!(matches!(
-        tampered.client.set_wake_pushes(WakePushes::On).await,
-        Err(ClientError::Sync(
-            pingers_sync::SyncError::PushRelayKeyMismatch
-        ))
+        rig.client.set_wake_pushes(WakePushes::On).await,
+        Err(ClientError::Unavailable(Unavailable::NoPushRelay))
     ));
-    assert_eq!(recorded_pin(&tampered)?, Some(vec![7; 32]));
+    assert_eq!(recorded_pin(&rig)?, None);
     Ok(())
 }
 
@@ -469,6 +477,30 @@ async fn turning_wake_pushes_off_drops_the_seals() -> Result<(), TestError> {
             pingers_parties::PartiesError::InvalidLink
         ))
     ));
+    // And a mailbox registered from now on (an invite's) wakes nobody.
+    let party = rig
+        .client
+        .create_party(pingers_client::ports::PartyDraft {
+            server: None,
+            name: pingers_client::snapshot::Name::new("Climbing")?,
+            my_name: pingers_client::snapshot::Name::new("Ana")?,
+            colour: pingers_client::snapshot::PartyColour::Blue,
+            post_quantum: pingers_client::snapshot::PostQuantum::Off,
+        })
+        .await?;
+    let link = rig.client.create_invite(party).await?;
+    let mailbox = pingers_parties::InviteLink::from_text(link.url.as_str().to_owned())
+        .payload()
+        .map_err(|_bad| TestError::Setup("invite link"))?
+        .invite_mailbox;
+    let database = Database::open(&rig.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+    let session = database.session()?;
+    let server = session.server(&ServerId::new(harness.endpoints().server_id.clone())?)?;
+    let invite = server
+        .mailboxes()
+        .get(&mailbox)?
+        .ok_or(TestError::Setup("invite mailbox not stored"))?;
+    assert!(invite.push.is_none(), "no push token is sealed into it");
     Ok(())
 }
 
@@ -548,7 +580,6 @@ async fn a_push_relay_key_off_the_pins_downgrades_wake_pushes() -> Result<(), Te
         Pins {
             gateway: pins.gateway,
             push_relay: Some(KeyPins::new([KeyConfigHash::from_bytes([1; 32])])?),
-            recorded: None,
         },
     )
     .await?;
@@ -602,6 +633,7 @@ async fn climbing_crew(ana: &Rig) -> Result<pingers_proto::PartyId, TestError> {
     Ok(ana
         .client
         .create_party(PartyDraft {
+            server: None,
             name: Name::new("Climbing crew")?,
             my_name: Name::new("Ana")?,
             colour: PartyColour::Teal,
@@ -611,11 +643,16 @@ async fn climbing_crew(ana: &Rig) -> Result<pingers_proto::PartyId, TestError> {
 }
 
 /// Invite mailboxes pooled on `rig`'s device, ready for its next link.
-fn pooled_invites(rig: &Rig, config: &HarnessConfig) -> Result<u32, TestError> {
+fn pooled_invites(
+    harness: &InProcessHarness,
+    rig: &Rig,
+    config: &HarnessConfig,
+) -> Result<u32, TestError> {
     let database = Database::open(&rig.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
     let now = pingers_time::Clock::now(&config.clock);
-    Ok(database
-        .session()?
+    let session = database.session()?;
+    let server = session.server(&ServerId::new(harness.endpoints().server_id.clone())?)?;
+    Ok(server
         .mailboxes()
         .pooled_count(pingers_store::MailboxPurpose::Invite, now)?)
 }
@@ -668,7 +705,7 @@ async fn ask_compare_codes_let_in_then_turn_the_next_one_away() -> Result<(), Te
     assert_eq!(request.code, ben_code);
     assert_eq!(request.shared_at, shared_at);
     // Being in a Party, Ana keeps an invite mailbox pooled for the next link.
-    assert_eq!(pooled_invites(&ana, &config)?, 1);
+    assert_eq!(pooled_invites(&harness, &ana, &config)?, 1);
     assert!(
         ana.events
             .events()
@@ -1105,15 +1142,65 @@ impl Phone {
             DatabaseKey::from_bytes(Zeroizing::new(KEY)),
         )?;
         let session = database.session()?;
-        let group = session
+        let row = session
             .parties()
             .get(&party)?
-            .ok_or(TestError::Setup("no such Party"))?
-            .group;
+            .ok_or(TestError::Setup("no such Party"))?;
+        let group = row.group;
         Ok(session
+            .server(&row.server)?
             .subscriptions()
             .get(&group)?
             .map(|subscription| subscription.handle))
+    }
+
+    /// The id of this phone's own subscription to `party`'s group, if it has one.
+    fn own_subscription(
+        &self,
+        party: pingers_proto::PartyId,
+    ) -> Result<Option<pingers_proto::SubscriptionId>, TestError> {
+        let database = Database::open(
+            &self.rig.database,
+            DatabaseKey::from_bytes(Zeroizing::new(KEY)),
+        )?;
+        let session = database.session()?;
+        let row = session
+            .parties()
+            .get(&party)?
+            .ok_or(TestError::Setup("no such Party"))?;
+        Ok(session
+            .server(&row.server)?
+            .subscriptions()
+            .get(&row.group)?
+            .map(|subscription| subscription.id))
+    }
+
+    /// The subscription id `other` last told this phone it holds in `party`'s group.
+    fn known_subscription(
+        &self,
+        party: pingers_proto::PartyId,
+        other: &Self,
+    ) -> Result<Option<pingers_proto::SubscriptionId>, TestError> {
+        let theirs = Database::open(
+            &other.rig.database,
+            DatabaseKey::from_bytes(Zeroizing::new(KEY)),
+        )?;
+        let key = theirs
+            .session()?
+            .identity()
+            .load()?
+            .ok_or(TestError::Setup("no identity"))?
+            .signing_key
+            .public_key();
+        drop(theirs);
+        let database = Database::open(
+            &self.rig.database,
+            DatabaseKey::from_bytes(Zeroizing::new(KEY)),
+        )?;
+        Ok(database
+            .session()?
+            .member_subscriptions()
+            .get(&party, &key)?)
     }
 
     /// The names of `party`'s Spots on this phone, sorted.
@@ -1253,6 +1340,18 @@ async fn a_push_token_that_comes_late_subscribes_to_the_parties() -> Result<(), 
     ben.save_spot(party, None, "Boulders").await?;
     stack.woken(&ana, party, seen).await?;
     assert_eq!(ana.spots(party)?, ["Boulders", "Crag"]);
+
+    // Each told the other the subscription it added, so whoever removes one later drops the
+    // right subscription from the server.
+    assert_eq!(
+        ben.known_subscription(party, &ana)?,
+        ana.own_subscription(party)?
+    );
+    assert_eq!(
+        ana.known_subscription(party, &ben)?,
+        ben.own_subscription(party)?
+    );
+    assert!(ana.own_subscription(party)?.is_some());
     Ok(())
 }
 

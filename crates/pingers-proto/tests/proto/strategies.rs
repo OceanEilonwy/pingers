@@ -219,16 +219,24 @@ pub(crate) fn invite_payload() -> impl Strategy<Value = InvitePayload> {
         bytes32(),
         uniform::<_, 8>(any::<u8>()),
         unix_seconds(),
+        (
+            proptest::collection::vec(bytes32(), 1..=InvitePayload::MAX_PINS),
+            proptest::collection::vec(bytes32(), 0..=InvitePayload::MAX_PINS),
+        ),
         option::of(text(40).prop_filter("never empty", |code| !code.is_empty())),
     )
         .prop_map(
-            |(server, mailbox, secret, fingerprint, expires, code)| InvitePayload {
-                server,
-                invite_mailbox: MailboxId::from_bytes(mailbox),
-                invite_secret: SecretBytes::new(secret),
-                inviter_fingerprint: InviterFingerprint::from_bytes(fingerprint),
-                expires,
-                registration_code: code.map(SecretText::new),
+            |(server, mailbox, secret, fingerprint, expires, (gateway, push), code)| {
+                InvitePayload {
+                    server,
+                    invite_mailbox: MailboxId::from_bytes(mailbox),
+                    invite_secret: SecretBytes::new(secret),
+                    inviter_fingerprint: InviterFingerprint::from_bytes(fingerprint),
+                    expires,
+                    gateway_pins: gateway.into_iter().map(KeyConfigHash::from_bytes).collect(),
+                    push_relay_pins: push.into_iter().map(KeyConfigHash::from_bytes).collect(),
+                    registration_code: code.map(SecretText::new),
+                }
             },
         )
 }

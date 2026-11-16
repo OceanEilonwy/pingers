@@ -23,7 +23,6 @@ use pingers_proto::{GroupId, MailboxId, MailboxPush, SubscriptionId, TimeToLive}
 use pingers_store::{Mailbox, MailboxPurpose, SealStamp, StoredSubscription};
 use pingers_time::UnixSeconds;
 
-use crate::engine::blocking;
 use crate::mailbox::sealed_push;
 use crate::{
     ApiRequest, GroupCall, NotSentReason, PoolRefill, PoolTarget, PushSeal, SyncEngine, SyncError,
@@ -380,7 +379,7 @@ impl SyncEngine {
         groups: HashSet<GroupId>,
         now: UnixSeconds,
     ) -> Result<(Vec<Mailbox>, Vec<StoredSubscription>), SyncError> {
-        blocking(&self.database, move |session| {
+        self.blocking(move |session| {
             let mut subscriptions = session.subscriptions().all()?;
             for gone in subscriptions
                 .iter()
@@ -457,7 +456,7 @@ impl SyncEngine {
 
     /// Forgets the registration `task` is about, which the server answered 404 for.
     async fn forget(&self, task: Task) -> Result<(), SyncError> {
-        blocking(&self.database, move |session| {
+        self.blocking(move |session| {
             match task {
                 Task::AddSubscription(group)
                 | Task::ResealSubscription(group)
@@ -515,19 +514,18 @@ impl SyncEngine {
         let stamp = seal.map(|(_, desired)| desired);
         let update = MailboxPush { push };
         let id = *mailbox;
-        let request = blocking(&self.database, move |session| {
-            let stored = session
-                .mailboxes()
-                .get(&id)?
-                .ok_or(SyncError::UnknownMailbox)?;
-            ApiRequest::replace_mailbox_push(&id, &stored.read_key, &update)
-        })
-        .await?;
+        let request = self
+            .blocking(move |session| {
+                let stored = session
+                    .mailboxes()
+                    .get(&id)?
+                    .ok_or(SyncError::UnknownMailbox)?;
+                ApiRequest::replace_mailbox_push(&id, &stored.read_key, &update)
+            })
+            .await?;
         self.exchange(request, budget).await?.success()?;
-        blocking(&self.database, move |session| {
-            Ok(session.mailboxes().set_push(&id, handle, stamp)?)
-        })
-        .await
+        self.blocking(move |session| Ok(session.mailboxes().set_push(&id, handle, stamp)?))
+            .await
     }
 }
 

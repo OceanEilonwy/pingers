@@ -95,7 +95,11 @@ fn upgrade_party(session: &Session, party: &PartyId) -> Result<(), PartiesError>
         key
     };
     if let Some(bytes) = take(session, &key(SETTINGS))? {
-        StoredSettings::decode(&bytes)?.write(session, party)?;
+        // The Party's server is its row's since the store moved every Party onto a server
+        // (schema version 10); the old record's copy is not trusted to be spelt the same.
+        let mut settings = StoredSettings::decode(&bytes)?;
+        settings.server = crate::lifecycle::party_row(session, party)?.server;
+        settings.write(session, party)?;
     }
     if let Some(bytes) = take(session, &key(EPOCHS))? {
         // Oldest first, so the newest ends up newest in the table too.
@@ -162,8 +166,10 @@ fn upgrade_joins(session: &Session) -> Result<(), PartiesError> {
         let mut reader = Reader::new(key.get(prefix.len()..).unwrap_or_default(), "join key");
         let reply = MailboxId::from_bytes(reader.fixed()?);
         reader.end()?;
-        if let Some(bytes) = take(session, &key)? {
-            session.party_joins().put(&decode_joining(reply, &bytes)?)?;
+        if let Some(bytes) = take(session, &key)?
+            && let Some(join) = decode_joining(reply, &bytes)?
+        {
+            session.party_joins().put(&join)?;
         }
     }
     Ok(())
@@ -247,9 +253,14 @@ fn decode_via(bytes: &[u8]) -> Result<JoinedVia, PartiesError> {
     Ok(JoinedVia { inviter, code })
 }
 
-fn decode_joining(reply: MailboxId, bytes: &[u8]) -> Result<PartyJoin, PartiesError> {
+/// An old join record, or `None` for one whose link is in the layout from before links carried
+/// the server's key pins (pinning its server blindly is what pins exist to avoid): that join is
+/// dropped, and the joiner opens a new link.
+fn decode_joining(reply: MailboxId, bytes: &[u8]) -> Result<Option<PartyJoin>, PartiesError> {
     let mut reader = Reader::new(bytes, "join record");
-    let payload = InvitePayload::decode(reader.variable()?)?;
+    let Ok(payload) = InvitePayload::decode(reader.variable()?) else {
+        return Ok(None);
+    };
     let name = DisplayName::new(reader.text()?)?;
     let subscription = match reader.byte()? {
         0 => None,
@@ -264,7 +275,7 @@ fn decode_joining(reply: MailboxId, bytes: &[u8]) -> Result<PartyJoin, PartiesEr
     };
     let asked_at = UnixSeconds::new(reader.u64()?);
     reader.end()?;
-    Ok(PartyJoin {
+    Ok(Some(PartyJoin {
         reply,
         payload,
         name,
@@ -272,7 +283,7 @@ fn decode_joining(reply: MailboxId, bytes: &[u8]) -> Result<PartyJoin, PartiesEr
         key_package,
         quantum_resistant,
         asked_at,
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -306,6 +317,7 @@ mod tests {
             own_leaf: LeafIndex::new(0),
             created_at: UnixSeconds::new(1),
             location_visibility: None,
+            server: ServerId::new(crate::test_support::SERVER.into())?,
         })?;
         let key = |suffix: &[u8]| party_record_key(&party, suffix);
         let settings = StoredSettings {
@@ -399,6 +411,7 @@ mod tests {
             own_leaf: LeafIndex::new(0),
             created_at: UnixSeconds::new(1),
             location_visibility: None,
+            server: ServerId::new(crate::test_support::SERVER.into())?,
         })?;
         write(session, &party_record_key(&party, PROFILE_WAITING), &[1])?;
         write(
@@ -428,6 +441,7 @@ mod tests {
             own_leaf: LeafIndex::new(0),
             created_at: UnixSeconds::new(1),
             location_visibility: None,
+            server: ServerId::new(crate::test_support::SERVER.into())?,
         })?;
         Ok(())
     }
@@ -607,6 +621,30 @@ mod tests {
     }
 
     #[test]
+    fn an_old_join_whose_link_carries_no_key_pins_is_dropped() -> Result<(), TestError> {
+        let device = Device::new(1)?;
+        let session = &device.session;
+        let reply = MailboxId::from_bytes([10; 16]);
+        // A link payload in no layout this build reads, as one from before key pins is.
+        let mut joining = Writer::new();
+        joining.variable(&[0x80])?;
+        joining.variable(b"Di")?;
+        joining.byte(0);
+        joining.variable(&[6; 4])?;
+        joining.byte(0);
+        joining.u64(30);
+        write(
+            session,
+            &record_key(JOINING, reply.as_bytes()),
+            &joining.finish(),
+        )?;
+        device.parties().upgrade_records()?;
+        assert_eq!(session.party_joins().get(&reply)?, None);
+        assert!(session.kv_keys_with_prefix(PREFIX)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn an_old_join_in_progress_moves_into_its_table_once() -> Result<(), TestError> {
         use pingers_proto::{InviterFingerprint, SecretBytes, ServerId, WireEncode as _};
 
@@ -619,6 +657,8 @@ mod tests {
             invite_secret: SecretBytes::new([3; 32]),
             inviter_fingerprint: InviterFingerprint::from_bytes([4; 8]),
             expires: UnixSeconds::new(900),
+            gateway_pins: vec![pingers_proto::KeyConfigHash::from_bytes([8; 32])],
+            push_relay_pins: Vec::new(),
             registration_code: None,
         };
         let mut joining = Writer::new();

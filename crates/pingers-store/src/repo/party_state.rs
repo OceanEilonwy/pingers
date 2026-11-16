@@ -82,7 +82,9 @@ impl PartyConfigs<'_> {
     ///
     /// # Errors
     ///
-    /// [`StoreError::Database`] if the Party does not exist or the write fails.
+    /// [`StoreError::NotFound`] if the Party does not exist; [`StoreError::ServerMismatch`] if
+    /// `config` names another server than the one the Party lives on; [`StoreError::Database`]
+    /// if the write fails.
     pub fn put(&self, party: &PartyId, config: &PartyConfig) -> Result<(), StoreError> {
         let suite: i64 = match config.suite {
             PartySuite::Classical => 0,
@@ -93,10 +95,27 @@ impl PartyConfigs<'_> {
             RelayList::Custom(relays) => (1, relays),
         };
         self.session.with(|connection| {
+            // The Party's server is kept once, in its `party` row (schema version 10); the
+            // configuration must agree with it.
+            let lives_on: Option<String> = connection
+                .query_row(
+                    "SELECT server.origin FROM party JOIN server USING (server_key) \
+                     WHERE party.party_id = ?1",
+                    [party.as_bytes()],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            match lives_on {
+                None => return Err(StoreError::NotFound { table: "party" }),
+                Some(origin) if origin != config.server.as_str() => {
+                    return Err(StoreError::ServerMismatch);
+                }
+                Some(_) => {}
+            }
             connection.execute(
-                "INSERT OR REPLACE INTO party_config (party_id, server, suite, custom_relays) \
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![party.as_bytes(), config.server.as_str(), suite, custom],
+                "INSERT OR REPLACE INTO party_config (party_id, suite, custom_relays) \
+                 VALUES (?1, ?2, ?3)",
+                params![party.as_bytes(), suite, custom],
             )?;
             connection.execute(
                 "DELETE FROM party_relay WHERE party_id = ?1",
@@ -127,7 +146,9 @@ impl PartyConfigs<'_> {
         self.session.with(|connection| {
             let row = connection
                 .query_row(
-                    "SELECT server, suite, custom_relays FROM party_config WHERE party_id = ?1",
+                    "SELECT server.origin, party_config.suite, party_config.custom_relays \
+                     FROM party_config JOIN party USING (party_id) JOIN server USING (server_key) \
+                     WHERE party_config.party_id = ?1",
                     [party.as_bytes()],
                     |row| {
                         Ok((
@@ -142,7 +163,7 @@ impl PartyConfigs<'_> {
                 return Ok(None);
             };
             let server = ServerId::new(server).map_err(|_| StoreError::Corrupt {
-                field: "party_config.server",
+                field: "server.origin",
             })?;
             let suite = match suite {
                 0 => PartySuite::Classical,
@@ -536,8 +557,19 @@ mod tests {
         let owner = party(1)?;
         session.parties().insert(&owner)?;
         assert_eq!(session.party_configs().get(&owner.id)?, None);
+        // A Party lives on one server, kept in its row: a configuration naming another is refused.
+        let elsewhere = PartyConfig {
+            server: ServerId::new("https://elsewhere.example".into())?,
+            suite: PartySuite::Classical,
+            relays: RelayList::ServerDefault,
+        };
+        assert!(matches!(
+            session.party_configs().put(&owner.id, &elsewhere),
+            Err(StoreError::ServerMismatch)
+        ));
+        assert_eq!(session.party_configs().get(&owner.id)?, None);
         let custom = PartyConfig {
-            server: ServerId::new("https://pingers.example".into())?,
+            server: owner.server.clone(),
             suite: PartySuite::QuantumResistant,
             relays: RelayList::Custom(vec![
                 RelayUrl::new("https://b.example".into())?,
@@ -655,7 +687,7 @@ mod tests {
             session.party_configs().put(
                 &owner.id,
                 &PartyConfig {
-                    server: ServerId::new("https://pingers.example".into())?,
+                    server: owner.server.clone(),
                     suite: PartySuite::Classical,
                     relays: RelayList::Custom(vec![RelayUrl::new("https://r.example".into())?]),
                 },

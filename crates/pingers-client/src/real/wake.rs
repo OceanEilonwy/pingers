@@ -18,7 +18,10 @@ use pingers_meetup::LocationVisibility;
 use pingers_meetup_session::MeetupScreen;
 use pingers_presence::DataMode;
 use pingers_proto::{CoverReadRatio, GroupId, PartyId, PushHandle};
-use pingers_store::{LocationVisibility as StoredVisibility, Session, WakePushes as StoredPushes};
+use pingers_store::{
+    HandleKind, HandleOwner, LocationVisibility as StoredVisibility, Session,
+    WakePushes as StoredPushes,
+};
 use pingers_time::{Clock, UnixSeconds};
 use pingers_wake::{
     FIX_MAX_AGE, GeofenceEvent, GeofenceTransition as WakeTransition, MailboxReads, PushReason,
@@ -94,13 +97,17 @@ impl Wake {
         trigger: WakeTrigger,
     ) -> Result<(WakeReport, WakeOutcome), ClientError> {
         let mut state = self.state.lock().await;
+        // A snapshot from before boards were kept per server belongs to the instance's server.
+        // The links are loaded before the wake: its synchronous mailbox port reads them.
+        self.net.servers.all().await?;
+        let legacy_server = self.net.servers.built_in().cloned();
         let (stored, lens, snapshot) = self
             .backend
-            .store(|session, clock, rng| {
+            .store(move |session, clock, rng| {
                 Ok((
                     Stored::load(session)?,
                     Lens::load(session, clock, rng)?,
-                    wake_codec::load(session)?,
+                    wake_codec::load(session, legacy_server.as_ref())?,
                 ))
             })
             .await?;
@@ -167,13 +174,25 @@ impl Wake {
     ) -> Result<(PushReason, Option<GroupId>), ClientError> {
         self.backend
             .store(move |session, _clock, _rng| {
-                if session.mailboxes().by_handle(&handle)?.is_some() {
-                    Ok((PushReason::Mailbox, None))
-                } else if let Some(subscription) = session.subscriptions().by_handle(&handle)? {
-                    Ok((PushReason::GroupCommit, Some(subscription.group)))
-                } else {
-                    Ok((PushReason::Unknown, None))
-                }
+                Ok(match session.push_handle_owner(&handle)? {
+                    Some(HandleOwner {
+                        kind: HandleKind::Mailbox,
+                        ..
+                    }) => (PushReason::Mailbox, None),
+                    Some(HandleOwner {
+                        kind: HandleKind::Subscription,
+                        server,
+                    }) => {
+                        // The subscription's group, looked up on the server that holds it.
+                        let group = session
+                            .server(&server)?
+                            .subscriptions()
+                            .by_handle(&handle)?
+                            .map(|subscription| subscription.group);
+                        (PushReason::GroupCommit, group)
+                    }
+                    None => (PushReason::Unknown, None),
+                })
             })
             .await
     }

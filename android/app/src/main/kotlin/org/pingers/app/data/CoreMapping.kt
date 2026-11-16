@@ -156,7 +156,7 @@ internal fun uniffi.pingers.Reachability.toUi(): Reachability = when (this) {
 }
 
 internal fun uniffi.pingers.NewPartyView.toUi(error: String?) =
-    NewPartyState(name, colour.toUi(), server, privacy.level(), canCreate, error, serverChoice, text)
+    NewPartyState(name, colour.toUi(), server, privacy.level(), canCreate, error, serverChoice, keysLine, keysTrust, text)
 
 internal fun uniffi.pingers.AdvancedView.toUi() = AdvancedState(
     privacy = privacy.level(),

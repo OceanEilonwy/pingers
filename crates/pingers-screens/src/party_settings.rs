@@ -14,7 +14,8 @@ use crate::ScreenError;
 use crate::common::{Host, Me, Name, Operator, Person, PrivacyLevel};
 use crate::party::{Overlap, party_overlaps, privacy_level};
 use crate::snapshot::{
-    ClientSnapshot, PostQuantum, PushRelayKind, RelayStatus, SafetyCheck, SafetyCode, WakePushes,
+    ClientSnapshot, KeyTrust, PostQuantum, PushRelayKind, RelayStatus, SafetyCheck, SafetyCode,
+    WakePushes,
 };
 
 /// Whether a service's operator is also the server's.
@@ -72,7 +73,7 @@ pub struct PartySettings {
     pub server: ServiceRow,
     /// The privacy relay.
     pub relay: ServiceRow,
-    /// The relay check.
+    /// The relay check: this Party's relay, to this Party's server.
     pub relay_check: RelayCheck,
     /// The push relay.
     pub push_relay: ServiceRow,
@@ -80,6 +81,8 @@ pub struct PartySettings {
     pub wake_pushes: WakePushes,
     /// Safety codes checked.
     pub safety: SafetySummary,
+    /// How this device came to trust the server's keys.
+    pub keys: KeyTrust,
     /// The Party's MLS suite.
     pub post_quantum: PostQuantum,
 }
@@ -131,7 +134,7 @@ pub fn party_settings(
             },
         },
         relay_check: RelayCheck {
-            status: snapshot.relay,
+            status: config.relay_status,
             checked_at: relay_checked_at,
         },
         push_relay: ServiceRow {
@@ -151,6 +154,7 @@ pub fn party_settings(
                 .count(),
             others: others.len(),
         },
+        keys: config.keys,
         post_quantum: config.post_quantum,
     })
 }
@@ -331,6 +335,37 @@ mod tests {
             }
         );
         assert_eq!(view.post_quantum, PostQuantum::Off);
+        Ok(())
+    }
+
+    #[test]
+    fn each_party_shows_its_own_server_relay_check_and_keys() -> Result<(), FixtureError> {
+        let mut snapshot = fixtures::snapshot()?;
+        let first = snapshot.parties.first().map(|party| party.id);
+        let second = snapshot.parties.get(1).map(|party| party.id);
+        let (Some(first), Some(second)) = (first, second) else {
+            return Err(FixtureError::Missing);
+        };
+        if let Some(party) = snapshot.parties.get_mut(1) {
+            party.config.origin = pingers_proto::ServerId::new("https://other.example".to_owned())?;
+            party.config.server.host = Host::new("other.example")?;
+            party.config.keys = KeyTrust::FromInvite;
+            party.config.relay_status = RelayStatus::Unreachable;
+        }
+        let one = party_settings(&snapshot, first, None)?;
+        let two = party_settings(&snapshot, second, None)?;
+        assert_eq!(
+            one.server.host.as_ref().map(Host::as_str),
+            Some("pingers.flat7.org")
+        );
+        assert_eq!(
+            two.server.host.as_ref().map(Host::as_str),
+            Some("other.example")
+        );
+        assert_eq!(one.keys, KeyTrust::Confirmed);
+        assert_eq!(two.keys, KeyTrust::FromInvite);
+        assert_eq!(one.relay_check.status, RelayStatus::Reachable);
+        assert_eq!(two.relay_check.status, RelayStatus::Unreachable);
         Ok(())
     }
 

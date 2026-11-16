@@ -169,30 +169,6 @@ fn an_announced_next_key_is_kept_only_beside_the_same_published_key() -> TestRes
     Ok(())
 }
 
-fn hash_of(relay: &VerifiedPushRelay) -> KeyConfigHash {
-    key_config_hash(&relay.config.key_config.to_bytes())
-}
-
-#[test]
-fn first_use_pins_grow_by_the_published_and_next_key_and_are_kept_when_complete() -> TestResult<()>
-{
-    let (one, two) = (relay(1, 60)?, relay(2, 60)?);
-    let next = ScheduledPushRelay {
-        verified: two.clone(),
-        activates_at: UnixSeconds::new(NOW + DAY),
-    };
-    assert_eq!(grown_pins(None, &one, None), Some(vec![hash_of(&one)]));
-    let known = KeyPins::from(hash_of(&one));
-    assert_eq!(
-        grown_pins(Some(&known), &one, Some(&next)),
-        Some(vec![hash_of(&one), hash_of(&two)])
-    );
-    assert_eq!(grown_pins(Some(&known), &one, None), None);
-    let both = KeyPins::new([hash_of(&one), hash_of(&two)])?;
-    assert_eq!(grown_pins(Some(&both), &two, None), None);
-    Ok(())
-}
-
 #[test]
 fn seals_are_made_again_for_a_new_token_a_new_key_or_near_their_end() {
     let key = PushRelayPublicKey::new(1, [1; 32]);

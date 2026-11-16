@@ -20,9 +20,7 @@ use pingers_geo::{Coordinate, Fix, Meters, PresenceState};
 use pingers_meetup::MeetupEvent;
 use pingers_mls::{CipherSuitePolicy, MlsContext, MlsError};
 use pingers_presence::{ActiveSpot, MeetupKey, SpotRef, SpotStatus};
-use pingers_proto::{
-    AccountId, Epoch, GroupId, KeyConfigHash, LeafIndex, PartyId, ServerId, SpotId,
-};
+use pingers_proto::{AccountId, Epoch, GroupId, LeafIndex, PartyId, ServerId, SpotId};
 use pingers_store::{Database, DatabaseKey, Identity, MemberName, Party, PartyName, Verification};
 use pingers_time::{Bucket, ManualClock, UnixSeconds};
 use tokio::sync::mpsc;
@@ -202,8 +200,15 @@ impl World {
                 session.identity().save(&Identity {
                     account: AccountId::from_bytes([fill; 16]),
                     signing_key: AccountSigningKey::from_bytes(Zeroizing::new(*key.expose_bytes())),
-                    server: ServerId::new("https://pingers.example".into())?,
-                    server_pin: KeyConfigHash::from_bytes([5; 32]),
+                })?;
+                let server = ServerId::new("https://pingers.example".into())?;
+                session.servers().put(&pingers_store::ServerRecord {
+                    server: server.clone(),
+                    ohttp_relays: Vec::new(),
+                    push_relay: None,
+                    gateway_pins: Vec::new(),
+                    push_relay_pins: Vec::new(),
+                    trust: pingers_store::ServerTrust::BuiltIn,
                 })?;
                 session.parties().insert(&Party {
                     id: party,
@@ -212,6 +217,7 @@ impl World {
                     own_leaf,
                     created_at: START,
                     location_visibility: None,
+                    server,
                 })?;
                 for (other_index, (other_name, other)) in NAMES.iter().zip(&keys).enumerate() {
                     if other_index != index {

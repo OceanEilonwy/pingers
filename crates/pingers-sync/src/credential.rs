@@ -15,7 +15,7 @@ use pingers_ohttp::Header;
 use pingers_proto::{
     AnonymousCredential, MembershipIndex, RlnAuth, RlnScope, ServerId, WireEncode,
 };
-use pingers_store::{HeldToken, RlnIdentity, Session, TreeLeaf, TreeState};
+use pingers_store::{HeldToken, RlnIdentity, ServerSession, TreeLeaf, TreeState};
 use pingers_time::{Bucket, UnixSeconds};
 use rand_core::CryptoRng;
 
@@ -153,7 +153,7 @@ pub(crate) struct ProvingState {
 
 impl ProvingState {
     /// Reads it in one store step.
-    pub(crate) fn load(session: &Session, now: UnixSeconds) -> Result<Self, SyncError> {
+    pub(crate) fn load(session: &ServerSession<'_>, now: UnixSeconds) -> Result<Self, SyncError> {
         Ok(Self {
             readiness: readiness(
                 session.rln_identity().load()?.as_ref(),
@@ -271,7 +271,7 @@ pub(crate) struct Reservation {
 /// between proving and sending can never reuse it (design B.4.8, self-slashing risk). `None` if
 /// the device cannot prove now or the bucket's message ids are spent.
 pub(crate) fn reserve_proof(
-    session: &Session,
+    session: &ServerSession<'_>,
     input: &ProofInput,
     now: UnixSeconds,
 ) -> Result<Option<Reservation>, SyncError> {

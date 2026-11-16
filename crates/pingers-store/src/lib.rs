@@ -72,8 +72,16 @@
 //!   ([`PartyName`], [`SpotName`], ...), [`ZoneId`], [`Avatar`], [`UnspentToken`],
 //!   [`TokenKeyId`], [`TreePosition`], [`TreeLevel`], [`TreeNodeHash`], [`RootEpoch`].
 //!   Privacy Pass tokens are opaque bytes so this crate does not link pingers-anon's prover.
-//! - **`server_pin` is a [`pingers_proto::KeyConfigHash`]**: the pinned hash of the server's
-//!   OHTTP key configuration.
+//! - **One device, several servers** (schema version 10, decided 2026-11-14). `identity` holds
+//!   only the device's account key; `server_url` and `server_pin` moved to a `server` row per
+//!   server, with its relays, push relay, key pins and how they were trusted
+//!   ([`ServerRecord`], [`ServerTrust`]). Every row that belongs to one server (account
+//!   standing, bearer, tokens, RLN state, mailboxes, subscriptions, push relays, fallbacks,
+//!   leases, knocks, seen segments, board upload, request queue, Parties) carries its
+//!   `server_key` and is deleted with its server; those repositories are methods of
+//!   [`ServerSession`] (`session.server(&id)?`), so no code can mix two servers' credentials.
+//!   `server_pin` is a [`pingers_proto::KeyConfigHash`]: the gateway key hash recorded with the
+//!   account on that server.
 //! - **`spot.created_by` is the creator's account key**, not a leaf index, because leaves are
 //!   reused after removals.
 //! - **pingers-sync's state survives a restart** (schema version 3): `request_queue` holds
@@ -86,8 +94,8 @@
 //! - **The main app's proving state** (schema version 5, not in design C.2): `rln_tree_state`
 //!   records which hourly root the leaf copy reproduces and this device's Merkle path in it, so a
 //!   proof reads one row instead of rebuilding the tree; `pp_allowance` the server's daily token
-//!   limit and what was issued today, so a refill never exceeds it; `prover_self_test` the last
-//!   self-test and the parameters it tested.
+//!   limit and what was issued today, so a refill never exceeds it (both per server since schema
+//!   version 10); `prover_self_test` the last self-test and the parameters it tested (device-wide).
 //! - **pingers-parties' per-Party state** (schema version 6), which it kept as key-value rows
 //!   before: `party_config` and `party_relay` (server, suite, relays in order),
 //!   `roster_epoch` and `roster_entry` (rosters of recent epochs, pruned by the caller with
@@ -129,6 +137,9 @@ mod migrations;
 #[cfg(test)]
 mod privacy_tests;
 mod repo;
+mod server;
+#[cfg(test)]
+mod server_tests;
 #[cfg(test)]
 mod test_support;
 mod types;
@@ -183,6 +194,7 @@ pub use repo::sync::{
     BoardUploads, LastUpload, NewQueuedRequest, OwnGroupEntries, Pushed, QueueCapacity,
     QueuedRequest, RequestBytes, RequestQueue,
 };
+pub use server::{HandleKind, HandleOwner, ServerRecord, ServerSession, ServerTrust, Servers};
 pub use types::{
     Avatar, FallbackReason, MemberName, OperatorName, PartyName, SpotName, TokenKeyId, TreeLevel,
     TreeNodeHash, TreePosition, UnspentToken, ZoneId, ZoneName,

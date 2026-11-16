@@ -22,9 +22,9 @@ use pingers_store::{Database, DatabaseKey, Identity, Session};
 use pingers_time::{Bucket, Clock as _, ManualClock, UnixSeconds};
 use pingers_wake::ports::{PartyView as _, RegionId};
 use pingers_wake::{
-    DecidedKnock, KnockStatus, KnownEpoch, LeaseSlot, LiveLease, PeerActivity, PortError,
-    RETRY_AFTER, RealRecord, SentKnock, SpotSnapshot, WakeEnding, WakeSnapshot, WakeStep,
-    WakeTrigger,
+    BoardSnapshot, DecidedKnock, KnockStatus, KnownEpoch, LeaseSlot, LiveLease, PeerActivity,
+    PortError, RETRY_AFTER, RealRecord, SentKnock, SpotSnapshot, WakeEnding, WakeSnapshot,
+    WakeStep, WakeTrigger,
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng as _;
@@ -81,13 +81,12 @@ fn store() -> Result<Store, Box<dyn std::error::Error>> {
     database.session()?.identity().save(&Identity {
         account: account_id(&signing_key.public_key()),
         signing_key,
-        server: ServerId::new("https://pingers.test".to_owned())?,
-        server_pin: KeyConfigHash::from_bytes([1; 32]),
     })?;
     let clock = ManualClock::new(UnixSeconds::new(1_800_000_000));
     let seeds = Arc::new(AtomicU64::new(0));
     let backend = Arc::new(Backend {
         database: Arc::new(database),
+        self_test: pingers_sync::SelfTestSlot::default(),
         outside: Outside {
             prover_self_test: pingers_sync::SelfTestPlan::new(
                 core::num::NonZeroU8::MIN,
@@ -101,7 +100,6 @@ fn store() -> Result<Store, Box<dyn std::error::Error>> {
                 ))
             }),
         },
-        transport: None,
     });
     Ok(Store {
         path,
@@ -133,12 +131,28 @@ fn wake(store: &Store) -> Wake {
     )
 }
 
-/// pingers-sync with no instance: every network call is unavailable.
+/// The built-in server of these tests: pinned, behind a relay on a reserved name that never
+/// resolves, so every request waits as it would with no network.
+fn unreachable() -> Result<super::Instance, Box<dyn std::error::Error>> {
+    Ok(super::Instance {
+        server: ServerId::new("https://pingers.test".to_owned())?,
+        relay: "https://relay.invalid".to_owned(),
+        push_relay: None,
+        gateway_pins: Some(pingers_ohttp::KeyPins::from(KeyConfigHash::from_bytes(
+            [1; 32],
+        ))),
+        push_relay_pins: None,
+        trust: super::Trust::Mozilla,
+        registration_code: None,
+    })
+}
+
+/// pingers-sync with its built-in server out of reach: every request waits.
 fn offline(store: &Store) -> Arc<Net> {
+    let instance = unreachable().ok();
     Arc::new(Net::new(
         Arc::clone(&store.backend),
-        None,
-        super::push::Learned::new(None, None),
+        super::servers::Servers::new(Arc::clone(&store.backend), instance, None),
     ))
 }
 
@@ -221,19 +235,31 @@ async fn a_full_wake_snapshot_round_trips_through_the_store() -> TestResult {
             presence(7, PresenceState::Outside, 14),
         ],
         last_in_zone: Some(UnixSeconds::new(20)),
-        leases: vec![LiveLease {
-            start: Bucket::from_index(1_000)?,
-            slots,
-        }],
-        sent_knocks: vec![
-            knock(4, KnockStatus::Waiting),
-            knock(8, KnockStatus::Answered),
+        boards: vec![
+            BoardSnapshot {
+                server: ServerId::new(String::from("https://one.example"))?,
+                leases: vec![LiveLease {
+                    start: Bucket::from_index(1_000)?,
+                    slots,
+                }],
+                sent_knocks: vec![
+                    knock(4, KnockStatus::Waiting),
+                    knock(8, KnockStatus::Answered),
+                ],
+                decided_knocks: vec![DecidedKnock {
+                    reply_mailbox: MailboxId::from_bytes([11; 16]),
+                    at: UnixSeconds::new(40),
+                }],
+                last_upload: Some(UnixSeconds::new(50)),
+            },
+            BoardSnapshot {
+                server: ServerId::new(String::from("https://two.example"))?,
+                leases: Vec::new(),
+                sent_knocks: vec![knock(9, KnockStatus::Waiting)],
+                decided_knocks: Vec::new(),
+                last_upload: None,
+            },
         ],
-        decided_knocks: vec![DecidedKnock {
-            reply_mailbox: MailboxId::from_bytes([11; 16]),
-            at: UnixSeconds::new(40),
-        }],
-        last_upload: Some(UnixSeconds::new(50)),
         epochs: vec![KnownEpoch {
             party: PartyId::from_bytes([12; 16]),
             epoch: Epoch::new(8),
@@ -245,12 +271,82 @@ async fn a_full_wake_snapshot_round_trips_through_the_store() -> TestResult {
     };
     let saved = snapshot.clone();
     let loaded = session(&store, move |session| {
-        let empty = wake_codec::load(session)?;
+        let empty = wake_codec::load(session, None)?;
         wake_codec::save(session, &saved)?;
-        Ok((empty, wake_codec::load(session)?))
+        Ok((empty, wake_codec::load(session, None)?))
     })
     .await?;
     assert_eq!(loaded, (WakeSnapshot::default(), snapshot));
+    Ok(())
+}
+
+/// A snapshot stored in the first layout (one board, no server) has its leases, decisions and
+/// last upload put under the instance's server; without an instance they are dropped and the
+/// rest is kept.
+#[tokio::test]
+async fn a_first_layout_wake_snapshot_moves_into_the_instance_servers_board() -> TestResult {
+    let store = store()?;
+    let lease = LiveLease {
+        start: Bucket::from_index(1_000)?,
+        slots: [LeaseSlot {
+            randomness: RecordRandomness::from_bytes([2; 16]),
+            real: None,
+        }; Lease::SLOTS],
+    };
+    let decided = DecidedKnock {
+        reply_mailbox: MailboxId::from_bytes([11; 16]),
+        at: UnixSeconds::new(40),
+    };
+    let known = KnownEpoch {
+        party: PartyId::from_bytes([12; 16]),
+        epoch: Epoch::new(8),
+    };
+    let server = ServerId::new(String::from("https://one.example"))?;
+    let legacy = server.clone();
+    let (moved, dropped) = session(&store, move |session| {
+        super::records::write(session, &super::records::Key::WakeSnapshot, |writer| {
+            // No Spots, no exclusion trail.
+            writer.len(0);
+            writer.option(None::<UnixSeconds>, |_writer, _at| {});
+            writer.len(1);
+            writer.u64(lease.start.index());
+            for slot in &lease.slots {
+                writer.fixed(slot.randomness.as_bytes());
+                writer.option(None::<RealRecord>, |_writer, _real| {});
+            }
+            // No knocks sent, one decided, the last upload.
+            writer.len(0);
+            writer.len(1);
+            writer.fixed(decided.reply_mailbox.as_bytes());
+            writer.u64(decided.at.get());
+            writer.option(Some(UnixSeconds::new(50)), |writer, at| {
+                writer.u64(at.get());
+            });
+            writer.len(1);
+            writer.fixed(known.party.as_bytes());
+            writer.u64(known.epoch.get());
+            // No peer activity.
+            writer.len(0);
+        })?;
+        Ok((
+            wake_codec::load(session, Some(&legacy))?,
+            wake_codec::load(session, None)?,
+        ))
+    })
+    .await?;
+    assert_eq!(
+        moved.boards,
+        vec![BoardSnapshot {
+            server,
+            leases: vec![lease],
+            sent_knocks: Vec::new(),
+            decided_knocks: vec![decided],
+            last_upload: Some(UnixSeconds::new(50)),
+        }]
+    );
+    assert_eq!(moved.epochs, vec![known]);
+    assert!(dropped.boards.is_empty());
+    assert_eq!(dropped.epochs, vec![known]);
     Ok(())
 }
 
@@ -384,6 +480,7 @@ async fn a_wake_confirmed_inside_a_spot_ends_at_the_sync_stub() -> TestResult {
     let parties = Parties::new(Arc::clone(&store.backend), offline(&store));
     let party = parties
         .create_party(PartyDraft {
+            server: None,
             name: Name::new("Crew")?,
             my_name: Name::new("Sam")?,
             colour: PartyColour::Plum,
@@ -427,14 +524,15 @@ async fn a_wake_confirmed_inside_a_spot_ends_at_the_sync_stub() -> TestResult {
         second.ending,
         WakeEnding::PortFailed {
             step: WakeStep::GroupLogs,
-            error: PortError::Unavailable,
+            // The built-in server's relay never resolves.
+            error: PortError::Unreachable,
         }
     );
     assert_eq!(outcome.location_mode, Some(LocationMode::Dwell));
     assert_eq!(outcome.next_wake, Some(RETRY_AFTER));
     assert!(outcome.events.is_empty());
 
-    let stored = session(&store, wake_codec::load).await?;
+    let stored = session(&store, |session| wake_codec::load(session, None)).await?;
     assert_eq!(
         stored.spots.first().map(|spot| spot.presence.state),
         Some(PresenceState::Inside)
@@ -473,10 +571,43 @@ async fn a_wake_confirmed_inside_a_spot_ends_at_the_sync_stub() -> TestResult {
 }
 
 #[tokio::test]
+async fn without_any_server_wake_pushes_cannot_go_on() -> TestResult {
+    let store = store()?;
+    let net = Arc::new(Net::new(
+        Arc::clone(&store.backend),
+        super::servers::Servers::new(Arc::clone(&store.backend), None, None),
+    ));
+    let sync = super::sync::Sync(net);
+    let tokens = crate::PushTokens {
+        platform: pingers_proto::PushPlatform::UnifiedPush,
+        token: pingers_proto::PushToken::from_bytes(b"https://push.example/up".to_vec()),
+    };
+    assert!(matches!(
+        sync.set_wake_pushes(crate::snapshot::WakePushes::On, Some(tokens))
+            .await,
+        Err(ClientError::Unavailable(crate::Unavailable::Sync))
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_link_that_is_not_an_invite_starts_no_join() -> TestResult {
+    let store = store()?;
+    let parties = Parties::new(Arc::clone(&store.backend), offline(&store));
+    let link = crate::snapshot::InviteUrl::new("https://pingers.test/j#x")?;
+    assert!(matches!(
+        parties.open_invite(link, Name::new("Al")?).await,
+        Err(ClientError::Parties(_))
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn join_decisions_and_withdrawals_need_a_request() -> TestResult {
     let store = store()?;
     let parties = Parties::new(Arc::clone(&store.backend), offline(&store));
     let draft = PartyDraft {
+        server: None,
         name: Name::new("Crew")?,
         my_name: Name::new("Sam")?,
         colour: PartyColour::Blue,
@@ -513,6 +644,7 @@ async fn party_commands_reach_pingers_parties_and_the_store() -> TestResult {
     let mut ids = Vec::new();
     for colour in PartyColour::ALL {
         let draft = PartyDraft {
+            server: None,
             name: Name::new("Crew")?,
             my_name: Name::new("Sam")?,
             colour,
@@ -568,11 +700,6 @@ async fn party_commands_reach_pingers_parties_and_the_store() -> TestResult {
             .is_err()
     );
 
-    let link = crate::snapshot::InviteUrl::new("https://pingers.test/j#x")?;
-    assert!(matches!(
-        parties.open_invite(link, Name::new("Al")?).await,
-        Err(ClientError::Unavailable(crate::Unavailable::Sync))
-    ));
     // Without an instance nothing is sent: the relay is unreachable by definition.
     let sync = super::sync::Sync(offline(&store));
     assert_eq!(
@@ -624,14 +751,20 @@ fn measure_a_session_open() -> TestResult {
 /// Pools an invite mailbox, as pingers-sync will.
 async fn pool_invite_mailbox(store: &Store, fill: u8) -> Result<(), ClientError> {
     session(store, move |session| {
-        session.mailboxes().insert(&pingers_store::Mailbox {
-            read_key: pingers_crypto::MailboxReadKey::from_bytes(Zeroizing::new([fill; 32])),
-            purpose: pingers_store::MailboxPurpose::Invite,
-            state: pingers_store::MailboxState::Pooled,
-            push: None,
-            seal: None,
-            expires_at: UnixSeconds::new(1_900_000_000),
-        })?;
+        session
+            .server(
+                &ServerId::new("https://pingers.test".to_owned())
+                    .map_err(|_bad| ClientError::Internal)?,
+            )?
+            .mailboxes()
+            .insert(&pingers_store::Mailbox {
+                read_key: pingers_crypto::MailboxReadKey::from_bytes(Zeroizing::new([fill; 32])),
+                purpose: pingers_store::MailboxPurpose::Invite,
+                state: pingers_store::MailboxState::Pooled,
+                push: None,
+                seal: None,
+                expires_at: UnixSeconds::new(1_900_000_000),
+            })?;
         Ok(())
     })
     .await
@@ -643,6 +776,7 @@ async fn cancelling_an_invite_revokes_it_and_withdraws_its_link() -> TestResult 
     let parties = Parties::new(Arc::clone(&store.backend), offline(&store));
     let draft = |name: &str| -> Result<PartyDraft, Box<dyn std::error::Error>> {
         Ok(PartyDraft {
+            server: None,
             name: Name::new(name)?,
             my_name: Name::new("Sam")?,
             colour: PartyColour::Blue,
@@ -784,14 +918,62 @@ async fn an_admission_the_client_cannot_carry_out_is_reported() -> TestResult {
     Ok(())
 }
 
-/// Closed board segments read in a wake are kept for a Meetup's first message; open ones,
-/// whose hash is not final, are not.
+/// The self-test is of this device's prover, not of a server: with Parties on two servers, the
+/// second server's engine finds the first one's test running instead of starting another.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn engines_of_two_servers_run_one_self_test() -> TestResult {
+    let store = store()?;
+    let mut engines = Vec::new();
+    for origin in ["https://a.test", "https://b.test"] {
+        let server = ServerId::new(origin.to_owned())?;
+        let record = pingers_store::ServerRecord {
+            server: server.clone(),
+            ohttp_relays: vec!["https://relay.invalid".to_owned()],
+            push_relay: None,
+            gateway_pins: vec![KeyConfigHash::from_bytes([1; 32])],
+            push_relay_pins: Vec::new(),
+            trust: pingers_store::ServerTrust::Confirmed,
+        };
+        session(&store, move |session| Ok(session.servers().put(&record)?)).await?;
+        let relays = ["https://relay.invalid".to_owned()];
+        let transport = super::network::router(
+            super::network::Route {
+                server: &server,
+                relays: &relays,
+                pin: pingers_transport::KeyPin::Pinned(pingers_ohttp::KeyPins::from(
+                    KeyConfigHash::from_bytes([1; 32]),
+                )),
+            },
+            &super::Trust::Mozilla,
+            &store.backend.outside,
+        )?;
+        engines.push(super::network::engine(&server, transport, &store.backend)?);
+    }
+    let [first, second] = engines.as_slice() else {
+        return Err("two engines".into());
+    };
+    assert_eq!(
+        first.start_prover_self_test().await?,
+        pingers_sync::SelfTestStart::Started
+    );
+    // A proof takes far longer than this call: the first engine's test is still running.
+    assert_eq!(
+        second.start_prover_self_test().await?,
+        pingers_sync::SelfTestStart::AlreadyRunning
+    );
+    Ok(())
+}
+
+/// Closed board segments read in a wake are kept, with the board's server, for a Meetup's
+/// first message; open ones, whose hash is not final, are not.
 #[tokio::test]
 async fn closed_board_segments_read_are_kept() -> TestResult {
     use pingers_proto::{BoardPage, SegmentHash, SegmentInfo};
 
     let store = store()?;
     let net = offline(&store);
+    // Loading the built-in server records its row, which the kept segments belong to.
+    let server = net.servers.built_in_link().await?.server.clone();
     let closed = SegmentInfo {
         start: Bucket::containing(store.clock.now()),
         record_count: 0,
@@ -807,8 +989,11 @@ async fn closed_board_segments_read_are_kept() -> TestResult {
         records: Vec::new(),
         next: None,
     };
-    net.saw_board(&page).await;
-    let kept = session(&store, |session| Ok(session.board_seen().list()?)).await?;
+    net.saw_board(&server, &page).await;
+    let kept = session(&store, move |session| {
+        Ok(session.server(&server)?.board_seen().list()?)
+    })
+    .await?;
     assert_eq!(
         kept,
         vec![pingers_proto::SeenSegment {
@@ -826,8 +1011,10 @@ async fn meetups_a_killed_process_left_are_deleted_at_launch() -> TestResult {
     use crate::ports::MeetupsPort as _;
 
     let store = store()?;
-    session(&store, |session| {
+    let built_in = unreachable()?.record();
+    session(&store, move |session| {
         let party = PartyId::from_bytes([4; 16]);
+        session.servers().put(&built_in)?;
         session.parties().insert(&pingers_store::Party {
             id: party,
             group: pingers_proto::GroupId::from_bytes([4; 32]),
@@ -835,6 +1022,7 @@ async fn meetups_a_killed_process_left_are_deleted_at_launch() -> TestResult {
             own_leaf: LeafIndex::new(0),
             created_at: UnixSeconds::new(1_000),
             location_visibility: None,
+            server: built_in.server.clone(),
         })?;
         session.meetups().start(&pingers_store::Meetup {
             group: pingers_proto::GroupId::from_bytes([5; 32]),
@@ -898,7 +1086,11 @@ async fn without_an_instance_relayed_maps_have_no_route_and_send_nothing() -> Te
     let store = store()?;
     let maps = super::maps::Maps::new(
         Arc::clone(&store.backend),
-        offline(&store),
+        // A build that names no built-in server.
+        Arc::new(Net::new(
+            Arc::clone(&store.backend),
+            super::servers::Servers::new(Arc::clone(&store.backend), None, None),
+        )),
         pingers_transport::TlsRoots::mozilla(),
     )?;
     let hosts = MapHosts {
@@ -922,5 +1114,111 @@ async fn without_an_instance_relayed_maps_have_no_route_and_send_nothing() -> Te
             pingers_map_downloads::catalog::HostFailure::NoRelayRoute
         ]
     );
+    Ok(())
+}
+
+/// The parameters read while a server was looked at are kept: nothing fetches them again in
+/// this process (one request fewer through its relay), and its operator shows at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parameters_learned_from_a_look_are_not_fetched_again() -> TestResult {
+    use pingers_proto::{
+        AnonymousCredential, CoverReadRatio, CustomPushRelays, Params, RelayUrl, Slashing,
+        TokenAllowance,
+    };
+
+    let store = store()?;
+    let net = offline(&store);
+    let link = net.servers.built_in_link().await?;
+    link.learn_params(Params {
+        anonymous_credentials: vec![AnonymousCredential::PrivacyPass],
+        rln_slashing: Slashing::Off,
+        cover_read_ratio: CoverReadRatio::ALWAYS,
+        board_page_records: 64,
+        ohttp_relays: vec![RelayUrl::new("https://relay.invalid".to_owned())?],
+        push_relays: Vec::new(),
+        custom_push_relays: CustomPushRelays::NotAllowed,
+        server_operator: "Flat 7".to_owned(),
+        server_time: store.clock.now(),
+        map_host: None,
+        privacy_pass_daily_limit: TokenAllowance::new(300),
+    })
+    .await?;
+    // The relay never resolves: a fetch would fail, not answer `None`.
+    assert!(matches!(link.fetch_params_once().await, Ok(None)));
+    assert_eq!(
+        link.operators()
+            .map(|known| known.server.as_str().to_owned())
+            .as_deref(),
+        Some("Flat 7")
+    );
+    Ok(())
+}
+
+/// A relay that answers its key config endpoint with an error (here: its gateway is gone) fails
+/// the check with a transport error, not "no relay": the Party's settings must still show the
+/// relay as unreachable, not the last good answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_relay_answering_with_an_error_shows_as_unreachable() -> TestResult {
+    use crate::snapshot::RelayStatus;
+
+    let store = store()?;
+    // A port nothing listens on any more, for the relay's gateway.
+    let gone = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let relay = tokio::spawn(pingers_testkit::harness::run_ohttp_relay(
+        listener,
+        gone,
+        async move {
+            drop(stopped.await);
+        },
+    ));
+    let instance = super::Instance {
+        relay: format!("http://{address}/ohttp"),
+        ..unreachable()?
+    };
+    let net = Arc::new(Net::new(
+        Arc::clone(&store.backend),
+        super::servers::Servers::new(Arc::clone(&store.backend), Some(instance), None),
+    ));
+    let link = net.servers.built_in_link().await?;
+    link.observe(&Ok::<(), pingers_sync::SyncError>(()));
+    assert_eq!(link.relay_status(), RelayStatus::Reachable);
+
+    let answer = super::sync::Sync(Arc::clone(&net))
+        .check_reachability()
+        .await;
+    // The relay may have stopped on its own; either way it is told to.
+    let _sent = stop.send(());
+    relay.await?;
+    assert_eq!(answer?, RelayStatus::Unreachable);
+    assert_eq!(link.relay_status(), RelayStatus::Unreachable);
+    Ok(())
+}
+
+/// What a server's traffic said becomes one notice each, once: a clock off by more than the
+/// correction allows, and a key mismatch, whether the registry or the link noticed it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_server_notice_is_raised_once() -> TestResult {
+    use pingers_sync::{ClockOffset, SyncError};
+
+    use crate::Notice;
+
+    let store = store()?;
+    let net = offline(&store);
+    let link = net.servers.built_in_link().await?;
+    let now = store.clock.now();
+    let skewed = UnixSeconds::new(now.get().saturating_add(3_600));
+    link.observe(&Err::<(), _>(SyncError::ClockSkew {
+        offset: ClockOffset::between(skewed, now),
+    }));
+    link.observe(&Err::<(), _>(SyncError::RelayKeyMismatch));
+    net.servers.raise_key_mismatch();
+    assert_eq!(
+        net.take_notices(),
+        [Notice::RelayKeyMismatch, Notice::ClockSkew]
+    );
+    assert!(net.take_notices().is_empty());
     Ok(())
 }

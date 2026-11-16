@@ -26,6 +26,7 @@ mod ids;
 mod maps;
 mod notifications;
 mod party_views;
+mod servers;
 mod snapshot;
 mod views;
 #[cfg(feature = "wipe-freed")]
@@ -56,6 +57,7 @@ pub use maps::{
 };
 pub use notifications::{CoreNotification, NotificationKind};
 pub use party_views::{CodeAnswer, PartySettingsView, SafetyCodesView};
+pub use servers::{KeysTrusted, ServerIssue, ServerLook};
 pub use snapshot::{AreaEditor, LocalClock, Snapshot};
 pub use views::*;
 

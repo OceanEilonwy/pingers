@@ -37,6 +37,22 @@ impl From<ClientError> for CoreError {
         reason = "ClientError is non-exhaustive; a new error is reported as unavailable"
     )]
     fn from(error: ClientError) -> Self {
+        if let Some(issue) = crate::servers::ServerIssue::of(&error) {
+            return issue.error();
+        }
+        match &error {
+            ClientError::RegistrationCodeRequired => {
+                return Self::CodeNeeded {
+                    reason: pingers_words::errors::code_needed(Language::English),
+                };
+            }
+            ClientError::RegistrationCodeRefused => {
+                return Self::CodeRefused {
+                    reason: pingers_words::errors::code_refused(Language::English),
+                };
+            }
+            _ => {}
+        }
         let reason = match &error {
             // Say what the call waits for, so the app's log names the missing piece.
             ClientError::Unavailable(waiting) => format!("{error}: {waiting}"),
@@ -73,7 +89,9 @@ pub struct NewPartyDraft {
     pub colour: PartyColour,
     /// Whether it uses the X-Wing suite.
     pub post_quantum: bool,
-    /// "Another server", by host; `None` for the app's own server.
+    /// "Another server", by host or origin; `None` for the app's own server. It must be one
+    /// this device trusts: `probe_server`, then `trust_server` ("Trust this server's keys"),
+    /// or an invite.
     pub other_server: Option<String>,
     /// A registration code the user typed ("This server needs a code").
     pub registration_code: Option<String>,
@@ -84,6 +102,13 @@ impl TryFrom<NewPartyDraft> for ports::PartyDraft {
 
     fn try_from(draft: NewPartyDraft) -> Result<Self, CoreError> {
         Ok(Self {
+            server: draft
+                .other_server
+                .as_deref()
+                .map(str::trim)
+                .filter(|address| !address.is_empty())
+                .map(pingers_client::server_address)
+                .transpose()?,
             name: pingers_client::snapshot::Name::new(&draft.name)?,
             my_name: pingers_client::snapshot::Name::new(&draft.my_name)?,
             colour: draft.colour.into(),
@@ -348,6 +373,13 @@ impl Core {
     }
 }
 
+impl Core {
+    /// The client, for the exports in other modules.
+    pub(crate) const fn client(&self) -> &Client {
+        &self.client
+    }
+}
+
 impl core::fmt::Debug for Core {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("Core")
@@ -391,55 +423,36 @@ impl Core {
         Snapshot::new(self.client.snapshot())
     }
 
-    /// Creates a Party.
+    /// Creates a Party, on the app's server or on another one this device trusts, with the
+    /// registration code the user typed if the server asked for one.
     ///
     /// # Errors
     ///
-    /// [`CoreError::Invalid`] for an empty name; [`CoreError::Network`].
+    /// [`CoreError::Invalid`] for an empty name; [`CoreError::CodeNeeded`] or
+    /// [`CoreError::CodeRefused`]; [`CoreError::Server`] for an address that is not one, or a
+    /// server whose keys were not trusted (`NotLookedAt`); [`CoreError::Network`].
     pub async fn create_party(&self, draft: NewPartyDraft) -> Result<PartyId, CoreError> {
-        if draft.other_server.is_some() {
-            return Err(CoreError::Unavailable {
-                reason: pingers_words::errors::other_server(Language::English),
-            });
-        }
         let code = draft
             .registration_code
-            .clone()
-            .filter(|code| !code.trim().is_empty());
-        let offered = code.is_some();
-        #[expect(
-            clippy::wildcard_enum_match_arm,
-            reason = "ClientError is non-exhaustive; every other error keeps its usual mapping"
-        )]
-        let refused = |error: ClientError| match error {
-            ClientError::RegistrationRefused if offered => CoreError::CodeRefused {
-                reason: pingers_words::errors::code_refused(Language::English),
-            },
-            ClientError::RegistrationRefused => CoreError::CodeNeeded {
-                reason: pingers_words::errors::code_needed(Language::English),
-            },
-            other => CoreError::from(other),
-        };
+            .as_deref()
+            .map(str::trim)
+            .filter(|code| !code.is_empty())
+            .map(|code| pingers_proto::SecretText::new(code.to_owned()));
+        let draft: ports::PartyDraft = draft.try_into()?;
+        // A typed code goes to the chosen server first; refused, no Party is created.
         if let Some(code) = code {
             self.client
-                .register_with_code(pingers_proto::SecretText::new(code.trim().to_owned()))
-                .await
-                .map_err(refused)?;
+                .submit_registration_code(draft.server.clone(), code)
+                .await?;
         }
-        let draft = draft.try_into()?;
-        Ok(self
-            .client
-            .create_party(draft)
-            .await
-            .map_err(refused)?
-            .into())
+        Ok(self.client.create_party(draft).await?.into())
     }
 
     /// Checks a first-phone setup link (`https://<server>/j#s1.…` or `pingers://join#s1.…`)
     /// for its confirm step, sending nothing: [`SetupLinkState::Confirm`] with the server, or
-    /// why the step stops before asking (already set up, a code refused before, another
-    /// server, keys this build does not pin, or [`SetupLinkState::Broken`] for a link that does
-    /// not decode).
+    /// why the step stops before asking (already set up, a code refused before, keys other than
+    /// the ones this phone pins for that server, or [`SetupLinkState::Broken`] for a link that
+    /// does not decode).
     ///
     /// # Errors
     ///
@@ -453,9 +466,9 @@ impl Core {
     }
 
     /// Uses a first-phone setup link (the confirm step's "Set up", or "Try again"): checks it
-    /// again, checks the gateway key the relay serves against the link's pins in a build
-    /// without pins, then makes this device's account with its code. Nothing retries on its
-    /// own: [`SetupLinkState::Unreachable`] waits for the user to tap again.
+    /// again, records the link's server with its pins if this phone does not know it (the keys it
+    /// serves must match them), then makes this device's account there with its code. Nothing
+    /// retries on its own: [`SetupLinkState::Unreachable`] waits for the user to tap again.
     ///
     /// # Errors
     ///
@@ -1235,7 +1248,7 @@ mod tests {
                             AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI";
 
     #[test]
-    fn build_pins_become_pin_sets_and_blank_ones_mean_first_use() -> Result<(), CoreError> {
+    fn build_pins_become_pin_sets_and_blank_ones_mean_none() -> Result<(), CoreError> {
         let pinned = pingers_client::Instance::try_from(InstanceConfig {
             gateway_key_pins: Some(TWO_PINS.into()),
             push_relay_key_pins: Some(" ".into()),
@@ -1253,6 +1266,19 @@ mod tests {
         let unpinned = pingers_client::Instance::try_from(instance())?;
         assert_eq!(unpinned.gateway_pins, None);
         Ok(())
+    }
+
+    /// New party's "This server needs a code" tells a missing code from a refused one.
+    #[test]
+    fn registration_refusals_reach_the_app_as_code_needed_or_refused() {
+        assert!(matches!(
+            CoreError::from(pingers_client::ClientError::RegistrationCodeRequired),
+            CoreError::CodeNeeded { .. }
+        ));
+        assert!(matches!(
+            CoreError::from(pingers_client::ClientError::RegistrationCodeRefused),
+            CoreError::CodeRefused { .. }
+        ));
     }
 
     #[test]
@@ -1581,6 +1607,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn servers_are_looked_at_trusted_and_given_codes_through_the_client()
+    -> Result<(), CoreError> {
+        let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
+        let core = open_on("servers", &fakes).await?;
+        let server = pingers_proto::ServerId::new("https://b.example".to_owned())?;
+        assert!(matches!(
+            core.probe_server("b.example".into()).await,
+            Err(CoreError::Server {
+                issue: crate::ServerIssue::NotLookedAt,
+                ..
+            })
+        ));
+        fakes.set_probe(Some(pingers_client::ServerProbe {
+            server: server.clone(),
+            operator: Some(pingers_client::snapshot::Operator::new("B")?),
+            relay: pingers_client::snapshot::Host::new("relay.b.example")?,
+            push_relay: None,
+            gateway_key: pingers_proto::KeyConfigHash::from_bytes([0x12; 32]),
+            known: false,
+        }));
+        let look = core.probe_server("b.example".into()).await?;
+        assert_eq!(look.server, "https://b.example");
+        assert_eq!(look.operator.as_deref(), Some("B"));
+        assert!(look.gateway_key.starts_with("1212 1212"));
+        assert_eq!(
+            fakes.calls().last(),
+            Some(&CrateCall::ProbeServer("b.example".into()))
+        );
+
+        core.trust_server("https://b.example".into()).await?;
+        assert_eq!(
+            fakes.calls().last(),
+            Some(&CrateCall::TrustServer(server.clone()))
+        );
+        assert!(matches!(
+            core.trust_server("http://b.example".into()).await,
+            Err(CoreError::Server {
+                issue: crate::ServerIssue::InvalidAddress,
+                ..
+            })
+        ));
+
+        // A Party on B, by host, with the code B asked for: the code goes to B first.
+        let on_b = NewPartyDraft {
+            name: "Book club".into(),
+            my_name: "Sam".into(),
+            colour: PartyColour::Blue,
+            post_quantum: false,
+            other_server: Some(" b.example ".into()),
+            registration_code: Some(" friends ".into()),
+        };
+        core.create_party(on_b.clone()).await?;
+        let calls = fakes.calls();
+        let last_two = calls.get(calls.len().saturating_sub(2)..);
+        assert!(matches!(
+            last_two,
+            Some([
+                CrateCall::SubmitRegistrationCode(Some(to), typed),
+                CrateCall::CreateParty(draft),
+            ]) if *to == server && typed == "friends" && draft.server.as_ref() == Some(&server)
+        ));
+        // An empty code is not sent.
+        let before = fakes.calls().len();
+        core.create_party(NewPartyDraft {
+            registration_code: Some("  ".into()),
+            ..on_b
+        })
+        .await?;
+        assert_eq!(fakes.calls().len(), before.saturating_add(1));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn join_requests_are_decided_and_invites_cancelled_through_the_client()
     -> Result<(), CoreError> {
         let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
@@ -1698,15 +1797,13 @@ mod tests {
         let host = |text: &str| {
             pingers_client::snapshot::Host::new(text).map_err(|_| CoreError::invalid("host"))
         };
-        fakes.set_setup_check(SetupCheck::OtherServer {
-            app: host("pingers.test")?,
-            link: host("friends.example")?,
+        fakes.set_setup_check(SetupCheck::BuildKeysDiffer {
+            server: host("pingers.test")?,
         });
         assert_eq!(
             core.check_setup_link(link.clone()).await?,
-            SetupLinkState::OtherServer {
-                app_server: "pingers.test".into(),
-                link_server: "friends.example".into(),
+            SetupLinkState::BuildKeysDiffer {
+                server: "pingers.test".into(),
             }
         );
         for (outcome, state) in [
@@ -1775,7 +1872,7 @@ mod tests {
         let last_two = calls.get(calls.len().saturating_sub(2)..);
         assert!(matches!(
             last_two,
-            Some([CrateCall::RegisterWithCode(typed), CrateCall::CreateParty(_)])
+            Some([CrateCall::SubmitRegistrationCode(None, typed), CrateCall::CreateParty(_)])
                 if typed == "spring-otter-4471"
         ));
         Ok(())
@@ -1985,12 +2082,15 @@ mod tests {
         };
         let elsewhere = NewPartyDraft {
             name: "Crew".into(),
-            other_server: Some("pingers.flat7.org".into()),
+            other_server: Some("pingers.flat7.org/path".into()),
             ..empty.clone()
         };
         assert!(matches!(
             core.create_party(elsewhere).await,
-            Err(CoreError::Unavailable { .. })
+            Err(CoreError::Server {
+                issue: crate::ServerIssue::InvalidAddress,
+                ..
+            })
         ));
         assert!(matches!(
             core.create_party(empty).await,

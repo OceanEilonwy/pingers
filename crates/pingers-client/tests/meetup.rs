@@ -122,6 +122,18 @@ impl Phone {
         config: &HarnessConfig,
         who: Who,
     ) -> Result<Self, TestError> {
+        let trust = harness.endpoints().push_relay_ca.clone();
+        Self::trusting(harness, config, who, &trust).await
+    }
+
+    /// A phone built against `harness` whose HTTPS trusts the test CAs in `trust_pem` (as a
+    /// debug build's extra CA bundle does), so it can reach other harness servers too.
+    async fn trusting(
+        harness: &InProcessHarness,
+        config: &HarnessConfig,
+        who: Who,
+        trust_pem: &str,
+    ) -> Result<Self, TestError> {
         let Who { seed, pushes } = who;
         let dir = TestDir::new()?;
         let endpoints = harness.endpoints();
@@ -130,9 +142,24 @@ impl Phone {
             server: ServerId::new(endpoints.server_id.clone())?,
             relay: format!("http://{}/ohttp", endpoints.ohttp_relay),
             push_relay: Some(format!("https://{}", endpoints.push_relay)),
-            gateway_pins: None,
-            push_relay_pins: None,
-            trust: Trust::from_pem(&endpoints.push_relay_ca)?,
+            // As an official build pins them: nothing is pinned on first use.
+            gateway_pins: Some(pingers_ohttp::KeyPins::from(
+                pingers_crypto::key_config_hash(&endpoints.ohttp_key_config),
+            )),
+            push_relay_pins: Some(pingers_ohttp::KeyPins::from(
+                pingers_crypto::key_config_hash(
+                    &pingers_proto::PushRelayKeyConfig {
+                        key_id: pingers_proto::PushRelayKeyId::new(1),
+                        public_key: endpoints
+                            .push_relay_key
+                            .as_slice()
+                            .try_into()
+                            .map_err(|_length| TestError::Missing("the push relay's key"))?,
+                    }
+                    .to_bytes(),
+                ),
+            )),
+            trust: Trust::from_pem(trust_pem)?,
             registration_code: None,
         };
         let clock = config.clock.clone();
@@ -275,7 +302,18 @@ impl Phone {
     fn subscribed(&self, group: GroupId) -> Result<bool, TestError> {
         let database =
             Database::open(&self.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
-        Ok(database.session()?.subscriptions().get(&group)?.is_some())
+        let session = database.session()?;
+        for record in session.servers().list()? {
+            if session
+                .server(&record.server)?
+                .subscriptions()
+                .get(&group)?
+                .is_some()
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// The Meetup rows left in this phone's store.
@@ -304,6 +342,7 @@ async fn party_of_two(ana: &Phone, ben: &Phone) -> Result<PartyId, TestError> {
             my_name: Name::new("Ana")?,
             colour: PartyColour::Teal,
             post_quantum: PostQuantum::Off,
+            server: None,
         })
         .await?;
     let_in(ana, ben, party, "Ben").await?;
@@ -1088,10 +1127,17 @@ async fn members_shown_different_boards_are_told() -> TestResult {
             &phone.database,
             DatabaseKey::from_bytes(Zeroizing::new(KEY)),
         )?;
-        database.session()?.board_seen().record(&SeenSegment {
-            start,
-            hash: SegmentHash::from_bytes(hash),
-        })?;
+        // The segment as read from the server both phones' Party is on, their only one.
+        let session = database.session()?;
+        for record in session.servers().list()? {
+            session
+                .server(&record.server)?
+                .board_seen()
+                .record(&SeenSegment {
+                    start,
+                    hash: SegmentHash::from_bytes(hash),
+                })?;
+        }
     }
     meet(&ana, &ben).await?;
     let told = RecordedEvent::Notice(pingers_client::Notice::BoardEquivocation);
@@ -1111,4 +1157,49 @@ async fn members_shown_different_boards_are_told() -> TestResult {
         .await;
     }
     Err(TestError::Missing("a notice that the boards differ"))
+}
+
+/// The Meetup of a Party on a server neither phone is built for: Ana trusts server B and makes
+/// the Party there, Ben joins with the pins in her invite, and they meet through server B's
+/// board, mailboxes and group logs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_clients_meet_in_a_party_on_another_server() -> TestResult {
+    let config = HarnessConfig::default();
+    let harness = InProcessHarness::start(&config)?;
+    let other = InProcessHarness::start(&HarnessConfig {
+        seed: 2,
+        clock: config.clock.clone(),
+        ..HarnessConfig::default()
+    })?;
+    let trust = format!(
+        "{}\n{}",
+        harness.endpoints().push_relay_ca,
+        other.endpoints().push_relay_ca
+    );
+    let off = |seed| Who {
+        seed,
+        pushes: Pushes::Off,
+    };
+    let ana = Phone::trusting(&harness, &config, off(3), &trust).await?;
+    let ben = Phone::trusting(&harness, &config, off(4), &trust).await?;
+    let server_b = ServerId::new(other.endpoints().server_id.clone())?;
+    ana.client
+        .probe_server(server_b.as_str().to_owned())
+        .await?;
+    ana.client.trust_server(server_b.clone()).await?;
+    let party = ana
+        .client
+        .create_party(PartyDraft {
+            name: Name::new("Climbing crew")?,
+            my_name: Name::new("Ana")?,
+            colour: PartyColour::Teal,
+            post_quantum: PostQuantum::Off,
+            server: Some(server_b.clone()),
+        })
+        .await?;
+    let_in(&ana, &ben, party, "Ben").await?;
+    assert_eq!(ben.client.snapshot().party(party)?.config.origin, server_b);
+    spot(&ana, party).await?;
+    let meeting = meet(&ana, &ben).await?;
+    meeting.chat().await
 }

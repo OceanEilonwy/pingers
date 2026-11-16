@@ -4,7 +4,15 @@
 //! ```text
 //! cargo xtask e2e-emulators [<local-stack options>] [--avd <name>] [--leases <dir>]
 //!                           [--apk <file>] [--ntfy-apk <file>] [--flavour foss|gms]
+//!                           [--cross-server]
 //! ```
+//!
+//! With `--second-server --cross-server` phone A's app is built with `second-server.env`, so its
+//! built-in server is server B, and phone B's with `app.env` (server A). A creates a Party (on
+//! B) and shares its link; B opens it, records server B with the pins the link carries, registers
+//! there with the link's registration code and asks to join; server B's metrics must show it
+//! answered. Then the whole scenario below runs with the Party on server B, and B's Party
+//! settings must name server B's operator and say its keys came from the invite link.
 //!
 //! It uses a running local stack, or starts one (and stops it at the end); builds the debug
 //! APK (foss, or gms with `--flavour gms`) against it unless `--apk` names one; takes both
@@ -66,6 +74,9 @@ use crate::wait::{Deadline, pause};
 const ACTIVITY: &str = "org.pingers.app.MainActivity";
 /// The host of the stack's server as the emulators reach it (its invite links' host).
 const STACK_HOST: &str = "10.0.2.2";
+/// The landing page's title (pingers-server's assets/landing.html), which Chrome shows in the dump
+/// even when none of the page reaches it.
+const LANDING_TITLE: &str = "Pingers invite";
 /// The browser on the Play images.
 const CHROME: &str = "com.android.chrome";
 /// The ntfy app, the UnifiedPush distributor on the emulators.
@@ -114,6 +125,9 @@ pub(crate) struct ScenarioOptions {
     apk: Option<PathBuf>,
     ntfy_apk: Option<PathBuf>,
     flavour: Flavour,
+    /// `--cross-server`: phone A's built-in server is server B (`--second-server`), phone B's
+    /// is server A; B joins A's Party on server B by its invite, and the scenario runs there.
+    cross_server: bool,
 }
 
 impl ScenarioOptions {
@@ -131,6 +145,7 @@ impl ScenarioOptions {
                 "--apk" => parsed.apk = Some(PathBuf::from(options.next()?)),
                 "--ntfy-apk" => parsed.ntfy_apk = Some(PathBuf::from(options.next()?)),
                 "--flavour" => parsed.flavour = Flavour::parse(options.next()?)?,
+                "--cross-server" => parsed.cross_server = true,
                 _ => return None,
             }
         }
@@ -334,6 +349,10 @@ pub(crate) fn run(workspace: &Path, options: &ScenarioOptions) -> Result<Outcome
 
 /// Everything that holds resources (the stack, the emulators) lives in this frame, so it is
 /// all released, emulators first, however the scenario ends.
+#[expect(
+    clippy::too_many_lines,
+    reason = "setup reads top to bottom as the steps it reports"
+)]
 fn setup_and_play(
     workspace: &Path,
     options: &ScenarioOptions,
@@ -357,6 +376,32 @@ fn setup_and_play(
         }
         Ok(apk.display().to_string())
     })?;
+    // Phone A's app, built-in server B, when the run crosses servers; phone B keeps `apk`.
+    let mut apk_a = apk.clone();
+    if options.cross_server {
+        setup_step(report, "app built for server B", || {
+            if !options.stack.second_server {
+                bail!("--cross-server needs --second-server");
+            }
+            // Gradle writes one path: keep the first build before the second replaces it.
+            let kept = layout.e2e_out().join("app-built-in-a.apk");
+            fs::copy(&apk, &kept)?;
+            apk = kept;
+            apk_a = crate::local_app::build_with(
+                workspace,
+                &options.stack,
+                crate::local_app::AppBuild {
+                    env: &layout.second_server_env(),
+                    flavour: options.flavour,
+                },
+            )?;
+            Ok(format!(
+                "A: {} (built-in server B); B: {} (built-in server A)",
+                apk_a.display(),
+                apk.display()
+            ))
+        })?;
+    }
 
     let mut emulators: Vec<Emulator> = Vec::new();
     let mut sdk = None;
@@ -433,7 +478,12 @@ fn setup_and_play(
         .ntfy_apk
         .clone()
         .or_else(|| environment("PINGERS_NTFY_APK").map(PathBuf::from));
-    let result = play(report, &mut scene, &apk, ntfy_apk.as_deref());
+    let apks = Apks {
+        a: &apk_a,
+        b: &apk,
+        cross_server: options.cross_server,
+    };
+    let result = play(report, &mut scene, &apks, ntfy_apk.as_deref());
     // Emulators go first, then the stack.
     drop(emulators);
     drop(own_stack);
@@ -449,6 +499,11 @@ fn stack_up(
     own_stack: &mut Option<Supervisor>,
 ) -> Result<String> {
     if stack::front_is_up() && layout.owns_running_stack() {
+        if options.cross_server && !stack::second_front_is_up() {
+            bail!(
+                "this directory's stack is running without server B: stop it, or run without --cross-server"
+            );
+        }
         return Ok("using the stack already running".to_owned());
     }
     wait_out_foreign_stack()?;
@@ -502,6 +557,14 @@ fn setup_step(
     }
 }
 
+/// The app each phone gets.
+struct Apks<'path> {
+    a: &'path Path,
+    b: &'path Path,
+    /// Phone A's built-in server is server B: stop once B has joined there.
+    cross_server: bool,
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "the scenario reads top to bottom as the steps it reports"
@@ -509,7 +572,7 @@ fn setup_step(
 fn play(
     report: &mut Report,
     scene: &mut Scene,
-    apk: &Path,
+    apks: &Apks<'_>,
     ntfy_apk: Option<&Path>,
 ) -> Result<(), Stopped> {
     step(report, scene, "ntfy points at the stack", |scene| {
@@ -525,9 +588,8 @@ fn play(
     })?;
 
     step(report, scene, "Pingers installed", |scene| {
-        for device in [&scene.a, &scene.b] {
-            install_pingers(device, apk, scene.package)?;
-        }
+        install_pingers(&scene.a, apks.a, scene.package)?;
+        install_pingers(&scene.b, apks.b, scene.package)?;
         Ok(format!(
             "{} installed, permissions granted, Home shown on both",
             scene.package
@@ -610,7 +672,10 @@ fn play(
 
     step(report, scene, "A shares the invite link", |scene| {
         let a = &scene.a;
-        a.tap_when(&Find::tag("invite_share").enabled(), NETWORK)
+        // The first invite on a server registers its mailbox, and the first Party there fetched a
+        // whole token batch: on an emulator's debug build that can take minutes, while the
+        // "Making an invite link" animation keeps uiautomator from dumping the screen.
+        a.tap_when(&Find::tag("invite_share").enabled(), PRESENCE)
             .context("the invite link was never made (Share invite link stayed disabled)")?;
         // The share sheet previews the text it shares: the link itself, https://<server>/j#v1.…
         let preview = a.wait_for(&Find::text(Text::Contains("/j#v1.".into())), UI)?;
@@ -627,6 +692,14 @@ fn play(
             "https://…/j#v1.… ({length} characters) read from the share sheet"
         ))
     })?;
+
+    let mut before = 0;
+    if apks.cross_server {
+        step(report, scene, "server B counted before B joins", |_scene| {
+            before = server_b_answers()?;
+            Ok(format!("{before} requests answered so far, all phone A's"))
+        })?;
+    }
 
     step(report, scene, "B opens the invite link", |scene| {
         let link = scene.link.clone().context("no link")?;
@@ -680,6 +753,10 @@ fn play(
         scene.code_b = Some(code.clone());
         Ok(format!("B's code {code}"))
     })?;
+
+    if apks.cross_server {
+        server_b_registered(report, scene, before)?;
+    }
 
     step(
         report,
@@ -748,6 +825,27 @@ fn play(
         Ok(format!("A's Party lists {JOINER}"))
     })?;
 
+    if apks.cross_server {
+        step(report, scene, "B's Party settings show server B", |scene| {
+            let b = &scene.b;
+            b.tap_when(&Find::tag("party_settings_open"), UI)?;
+            let keys = Find::text(Text::Is("Server keys from your invite link".into()));
+            let operator = Find::text(Text::Is(stack::SECOND_OPERATOR.into()));
+            let screen = b.screen()?;
+            if screen.find(&keys).is_none() || screen.find(&operator).is_none() {
+                // The Operators card may sit below the fold.
+                b.shell("input swipe 540 1800 540 900")?;
+            }
+            b.wait_for(&keys, UI)?;
+            b.wait_for(&operator, UI)?;
+            open_party(b, scene.package)?;
+            Ok(format!(
+                "run by {:?}, keys from the invite link",
+                stack::SECOND_OPERATOR
+            ))
+        })?;
+    }
+
     // 3. A Spot.
     step(report, scene, "A creates a Spot", |scene| {
         let a = &scene.a;
@@ -777,6 +875,17 @@ fn play(
         let signal = Find::tag("alert_open")
             .or(Text::Is("Open meetup".into()))
             .or(Text::Contains(" here".into()));
+        // Play services' fused provider takes an emulator for a phone that never moves (its
+        // motion sensors are still), so after the Spot editor's fix it keeps answering a
+        // balanced request with that fix, as far away as it was, and never turns GPS on for
+        // the walk in. Location off and on again drops that cached fix.
+        for device in [&scene.a, &scene.b] {
+            device.shell("cmd location set-location-enabled false")?;
+        }
+        pause(Duration::from_secs(2));
+        for device in [&scene.a, &scene.b] {
+            device.shell("cmd location set-location-enabled true")?;
+        }
         let deadline = Deadline::after(PRESENCE);
         let mut round = 0_u32;
         loop {
@@ -1110,6 +1219,62 @@ fn notification_line(dump: &str, package: &str, text: &str) -> Option<String> {
 
 /// Installs (or finds) ntfy and points its default server at the stack's, through `adb
 /// reverse`. Without an ntfy app, says so: Pingers then has no UnifiedPush distributor.
+/// Phone B, whose built-in server is A, joins phone A's Party on server B: it records B with the
+/// invite's pins, registers there with the link's code, and asks to join. Server B answering
+/// phone B's registration and requests (direct and through B's relay) is the evidence.
+/// With `--cross-server`, after B asked to join: server B answered phone B, whose built-in
+/// server is server A, so B recorded server B from the link and registered there.
+fn server_b_registered(report: &mut Report, scene: &mut Scene, before: u64) -> Result<(), Stopped> {
+    step(report, scene, "B registered on server B", |_scene| {
+        let deadline = Deadline::after(NETWORK);
+        loop {
+            let now = server_b_answers()?;
+            // Registration, bearer, token issuance and leaf (direct), then the reply mailbox
+            // and the join request (through B's relay).
+            if now >= before.saturating_add(4) {
+                return Ok(format!(
+                    "server B answered {} more requests",
+                    now.saturating_sub(before)
+                ));
+            }
+            if deadline.passed() {
+                bail!(
+                    "server B answered only {} more requests",
+                    now.saturating_sub(before)
+                );
+            }
+            pause(Duration::from_secs(2));
+        }
+    })
+}
+
+/// How many requests server B answered, by its own metrics (public and OHTTP channels).
+fn server_b_answers() -> Result<u64> {
+    let address = stack::second_server_api();
+    let output = std::process::Command::new("curl")
+        .args(["--silent", "--show-error", "--http2-prior-knowledge"])
+        .arg(format!("http://{address}/metrics"))
+        .output()
+        .context("running curl for server B's metrics")?;
+    if !output.status.success() {
+        bail!("server B's metrics did not answer");
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(answered(&text))
+}
+
+/// The answered requests in a metrics text: every `pingers_requests_total` line whose outcome
+/// is `ok`.
+fn answered(metrics: &str) -> u64 {
+    metrics
+        .lines()
+        .filter(|line| {
+            line.starts_with("pingers_requests_total") && line.contains("outcome=\"ok\"")
+        })
+        .filter_map(|line| line.rsplit(' ').next()?.parse::<u64>().ok())
+        .sum()
+}
+
 fn setup_ntfy(device: &Device, apk: Option<&Path>) -> Result<String> {
     device.adb(&[
         "reverse",
@@ -1305,14 +1470,16 @@ fn through_landing_page(device: &Device, link: &str) -> Result<String> {
             device.tap(button)?;
             tapped_open = true;
         } else if screen
-            .find(&Find::text(Text::StartsWith(
-                "Don't have Pingers yet".into(),
-            )))
+            .find(
+                &Find::text(Text::StartsWith("Don't have Pingers yet".into()))
+                    .or(Text::Is(LANDING_TITLE.into())),
+            )
             .is_some()
         {
             // The page is up but its script has not shown the button: right after the
-            // certificate warning, Chrome may have loaded the page without it. Once a while,
-            // load the link again.
+            // certificate warning, Chrome may have loaded the page without it. Or the page is up
+            // (its title shows) but none of it reaches the dump, as while Chrome's first-run
+            // tip about the address bar covers it. Once a while, load the link again.
             let reload = *page_without_button.get_or_insert_with(|| Deadline::after(UI));
             if reload.passed() {
                 device.shell(&format!(
@@ -1354,6 +1521,15 @@ mod tests {
     }
 
     #[test]
+    fn answered_requests_add_up_the_ok_lines() {
+        let metrics = "# TYPE pingers_requests_total counter\n\
+            pingers_requests_total{channel=\"public\",outcome=\"ok\"} 5\n\
+            pingers_requests_total{channel=\"public\",outcome=\"client_error\"} 9\n\
+            pingers_requests_total{channel=\"ohttp\",outcome=\"ok\"} 3\n";
+        assert_eq!(answered(metrics), 8);
+    }
+
+    #[test]
     fn options_mix_stack_and_scenario_flags() {
         let parsed = ScenarioOptions::parse(&strings(&[
             "--dir",
@@ -1379,8 +1555,16 @@ mod tests {
                 apk: Some(PathBuf::from("/a.apk")),
                 ntfy_apk: None,
                 flavour: Flavour::Gms,
+                cross_server: false,
             })
         );
+        let crossing = ScenarioOptions::parse(&strings(&["--second-server", "--cross-server"]));
+        assert!(
+            crossing
+                .as_ref()
+                .is_some_and(|options| options.cross_server)
+        );
+        assert!(crossing.is_some_and(|options| options.stack.second_server));
         assert_eq!(ScenarioOptions::parse(&strings(&["--avd"])), None);
         assert_eq!(
             ScenarioOptions::parse(&strings(&["--flavour", "play"])),
