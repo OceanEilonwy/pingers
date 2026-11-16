@@ -13,7 +13,8 @@ use pingers_proto::{
     SequenceNumber, ServerId, SubscriptionId,
 };
 use pingers_sync::{
-    ApiRequest, GroupCall, GroupLifetime, GroupSigner, GroupStart, Sending, SyncError, WakeBudget,
+    ApiRequest, GroupCall, GroupLifetime, GroupSigner, GroupStart, OwnedSubscription, Sending,
+    SyncError, WakeBudget,
 };
 use pingers_transport::DuplexStream;
 
@@ -166,7 +167,15 @@ impl GroupNetwork for GroupLogs {
         subscription: Option<SubscriptionId>,
     ) -> Result<Box<dyn DuplexStream>, NetworkError> {
         let link = self.link().await?;
-        let request = ApiRequest::live(group, subscription.as_ref(), &Self::signer(&link, auth))
+        // The channel speaks for this device's subscription only with its owner's signature.
+        let owner = subscription
+            .map(|id| link.engine.subscription_owner(&id).map(|owner| (id, owner)))
+            .transpose()
+            .map_err(|error| network_error(&error))?;
+        let owned = owner
+            .as_ref()
+            .map(|(id, owner)| OwnedSubscription { id: *id, owner });
+        let request = ApiRequest::live(group, owned.as_ref(), &Self::signer(&link, auth))
             .map_err(|error| network_error(&error))?;
         let result = link.engine.open_live(request).await;
         link.observe(&result);

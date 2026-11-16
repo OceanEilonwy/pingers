@@ -72,6 +72,6 @@ pub use pool::{LEASE_BUCKETS, PoolRefill, PoolTarget, WakePush};
 pub use prover::{RETEST_AFTER, SelfTestSlot, SelfTestStanding, SelfTestStart};
 pub use queue::{QueueCapacity, QueuePolicy, Sending};
 pub use registrations::{GroupMembership, Maintained, Maintenance, Pushes, RENEW_AHEAD};
-pub use request::{ApiRequest, GroupLifetime, GroupSigner, GroupStart, Route};
+pub use request::{ApiRequest, GroupLifetime, GroupSigner, GroupStart, OwnedSubscription, Route};
 pub use server::{NextPushRelayKey, ScheduledPushRelay, VerifiedPushRelay, params_direct};
 pub use tokens::{DEFAULT_DAILY_LIMIT, Refill, TokenIssuer, TokenStock};

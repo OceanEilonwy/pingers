@@ -560,6 +560,7 @@ impl Device {
                 handle: PushHandle::from_bytes(random_array(&mut self.rng)),
             },
             time_to_live: TimeToLive::new(SUBSCRIPTION_LIFETIME)?,
+            owner: pingers_proto::SubscriptionOwner::from_bytes([7; 32]),
         })
     }
 

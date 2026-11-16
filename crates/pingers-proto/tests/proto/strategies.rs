@@ -307,11 +307,14 @@ pub(crate) fn mailbox_push() -> impl Strategy<Value = MailboxPush> {
 }
 
 pub(crate) fn subscription() -> impl Strategy<Value = Subscription> {
-    (bytes16(), sealed_push(), time_to_live()).prop_map(|(id, push, time_to_live)| Subscription {
-        id: SubscriptionId::from_bytes(id),
-        push,
-        time_to_live,
-    })
+    (bytes16(), sealed_push(), time_to_live(), bytes32()).prop_map(
+        |(id, push, time_to_live, owner)| Subscription {
+            id: SubscriptionId::from_bytes(id),
+            push,
+            time_to_live,
+            owner: pingers_proto::SubscriptionOwner::from_bytes(owner),
+        },
+    )
 }
 
 pub(crate) fn push_token_plaintext() -> impl Strategy<Value = PushTokenPlaintext> {

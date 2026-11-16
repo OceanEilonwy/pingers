@@ -8,7 +8,10 @@
 //! engine attaches when it is actually sent (so a queued request gets a credential for the
 //! bucket it is sent in, and a request that is never sent spends none).
 
-use pingers_crypto::{GroupRequest, LogAuthKeyPair, MailboxReadKey, sign_group_request};
+use pingers_crypto::{
+    GroupRequest, LogAuthKeyPair, MailboxReadKey, SubscriptionOwnerKey, sign_group_request,
+    sign_subscription_request,
+};
 use pingers_ohttp::{BinaryRequest, Header};
 use pingers_proto::{
     AppMessage, AuthRequest, BoardCursor, BoardSyncRequest, CommitRequest, CreateGroup, GroupId,
@@ -30,6 +33,9 @@ pub(crate) const READ_KEY_HEADER: &str = "pingers-read-key";
 pub(crate) const GROUP_TIME_HEADER: &str = "pingers-group-time";
 /// The header carrying a group request's Ed25519 signature, as hex (auth mode Grp).
 pub(crate) const GROUP_SIGNATURE_HEADER: &str = "pingers-group-signature";
+/// The header carrying a subscription owner's signature over the same request, as hex, on a
+/// request that changes a subscription or speaks for it (design D, "Subscription owner").
+pub(crate) const SUBSCRIPTION_SIGNATURE_HEADER: &str = "pingers-sub-signature";
 /// The header carrying a bearer token or an anonymous credential.
 pub(crate) const AUTHORIZATION: &str = "authorization";
 
@@ -204,6 +210,15 @@ pub struct GroupSigner<'key> {
     pub now: UnixSeconds,
 }
 
+/// This device's subscription in a group and the owner key that signs for it: replacing or
+/// deleting it, or attaching the live channel under it, needs that signature too (design D).
+pub struct OwnedSubscription<'key> {
+    /// The subscription.
+    pub id: SubscriptionId,
+    /// Its owner key ([`SubscriptionOwnerKey::derive`]).
+    pub owner: &'key SubscriptionOwnerKey,
+}
+
 /// One request to the server, complete except for its anonymous credential.
 ///
 /// `Debug` prints only the route: paths carry identifiers and headers carry secrets.
@@ -303,6 +318,28 @@ impl ApiRequest {
                 GROUP_SIGNATURE_HEADER,
                 hex::encode(signature.as_bytes()).into_bytes(),
             ))
+    }
+
+    /// Adds the subscription owner's signature over the request as signed by `signer`
+    /// (the same method, path, body and time).
+    fn signed_as_owner(
+        self,
+        signer: &GroupSigner<'_>,
+        owner: &SubscriptionOwnerKey,
+    ) -> Result<Self, SyncError> {
+        let signature = sign_subscription_request(
+            owner,
+            &GroupRequest {
+                method: self.method,
+                path: &self.path,
+                body: &self.body,
+                timestamp: signer.now,
+            },
+        )?;
+        Ok(self.with_header(
+            SUBSCRIPTION_SIGNATURE_HEADER,
+            hex::encode(signature.as_bytes()).into_bytes(),
+        ))
     }
 
     fn in_group(mut self, group: &GroupId) -> Self {
@@ -590,7 +627,8 @@ impl ApiRequest {
         .signed(signer)
     }
 
-    /// `PUT /v1/groups/{id}/subs/{sub_id}`.
+    /// `PUT /v1/groups/{id}/subs/{sub_id}`, signed by the group key and by `owner`, the key the
+    /// subscription carries.
     ///
     /// # Errors
     ///
@@ -600,6 +638,7 @@ impl ApiRequest {
         group: &GroupId,
         subscription: &Subscription,
         signer: &GroupSigner<'_>,
+        owner: &SubscriptionOwnerKey,
     ) -> Result<Self, SyncError> {
         Self::new(
             Route::PutSubscription,
@@ -611,17 +650,18 @@ impl ApiRequest {
             ),
         )
         .with_cbor(subscription)?
-        .signed(signer)
+        .signed(signer)?
+        .signed_as_owner(signer, owner)
     }
 
-    /// `DELETE /v1/groups/{id}/subs/{sub_id}`.
+    /// `DELETE /v1/groups/{id}/subs/{sub_id}`, signed by the group key and the owner.
     ///
     /// # Errors
     ///
     /// [`SyncError::Crypto`] if signing fails.
     pub fn delete_subscription(
         group: &GroupId,
-        subscription: &SubscriptionId,
+        subscription: &OwnedSubscription<'_>,
         signer: &GroupSigner<'_>,
     ) -> Result<Self, SyncError> {
         Self::new(
@@ -630,10 +670,11 @@ impl ApiRequest {
             format!(
                 "/v1/groups/{}/subs/{}",
                 id_hex(group.as_bytes()),
-                id_hex(subscription.as_bytes())
+                id_hex(subscription.id.as_bytes())
             ),
         )
-        .signed(signer)
+        .signed(signer)?
+        .signed_as_owner(signer, subscription.owner)
     }
 
     /// `POST /v1/groups/{id}/msgs`.
@@ -705,26 +746,34 @@ impl ApiRequest {
     }
 
     /// `POST /v1/groups/{id}/live?sub=<sub_id>`: the head of the chunked live channel. The
-    /// subscription is the device's own in the group, so the server skips its push while the
-    /// channel is open; a device without one (wake-up pushes off) leaves `sub` out.
+    /// subscription is the device's own in the group, signed by its owner key too, so the
+    /// server skips its push while the channel is open; a device without one (wake-up pushes
+    /// off) leaves `sub` out.
     ///
     /// # Errors
     ///
     /// [`SyncError::Crypto`] if signing fails.
     pub fn live(
         group: &GroupId,
-        subscription: Option<&SubscriptionId>,
+        subscription: Option<&OwnedSubscription<'_>>,
         signer: &GroupSigner<'_>,
     ) -> Result<Self, SyncError> {
         let group = id_hex(group.as_bytes());
-        let path = match subscription {
-            Some(subscription) => format!(
-                "/v1/groups/{group}/live?sub={}",
-                id_hex(subscription.as_bytes())
-            ),
-            None => format!("/v1/groups/{group}/live"),
-        };
-        Self::new(Route::Live, "POST", path).signed(signer)
+        match subscription {
+            Some(subscription) => Self::new(
+                Route::Live,
+                "POST",
+                format!(
+                    "/v1/groups/{group}/live?sub={}",
+                    id_hex(subscription.id.as_bytes())
+                ),
+            )
+            .signed(signer)?
+            .signed_as_owner(signer, subscription.owner),
+            None => {
+                Self::new(Route::Live, "POST", format!("/v1/groups/{group}/live")).signed(signer)
+            }
+        }
     }
 }
 

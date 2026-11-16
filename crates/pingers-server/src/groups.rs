@@ -28,7 +28,9 @@ use pingers_proto::{
 use tokio::sync::mpsc;
 
 use crate::Shared;
-use crate::credential::{GroupAnon, admit, admit_group, check_signature, start_session};
+use crate::credential::{
+    GroupAnon, admit, admit_group, check_owner_signature, check_signature, start_session,
+};
 use crate::dispatch::Reply;
 use crate::wire::{decode, encoded, hex_array, query, segment};
 
@@ -42,7 +44,10 @@ pub(crate) fn status_of(error: &DeliveryError) -> StatusCode {
     match error {
         DeliveryError::UnknownGroup | DeliveryError::UnknownChannel => StatusCode::NOT_FOUND,
         DeliveryError::GroupExists => StatusCode::CONFLICT,
-        DeliveryError::LaterEpoch | DeliveryError::EpochEnded => StatusCode::FORBIDDEN,
+        DeliveryError::LaterEpoch
+        | DeliveryError::EpochEnded
+        | DeliveryError::SubscriptionOwned
+        | DeliveryError::PartyGroupKept => StatusCode::FORBIDDEN,
         DeliveryError::FutureEpoch { .. }
         | DeliveryError::SubscriptionTooLong
         | DeliveryError::TooManySubscriptions => StatusCode::UNPROCESSABLE_ENTITY,
@@ -259,14 +264,53 @@ fn subscription_id(path: &str) -> Option<SubscriptionId> {
         .map(SubscriptionId::from_bytes)
 }
 
-/// `PUT /v1/groups/{id}/subs/{sub_id}`: the body's id must be the path's.
+/// A request and the body its signatures cover: its own, or for a split channel's uplink the
+/// empty body of the live head whose headers it carries.
+#[derive(Clone, Copy)]
+struct Signed<'request> {
+    request: &'request BinaryRequest,
+    body: &'request [u8],
+}
+
+/// Checks the owner's signature when the group holds subscription `id` (it is bound to the
+/// owner key it was first stored with); a subscription the group does not hold needs none.
+fn owner_may_act(
+    shared: &Shared,
+    signed: Signed<'_>,
+    group: &GroupId,
+    id: &SubscriptionId,
+) -> Result<Option<Subscription>, Reply> {
+    let Signed { request, body } = signed;
+    let held = shared
+        .groups
+        .subscription(group, id)
+        .map_err(|error| refused(&error))?;
+    if let Some(held) = &held {
+        check_owner_signature(request, &held.owner, body)?;
+    }
+    Ok(held)
+}
+
+/// `PUT /v1/groups/{id}/subs/{sub_id}`: the body's id must be the path's. Replacing a
+/// subscription the group holds needs its owner's signature too, checked before a credential
+/// is spent.
 pub(crate) fn put_subscription(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
-    let (group, anon) = authorise(shared, request, &request.body, Anon::Required)?;
+    let (group, _epoch) = authorise_current(shared, request, &request.body)?;
     let id = subscription_id(&request.path).ok_or_else(bad_request)?;
     let subscription = decode::<Subscription>(&request.body)?;
     if subscription.id != id {
         return Err(bad_request());
     }
+    owner_may_act(
+        shared,
+        Signed {
+            request,
+            body: &request.body,
+        },
+        &group,
+        &id,
+    )?;
+    let anon = admit_group(shared, request, group)?;
     shared
         .groups
         .put_subscription(&group, subscription)
@@ -274,13 +318,23 @@ pub(crate) fn put_subscription(shared: &Shared, request: &BinaryRequest) -> Resu
     Ok(with_session(Reply::status(StatusCode::NO_CONTENT), anon))
 }
 
-/// `DELETE /v1/groups/{id}/subs/{sub_id}`.
+/// `DELETE /v1/groups/{id}/subs/{sub_id}`: needs the owner's signature when the group holds
+/// it (deleting one it does not hold changes nothing).
 pub(crate) fn delete_subscription(
     shared: &Shared,
     request: &BinaryRequest,
 ) -> Result<Reply, Reply> {
     let (group, anon) = authorise(shared, request, &request.body, Anon::NotRequired)?;
     let id = subscription_id(&request.path).ok_or_else(bad_request)?;
+    owner_may_act(
+        shared,
+        Signed {
+            request,
+            body: &request.body,
+        },
+        &group,
+        &id,
+    )?;
     // Through the pusher, which first waits for a push to this subscription already in
     // flight: once the 204 is sent, the relay hears nothing more for it.
     shared
@@ -357,13 +411,20 @@ pub(crate) fn delete(shared: &Shared, request: &BinaryRequest) -> Result<Reply, 
 }
 
 /// `POST /v1/groups/{id}/live?sub=` as a one-shot request: one uplink frame of a split
-/// channel, from the member whose downlink was opened with the same `sub`.
+/// channel, from the member whose downlink was opened with the same `sub`, signed by that
+/// subscription's owner as well (another member knows the id, not the key). An uplink carries
+/// the live head's headers (pingers-transport), so both signatures cover the head's empty body,
+/// not the frame.
 pub(crate) fn uplink(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
-    let (group, anon) = authorise(shared, request, &request.body, Anon::NotRequired)?;
+    let (group, anon) = authorise(shared, request, &[], Anon::NotRequired)?;
     let subscription = query(&request.path, "sub")
         .and_then(hex_array::<{ SubscriptionId::LENGTH }>)
         .map(SubscriptionId::from_bytes)
         .ok_or_else(bad_request)?;
+    let signed = Signed { request, body: &[] };
+    if owner_may_act(shared, signed, &group, &subscription)?.is_none() {
+        return Err(Reply::status(StatusCode::NOT_FOUND));
+    }
     let channel = shared
         .live_channels
         .find(group, subscription)

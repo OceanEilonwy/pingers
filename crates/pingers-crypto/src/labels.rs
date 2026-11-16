@@ -75,6 +75,11 @@ pub(crate) const INVITE_JOIN: &[u8] = b"join";
 pub(crate) const JOIN_CODE: &[u8] = b"pingers/v1/join-code";
 /// Signature prefix for group log requests. Decision: the design gives none.
 pub(crate) const GROUP_REQUEST: &[u8] = b"pingers/v1/grp-request";
+/// HKDF info for a subscription's owner key (design D). Decision (2026-11-17).
+pub(crate) const SUBSCRIPTION_OWNER: &[u8] = b"pingers/v1/subscription-owner";
+/// Signature prefix for a subscription owner's signature on a group request. Decision
+/// (2026-11-17).
+pub(crate) const SUBSCRIPTION_REQUEST: &[u8] = b"pingers/v1/sub-request";
 /// Signature prefix for account registration. Decision: the design gives none.
 pub(crate) const REGISTRATION: &[u8] = b"pingers/v1/register";
 /// Decision: the account challenge signed for `POST /v1/auth`.
@@ -90,7 +95,9 @@ pub(crate) const SAFETY_NUMBER: &[u8] = b"pingers/v1/safety-number";
 
 /// Every private label, so tests can check they are distinct and vectors can name them.
 #[cfg(test)]
-pub(crate) const ALL: [&[u8]; 26] = [
+pub(crate) const ALL: [&[u8]; 28] = [
+    SUBSCRIPTION_OWNER,
+    SUBSCRIPTION_REQUEST,
     SAFETY_NUMBER,
     JOIN_CODE,
     AUTH_CHALLENGE,

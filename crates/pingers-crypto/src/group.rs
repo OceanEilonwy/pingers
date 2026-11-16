@@ -88,8 +88,17 @@ pub fn verify_group_request(
 /// `"pingers/v1/grp-request" || be32(len(method)) || method || be32(len(path)) || path ||
 /// SHA-256(body) || be64(timestamp)`.
 pub(crate) fn group_request_message(request: &GroupRequest<'_>) -> Result<Vec<u8>, CryptoError> {
+    request_message(labels::GROUP_REQUEST, request)
+}
+
+/// `label || be32(len(method)) || method || be32(len(path)) || path || SHA-256(body) ||
+/// be64(timestamp)`: what a group request signature, or a subscription owner's, covers.
+pub(crate) fn request_message(
+    label: &[u8],
+    request: &GroupRequest<'_>,
+) -> Result<Vec<u8>, CryptoError> {
     Ok([
-        labels::GROUP_REQUEST,
+        label,
         &length_prefix(request.method.as_bytes())?,
         request.method.as_bytes(),
         &length_prefix(request.path.as_bytes())?,

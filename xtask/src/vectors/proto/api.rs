@@ -126,7 +126,13 @@ fn knock() -> Result<VectorFile> {
     let signature = fill(0x99, 64);
     let reply = ramp(0x55, 16);
     let subscription_id = ramp(0x66, 16);
-    let subscription = array([bytes(&subscription_id), listed_sealed_push(), uint(900)]);
+    // `[subscription id, sealed push, ttl seconds, owner key]`, the owner `ramp(0x70, 32)`.
+    let subscription = array([
+        bytes(&subscription_id),
+        listed_sealed_push(),
+        uint(900),
+        bytes(&ramp(0x70, 32)),
+    ]);
     proto_file(
         "knock-encoding",
         "Knock plaintext as canonical CBOR, before padding and sealing (design B.4.2)",

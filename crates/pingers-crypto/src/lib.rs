@@ -46,6 +46,7 @@ mod rln;
 mod rs256;
 mod safety;
 mod secret;
+mod subscription;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -91,3 +92,6 @@ pub use rln::{RlnPreimageHash, rln_external_nullifier_hash, rln_request_hash};
 #[cfg(feature = "rs256")]
 pub use rs256::{Rs256Key, sign_compact_jws_rs256};
 pub use safety::{SAFETY_NUMBER_DIGITS, SafetyNumber, inviter_fingerprint, safety_number};
+pub use subscription::{
+    SubscriptionOwnerKey, sign_subscription_request, verify_subscription_request,
+};

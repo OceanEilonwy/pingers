@@ -516,6 +516,27 @@ impl CborBody for MailboxSpec {
     }
 }
 
+/// The Ed25519 public key a subscription is bound to when the server first stores it (design
+/// D): replacing or deleting the subscription, or attaching or uplinking on the live channel
+/// under its id, needs a signature by the matching key as well as the group's. The subscriber
+/// derives it from its account key and the subscription id, so it links to neither.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SubscriptionOwner([u8; 32]);
+
+impl SubscriptionOwner {
+    /// Wraps key bytes.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// The key bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 /// A sealed-push subscription to a group's log (design D). Its `bind` uses the subscription
 /// id in place of a mailbox id.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -526,23 +547,27 @@ pub struct Subscription {
     pub push: SealedPush,
     /// How long the server keeps it.
     pub time_to_live: TimeToLive,
+    /// The key that must sign any later change to it.
+    pub owner: SubscriptionOwner,
 }
 
-/// Layout: `[subscription id, sealed push, ttl seconds]`.
+/// Layout: `[subscription id, sealed push, ttl seconds, owner key]`.
 impl CborBody for Subscription {
     fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
-        writer.array(3)?;
+        writer.array(4)?;
         writer.bytes(self.id.as_bytes())?;
         self.push.encode_body(writer)?;
-        self.time_to_live.encode_cbor(writer)
+        self.time_to_live.encode_cbor(writer)?;
+        writer.bytes(self.owner.as_bytes())
     }
 
     fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
-        cbor::array_of(decoder, 3)?;
+        cbor::array_of(decoder, 4)?;
         Ok(Self {
             id: SubscriptionId::from_bytes(cbor::fixed_bytes(decoder)?),
             push: SealedPush::decode_body(decoder)?,
             time_to_live: TimeToLive::decode_cbor(decoder)?,
+            owner: SubscriptionOwner::from_bytes(cbor::fixed_bytes(decoder)?),
         })
     }
 }

@@ -686,6 +686,7 @@ pub(crate) fn knock_subscription(reply_mailbox: MailboxId) -> Option<Subscriptio
             handle: PushHandle::from_bytes([fill; 8]),
         },
         time_to_live,
+        owner: pingers_proto::SubscriptionOwner::from_bytes([fill; 32]),
     })
 }
 

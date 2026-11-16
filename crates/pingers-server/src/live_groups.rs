@@ -19,6 +19,7 @@ use pingers_ohttp::BinaryRequest;
 use pingers_proto::{GroupId, SubscriptionId, WireDecode as _};
 use tokio::sync::mpsc;
 
+use crate::credential::check_owner_signature;
 use crate::groups::{FromChannel, authorise_current, forward_frame, status_of};
 use crate::wire::{hex_array, query};
 use crate::{LIVE_BUFFER, LiveFrame, Shared};
@@ -71,11 +72,30 @@ fn attach(
     // The head of a live exchange has no body of its own: it signs an empty one. The channel
     // is attached under the epoch whose key signed it, and ends with that epoch.
     let (group, epoch) = authorise_current(shared, head, &[]).map_err(|reply| reply.status)?;
-    let subscription = match query(&head.path, "sub") {
+    let named = match query(&head.path, "sub") {
         None => None,
         Some(text) => Some(SubscriptionId::from_bytes(
             hex_array::<{ SubscriptionId::LENGTH }>(text).ok_or(StatusCode::BAD_REQUEST)?,
         )),
+    };
+    // A channel speaks for a subscription (holds back its pushes, takes its split-channel
+    // uplinks) only with that subscription owner's signature. One the group does not hold
+    // (expired, or never put) is attached as a channel without one.
+    let subscription = match named {
+        None => None,
+        Some(id) => {
+            let held = shared
+                .groups
+                .subscription(&group, &id)
+                .map_err(|error| status_of(&error))?;
+            match held {
+                Some(held) => {
+                    check_owner_signature(head, &held.owner, &[]).map_err(|reply| reply.status)?;
+                    Some(id)
+                }
+                None => None,
+            }
+        }
     };
     let (sender, outbound) = mpsc::channel(LIVE_BUFFER);
     let channel = shared

@@ -17,7 +17,8 @@ Wire types and encodings. No crypto; no logic beyond encode, decode and length c
 - **Knock**: `Knock`, `KnockSignature`.
 - **Push and mailboxes**: `MailboxSpec`, `SealedPush`, `SealedPushBlob` (320 B), `RelayRef`,
   `RelayUrl`, `KeyConfigHash`, `Urgency`, `PushPlatform` (FCM, UnifiedPush), `PushClass`,
-  `PushToken`, `PushTokenPlaintext` (`PADDED_SIZE = 272`), `Subscription`, `TimeToLive`.
+  `PushToken`, `PushTokenPlaintext` (`PADDED_SIZE = 272`), `Subscription` (`[id, sealed push, ttl seconds, owner key]`; decided 2026-11-17),
+  `SubscriptionOwner`, `TimeToLive`.
 - **Groups**: `CreateGroup`, `CommitRequest`, `CommitResponse`, `AppMessage` (the group
   message envelope), `GroupLogEntry`, `LiveFrame`, `ContentType`, `Delivery`, `GroupAuthKey`,
   and opaque `KeyPackageBytes`, `MlsMessageBytes`, `WelcomeBytes`, `SealedSnapshot`.

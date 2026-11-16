@@ -25,6 +25,7 @@ fn subscription(fill: u8) -> Result<Subscription, TestError> {
             handle: PushHandle::from_bytes([fill; 8]),
         },
         time_to_live: TimeToLive::new(Duration::from_hours(24))?,
+        owner: pingers_proto::SubscriptionOwner::from_bytes([7; 32]),
     })
 }
 

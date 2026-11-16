@@ -142,13 +142,7 @@ async fn the_live_channel_goes_only_through_the_relay() -> TestResult {
         key: &key,
         now: world.clock.now(),
     };
-    let live = || {
-        ApiRequest::live(
-            &GroupId::from_bytes([4; 32]),
-            Some(&SubscriptionId::from_bytes([5; 16])),
-            &signer,
-        )
-    };
+    let live = || ApiRequest::live(&GroupId::from_bytes([4; 32]), None, &signer);
     // Only the live route may open a stream.
     assert!(matches!(
         device.engine.open_live(ApiRequest::params()).await,

@@ -77,8 +77,8 @@ pub use privacy_pass::{
 };
 pub use push::{
     KeyConfigHash, MailboxPush, MailboxSpec, PushBind, PushClass, PushPlatform, PushToken,
-    PushTokenPlaintext, RelayRef, RelayUrl, SealedPush, SealedPushBlob, Subscription, TimeToLive,
-    Urgency,
+    PushTokenPlaintext, RelayRef, RelayUrl, SealedPush, SealedPushBlob, Subscription,
+    SubscriptionOwner, TimeToLive, Urgency,
 };
 pub use redacted::Redacted;
 pub use relay::{

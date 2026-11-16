@@ -17,7 +17,7 @@ use pingers_proto::{
     AppMessage, CommitRequest, CommitResponse, ContentType, CreateGroup, Delivery as Mode, Epoch,
     GroupAuthKey, GroupId, LiveFrame, MlsMessageBytes, ProtoError, PushHandle, PushRelayKeyId,
     RelayId, RelayRef, SealedPush, SealedPushBlob, SealedSnapshot, SequenceNumber, Subscription,
-    SubscriptionId, TimeToLive, Urgency,
+    SubscriptionId, SubscriptionOwner, TimeToLive, Urgency,
 };
 use pingers_testkit::{ManualClock, seeded_rng, test_clock};
 
@@ -56,6 +56,7 @@ fn subscription(tag: u8, lifetime: Duration) -> Result<Subscription, TestError> 
             handle: PushHandle::from_bytes([tag; 8]),
         },
         time_to_live: TimeToLive::new(lifetime)?,
+        owner: SubscriptionOwner::from_bytes([tag; 32]),
     })
 }
 
@@ -1319,6 +1320,71 @@ fn earlier_epochs_keys_are_kept_newest_first(store: impl DeliveryStore) -> Resul
     Ok(())
 }
 
+/// A Party group outlives a delete: any member holds its log-auth key, so a delete would let
+/// one member erase the Party for everyone.
+fn a_party_group_is_not_deleted_on_request(store: impl DeliveryStore) -> Result<(), TestError> {
+    let world = World::new(store, &[])?;
+    let party = GroupId::from_bytes([8; 32]);
+    world.delivery.create_group(
+        CreateGroup {
+            group_id: party,
+            auth_key: auth_key(0),
+            subscriptions: vec![subscription(1, SUBSCRIPTION_LIFETIME)?],
+            state: None,
+        },
+        at_zero(GroupLifetime::Party),
+    )?;
+    assert!(matches!(
+        world.delivery.delete_group(&party),
+        Err(DeliveryError::PartyGroupKept)
+    ));
+    assert!(world.delivery.subscription(&party, &sub_id(1))?.is_some());
+    // A Meetup group still goes when its last member deletes it.
+    world.delivery.delete_group(&world.group)?;
+    Ok(())
+}
+
+/// A subscription keeps the owner key it was first stored with: neither a PUT nor a commit can
+/// hand its id to another key, until it expires.
+fn a_subscription_keeps_its_owner_key(store: impl DeliveryStore) -> Result<(), TestError> {
+    let world = World::new(store, &[1])?;
+    let hijack = Subscription {
+        owner: SubscriptionOwner::from_bytes([0xee; 32]),
+        ..subscription(1, SUBSCRIPTION_LIFETIME)?
+    };
+    assert!(matches!(
+        world
+            .delivery
+            .put_subscription(&world.group, hijack.clone()),
+        Err(DeliveryError::SubscriptionOwned)
+    ));
+    assert!(matches!(
+        world.commit_with(CommitRequest {
+            subscriptions_added: vec![hijack.clone()],
+            ..commit_request(0, Urgency::Quiet)
+        }),
+        Err(TestError::Delivery(DeliveryError::SubscriptionOwned))
+    ));
+    // The owner renews it; a new id can have any owner.
+    world
+        .delivery
+        .put_subscription(&world.group, subscription(1, SUBSCRIPTION_LIFETIME)?)?;
+    world
+        .delivery
+        .put_subscription(&world.group, subscription(2, SUBSCRIPTION_LIFETIME)?)?;
+    assert_eq!(
+        world
+            .delivery
+            .subscription(&world.group, &sub_id(1))?
+            .map(|found| found.owner),
+        Some(SubscriptionOwner::from_bytes([1; 32]))
+    );
+    // Once it has expired, the id is free.
+    world.clock.advance(SUBSCRIPTION_LIFETIME);
+    world.delivery.put_subscription(&world.group, hijack)?;
+    Ok(())
+}
+
 fn delete_removes_the_group_and_closes_its_channels(
     store: impl DeliveryStore,
 ) -> Result<(), TestError> {
@@ -1535,6 +1601,8 @@ for_each_store!(
     earlier_epochs_keys_are_kept_newest_first,
     a_group_uploaded_after_its_first_commit_starts_at_that_epoch,
     delete_removes_the_group_and_closes_its_channels,
+    a_party_group_is_not_deleted_on_request,
+    a_subscription_keeps_its_owner_key,
     expiry_leaves_other_groups_alone,
     duplicate_group_is_refused,
     commit_snapshot_replaces_the_state_for_the_next_epoch,

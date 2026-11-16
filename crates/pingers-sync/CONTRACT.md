@@ -28,7 +28,7 @@ B.4.9, B.12, D, E.2). L3: tokio (spawn_blocking, select), no detached tasks.
   privacy class, `Route::credential()` the RLN scope of the anonymous credential (writes only).
 - `SyncEngine::send(request, Sending { policy, budget }) -> Outcome::{Answered(Response),
   Queued(NotSentReason), Dropped(NotSentReason)}`; `flush_queue(budget) -> FlushReport`;
-  `queued()` (async, counts the store's queue); `open_live(ApiRequest::live(group, Option<&sub>, signer)) -> Box<dyn DuplexStream>`
+  `queued()` (async, counts the store's queue); `open_live(ApiRequest::live(group, Option<&OwnedSubscription>, signer)) -> Box<dyn DuplexStream>`
   (chunked OHTTP on the Stream route; pingers-client hands it to pingers-meetup-session's
   `GroupNetwork::open_live`).
 - `QueuePolicy::{Drop, KeepUntil(UnixSeconds)}`; `Sending::{or_drop, or_keep_until}`.
@@ -41,7 +41,9 @@ B.4.9, B.12, D, E.2). L3: tokio (spawn_blocking, select), no detached tasks.
 - Mailboxes: `register_mailbox(&NewMailbox { purpose, lifetime, push: Option<PushSeal> })`,
   `pooled_mailboxes`, `take_mailbox`, `read_mailbox`, `post_to_mailbox`, `delete_mailbox`,
   `forget_expired`. Sealed push: `PushSeal { relay, relay_key, token, urgency }`,
-  `new_subscription(seal, lifetime)`, `remember_subscription(group, sub)`.
+  `new_subscription(seal, lifetime)` (carries the owner key), `remember_subscription(group, sub)`,
+  `subscription_owner(id) -> SubscriptionOwnerKey` (derived from the account key; design D,
+  "Subscription owner").
 - Groups: traits `GroupLogOwner { applied_through, log_auth_key, apply }` and `CommitOwner {
   prepare_commit, commit_accepted, commit_rejected }`; `pull_group`, `commit -> Committed`,
   `create_group`, `post_group_message`, `read_group_messages`, `put_subscription`,
@@ -110,7 +112,9 @@ B.4.9, B.12, D, E.2). L3: tokio (spawn_blocking, select), no detached tasks.
 - **Wire choices the server must match** (not fixed by `wire.rs` yet): Grp requests carry
   `pingers-group-time: <decimal unix seconds>` and `pingers-group-signature: <hex>` over
   pingers-crypto's `GroupRequest`; group writes (create, commit, post, put subscription) also
-  carry an anonymous credential, reads and deletes only the signature; RLN proofs travel as
+  carry an anonymous credential, reads and deletes only the signature; putting or deleting a
+  subscription, and the live head naming one, also carry `pingers-sub-signature: <hex>`, its
+  owner key's signature over the same `GroupRequest`; RLN proofs travel as
   `authorization: PingersRln <padded base64url of RlnAuth>`; the first group read is
   `?after=0`, the first mailbox read has no `after`; `DELETE` of an already-forgotten mailbox,
   subscription or group (404) counts as done.

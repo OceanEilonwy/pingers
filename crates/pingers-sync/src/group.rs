@@ -15,7 +15,8 @@ use pingers_proto::{
 
 use crate::mailbox::Delivered;
 use crate::{
-    ApiRequest, GroupError, GroupSigner, GroupStart, Sending, SyncEngine, SyncError, WakeBudget,
+    ApiRequest, GroupError, GroupSigner, GroupStart, OwnedSubscription, Sending, SyncEngine,
+    SyncError, WakeBudget,
 };
 
 /// How many times a commit is tried before the conflicts are reported.
@@ -328,8 +329,9 @@ impl SyncEngine {
         subscription: &Subscription,
         budget: WakeBudget,
     ) -> Result<(), SyncError> {
+        let owner = self.subscription_owner(&subscription.id)?;
         let request =
-            ApiRequest::put_subscription(call.group, subscription, &self.signer(call.key))?;
+            ApiRequest::put_subscription(call.group, subscription, &self.signer(call.key), &owner)?;
         self.exchange(request, budget).await?.success()?;
         self.remember_subscription(call.group, subscription).await
     }
@@ -345,8 +347,12 @@ impl SyncEngine {
         subscription: &SubscriptionId,
         budget: WakeBudget,
     ) -> Result<(), SyncError> {
-        let request =
-            ApiRequest::delete_subscription(call.group, subscription, &self.signer(call.key))?;
+        let owner = self.subscription_owner(subscription)?;
+        let owned = OwnedSubscription {
+            id: *subscription,
+            owner: &owner,
+        };
+        let request = ApiRequest::delete_subscription(call.group, &owned, &self.signer(call.key))?;
         let response = self.exchange(request, budget).await?;
         if response.status() != 404 {
             response.success()?;

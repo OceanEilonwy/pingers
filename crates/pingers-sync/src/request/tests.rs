@@ -356,7 +356,10 @@ fn every_group_route_is_signed_with_its_own_path() -> Result<(), TestError> {
         key: &key,
         now: NOW,
     };
-    let subscription = SubscriptionId::from_bytes([0x5a; 16]);
+    let id = SubscriptionId::from_bytes([0x5a; 16]);
+    let account = pingers_crypto::AccountSigningKey::from_bytes(Zeroizing::new([0x11; 32]));
+    let owner = pingers_crypto::SubscriptionOwnerKey::derive(&account, &id)?;
+    let subscription = OwnedSubscription { id, owner: &owner };
     let hex_group = "ab".repeat(32);
     let hex_subscription = "5a".repeat(16);
     let cases = [
@@ -403,6 +406,56 @@ fn every_group_route_is_signed_with_its_own_path() -> Result<(), TestError> {
         assert!(header(&request, GROUP_SIGNATURE_HEADER).is_ok());
         assert_eq!(header(&request, GROUP_TIME_HEADER)?, b"1800000000");
     }
+    Ok(())
+}
+
+/// A request that changes a subscription or speaks for it carries its owner's signature over
+/// the same method, path, body and time as the group signature; others carry none.
+#[test]
+fn subscription_requests_are_signed_by_the_owner_too() -> Result<(), TestError> {
+    let key = key();
+    let signer = GroupSigner {
+        key: &key,
+        now: NOW,
+    };
+    let id = SubscriptionId::from_bytes([0x5b; 16]);
+    let account = pingers_crypto::AccountSigningKey::from_bytes(Zeroizing::new([0x12; 32]));
+    let owner = pingers_crypto::SubscriptionOwnerKey::derive(&account, &id)?;
+    let owned = OwnedSubscription { id, owner: &owner };
+    let subscription = Subscription {
+        id,
+        push: pingers_proto::SealedPush {
+            relay: pingers_proto::RelayRef::Listed(pingers_proto::RelayId::new(1)),
+            key_id: pingers_proto::PushRelayKeyId::new(1),
+            blob: pingers_proto::SealedPushBlob::from_bytes([1; 320]),
+            urgency: Urgency::Alert,
+            handle: pingers_proto::PushHandle::from_bytes([2; 8]),
+        },
+        time_to_live: pingers_proto::TimeToLive::new(core::time::Duration::from_hours(1))?,
+        owner: owner.public_key(),
+    };
+    for request in [
+        ApiRequest::put_subscription(&group(), &subscription, &signer, &owner)?,
+        ApiRequest::delete_subscription(&group(), &owned, &signer)?,
+        ApiRequest::live(&group(), Some(&owned), &signer)?,
+    ] {
+        let signature: [u8; 64] = hex::decode(header(&request, SUBSCRIPTION_SIGNATURE_HEADER)?)
+            .ok()
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or(TestError::BadHeader("signature"))?;
+        pingers_crypto::verify_subscription_request(
+            &owner.public_key(),
+            &GroupRequest {
+                method: request.method(),
+                path: request.path(),
+                body: request.body(),
+                timestamp: NOW,
+            },
+            &Signature::from_bytes(signature),
+        )?;
+    }
+    let plain = ApiRequest::live(&group(), None, &signer)?;
+    assert!(header(&plain, SUBSCRIPTION_SIGNATURE_HEADER).is_err());
     Ok(())
 }
 

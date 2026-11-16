@@ -48,6 +48,13 @@ pub enum DeliveryError {
     /// since. HTTP 403: the member attaches again with the next epoch's key.
     #[error("the epoch that authorised the channel has ended")]
     EpochEnded,
+    /// A subscription would replace an unexpired one bound to another owner key. HTTP 403.
+    #[error("the subscription belongs to another owner key")]
+    SubscriptionOwned,
+    /// `DELETE /v1/groups/{id}` named a Party group, which is never deleted on request. HTTP
+    /// 403.
+    #[error("a Party group is not deleted on request")]
+    PartyGroupKept,
     /// No live channel with this id is attached to the group.
     #[error("no such live channel")]
     UnknownChannel,

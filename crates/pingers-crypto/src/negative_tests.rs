@@ -294,6 +294,7 @@ fn knock_signature_without_subscription_does_not_cover_one_with() -> Result<(), 
             handle: pingers_proto::PushHandle::from_bytes([8; 8]),
         },
         time_to_live: pingers_proto::TimeToLive::new(core::time::Duration::from_secs(600))?,
+        owner: pingers_proto::SubscriptionOwner::from_bytes([9; 32]),
     };
     let with_subscription = KnockSignedFields {
         meetup_subscription: Some(&subscription),

@@ -983,14 +983,14 @@ POST /v1/groups?lifetime=meetup|party (Anon, scope Group) CreateGroup { group_id
 POST /v1/groups/{id}/commit (Grp) CommitReq { epoch: u64, commit: Bytes, next_auth_pk: [u8;32], state: Option<Bytes>,
                                               subs_add: Vec<Subscription>, subs_del: Vec<[u8;16]>, wake: Quiet|Alert }
                                   -> 200 { seq } | 409 { head_epoch }      // exactly one commit per epoch
-PUT  /v1/groups/{id}/subs/{sub_id} (Grp) Subscription                      // a member renews or replaces its own subscription
-DELETE /v1/groups/{id}/subs/{sub_id} (Grp)
+PUT  /v1/groups/{id}/subs/{sub_id} (Grp, + owner) Subscription { id, sealed push, ttl, owner }   // a member renews or replaces its own subscription
+DELETE /v1/groups/{id}/subs/{sub_id} (Grp, + owner)
 POST /v1/groups/{id}/msgs  (Grp) AppMsg { epoch: u64, body: Bytes, ephemeral: bool, wake: None|Quiet|Alert } -> { seq }
 GET  /v1/groups/{id}/msgs?after=seq (Grp) -> { msgs: Vec<GrpMsg>, head_epoch }
                            // signed with an earlier epoch's key: only up to the commit that ended it (B.2)
 GET  /v1/groups/{id}/state (Grp) -> { epoch, blob }
-DELETE /v1/groups/{id}     (Grp)
-POST /v1/groups/{id}/live?sub=<sub_id>  (Grp) chunked OHTTP exchange: request and response bodies are streams of Frame { epoch, body, ephemeral }   // privacy class Stream; reached only via POST /ohttp with message/ohttp-chunked-req
+DELETE /v1/groups/{id}     (Grp)                  // Meetup groups only; a Party group answers 403 and expires when idle
+POST /v1/groups/{id}/live?sub=<sub_id>  (Grp, + owner with `sub`) chunked OHTTP exchange: request and response bodies are streams of Frame { epoch, body, ephemeral }   // privacy class Stream; reached only via POST /ohttp with message/ohttp-chunked-req
 
 // --- map downloads through the privacy relay (Anon, no credential; B.12) ---
 POST /v1/maps/ohttp        body: message/ohttp-req sealed to the map host's own key   -> 200 message/ohttp-res (the map host's answer, unopened)
@@ -1001,6 +1001,10 @@ GET  /v1/maps/ohttp-keys                                                   -> ap
 Welcome messages travel as mailbox posts. Invites reuse mailboxes (below). There is deliberately no KeyPackage endpoint, no user lookup endpoint, and no endpoint that takes a raw push token.
 
 **Wake rule.** A mailbox post forwards that mailbox's sealed push to its relay. A Commit, or an `AppMsg` with `wake` set, forwards each subscription's sealed push with the given urgency, skipping subscriptions connected to the group's live stream; `Quiet` forwards are delayed by a random 0 to 30 seconds each. If the relay answers `410 Gone` the server deletes the blob.
+
+**Subscription owner** (decided 2026-11-17, from the pre-launch review). Every member can read the others' subscription ids (a Meetup leaf carries one) and every member holds the group's log-auth key, so the group signature alone would let one member replace another's subscription with its own push, delete it, or attach the live channel and send split-channel uplinks under it (holding back its pushes). Each `Subscription` therefore carries an Ed25519 `owner` key, which the server stores with it when it is first stored, by `CreateGroup`, a Commit's `subs_add` or a `PUT`. Replacing it (`PUT`), deleting it (`DELETE`), attaching the live channel with `?sub=` and sending an uplink under it need, besides the group signature, `pingers-sub-signature`: the owner key's signature (label `pingers/v1/sub-request`) over the same method, path, body hash and time. A `PUT`, `CreateGroup` or `subs_add` that would give a held, unexpired subscription a different owner key is refused (403); a `DELETE` of a subscription the group does not hold changes nothing. A live channel naming a subscription the group does not hold (expired) attaches as one without. The device derives each owner key as `HKDF-Expand(account key, "pingers/v1/subscription-owner" || sub_id)`, so nothing new is stored, and the key links to neither the account nor its other subscriptions. A split channel's uplink carries the live head's headers, so both of its signatures cover the head's empty body, not the frame.
+
+**Deleting a group.** `DELETE /v1/groups/{id}` deletes only a Meetup group (its last member ends it). A Party group answers 403: any member holds the key the request is signed with, so a delete would let one member erase the Party for everyone, and nothing in the protocol needs it; a Party group no one reads or writes expires after 180 days.
 
 **Removing a member's subscriptions.** A Commit's `subs_del` (the remover lists the removed member's subscription: a Party member's from its roster profile, a Meetup member's as in G.6) is applied in the same transaction as the Commit, so the Commit's own wake never reaches it. The server answers the Commit only after any push already on its way to those subscriptions has been answered, closes the live channels opened with them (the removed member receives nothing further and can send nothing more; every other channel of the ended epoch gets the Commit as its last frame and is closed too, B.4.9), and never forwards a later wake to them. `DELETE /v1/groups/{id}/subs/{sub_id}` waits the same way, and `DELETE /v1/groups/{id}` waits for every push to the group in flight: once the server has answered a removal, the push relay hears nothing more for what was removed.
 

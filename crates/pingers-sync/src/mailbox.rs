@@ -4,8 +4,8 @@
 //! mailboxes and group subscriptions. What the posts mean is the owner's business.
 
 use pingers_crypto::{
-    MailboxReadKey, PushRelayPublicKey, PushTokenToSeal, mailbox_id, push_bind_for_mailbox,
-    push_bind_for_subscription, seal_push_token,
+    MailboxReadKey, PushRelayPublicKey, PushTokenToSeal, SubscriptionOwnerKey, mailbox_id,
+    push_bind_for_mailbox, push_bind_for_subscription, seal_push_token,
 };
 use pingers_proto::{
     GroupId, MailboxId, MailboxMessages, MailboxSpec, MessageAccepted, Padded, PushBind,
@@ -298,6 +298,27 @@ impl SyncEngine {
         Ok(subscription)
     }
 
+    /// The owner key of this device's subscription `id`, derived from the account key (design D,
+    /// "Subscription owner"): the subscription carries its public half, and replacing or
+    /// deleting it, or attaching the live channel under it, is signed with it.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::NoCredential`] before this device has an account; [`SyncError::Store`];
+    /// [`SyncError::Crypto`].
+    pub fn subscription_owner(
+        &self,
+        id: &SubscriptionId,
+    ) -> Result<SubscriptionOwnerKey, SyncError> {
+        let session = self.database.session()?;
+        let identity = session
+            .server(&self.server())?
+            .identity()
+            .load()?
+            .ok_or(SyncError::NoCredential)?;
+        Ok(SubscriptionOwnerKey::derive(&identity.signing_key, id)?)
+    }
+
     /// A subscription under `id` (or a random new one), sealed fresh with a fresh handle.
     pub(crate) fn seal_subscription(
         &self,
@@ -305,18 +326,20 @@ impl SyncEngine {
         seal: &PushSeal,
         lifetime: TimeToLive,
     ) -> Result<Subscription, SyncError> {
-        self.with_rng(|rng| {
+        let (id, push) = self.with_rng(|rng| {
             let id = id.unwrap_or_else(|| {
                 let mut bytes = [0_u8; SubscriptionId::LENGTH];
                 rng.fill_bytes(&mut bytes);
                 SubscriptionId::from_bytes(bytes)
             });
             let push = sealed_push(seal, push_bind_for_subscription(&id), rng)?;
-            Ok(Subscription {
-                id,
-                push,
-                time_to_live: lifetime,
-            })
+            Ok::<_, SyncError>((id, push))
+        })?;
+        Ok(Subscription {
+            id,
+            push,
+            time_to_live: lifetime,
+            owner: self.subscription_owner(&id)?.public_key(),
         })
     }
 

@@ -17,8 +17,8 @@ use pingers_proto::{
     PushTokenPlaintext, Record, RecordRandomness, RecordTag, RelayId, RelayRef, RelayUrl,
     RevokeCommitment, RlnAuth, RlnScope, ScheduledPushRelayConfig, SealedBeacon,
     SealedLocationFrame, SealedPush, SealedPushBlob, SecretBytes, SecretText, SeenSegment,
-    SegmentHash, SegmentInfo, ServerId, SetupPayload, Subscription, SubscriptionId, TimeToLive,
-    Urgency, WireDecode, WireEncode,
+    SegmentHash, SegmentInfo, ServerId, SetupPayload, Subscription, SubscriptionId,
+    SubscriptionOwner, TimeToLive, Urgency, WireDecode, WireEncode,
 };
 use pingers_testkit::{Vector, VectorError, load_vectors};
 use pingers_time::{Bucket, UnixSeconds};
@@ -620,6 +620,7 @@ fn join_request(vector: &Vector) -> Result<JoinRequest, TestError> {
                 handle: PushHandle::from_bytes(ramp::<8>(0xf0)),
             },
             time_to_live: time_to_live(vector, "subscription_ttl_seconds")?,
+            owner: SubscriptionOwner::from_bytes(ramp::<32>(0x70)),
         }),
         None => None,
     };
@@ -668,6 +669,7 @@ fn knock_vectors() -> Result<(), TestError> {
                         handle: PushHandle::from_bytes(ramp::<8>(0xf0)),
                     },
                     time_to_live: time_to_live(vector, "subscription_ttl_seconds")?,
+                    owner: SubscriptionOwner::from_bytes(ramp::<32>(0x70)),
                 }),
                 None => None,
             };

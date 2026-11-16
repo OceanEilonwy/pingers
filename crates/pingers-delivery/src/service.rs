@@ -187,6 +187,27 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         })
     }
 
+    /// Refuses subscriptions that would replace an unexpired one bound to another owner key:
+    /// a subscription keeps the owner it was first stored with (design D).
+    fn check_owners(
+        &self,
+        group: &GroupId,
+        added: &[StoredSubscription],
+    ) -> Result<(), DeliveryError> {
+        let now = self.clock.now();
+        let held = self.store.live_subscriptions(group, now)?;
+        let taken = added.iter().any(|new| {
+            held.iter().any(|old| {
+                old.subscription.id == new.subscription.id
+                    && old.subscription.owner != new.subscription.owner
+            })
+        });
+        if taken {
+            return Err(DeliveryError::SubscriptionOwned);
+        }
+        Ok(())
+    }
+
     /// Refuses a change that would leave `group` with more than
     /// [`MAX_SUBSCRIPTIONS_PER_GROUP`] unexpired subscriptions. Concurrent changes are
     /// checked one by one, so a burst can pass the limit by at most the burst's size.
@@ -281,6 +302,7 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         let lifetime = self.store.head(group)?.lifetime;
         let removed = request.subscriptions_removed;
         if !subscriptions_added.is_empty() {
+            self.check_owners(group, &subscriptions_added)?;
             self.check_room(group, &subscriptions_added, &removed)?;
         }
         let write = self.store.append_commit(
@@ -499,6 +521,25 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         }
     }
 
+    /// The group's unexpired subscription `id`, if it has one: its owner key must sign any
+    /// request that changes it or speaks for it.
+    ///
+    /// # Errors
+    ///
+    /// [`DeliveryError::UnknownGroup`]; storage errors.
+    pub fn subscription(
+        &self,
+        group: &GroupId,
+        id: &SubscriptionId,
+    ) -> Result<Option<Subscription>, DeliveryError> {
+        Ok(self
+            .store
+            .live_subscriptions(group, self.clock.now())?
+            .into_iter()
+            .map(|stored| stored.subscription)
+            .find(|subscription| subscription.id == *id))
+    }
+
     /// The key that `Grp` requests to this group must be signed with now.
     ///
     /// # Errors
@@ -551,11 +592,13 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
     }
 
     /// `PUT /v1/groups/{id}/subs/{sub_id}`: a member renews or replaces its own subscription.
+    /// The caller has checked the owner's signature against [`Delivery::subscription`].
     ///
     /// # Errors
     ///
     /// [`DeliveryError::UnknownGroup`]; [`DeliveryError::SubscriptionTooLong`];
-    /// [`DeliveryError::TooManySubscriptions`]; storage errors.
+    /// [`DeliveryError::SubscriptionOwned`] if it would change the owner key of an unexpired
+    /// subscription; [`DeliveryError::TooManySubscriptions`]; storage errors.
     pub fn put_subscription(
         &self,
         group: &GroupId,
@@ -564,6 +607,7 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         let now = self.clock.now();
         let stored = Self::stored(now, subscription)?;
         let lifetime = self.store.head(group)?.lifetime;
+        self.check_owners(group, core::slice::from_ref(&stored))?;
         self.check_room(group, core::slice::from_ref(&stored), &[])?;
         self.store
             .put_subscription(group, stored, Self::idle_expiry(now, lifetime)?)
@@ -602,13 +646,18 @@ impl<S: DeliveryStore, T: Clone> Delivery<S, T> {
         }
     }
 
-    /// `DELETE /v1/groups/{id}`: deletes the log, snapshot and subscriptions, and closes the
-    /// group's live channels.
+    /// `DELETE /v1/groups/{id}`: deletes a Meetup group's log, snapshot and subscriptions, and
+    /// closes its live channels. A Party group cannot be deleted: every member holds its log-auth
+    /// key, so a delete would let any one member erase the Party for all; it expires after
+    /// [`GroupLifetime::Party`]'s idle time instead.
     ///
     /// # Errors
     ///
-    /// [`DeliveryError::UnknownGroup`]; storage errors.
+    /// [`DeliveryError::UnknownGroup`]; [`DeliveryError::PartyGroupKept`]; storage errors.
     pub fn delete_group(&self, group: &GroupId) -> Result<(), DeliveryError> {
+        if self.store.head(group)?.lifetime == GroupLifetime::Party {
+            return Err(DeliveryError::PartyGroupKept);
+        }
         self.store.delete_group(group)?;
         self.live.close_group(group)
     }

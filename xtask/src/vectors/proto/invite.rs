@@ -212,11 +212,14 @@ impl Join {
         }
     }
 
+    /// `[subscription id, sealed push, ttl seconds, owner key]`; the owner key is always
+    /// `ramp(0x70, 32)`.
     fn subscription(&self) -> Vec<u8> {
         array([
             bytes(&self.subscription_id),
             listed_sealed_push(),
             uint(2_592_000),
+            bytes(&ramp(0x70, 32)),
         ])
     }
 

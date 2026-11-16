@@ -926,6 +926,7 @@ async fn subscriptions_are_put_and_deleted_by_their_own_id() -> TestResult {
             handle: PushHandle::from_bytes([3; 8]),
         },
         time_to_live: TimeToLive::new(Duration::from_hours(24))?,
+        owner: pingers_proto::SubscriptionOwner::from_bytes([4; 32]),
     }
     .encode()?;
     let own = format!("/subs/{}", hex::encode([1_u8; 16]));
@@ -934,7 +935,9 @@ async fn subscriptions_are_put_and_deleted_by_their_own_id() -> TestResult {
         ("PUT", other.as_str(), subscription.clone(), 400),
         ("PUT", "/subs/zz", subscription.clone(), 400),
         ("PUT", own.as_str(), subscription, 204),
-        ("DELETE", own.as_str(), Vec::new(), 204),
+        // Held now, so bound to its owner key: the group signature alone deletes nothing.
+        ("DELETE", own.as_str(), Vec::new(), 403),
+        ("DELETE", other.as_str(), Vec::new(), 204),
         ("DELETE", "/subs/zz", Vec::new(), 400),
     ] {
         let answer = call(&server, &creator.request(method, rest, body)?).await?;
@@ -991,34 +994,60 @@ async fn live_channels_fan_out_frames_and_commits_to_the_other_members() -> Test
     ends_after_the_last_payload(&mut b_body, b_decoder).await?;
     drop(a_sender);
 
-    // The members attach again, signed with the next key that the commit rotated to.
+    // The members attach again, signed with the next key that the commit rotated to; A under
+    // its subscription, which it now holds, so signed by its owner key too.
     let creator = Creator {
         key: next,
         ..creator
     };
-    let live_head = |sub: u8| {
-        creator.request(
-            "POST",
-            &format!("/live?sub={}", hex::encode([sub; 16])),
-            Vec::new(),
+    let a_owner = hold_subscription(&server, &creator, 1).await?;
+    let a_head = || -> Result<BinaryRequest, TestError> {
+        owner_signed(
+            &a_owner,
+            creator.request(
+                "POST",
+                &format!("/live?sub={}", hex::encode([1_u8; 16])),
+                Vec::new(),
+            )?,
         )
     };
-    let (a_sender, _a_client, _a_body) = open_live_with(&server, &live_head(1)?).await?;
-    let (_b_sender, b_client, mut b_body) = open_live_with(&server, &live_head(2)?).await?;
+    let (a_sender, _a_client, _a_body) = open_live_with(&server, &a_head()?).await?;
+    let (_b_sender, b_client, mut b_body) =
+        open_live_with(&server, &creator.request("POST", "/live", Vec::new())?).await?;
     let mut b_decoder = b_client.response_decoder();
 
-    // A split channel's uplink: a one-shot request naming A's `sub` reaches B as A's frame.
+    // A split channel's uplink: a one-shot request with A's live head (its `sub` and both
+    // signatures, over the head's empty body) and a frame as its body reaches B as A's frame.
     let uplink = LiveFrame {
         epoch: Epoch::new(1),
         body: MlsMessageBytes::from_bytes(vec![0x66; 40]),
         delivery: Mode::Ephemeral,
     }
     .encode()?;
-    let path = |sub: u8| format!("/live?sub={}", hex::encode([sub; 16]));
-    let sent = call(&server, &creator.request("POST", &path(1), uplink.clone())?).await?;
+    let sent = call(
+        &server,
+        &BinaryRequest {
+            body: uplink.clone(),
+            ..a_head()?
+        },
+    )
+    .await?;
     assert_eq!(sent.status.get(), 202);
     assert_eq!(next_payload(&mut b_body, &mut b_decoder).await?, uplink);
-    let unknown = call(&server, &creator.request("POST", &path(9), uplink)?).await?;
+    // A subscription the group does not hold has no channel to speak for.
+    let unknown = creator.request(
+        "POST",
+        &format!("/live?sub={}", hex::encode([9_u8; 16])),
+        Vec::new(),
+    )?;
+    let unknown = call(
+        &server,
+        &BinaryRequest {
+            body: uplink,
+            ..unknown
+        },
+    )
+    .await?;
     assert_eq!(unknown.status.get(), 404);
     drop(a_sender);
     server.stop().await
@@ -1029,11 +1058,22 @@ async fn a_removal_commit_ends_the_removed_members_live_channel() -> TestResult 
     let server = started(DeliveryLive).await?;
     let wallet = Wallet::fetch(&server, 1, 1).await?;
     let creator = create_group(&server, &wallet, 31).await?;
-    let live_head = |sub: u8| {
-        creator.request(
-            "POST",
-            &format!("/live?sub={}", hex::encode([sub; 16])),
-            Vec::new(),
+    // Both members hold a subscription and attach under it, signed by its owner.
+    let owners = [
+        hold_subscription(&server, &creator, 1).await?,
+        hold_subscription(&server, &creator, 2).await?,
+    ];
+    let live_head = |sub: u8| -> Result<BinaryRequest, TestError> {
+        let owner = owners
+            .get(usize::from(sub).saturating_sub(1))
+            .ok_or("no such member")?;
+        owner_signed(
+            owner,
+            creator.request(
+                "POST",
+                &format!("/live?sub={}", hex::encode([sub; 16])),
+                Vec::new(),
+            )?,
         )
     };
     let (_removed_sender, removed_client, removed_body) =
@@ -1217,4 +1257,205 @@ async fn ends_after_the_last_payload(
     let last = decoder.finish()?;
     assert!(last.is_none_or(|chunk| chunk.position == ChunkPosition::Final));
     Ok(())
+}
+
+/// Adds the subscription owner's signature to a request the group key already signed.
+fn owner_signed(
+    owner: &pingers_crypto::SubscriptionOwnerKey,
+    mut request: BinaryRequest,
+) -> Result<BinaryRequest, TestError> {
+    let timestamp = request
+        .headers
+        .iter()
+        .find(|header| header.name == "pingers-group-time")
+        .and_then(|header| core::str::from_utf8(&header.value).ok())
+        .and_then(|text| text.parse::<u64>().ok())
+        .map(UnixSeconds::new)
+        .ok_or("no group time")?;
+    let signature = pingers_crypto::sign_subscription_request(
+        owner,
+        &GroupRequest {
+            method: &request.method,
+            path: &request.path,
+            body: &request.body,
+            timestamp,
+        },
+    )?;
+    request.headers.push(header(
+        "pingers-sub-signature",
+        &hex::encode(signature.as_bytes()),
+    ));
+    Ok(request)
+}
+
+/// A member knows every other member's subscription id (it is in their leaves) and holds the
+/// group key, but not their owner key: it cannot replace, delete or speak for their
+/// subscription. The owner can.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscriptions_are_bound_to_their_owner_key() -> TestResult {
+    use pingers_crypto::{AccountSigningKey, SubscriptionOwnerKey};
+    use pingers_proto::{
+        PushHandle, PushRelayKeyId, RelayId, RelayRef, SealedPush, SealedPushBlob, Subscription,
+        SubscriptionId, TimeToLive,
+    };
+    let server = started(DeliveryLive).await?;
+    let wallet = Wallet::fetch(&server, 1, 1).await?;
+    let creator = create_group(&server, &wallet, 13).await?;
+    let id = SubscriptionId::from_bytes([5; 16]);
+    let victim =
+        SubscriptionOwnerKey::derive(&AccountSigningKey::from_bytes(Zeroizing::new([6; 32])), &id)?;
+    let thief =
+        SubscriptionOwnerKey::derive(&AccountSigningKey::from_bytes(Zeroizing::new([7; 32])), &id)?;
+    let subscription = |owner: &SubscriptionOwnerKey, fill: u8| -> Result<Vec<u8>, TestError> {
+        Ok(Subscription {
+            id,
+            push: SealedPush {
+                relay: RelayRef::Listed(RelayId::new(1)),
+                key_id: PushRelayKeyId::new(1),
+                blob: SealedPushBlob::from_bytes([fill; 320]),
+                urgency: Urgency::Quiet,
+                handle: PushHandle::from_bytes([fill; 8]),
+            },
+            time_to_live: TimeToLive::new(Duration::from_hours(24))?,
+            owner: owner.public_key(),
+        }
+        .encode()?)
+    };
+    let path = format!("/subs/{}", hex::encode(id.as_bytes()));
+    let put = |owner: &SubscriptionOwnerKey, fill: u8| {
+        creator.request("PUT", &path, subscription(owner, fill)?)
+    };
+    // First stored: bound to the victim's key.
+    let first = call(&server, &put(&victim, 1)?).await?;
+    assert_eq!(first.status.get(), 204);
+    // The thief, with the group key: no owner signature, its own, or its own key in the body.
+    for request in [
+        put(&victim, 2)?,
+        owner_signed(&thief, put(&victim, 2)?)?,
+        owner_signed(&thief, put(&thief, 2)?)?,
+        creator.request("DELETE", &path, Vec::new())?,
+        owner_signed(&thief, creator.request("DELETE", &path, Vec::new())?)?,
+    ] {
+        let refused = call(&server, &request).await?;
+        assert_eq!(
+            refused.status.get(),
+            403,
+            "{} {}",
+            request.method,
+            request.path
+        );
+    }
+    // Nor attach the live channel or send a split channel's uplink under the victim's
+    // subscription. An uplink carries the live head's headers, signed over its empty body.
+    let live = format!("/live?sub={}", hex::encode(id.as_bytes()));
+    let head = |owner: Option<&SubscriptionOwnerKey>| -> Result<BinaryRequest, TestError> {
+        let head = creator.request("POST", &live, Vec::new())?;
+        owner.map_or(Ok(head.clone()), |owner| owner_signed(owner, head))
+    };
+    let frame = LiveFrame {
+        epoch: Epoch::new(0),
+        body: MlsMessageBytes::from_bytes(vec![0x42; 40]),
+        delivery: Mode::Ephemeral,
+    }
+    .encode()?;
+    let uplink = |head: BinaryRequest| BinaryRequest {
+        body: frame.clone(),
+        ..head
+    };
+    for owner in [None, Some(&thief)] {
+        let (_sender, client, body) = super::open_live_with(&server, &head(owner)?).await?;
+        super::ends_with_nothing_but_the_final_chunk(&client, body).await?;
+        let refused = call(&server, &uplink(head(owner)?)).await?;
+        assert_eq!(refused.status.get(), 403);
+    }
+    // The owner renews it, attaches under it, sends an uplink as itself, and deletes it.
+    let renewed = call(&server, &owner_signed(&victim, put(&victim, 3)?)?).await?;
+    assert_eq!(renewed.status.get(), 204);
+    let (_own_sender, _own_client, _own_body) =
+        super::open_live_with(&server, &head(Some(&victim))?).await?;
+    let (_sender, listener, mut heard) =
+        super::open_live_with(&server, &creator.request("POST", "/live", Vec::new())?).await?;
+    let sent = call(&server, &uplink(head(Some(&victim))?)).await?;
+    assert_eq!(sent.status.get(), 202);
+    let mut decoder = listener.response_decoder();
+    assert_eq!(next_payload(&mut heard, &mut decoder).await?, frame);
+    let deleted = call(
+        &server,
+        &owner_signed(&victim, creator.request("DELETE", &path, Vec::new())?)?,
+    )
+    .await?;
+    assert_eq!(deleted.status.get(), 204);
+    server.stop().await
+}
+
+/// A Party group is never deleted on request: any member holds the key a delete is signed
+/// with. A Meetup group still is.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_party_group_cannot_be_deleted_with_the_shared_key() -> TestResult {
+    let server = started(DeliveryLive).await?;
+    let wallet = Wallet::fetch(&server, 1, 2).await?;
+    let key = LogAuthKeyPair::from_bytes(Zeroizing::new([14; 32]));
+    let group = GroupId::from_bytes([14; 32]);
+    let body = CreateGroup {
+        group_id: group,
+        auth_key: key.public_key(),
+        subscriptions: Vec::new(),
+        state: None,
+    }
+    .encode()?;
+    let created = call(
+        &server,
+        &wallet.pay(inner("POST", "/v1/groups?lifetime=party", Vec::new(), body))?,
+    )
+    .await?;
+    assert_eq!(created.status.get(), 201);
+    let party = Creator {
+        group,
+        key,
+        session: response_header(&created, "pingers-group-session").map(str::to_owned),
+        clock: server.clock.clone(),
+    };
+    let refused = call(&server, &party.request("DELETE", "", Vec::new())?).await?;
+    assert_eq!(refused.status.get(), 403);
+    let still = call(&server, &party.request("GET", "/msgs", Vec::new())?).await?;
+    assert_eq!(still.status.get(), 200);
+    let meetup = create_group(&server, &wallet, 15).await?;
+    let deleted = call(&server, &meetup.request("DELETE", "", Vec::new())?).await?;
+    assert_eq!(deleted.status.get(), 204);
+    server.stop().await
+}
+
+/// Puts subscription `[fill; 16]` into the creator's group, bound to an owner key derived from
+/// account key `[fill; 32]`, and returns that key.
+async fn hold_subscription(
+    server: &Running,
+    creator: &Creator,
+    fill: u8,
+) -> Result<pingers_crypto::SubscriptionOwnerKey, TestError> {
+    use pingers_proto::{
+        PushHandle, PushRelayKeyId, RelayId, RelayRef, SealedPush, SealedPushBlob, Subscription,
+        SubscriptionId, TimeToLive,
+    };
+    let id = SubscriptionId::from_bytes([fill; 16]);
+    let owner = pingers_crypto::SubscriptionOwnerKey::derive(
+        &pingers_crypto::AccountSigningKey::from_bytes(Zeroizing::new([fill; 32])),
+        &id,
+    )?;
+    let body = Subscription {
+        id,
+        push: SealedPush {
+            relay: RelayRef::Listed(RelayId::new(1)),
+            key_id: PushRelayKeyId::new(1),
+            blob: SealedPushBlob::from_bytes([fill; 320]),
+            urgency: Urgency::Quiet,
+            handle: PushHandle::from_bytes([fill; 8]),
+        },
+        time_to_live: TimeToLive::new(Duration::from_hours(24))?,
+        owner: owner.public_key(),
+    }
+    .encode()?;
+    let path = format!("/subs/{}", hex::encode(id.as_bytes()));
+    let put = call(server, &creator.request("PUT", &path, body)?).await?;
+    assert_eq!(put.status.get(), 204);
+    Ok(owner)
 }

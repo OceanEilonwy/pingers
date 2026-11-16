@@ -34,9 +34,9 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use pingers_anon::request_digest;
-use pingers_crypto::{GroupRequest, Signature, verify_group_request};
+use pingers_crypto::{GroupRequest, Signature, verify_group_request, verify_subscription_request};
 use pingers_ohttp::BinaryRequest;
-use pingers_proto::{GroupAuthKey, GroupId, RlnAuth, RlnScope, WireDecode as _};
+use pingers_proto::{GroupAuthKey, GroupId, RlnAuth, RlnScope, SubscriptionOwner, WireDecode as _};
 use pingers_quota::{Admission, QuotaError};
 use pingers_time::{Clock as _, UnixSeconds};
 use rand_core::Rng as _;
@@ -51,6 +51,9 @@ pub(crate) const AUTHORIZATION: &str = "authorization";
 pub(crate) const GROUP_SIGNATURE: &str = "pingers-group-signature";
 /// The Grp timestamp header.
 pub(crate) const GROUP_TIMESTAMP: &str = "pingers-group-time";
+/// The subscription owner's signature over the same request (hex), on a request that changes
+/// a subscription or speaks for it on the live channel (design D, "Subscription owner").
+pub(crate) const SUBSCRIPTION_SIGNATURE: &str = "pingers-sub-signature";
 /// The group session header, in requests and responses.
 pub(crate) const GROUP_SESSION: &str = "pingers-group-session";
 /// How far a Grp time may be from the server's clock: half a bucket (design F.1: within
@@ -249,6 +252,31 @@ pub(crate) fn check_signature(
     keys.iter()
         .position(|key| verify_group_request(key, &signed, &signature).is_ok())
         .ok_or_else(forbidden)
+}
+
+/// Checks the subscription owner's signature on a group request whose group signature has
+/// already been checked (so its timestamp is within the skew): the same method, path, body and
+/// timestamp, signed with `owner`.
+pub(crate) fn check_owner_signature(
+    request: &BinaryRequest,
+    owner: &SubscriptionOwner,
+    body: &[u8],
+) -> Result<(), Reply> {
+    let signature = header(request, SUBSCRIPTION_SIGNATURE)
+        .and_then(hex_array::<64>)
+        .ok_or_else(forbidden)?;
+    let timestamp = header(request, GROUP_TIMESTAMP)
+        .and_then(|text| text.parse::<u64>().ok())
+        .map(UnixSeconds::new)
+        .ok_or_else(unauthorized)?;
+    let signed = GroupRequest {
+        method: &request.method,
+        path: &request.path,
+        body,
+        timestamp,
+    };
+    verify_subscription_request(owner, &signed, &Signature::from_bytes(signature))
+        .map_err(|_| forbidden())
 }
 
 /// What a group request's Anon half came to.
