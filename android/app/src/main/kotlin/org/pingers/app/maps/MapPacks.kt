@@ -1,13 +1,12 @@
 package org.pingers.app.maps
 
-import org.json.JSONObject
 import org.pingers.app.data.Coordinate
 
 /*
- * The region pack formats pingers-tiles writes and pingers-map-host serves
- * (crates/pingers-map-packs/src/manifest.rs): a catalog of manifests, each naming a PMTiles
- * pack and a place-name index with their sizes and SHA-256s. Packs are downloaded whole,
- * so no request ever says which part of the map is on screen.
+ * The region packs the core downloads (crates/pingers-map-downloads, through pingers-ffi): a
+ * catalog of regions from the map host chain, each a PMTiles pack and a place-name index with
+ * their sizes and SHA-256s. Packs are downloaded whole, so no request ever says which part of
+ * the map is on screen. The shell only draws them and searches their indexes.
  */
 
 /** West, south, east, north, in degrees. */
@@ -23,7 +22,7 @@ data class Bbox(val west: Double, val south: Double, val east: Double, val north
 
 data class PackFile(val file: String, val size: Long, val sha256: String, val entries: Long? = null)
 
-/** A region's manifest. */
+/** A region's manifest, as the core checked it. */
 data class Manifest(
     val id: String,
     val name: String,
@@ -35,49 +34,21 @@ data class Manifest(
     val pack: PackFile,
     val index: PackFile,
 ) {
-    /** The file name stem the region's files share (`oceania.australia.victoria`). */
-    val stem: String get() = id.replace('/', '.')
-
-    fun toJson(): JSONObject = JSONObject()
-        .put("format", 1)
-        .put("id", id)
-        .put("name", name)
-        .apply { if (group != null) put("group", group) }
-        .put("bbox", org.json.JSONArray(listOf(bbox.west, bbox.south, bbox.east, bbox.north)))
-        .put("max_zoom", maxZoom)
-        .put("build_date", buildDate)
-        .put("pack", pack.toJson())
-        .put("index", index.toJson())
-
     companion object {
-        /** Parses a manifest; null if it is not format 1 or misses a field. */
-        fun parse(o: JSONObject): Manifest? = runCatching {
-            if (o.optInt("format", 1) != 1) return null
-            val b = o.getJSONArray("bbox")
-            Manifest(
-                id = o.getString("id"),
-                name = o.getString("name"),
-                group = o.optString("group").takeIf { it.isNotEmpty() },
-                bbox = Bbox(b.getDouble(0), b.getDouble(1), b.getDouble(2), b.getDouble(3)),
-                maxZoom = o.getInt("max_zoom"),
-                buildDate = o.getString("build_date"),
-                pack = file(o.getJSONObject("pack")),
-                index = file(o.getJSONObject("index")),
-            ).takeIf { SAFE_STEM.matches(it.stem) && it.pack.file == it.stem + ".pmtiles" && it.index.file == it.stem + ".places.tsv" }
-        }.getOrNull()
-
-        private fun file(o: JSONObject) = PackFile(
-            o.getString("file"), o.getLong("size"), o.getString("sha256").lowercase(),
-            if (o.has("entries")) o.getLong("entries") else null,
+        fun of(m: uniffi.pingers.MapManifest) = Manifest(
+            id = m.id,
+            name = m.name,
+            group = m.group,
+            bbox = Bbox(m.west, m.south, m.east, m.north),
+            maxZoom = m.maxZoom.toInt(),
+            buildDate = m.buildDate,
+            pack = m.pack.toShell(),
+            index = m.index.toShell(),
         )
 
-        /** Region ids are lowercase segments; anything else could name a path outside the maps directory. */
-        private val SAFE_STEM = Regex("[a-z0-9][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*)*")
+        private fun uniffi.pingers.MapFile.toShell() = PackFile(file, size.toLong(), sha256, entries?.toLong())
     }
 }
-
-private fun PackFile.toJson() = JSONObject().put("file", file).put("size", size).put("sha256", sha256)
-    .apply { if (entries != null) put("entries", entries) }
 
 /** One entry of a host's catalog: cut and ready, or (a cache-mode host) cut on first request. */
 sealed interface CatalogEntry {
@@ -91,66 +62,61 @@ sealed interface CatalogEntry {
         override val group get() = manifest.group
     }
 
-    data class OnDemand(override val id: String, override val name: String, override val group: String?, val bbox: Bbox?) : CatalogEntry
-}
-
-/** Parses `catalog.json`; entries that don't parse are left out. */
-fun parseCatalog(text: String): List<CatalogEntry> {
-    val regions = JSONObject(text).optJSONArray("regions") ?: return emptyList()
-    return (0 until regions.length()).mapNotNull { i ->
-        val o = regions.optJSONObject(i) ?: return@mapNotNull null
-        if (o.optString("status") == "on_demand") {
-            val b = o.optJSONArray("bbox")
-            CatalogEntry.OnDemand(
-                o.optString("id").takeIf { it.isNotEmpty() } ?: return@mapNotNull null,
-                o.optString("name"),
-                o.optString("group").takeIf { it.isNotEmpty() },
-                b?.let { Bbox(it.getDouble(0), it.getDouble(1), it.getDouble(2), it.getDouble(3)) },
-            )
-        } else {
-            Manifest.parse(o)?.let(CatalogEntry::Ready)
-        }
-    }
+    data class OnDemand(override val id: String, override val name: String, override val group: String?) : CatalogEntry
 }
 
 /** A map host, and why it is in the chain. */
 data class MapHost(val url: String, val source: MapHostSource) {
     /** The host name, for "Maps: <host>". */
     val name: String get() = url.substringAfter("://").substringBefore('/')
+
+    companion object {
+        fun of(h: uniffi.pingers.MapHostInfo) = MapHost(
+            h.url,
+            when (h.source) {
+                uniffi.pingers.MapHostSource.USER_OVERRIDE -> MapHostSource.UserOverride
+                uniffi.pingers.MapHostSource.SERVER -> MapHostSource.Server
+                uniffi.pingers.MapHostSource.PUBLISHER -> MapHostSource.Publisher
+            },
+        )
+    }
 }
 
 /** Where a map host came from, highest priority first (the order of the fallback chain). */
 enum class MapHostSource { UserOverride, Server, Publisher }
 
-/** What a host offered, or why it offered nothing. */
-sealed interface HostCatalog {
-    val host: MapHost
-
-    data class Listed(override val host: MapHost, val entries: List<CatalogEntry>) : HostCatalog
-    data class Failed(override val host: MapHost) : HostCatalog
-}
-
-/** A region on offer, with the host that will serve it. */
-data class RegionOffer(val entry: CatalogEntry, val host: MapHost) {
+/** A region on offer, with the host that will serve it; [offer] goes back to the core to download it. */
+data class RegionOffer(val entry: CatalogEntry, val host: MapHost, val offer: uniffi.pingers.MapOffer) {
     val id: String get() = entry.id
+
+    companion object {
+        fun of(o: uniffi.pingers.MapOffer) = RegionOffer(
+            when (val e = o.entry) {
+                is uniffi.pingers.MapEntry.Ready -> CatalogEntry.Ready(Manifest.of(e.manifest))
+                is uniffi.pingers.MapEntry.OnDemand -> CatalogEntry.OnDemand(e.id, e.name, e.group)
+            },
+            MapHost.of(o.host),
+            o,
+        )
+    }
 }
 
-/**
- * The per-region fallback: each region comes from the first host in the chain that lists it,
- * so a host that doesn't carry an area hands only that area to the next host (the user's
- * override, then the server's host, then the publisher's default). [chain] is in priority order.
- */
-fun resolveRegions(chain: List<HostCatalog>): List<RegionOffer> {
-    val chosen = LinkedHashMap<String, RegionOffer>()
-    for (catalog in chain) {
-        if (catalog !is HostCatalog.Listed) continue
-        for (entry in catalog.entries) {
-            val existing = chosen[entry.id]
-            // A ready pack beats an on-demand one only from the same priority; otherwise priority wins.
-            if (existing == null) chosen[entry.id] = RegionOffer(entry, catalog.host)
-        }
+/** Why a host in the chain offered nothing. */
+enum class HostProblem { Unreachable, NotThroughRelay, NoRelayRoute, KeyChanged }
+
+/** A host that offered nothing, and why. */
+data class FailedHost(val host: MapHost, val problem: HostProblem) {
+    companion object {
+        fun of(f: uniffi.pingers.MapHostFailure) = FailedHost(
+            MapHost.of(f.host),
+            when (f.problem) {
+                uniffi.pingers.MapHostProblem.UNREACHABLE -> HostProblem.Unreachable
+                uniffi.pingers.MapHostProblem.NOT_THROUGH_RELAY -> HostProblem.NotThroughRelay
+                uniffi.pingers.MapHostProblem.NO_RELAY_ROUTE -> HostProblem.NoRelayRoute
+                uniffi.pingers.MapHostProblem.KEY_CHANGED -> HostProblem.KeyChanged
+            },
+        )
     }
-    return chosen.values.sortedWith(compareBy({ it.entry.group ?: it.entry.name }, { it.entry.name }))
 }
 
 /** The installed packs covering [at], the most detailed (smallest) first. */

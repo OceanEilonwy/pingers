@@ -13,7 +13,7 @@ use std::io::{self, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use sha2::{Digest as _, Sha256};
+use pingers_crypto::{ContentDigest, ContentHasher};
 
 use crate::index::{index_text, places_in};
 use crate::manifest::{FORMAT, FileEntry, Manifest};
@@ -199,17 +199,25 @@ fn shell_quote(text: &str) -> String {
     }
 }
 
-/// The lowercase hex SHA-256 and length of a file. A checksum of public map data, for the app
-/// to verify downloads with; nothing secret goes through it, so it is not one of
-/// pingers-crypto's keyed primitives (style guide §8 concerns those).
+/// A file's SHA-256 and length, as a manifest records them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileChecksum {
+    /// The SHA-256 of its bytes.
+    pub sha256: ContentDigest,
+    /// Its length in bytes.
+    pub length: u64,
+}
+
+/// The SHA-256 and length of a file: a checksum of public map data, for the app to verify
+/// downloads with (pingers-crypto's content checksum).
 ///
 /// # Errors
 ///
 /// [`ExtractError::Io`] if the file cannot be read.
-pub fn sha256_file(path: &Path) -> Result<(String, u64), ExtractError> {
+pub fn sha256_file(path: &Path) -> Result<FileChecksum, ExtractError> {
     let file = File::open(path).map_err(io_error(path))?;
     let mut reader = BufReader::new(file);
-    let mut hasher = Sha256::new();
+    let mut hasher = ContentHasher::new();
     let mut buffer = vec![0_u8; 1 << 16];
     let mut length: u64 = 0;
     loop {
@@ -223,7 +231,10 @@ pub fn sha256_file(path: &Path) -> Result<(String, u64), ExtractError> {
         hasher.update(chunk);
         length = length.saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
     }
-    Ok((hex::encode(hasher.finalize()), length))
+    Ok(FileChecksum {
+        sha256: hasher.finish(),
+        length,
+    })
 }
 
 /// What [`publish`] needs besides the region.
@@ -251,8 +262,8 @@ pub fn publish(region: &Region, publication: &Publication<'_>) -> Result<Manifes
     let header = pack.header.clone();
     let places = places_in(&mut pack)?;
     fs::write(&files.index, index_text(&places)).map_err(io_error(&files.index))?;
-    let (pack_sha, pack_size) = sha256_file(&files.pack)?;
-    let (index_sha, index_size) = sha256_file(&files.index)?;
+    let pack_sum = sha256_file(&files.pack)?;
+    let index_sum = sha256_file(&files.index)?;
     let name_of = |path: &Path| {
         path.file_name()
             .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
@@ -273,14 +284,14 @@ pub fn publish(region: &Region, publication: &Publication<'_>) -> Result<Manifes
         source: publication.source.to_owned(),
         pack: FileEntry {
             file: name_of(&files.pack),
-            size: pack_size,
-            sha256: pack_sha,
+            size: pack_sum.length,
+            sha256: pack_sum.sha256.to_hex(),
             entries: None,
         },
         index: FileEntry {
             file: name_of(&files.index),
-            size: index_size,
-            sha256: index_sha,
+            size: index_sum.length,
+            sha256: index_sum.sha256.to_hex(),
             entries: Some(u64::try_from(places.len()).unwrap_or(u64::MAX)),
         },
     };

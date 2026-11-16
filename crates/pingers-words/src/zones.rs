@@ -75,11 +75,11 @@ pub(crate) fn applies_to(language: Language, applies: &ZoneAppliesTo) -> String 
 }
 
 /// A zone's shape inside a sentence: "150 m circle", "drawn area".
-pub(crate) fn shape(language: Language, shape: ZoneShape) -> String {
+pub(crate) fn shape(language: Language, shape: &ZoneShape) -> String {
     let Language::English = language;
     match shape {
-        ZoneShape::Circle(radius) => format!("{} circle", distance(language, radius)),
-        ZoneShape::Area => "drawn area".into(),
+        ZoneShape::Circle(radius) => format!("{} circle", distance(language, *radius)),
+        ZoneShape::Area(_) => "drawn area".into(),
     }
 }
 
@@ -96,9 +96,9 @@ pub fn exclusion_zones(language: Language, view: &ExclusionZones) -> ExclusionZo
             .zones
             .iter()
             .map(|zone| {
-                let shape = match zone.shape {
-                    ZoneShape::Circle(radius) => format!("{} circle", distance(language, radius)),
-                    ZoneShape::Area => "Drawn area".into(),
+                let shape = match &zone.shape {
+                    ZoneShape::Circle(radius) => format!("{} circle", distance(language, *radius)),
+                    ZoneShape::Area(_) => "Drawn area".into(),
                 };
                 let parts: Vec<String> = [
                     Some(shape),

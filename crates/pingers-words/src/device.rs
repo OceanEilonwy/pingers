@@ -340,7 +340,7 @@ pub fn zone_times(language: Language, view: &ZoneTimesEditor) -> ZoneTimesText {
         title: zone.name.as_str().to_owned(),
         subtitle: format!(
             "Exclusion zone · {} · {}",
-            crate::zones::shape(language, zone.shape),
+            crate::zones::shape(language, &zone.shape),
             crate::zones::applies_to(language, &zone.applies_to)
         ),
         when_heading: "When it applies".into(),

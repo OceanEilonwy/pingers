@@ -24,6 +24,8 @@ use crate::ports::Crates;
 use crate::snapshot::ClientSnapshot;
 use crate::{ClientError, Events, Instance, Outside, Platform, SecureStoreKey};
 
+mod maps;
+
 /// Where the client keeps its data.
 #[derive(Clone, Debug)]
 pub struct ClientConfig {

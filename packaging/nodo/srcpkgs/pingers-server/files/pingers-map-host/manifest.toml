@@ -15,7 +15,16 @@ name = "map-host.toml"
 
 # Unencrypted on purpose: map packs are public OpenStreetMap data, too large to back up, and can
 # be cut again. Turn on UseDataDrive before installing, so they go to the data drive. No
-# outbound access: packs are uploaded (rsync over the owner's SSH), not fetched.
+# outbound access: packs are uploaded (rsync over the owner's SSH), not fetched. The OHTTP
+# gateway key (.ohttp-key in the data directory) is made on first start; it is not a secret
+# worth sealing: losing it only makes phones ask once whether to trust the new key.
+
+# Declared so pingers-server can reference gateway-url and be granted this loopback port: it
+# forwards map downloads made through the privacy relay to the host's own OHTTP gateway.
+[[network.inbound]]
+port = 9474
+protocol = "tcp"
+scope = "local"
 
 [[web]]
 name = "maps"

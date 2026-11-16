@@ -12,7 +12,9 @@
 //! - the chunked live channel ([`Transport::stream`]): keep-alives, reconnects with backoff and
 //!   a fresh HPKE context, and the split-channel fallback for relays that cannot stream full
 //!   duplex (design B.4.9);
-//! - [`DirectTransport`]: HTTPS for the `Identified` class only.
+//! - [`DirectTransport`]: HTTPS for the `Identified` class only;
+//! - [`PublicClient`]: HTTPS `GET`s to a public static host the user chose to reach directly
+//!   (the map host with "Download maps through privacy relay" off), never the server.
 //!
 //! Every network step has a deadline from the injected [`Timer`](pingers_time::Timer), and
 //! every spawned task has an owner that aborts it when dropped. Tor and mixnets would be new
@@ -26,6 +28,7 @@ mod endpoint;
 mod http;
 mod live;
 mod ohttp;
+mod public;
 mod relay;
 mod router;
 mod timer;
@@ -36,6 +39,7 @@ use pingers_ohttp::{BinaryRequest, BinaryResponse, OhttpError};
 pub use direct::{DirectConfig, DirectTransport};
 pub use live::{KEEP_ALIVE_CHUNK, MAX_FRAME_BYTES};
 pub use ohttp::{LiveSettings, OhttpConfig, OhttpTransport, Timeouts};
+pub use public::{PublicClient, PublicConfig};
 pub use relay::{Backoff, KeyPin, Relay};
 pub use router::{Router, Routes};
 pub use timer::TokioTimer;

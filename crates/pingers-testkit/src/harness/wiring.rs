@@ -271,6 +271,19 @@ fn map_host() -> Result<pingers_proto::MapHostUrl, HarnessError> {
     })
 }
 
+/// Where the server forwards map downloads through the relay.
+fn map_host_gateway(
+    config: &HarnessConfig,
+) -> Result<Option<pingers_server::MapHostGateway>, HarnessError> {
+    pingers_server::MapHostGateway::from_settings(
+        Some(HARNESS_MAP_HOST),
+        config.map_host_gateway.clone(),
+    )
+    .map_err(|_| HarnessError::Keys {
+        service: Service::Server,
+    })
+}
+
 /// Binds, generates keys, and starts the three services on their own runtime thread.
 pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started, HarnessError> {
     let listeners = Listeners {
@@ -334,6 +347,7 @@ pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started,
         ohttp_relay_urls: vec![relay_url],
         advertised_push_relays: vec![advertised(&push_url, &push_public)],
         map_host: Some(map_host()?),
+        map_host_gateway: map_host_gateway(config)?,
         push_relays: ListedRelays::new([(
             HARNESS_PUSH_RELAY_ID,
             RelayTarget {

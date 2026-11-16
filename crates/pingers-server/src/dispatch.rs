@@ -109,6 +109,8 @@ pub(crate) fn key_config_reply(shared: &Shared) -> Reply {
 async fn dispatch(shared: &Arc<Shared>, route: Route, request: &BinaryRequest) -> Reply {
     let handler: Blocking = match route {
         Route::OhttpConfig => return key_config_reply(shared),
+        Route::MapRequest => return crate::map_relay::request(shared, request).await,
+        Route::MapKeys => return crate::map_relay::keys(shared).await,
         Route::PushRelayConfig => return push_relay_config(shared, request).await,
         Route::BoardPage => return board_routes::page(shared, request),
         Route::BoardRevokeLease => return board_routes::revoke(shared, request),

@@ -544,6 +544,61 @@ fn server_identity_and_published_fields_are_read() -> TestResult {
             .map(pingers_proto::MapHostUrl::as_str),
         Some("https://maps.example")
     );
+    // Without map_host_gateway, map downloads through the relay go to the map host itself.
+    assert_eq!(
+        config
+            .map_host_gateway
+            .as_ref()
+            .map(super::MapHostGateway::origin),
+        Some("https://maps.example")
+    );
+    assert_eq!(defaults.map_host_gateway, None);
+    Ok(())
+}
+
+#[test]
+fn the_map_host_gateway_is_the_map_host_unless_named() -> Result<(), ConfigError> {
+    use super::MapHostGateway;
+    let host = Some("https://maps.example/");
+    assert_eq!(MapHostGateway::from_settings(None, None)?, None);
+    assert_eq!(
+        MapHostGateway::from_settings(host, None)?
+            .as_ref()
+            .map(MapHostGateway::origin),
+        Some("https://maps.example")
+    );
+    // A map host on this machine is reached over loopback, never by host name.
+    for gateway in [
+        "http://127.0.0.1:9474",
+        "http://[::1]:9474/",
+        "https://gw.example",
+    ] {
+        assert_eq!(
+            MapHostGateway::from_settings(host, Some(gateway.to_owned()))?
+                .as_ref()
+                .map(MapHostGateway::origin),
+            Some(gateway.trim_end_matches('/')),
+            "{gateway}"
+        );
+    }
+    for gateway in [
+        "http://localhost:9474",
+        "http://10.0.0.2",
+        "ftp://maps.example",
+    ] {
+        assert!(
+            matches!(
+                MapHostGateway::from_settings(host, Some(gateway.to_owned())),
+                Err(ConfigError::MapHostGateway)
+            ),
+            "{gateway}"
+        );
+    }
+    // A gateway with no map host to advertise would forward for a host no device knows.
+    assert!(matches!(
+        MapHostGateway::from_settings(None, Some("https://gw.example".to_owned())),
+        Err(ConfigError::MapHostGateway)
+    ));
     Ok(())
 }
 

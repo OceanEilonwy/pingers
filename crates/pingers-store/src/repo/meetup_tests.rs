@@ -195,8 +195,7 @@ fn ending_a_meetup_deletes_its_mls_state() -> Result<(), TestError> {
 /// Decrypts the whole database into a plaintext copy and returns its bytes.
 fn decrypted_file(directory: &TestDir, path: &std::path::Path) -> Result<Vec<u8>, TestError> {
     let plain = directory.file("plain.db");
-    let connection = rusqlite::Connection::open(path)?;
-    connection.execute_batch(&key(1).pragma())?;
+    let connection = crate::database::open_keyed(path, &key(1))?;
     connection.execute(
         "ATTACH DATABASE ?1 AS plaintext KEY ''",
         [plain.to_string_lossy()],

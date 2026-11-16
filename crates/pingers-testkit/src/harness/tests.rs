@@ -463,3 +463,6 @@ mod running {
         Ok(())
     }
 }
+
+#[cfg(feature = "harness")]
+mod maps;

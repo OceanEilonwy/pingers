@@ -70,12 +70,12 @@ pub use crates::{CrateCall, CrateName, FakeCrates, FakeCratesError};
 #[cfg(feature = "client")]
 pub use events::{EventAssertion, EventKind, NoticeKind, RecordedEvent, RecordingEvents};
 pub use fixtures::{FixtureError, MemberFixture, PartyBuilder, PartyFixture, SpotFixture};
-#[cfg(feature = "harness")]
-pub use harness::send_direct;
 pub use harness::{
     CapturedPush, Endpoints, HARNESS_MAP_HOST, HARNESS_PUSH_RELAY_ID, HarnessConfig, HarnessError,
     InProcessHarness, Service,
 };
+#[cfg(feature = "harness")]
+pub use harness::{TlsFront, send_direct};
 /// Whether the harness server accepts membership proofs (`HarnessConfig::membership_proofs`).
 #[cfg(feature = "harness")]
 pub use pingers_server::MembershipProofs;

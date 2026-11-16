@@ -49,8 +49,9 @@ pub use ids::{
     InviteId, LocationRequestId, MeetupId, MemberId, MessageId, PartyId, SpotId, ZoneId,
 };
 pub use maps::{
-    DownloadedMapsWords, MapHostSource, MapsWords, downloaded_maps_words, downloading_words,
-    maps_words, size_words,
+    DownloadedMapsWords, MapCatalog, MapDownloadListener, MapDownloadRequest, MapEntry, MapFailure,
+    MapFile, MapHostFailure, MapHostInfo, MapHostProblem, MapHostSource, MapManifest, MapOffer,
+    MapSettings, MapsWords, downloaded_maps_words, downloading_words, maps_words, size_words,
 };
 pub use party_views::{CodeAnswer, PartySettingsView, SafetyCodesView};
 pub use servers::{KeysTrusted, ServerIssue, ServerLook};
