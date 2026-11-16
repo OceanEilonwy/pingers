@@ -28,8 +28,13 @@ interface FixSource {
 /** What continuous updates a mode wants (design F.3), for either flavour's [FixSource]. */
 data class ContinuousRequest(val highAccuracy: Boolean, val intervalMillis: Long, val minIntervalMillis: Long, val minDistanceMeters: Float) {
     companion object {
-        /** The pipeline asks for a fix only when it has nothing younger than 60 s (design E.2). */
-        const val MAX_CACHED_AGE_MILLIS = 60_000L
+        /**
+         * How old a cached fix may be to answer a request. The pipeline asks only when what it
+         * has is too old (design E.2), and an entry is confirmed by a second fix taken at least
+         * 30 s after the first: a cached fix up to a minute old could be the first one again,
+         * and the entry would never be confirmed.
+         */
+        const val MAX_CACHED_AGE_MILLIS = 5_000L
 
         /**
          * Backgrounded Meetup: send on 20 m movement or 60 s (the core drops to a 5-minute
