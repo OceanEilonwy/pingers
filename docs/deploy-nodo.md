@@ -382,9 +382,12 @@ gh release create feed --repo OceanEilonwy/pingers --target main --latest=false 
 `NODO_REV` in `feed.yml` names the monokulo-nodo commit the feed is built with; it must have N1
 and N2, which monokulo-nodo merged in #12, and bundles and owner pages (branch
 `bundles-and-owner-pages`, 226610d, whose PR is not merged yet): an older install review refuses
-the `pingers` app, and the workflow stops with "update NODO_REV". Until that PR is merged,
-`Cargo.toml` pins `nodo-manifest` and `nodo-settings` to 226610d for the packaging test; after,
-both move to the merge commit. (Before bundles both were 4ad5661, the merge of #12.)
+the `pingers` app, and the workflow stops with "update NODO_REV". `NODO_REV` and the
+`nodo-manifest` and `nodo-settings` pins in `Cargo.toml` (the packaging test) all name 226610d,
+the branch head. Until that branch is on GitHub, the feed workflow cannot check it out and
+`cargo` cannot fetch the pins, so `cargo xtask ci` on GitHub fails. A merge commit keeps
+226610d reachable; after a squash merge all three move to the squashed commit. (Before bundles
+all were 4ad5661, the merge of #12.)
 
 **Building locally** (Docker, a monokulo-nodo checkout with N1, N2, bundles and owner pages, at `$NODO`):
 
@@ -515,8 +518,8 @@ with this appliance's values filled in and each step marked done where the appli
    | A | `push` | your public address |
    | A | `maps` | your public address |
 
-   The page shows the public address nodo found. *Done when* each site is public, its name
-   resolves to the public address and its certificate is issued.
+   The page shows each record with the public address nodo found filled in. *Done when* each
+   site is public, its name resolves to the public address and its certificate is issued.
 3. **Forward port 443 to this appliance.** On the router, forward TCP 443 to the appliance's LAN
    address (the page shows it). If the router runs its own reverse proxy in front: set it to
    pass TLS through (TCP or SNI forwarding) for the four names, the recommended setup (section
@@ -552,12 +555,19 @@ with this appliance's values filled in and each step marked done where the appli
    | `PINGERS_GATEWAY_KEY_PINS` | the gateway's two pins, comma-separated, served key first (from the page) |
    | `PINGERS_PUSH_RELAY_KEY_PINS` | the push relay's two pins, the same way (from the page) |
 
-   The release workflow also needs its signing secrets in the `release` environment
-   (`PINGERS_KEYSTORE_BASE64`, `PINGERS_KEYSTORE_PASSWORD`, `PINGERS_KEY_ALIAS`,
-   `GOOGLE_SERVICES_JSON`; android/docs/release.md). The appliance cannot see GitHub, so tick it
-   off yourself. From outside, `cargo xtask pins --relay https://ohttp.example.org --push
-   https://push.example.org` cross-checks the served gateway pin and both push relay pins
-   against the running services.
+   The page also shows the six as `gh variable set <NAME> --repo OceanEilonwy/pingers
+   --body=<value>` lines (`--body=`, since a pin can start with `-`).
+
+   Secrets, which the appliance does not hold (android/docs/release.md says where each comes
+   from): create the `release` environment (Settings, Environments) and in it the secrets
+   `PINGERS_KEYSTORE_BASE64`, `PINGERS_KEYSTORE_PASSWORD`, `PINGERS_KEY_ALIAS` and
+   `GOOGLE_SERVICES_JSON`; set `GOOGLE_SERVICES_JSON` as a repository secret too, or `ci.yml`
+   skips the gms build. The package feed (the `feed` environment's `PINGERS_FEED_SIGNING_KEY` and
+   the `feed` release, "The package feed" above) was set up before the install. The appliance
+   cannot see GitHub, so tick this step off yourself. A test in pingers-setup checks that the
+   page names every variable and secret `release.yml` and `ci.yml` read. From outside, `cargo
+   xtask pins --relay https://ohttp.example.org --push https://push.example.org` cross-checks
+   the served gateway pin and both push relay pins against the running services.
 8. **Make a release.** On the commit to release: `git tag -a v1.0.0-rc.1 -m "Pingers
    v1.0.0-rc.1"` and `git push origin v1.0.0-rc.1` (the page uses pingers' `release_tag`
    setting). `release.yml` builds both APKs with the variables and publishes a pre-release;

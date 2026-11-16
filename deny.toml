@@ -70,7 +70,7 @@ exceptions = [
 #
 # This also skips monokulo-nodo's nodo-manifest and nodo-settings (git dependencies with
 # `publish = false`), so a licence exception for them could never match and cargo deny reported
-# the old ones as unmatched. Checked by hand at the pinned commit (4ad5661, Cargo.toml): both are
+# the old ones as unmatched. Checked by hand at the pinned commit (226610d, Cargo.toml): both are
 # GPL-3.0-or-later, compatible with AGPL-3.0 (GPLv3 §13). They are dev-dependencies of xtask
 # only, for the test that checks packaging/nodo as a device would, never in a shipped binary.
 # Re-check the licence whenever the pin in the workspace Cargo.toml moves.

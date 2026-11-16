@@ -28,10 +28,12 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  # monokulo-nodo's builder and feed scripts, at a main commit with h2c upstreams (N1) and
-  # third-party feeds (N2): the merge of OceanEilonwy/monokulo-nodo#12.
+  # monokulo-nodo's builder and feed scripts, with h2c upstreams (N1) and third-party feeds
+  # (N2), merged in OceanEilonwy/monokulo-nodo#12, and bundles and owner pages: the head of
+  # branch bundles-and-owner-pages, the same commit Cargo.toml pins nodo-manifest and
+  # nodo-settings to. A merge commit keeps it reachable; a squash merge needs both moved.
   NODO_REPOSITORY: OceanEilonwy/monokulo-nodo
-  NODO_REV: 4ad566128b7ce69a83a512ce435084428487b39f
+  NODO_REV: 226610d83fa8ce34a8033d827bad7854c8f42e78
   # The feed key's fingerprint as xbps and nodo show it (MD5 of the key in SSH form). Its public
   # half is packaging/nodo/feed-signing-key.pub.pem.
   FEED_FINGERPRINT: "9d:c4:00:6e:53:d8:99:c4:f9:5d:9c:96:b0:e9:1a:07"

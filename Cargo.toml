@@ -149,8 +149,8 @@ toml = "1.2.1"
 # device would. GPL-3.0-or-later (compatible with AGPL-3.0 under GPLv3 §13); dev-dependencies of
 # xtask only, never in a shipped binary (`[licenses.private]` in deny.toml says how their licence
 # is checked). Pinned to the monokulo-nodo commit with bundles and owner pages (branch
-# bundles-and-owner-pages, on top of N1 and N2 from #12); once that PR is merged, the merge
-# commit, the same one feed.yml's NODO_REV builds with.
+# bundles-and-owner-pages, on top of N1 and N2 from #12), the same commit feed.yml's NODO_REV
+# builds with. A merge commit keeps it reachable; after a squash merge, move both.
 nodo-manifest = { git = "https://github.com/OceanEilonwy/monokulo-nodo", rev = "226610d83fa8ce34a8033d827bad7854c8f42e78" }
 nodo-settings = { git = "https://github.com/OceanEilonwy/monokulo-nodo", rev = "226610d83fa8ce34a8033d827bad7854c8f42e78" }
 

@@ -283,3 +283,102 @@ fn firebase_is_done_only_when_the_relay_serves_fcm() -> TestResult {
     assert!(unipush.1.is_some());
     Ok(())
 }
+
+/// Every text a page step shows, values and labels included.
+fn step_text(page: &Page, title: &str) -> String {
+    page.steps
+        .iter()
+        .filter(|step| step.title == title)
+        .flat_map(|step| &step.items)
+        .map(|item| match item {
+            Item::Text { text } => text.clone(),
+            Item::Value { label, value } => format!("{label} {value}"),
+            Item::Check { label, .. } => label.clone(),
+            _ => String::new(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The names after `prefix` (`vars.` or `secrets.`) in a workflow file.
+fn workflow_names(workflow: &str, prefix: &str) -> Vec<String> {
+    let mut names: Vec<String> = workflow
+        .split(prefix)
+        .skip(1)
+        .map(|rest| {
+            rest.chars()
+                .take_while(|character| character.is_ascii_uppercase() || *character == '_')
+                .collect::<String>()
+        })
+        .filter(|name| !name.is_empty())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+const RELEASE_WORKFLOW: &str = include_str!("../../../../.github/workflows/release.yml");
+const CI_WORKFLOW: &str = include_str!("../../../../.github/workflows/ci.yml");
+
+#[test]
+fn the_page_names_every_variable_the_release_reads_with_a_value() -> TestResult {
+    let page = build(&config()?, &running());
+    let variables = workflow_names(RELEASE_WORKFLOW, "vars.");
+    assert_eq!(variables.len(), 6, "{variables:?}");
+    let commands = value_of(&page, "The same with the gh command line").ok_or("no gh lines")?;
+    for name in &variables {
+        let shown = value_of(&page, name).ok_or_else(|| format!("{name} not on the page"))?;
+        let line = format!("gh variable set {name} --repo OceanEilonwy/pingers --body={shown}");
+        assert!(commands.lines().any(|command| command == line), "{name}");
+    }
+    assert_eq!(commands.lines().count(), variables.len());
+    Ok(())
+}
+
+#[test]
+fn the_page_names_every_secret_the_workflows_read() -> TestResult {
+    let page = build(&config()?, &running());
+    let github = step_text(&page, "Copy the hosts and pins into GitHub");
+    let variables = workflow_names(RELEASE_WORKFLOW, "vars.");
+    for name in workflow_names(RELEASE_WORKFLOW, "secrets.")
+        .into_iter()
+        .chain(workflow_names(CI_WORKFLOW, "secrets."))
+    {
+        // A host may be a secret instead of a variable; the page sets it as a variable.
+        if variables.contains(&name) {
+            continue;
+        }
+        assert!(github.contains(&name), "{name}");
+    }
+    // CI reads GOOGLE_SERVICES_JSON outside the release environment.
+    assert!(github.contains("GOOGLE_SERVICES_JSON as a repository secret"));
+    assert!(github.contains("environment release"));
+    Ok(())
+}
+
+#[test]
+fn each_site_shows_its_dns_record() -> TestResult {
+    let page = build(&config()?, &running());
+    for (package, name) in [
+        ("pingers-server", "pingers"),
+        ("pingers-ohttp-relay", "ohttp"),
+        ("pingers-push-relay", "push"),
+        ("pingers-map-host", "maps"),
+    ] {
+        assert_eq!(
+            value_of(&page, &format!("{package} DNS record")),
+            Some(format!(
+                "Type A, name {name} ({name}.example.org), value {{public_address}}"
+            )),
+        );
+    }
+    assert_eq!(
+        dns_record("example.org", "example.org"),
+        "Type A, name @ (example.org), value {public_address}"
+    );
+    assert_eq!(
+        dns_record("pingers.other.net", "example.org"),
+        "Type A, name pingers.other.net (pingers.other.net), value {public_address}"
+    );
+    Ok(())
+}

@@ -245,12 +245,31 @@ fn sites_step(config: &Config) -> Step {
     ))];
     for site in config.origins() {
         items.push(value(format!("{} address", site.package), site.host()));
+        items.push(value(
+            format!("{} DNS record", site.package),
+            dns_record(site.host(), &config.domain),
+        ));
         items.push(Item::Site {
             package: site.package.to_owned(),
             site: site.site.to_owned(),
         });
     }
     step("Put the four sites online", StepState::Auto, items)
+}
+
+/// The A record for `host` as a DNS provider asks for it: the type, the name within `domain`
+/// (the address part), and the public address, which the appliance fills in when it shows the
+/// page.
+fn dns_record(host: &str, domain: &str) -> String {
+    let name = if host == domain {
+        "@"
+    } else {
+        host.strip_suffix(domain)
+            .and_then(|rest| rest.strip_suffix('.'))
+            .filter(|name| !name.is_empty())
+            .unwrap_or(host)
+    };
+    format!("Type A, name {name} ({host}), value {{public_address}}")
 }
 
 fn router_step(facts: &Facts) -> Step {
@@ -378,22 +397,27 @@ fn maps_step(facts: &Facts) -> Step {
 }
 
 fn github_step(config: &Config, facts: &Facts) -> Step {
+    let repo = &config.github_repository;
     let mut items = vec![text(format!(
         "At github.com/{repo}: Settings, Secrets and variables, Actions, the Variables tab, New \
-         repository variable, once for each name below. The release builds read them; the pins \
-         make the app accept only this appliance's keys. The release workflow also needs its \
-         signing secrets in the release environment (PINGERS_KEYSTORE_BASE64, \
-         PINGERS_KEYSTORE_PASSWORD, PINGERS_KEY_ALIAS, GOOGLE_SERVICES_JSON; \
-         android/docs/release.md).",
-        repo = config.github_repository
+         repository variable, once for each name below, with the value exactly as shown. The \
+         release builds read them; the pins make the app accept only this appliance's keys."
     ))];
     let [server, _, push, maps] = config.origins();
-    items.push(value("PINGERS_SERVER_HOST", server.origin));
-    items.push(value("PINGERS_OHTTP_RELAY", config.ohttp_relay_url.clone()));
-    items.push(value("PINGERS_PUSH_RELAY", push.origin));
-    items.push(value("PINGERS_MAP_HOST", maps.origin));
+    let mut variables = vec![
+        ("PINGERS_SERVER_HOST", server.origin.to_owned()),
+        ("PINGERS_OHTTP_RELAY", config.ohttp_relay_url.clone()),
+        ("PINGERS_PUSH_RELAY", push.origin.to_owned()),
+        ("PINGERS_MAP_HOST", maps.origin.to_owned()),
+    ];
+    for (name, origin) in &variables {
+        items.push(value(*name, origin.clone()));
+    }
     match &facts.gateway_pins {
-        Ok(pins) => items.push(value("PINGERS_GATEWAY_KEY_PINS", pin_list(pins))),
+        Ok(pins) => {
+            items.push(value("PINGERS_GATEWAY_KEY_PINS", pin_list(pins)));
+            variables.push(("PINGERS_GATEWAY_KEY_PINS", pin_list(pins)));
+        }
         Err(why) => items.push(check_of(
             "PINGERS_GATEWAY_KEY_PINS",
             State::Failed,
@@ -401,13 +425,33 @@ fn github_step(config: &Config, facts: &Facts) -> Step {
         )),
     }
     match &facts.push_relay {
-        Ok(relay) => items.push(value("PINGERS_PUSH_RELAY_KEY_PINS", pin_list(&relay.pins))),
+        Ok(relay) => {
+            items.push(value("PINGERS_PUSH_RELAY_KEY_PINS", pin_list(&relay.pins)));
+            variables.push(("PINGERS_PUSH_RELAY_KEY_PINS", pin_list(&relay.pins)));
+        }
         Err(why) => items.push(check_of(
             "PINGERS_PUSH_RELAY_KEY_PINS",
             State::Failed,
             why.clone(),
         )),
     }
+    items.push(value(
+        "The same with the gh command line",
+        variables
+            .iter()
+            .map(|(name, body)| format!("gh variable set {name} --repo {repo} --body={body}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    ));
+    items.push(text(
+        "Secrets, which this appliance does not hold (android/docs/release.md says where each \
+         comes from): under Settings, Environments, create the environment release, and in it \
+         the secrets PINGERS_KEYSTORE_BASE64, PINGERS_KEYSTORE_PASSWORD, PINGERS_KEY_ALIAS and \
+         GOOGLE_SERVICES_JSON. Set GOOGLE_SERVICES_JSON as a repository secret too, or CI skips \
+         the gms build. The package feed this appliance installed Pingers from (the feed \
+         environment's PINGERS_FEED_SIGNING_KEY and the feed release, docs/deploy-nodo.md) was \
+         set up before the install and needs nothing more.",
+    ));
     step(
         "Copy the hosts and pins into GitHub",
         StepState::Unknown,
