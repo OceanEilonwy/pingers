@@ -17,12 +17,12 @@ use pingers_geo::{Fence, Fix};
 use pingers_meetup::{LocationAnswer, LocationVisibility, MeetPointDraft};
 use pingers_proto::{
     ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, PartyId, PushHandle,
-    SecretText, SpotId,
+    SecretText, SetupPayload, SpotId,
 };
 
 use crate::snapshot::{
-    EndedMeetup, ExclusionZone, HideTrail, InviteLink, InviteUrl, Joining, LocationRequest, Meetup,
-    Name, OwnPosition, Party, PartyColour, PauseInFocus, PostQuantum, QuietHoursPreference,
+    EndedMeetup, ExclusionZone, HideTrail, Host, InviteLink, InviteUrl, Joining, LocationRequest,
+    Meetup, Name, OwnPosition, Party, PartyColour, PauseInFocus, PostQuantum, QuietHoursPreference,
     RelayStatus, SafetyCode, Settings, WakePushes,
 };
 use crate::{ClientError, Fallback, FixQuality, LocationMode, Notice, OsRegion, PushTokens};
@@ -64,6 +64,75 @@ pub struct SpotDraft {
     pub name: Name,
     /// Its shape.
     pub fence: Fence,
+}
+
+/// What a first-phone setup link (pingers-proto's `SetupPayload`) is to this device, found
+/// without sending anything: the confirm screen's question, or why it stops before asking.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SetupCheck {
+    /// The link is for this app's server, its keys are the build's (or the build pins on first
+    /// use), and this device has no account yet: ask before using it.
+    Ready {
+        /// The server the account would be made on.
+        server: Host,
+    },
+    /// This device has its account already; the link's code is not needed.
+    AlreadySetUp,
+    /// The server refused this very code before: it is not sent again. A link with another
+    /// code is.
+    Refused,
+    /// The link is for a server other than the one this app is built for.
+    OtherServer {
+        /// The app's server.
+        app: Host,
+        /// The link's server.
+        link: Host,
+    },
+    /// The build pins keys, and the link's served gateway or push relay key is not among them:
+    /// this build was made before the appliance's pins were copied into it.
+    BuildKeysDiffer {
+        /// The server, which is the app's.
+        server: Host,
+    },
+}
+
+/// What using a setup link did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SetupOutcome {
+    /// The account was made with the link's code; credentials were prepared as far as the
+    /// network allowed.
+    SetUp,
+    /// This device has its account already; nothing was offered.
+    AlreadySetUp,
+    /// The server refused the code, now or before. It is recorded and not tried again: only a
+    /// link with another code is.
+    Refused,
+    /// As [`SetupCheck::OtherServer`]: nothing was sent.
+    OtherServer {
+        /// The app's server.
+        app: Host,
+        /// The link's server.
+        link: Host,
+    },
+    /// As [`SetupCheck::BuildKeysDiffer`]: nothing was sent.
+    BuildKeysDiffer {
+        /// The server.
+        server: Host,
+    },
+    /// The gateway key the relay served is not one of the link's (a build without pins), or
+    /// not one of the build's: the code was not sent.
+    ServerKeysDiffer {
+        /// The server.
+        server: Host,
+    },
+    /// The relay or the server did not answer. Nothing retries on its own: the user taps
+    /// again.
+    Unreachable {
+        /// The server.
+        server: Host,
+    },
 }
 
 /// The inviter's answer once the joiner read out their code.
@@ -331,6 +400,14 @@ pub trait SyncPort: Send + Sync {
     ///
     /// Errors with `ClientError::RegistrationRefused` if the server refused the account.
     async fn register_with_code(&self, code: SecretText) -> Result<(), ClientError>;
+    /// What a first-phone setup link is to this device (its server, the build's pins, the
+    /// account), read from the instance and the store: nothing is sent.
+    async fn check_setup_link(&self, link: &SetupPayload) -> Result<SetupCheck, ClientError>;
+    /// Uses a first-phone setup link: checks it as [`SyncPort::check_setup_link`] does and, in
+    /// a build without gateway pins, the gateway key the relay serves against the link's pins;
+    /// seeds the push relay's first-use pins from it; then offers its code and registers.
+    /// Nothing is sent with the code unless every check passed.
+    async fn use_setup_link(&self, link: SetupPayload) -> Result<SetupOutcome, ClientError>;
     /// The server status.
     async fn section(&self) -> Result<ServerSection, ClientError>;
 }

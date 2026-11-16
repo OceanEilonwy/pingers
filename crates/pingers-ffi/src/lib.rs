@@ -40,8 +40,9 @@ pub use core::{
     SettingChange, SpotToSave,
 };
 pub use device_views::{
-    DevicePlatform, PushServiceInfo, QuietHoursEditorView, SetupStep, SetupView, WakePlatform,
-    quiet_hours_editor, setup_view,
+    DevicePlatform, PushServiceInfo, QuietHoursEditorView, SetupLinkAction, SetupLinkState,
+    SetupLinkView, SetupStep, SetupView, WakePlatform, quiet_hours_editor, setup_link_view,
+    setup_view,
 };
 pub use error::CoreError;
 pub use geo::{Coordinate, Fence, Fix};

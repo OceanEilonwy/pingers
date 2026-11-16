@@ -26,6 +26,7 @@ mod party_log;
 mod push;
 mod records;
 mod registrations;
+mod setup;
 mod sync;
 mod wake;
 mod wake_codec;
@@ -131,6 +132,7 @@ impl Crates {
         let online = engine.map(|engine| sync::Online {
             engine,
             registration_code: instance.and_then(|instance| instance.registration_code.clone()),
+            gateway_pins: instance.and_then(|instance| instance.gateway_pins.clone()),
         });
         let net = Arc::new(sync::Net::new(Arc::clone(&backend), online, learned));
         let meetups = Arc::new(meetups::Meetups::new(

@@ -19,6 +19,7 @@ use pingers_words::Language;
 
 use crate::CoreError;
 use crate::callbacks::{Events, EventsAdapter, Platform, PlatformAdapter, PushPriority};
+use crate::device_views::SetupLinkState;
 use crate::geo::{Coordinate, Fence, Fix};
 use crate::ids::{
     InviteId, LocationRequestId, MeetupId, MemberId, MessageId, PartyId, SpotId, ZoneId,
@@ -280,6 +281,13 @@ impl TryFrom<InstanceConfig> for pingers_client::Instance {
     }
 }
 
+/// A setup link's payload, or `None` if the text is not one. The text carries the code: it is
+/// zeroed once read, and the payload keeps the code zeroed on drop.
+fn setup_payload(link: String) -> Option<pingers_proto::SetupPayload> {
+    let link = zeroize::Zeroizing::new(link);
+    pingers_proto::SetupPayload::from_link(link.trim()).ok()
+}
+
 /// The Rust core: one per process.
 #[derive(uniffi::Object)]
 pub struct Core {
@@ -425,6 +433,40 @@ impl Core {
             .await
             .map_err(refused)?
             .into())
+    }
+
+    /// Checks a first-phone setup link (`https://<server>/j#s1.…` or `pingers://join#s1.…`)
+    /// for its confirm step, sending nothing: [`SetupLinkState::Confirm`] with the server, or
+    /// why the step stops before asking (already set up, a code refused before, another
+    /// server, keys this build does not pin, or [`SetupLinkState::Broken`] for a link that does
+    /// not decode).
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Storage`]; [`CoreError::Unavailable`] without an instance.
+    pub async fn check_setup_link(&self, link: String) -> Result<SetupLinkState, CoreError> {
+        let Some(payload) = setup_payload(link) else {
+            return Ok(SetupLinkState::Broken);
+        };
+        let check = self.client.check_setup_link(&payload).await?;
+        Ok(screens::setup::SetupLink::checked(check).into())
+    }
+
+    /// Uses a first-phone setup link (the confirm step's "Set up", or "Try again"): checks it
+    /// again, checks the gateway key the relay serves against the link's pins in a build
+    /// without pins, then makes this device's account with its code. Nothing retries on its
+    /// own: [`SetupLinkState::Unreachable`] waits for the user to tap again.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Storage`]; [`CoreError::Unavailable`] without an instance. What the network
+    /// answered is the state, not an error.
+    pub async fn use_setup_link(&self, link: String) -> Result<SetupLinkState, CoreError> {
+        let Some(payload) = setup_payload(link) else {
+            return Ok(SetupLinkState::Broken);
+        };
+        let outcome = self.client.use_setup_link(payload).await?;
+        Ok(screens::setup::SetupLink::finished(outcome).into())
     }
 
     /// The safety code between this device and a member (Safety codes): twelve groups of
@@ -1480,6 +1522,112 @@ mod tests {
             core.cancel_invite(party, short).await,
             Err(CoreError::Invalid { .. })
         ));
+        Ok(())
+    }
+
+    /// A setup link for the fakes' server, as the appliance's QR code carries it.
+    fn setup_link(server: &str) -> Result<String, CoreError> {
+        let payload = pingers_proto::SetupPayload {
+            server: pingers_proto::ServerId::new(server.to_owned())?,
+            registration_code: pingers_proto::SecretText::new("0123456789abcdef".into()),
+            gateway_pins: vec![pingers_proto::KeyConfigHash::from_bytes([1; 32])],
+            push_relay_pins: vec![pingers_proto::KeyConfigHash::from_bytes([2; 32])],
+        };
+        Ok(payload.to_link()?.to_string())
+    }
+
+    #[tokio::test]
+    async fn setup_links_are_checked_and_used_through_the_client() -> Result<(), CoreError> {
+        use crate::device_views::SetupLinkState;
+        use pingers_client::ports::{SetupCheck, SetupOutcome};
+        let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
+        let core = open_on("setup-link", &fakes).await?;
+        let link = setup_link("https://pingers.test")?;
+        let server = || SetupLinkState::Confirm {
+            server: FakeCrates::SETUP_SERVER.into(),
+        };
+
+        // Spaces around a pasted link do not matter; the check reaches the client.
+        assert_eq!(core.check_setup_link(format!(" {link}\n")).await?, server());
+        assert_eq!(
+            fakes.calls().last(),
+            Some(&CrateCall::CheckSetupLink("https://pingers.test".into()))
+        );
+        // A link that does not decode stops the step without a client call.
+        let before = fakes.calls().len();
+        for junk in [
+            "https://pingers.test/j#s1.!!",
+            "https://pingers.test/j#v1.AAAA",
+            "pingers://join#s1.",
+        ] {
+            assert_eq!(
+                core.check_setup_link(junk.into()).await?,
+                SetupLinkState::Broken
+            );
+            assert_eq!(
+                core.use_setup_link(junk.into()).await?,
+                SetupLinkState::Broken
+            );
+        }
+        assert_eq!(fakes.calls().len(), before);
+
+        // The forwarded form carries the same link; using it hands the client the code.
+        let forwarded = link.replacen("https://pingers.test/j", "pingers://join", 1);
+        assert_eq!(core.use_setup_link(forwarded).await?, SetupLinkState::SetUp);
+        assert_eq!(
+            fakes.calls().last(),
+            Some(&CrateCall::UseSetupLink(
+                "https://pingers.test".into(),
+                "0123456789abcdef".into()
+            ))
+        );
+
+        // Each outcome reaches the app with its hosts.
+        let host = |text: &str| {
+            pingers_client::snapshot::Host::new(text).map_err(|_| CoreError::invalid("host"))
+        };
+        fakes.set_setup_check(SetupCheck::OtherServer {
+            app: host("pingers.test")?,
+            link: host("friends.example")?,
+        });
+        assert_eq!(
+            core.check_setup_link(link.clone()).await?,
+            SetupLinkState::OtherServer {
+                app_server: "pingers.test".into(),
+                link_server: "friends.example".into(),
+            }
+        );
+        for (outcome, state) in [
+            (SetupOutcome::Refused, SetupLinkState::Refused),
+            (SetupOutcome::AlreadySetUp, SetupLinkState::AlreadySetUp),
+            (
+                SetupOutcome::BuildKeysDiffer {
+                    server: host("pingers.test")?,
+                },
+                SetupLinkState::BuildKeysDiffer {
+                    server: "pingers.test".into(),
+                },
+            ),
+            (
+                SetupOutcome::ServerKeysDiffer {
+                    server: host("pingers.test")?,
+                },
+                SetupLinkState::ServerKeysDiffer {
+                    server: "pingers.test".into(),
+                },
+            ),
+            (
+                SetupOutcome::Unreachable {
+                    server: host("pingers.test")?,
+                },
+                SetupLinkState::Unreachable {
+                    server: "pingers.test".into(),
+                },
+            ),
+        ] {
+            fakes.set_setup_outcome(outcome);
+            assert_eq!(core.use_setup_link(link.clone()).await?, state);
+        }
         Ok(())
     }
 

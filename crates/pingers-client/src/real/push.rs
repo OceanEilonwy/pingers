@@ -182,6 +182,27 @@ impl Learned {
             problem: Mutex::new(None),
         }
     }
+
+    /// How the instance's push relay key is pinned, for a setup link's checks.
+    pub(super) fn push_relay_pinning(&self) -> PushRelayPinning<'_> {
+        match &self.push_relay {
+            None => PushRelayPinning::NoPushRelay,
+            Some(PushRelaySetup {
+                pins: Some(pins), ..
+            }) => PushRelayPinning::Build(pins),
+            Some(PushRelaySetup { pins: None, .. }) => PushRelayPinning::FirstUse,
+        }
+    }
+}
+
+/// How the instance's push relay key is pinned.
+pub(super) enum PushRelayPinning<'pins> {
+    /// The instance names no push relay.
+    NoPushRelay,
+    /// The build's pin set.
+    Build(&'pins KeyPins),
+    /// No build pins: the first key met, kept in a record, or a setup link's pins.
+    FirstUse,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -367,6 +388,45 @@ impl Net {
         hashes
             .map(|hashes| KeyPins::new(hashes).map_err(|_| corrupt()))
             .transpose()
+    }
+
+    /// Takes a setup link's push relay pins as the first-use pins, unless pins were learned
+    /// already: the relay's key is then checked from the first fetch instead of trusted on
+    /// first use. Only for a build without push relay pins.
+    ///
+    /// # Errors
+    ///
+    /// A storage failure.
+    pub(super) async fn seed_first_use_pins(
+        &self,
+        pins: Vec<KeyConfigHash>,
+    ) -> Result<(), ClientError> {
+        if !matches!(
+            self.learned.push_relay_pinning(),
+            PushRelayPinning::FirstUse
+        ) || pins.is_empty()
+        {
+            return Ok(());
+        }
+        self.backend
+            .store(move |session, _clock, _rng| {
+                session.transaction(|session| {
+                    if records::read(session, &Key::PushRelayPin, |reader| {
+                        drop(reader.rest());
+                        Ok(())
+                    })?
+                    .is_some()
+                    {
+                        return Ok(());
+                    }
+                    records::write(session, &Key::PushRelayPin, |writer| {
+                        for hash in &pins {
+                            writer.fixed(hash.as_bytes());
+                        }
+                    })
+                })
+            })
+            .await
     }
 
     /// Adds the published key and the announced next key to the first-use pins, so a build

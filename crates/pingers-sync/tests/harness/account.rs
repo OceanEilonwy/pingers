@@ -7,7 +7,8 @@ use pingers_crypto::key_config_hash;
 use pingers_proto::SecretText;
 use pingers_store::{AccountBearer, AccountRegistration};
 use pingers_sync::{
-    CodeSource, CredentialChoice, Delivered, LeafStanding, Prepared, Refill, SyncError, WakeBudget,
+    CodeSource, CodeStanding, CredentialChoice, Delivered, LeafStanding, Prepared, Refill,
+    SyncError, WakeBudget,
 };
 use pingers_testkit::HarnessConfig;
 use pingers_time::Clock as _;
@@ -215,6 +216,10 @@ async fn a_refused_code_is_not_tried_again_until_another_is_offered() -> TestRes
         ..HarnessConfig::default()
     })?;
     let device = world.account_device()?;
+    assert_eq!(
+        device.engine.code_standing(code("strangers")).await?,
+        CodeStanding::Open
+    );
     // A later invite's code replaces an earlier one that waits.
     device
         .engine
@@ -243,6 +248,16 @@ async fn a_refused_code_is_not_tried_again_until_another_is_offered() -> TestRes
         device.session()?.account().registration()?,
         AccountRegistration::Refused { code: Some(refused) } if refused.expose() == "strangers"
     ));
+    // A screen can tell the refused code from another, without a request.
+    assert_eq!(
+        device.engine.code_standing(code("strangers")).await?,
+        CodeStanding::RefusedBefore
+    );
+    assert_eq!(
+        device.engine.code_standing(code("friends")).await?,
+        CodeStanding::Open
+    );
+    assert!(direct(&device)?.take_seen().is_empty());
 
     // The same code again changes nothing; an empty one offers nothing.
     device
@@ -279,6 +294,10 @@ async fn a_refused_code_is_not_tried_again_until_another_is_offered() -> TestRes
             .as_ref()
             .map(SecretText::expose),
         Some("friends")
+    );
+    assert_eq!(
+        device.engine.code_standing(code("strangers")).await?,
+        CodeStanding::Registered
     );
     // A registered account keeps its code whatever is offered later.
     device

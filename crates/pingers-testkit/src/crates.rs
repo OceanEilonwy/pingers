@@ -14,10 +14,11 @@ use async_trait::async_trait;
 use pingers_client::ports::{
     AllowListChange, ClientEvent, JoinDecision, MapDownload, MapHosts, MapRoute, MapsPort,
     MeetupsPort, MeetupsSection, PartiesPort, PartiesSection, PartyDraft, PipelineSection,
-    ServerSection, SettingChange, SpotDraft, SyncPort, WakeInput, WakeOutcome, WakePort,
+    ServerSection, SettingChange, SetupCheck, SetupOutcome, SpotDraft, SyncPort, WakeInput,
+    WakeOutcome, WakePort,
 };
 use pingers_client::snapshot::{
-    DailyWindow, HideTrail, InviteLink, InviteUrl, Name, PauseInFocus, QuietHoursPreference,
+    DailyWindow, HideTrail, Host, InviteLink, InviteUrl, Name, PauseInFocus, QuietHoursPreference,
     RelayStatus, SafetyCode, Settings, SnapshotError, Toggle, WakePushes,
 };
 use pingers_client::{ClientError, Crates, PushTokens};
@@ -28,7 +29,7 @@ use pingers_map_downloads::{MapsError, RegionManifest};
 use pingers_meetup::{LocationAnswer, LocationVisibility, MeetPointDraft};
 use pingers_proto::{
     ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, PartyId, SecretText,
-    SpotId,
+    SetupPayload, SpotId,
 };
 use pingers_time::UnixSeconds;
 
@@ -83,6 +84,10 @@ pub enum CrateCall {
     MarkChecked(PartyId, LeafIndex),
     /// The code, exposed: the fake keeps no secrets.
     RegisterWithCode(String),
+    /// The link's server.
+    CheckSetupLink(String),
+    /// The link's server and code, exposed.
+    UseSetupLink(String, String),
     PushTokensChanged(Option<PushTokens>),
     SetWakePushes(WakePushes, Option<PushTokens>),
     ReportPushPriority(pingers_wake::PushPriority, pingers_wake::PushPriority),
@@ -119,6 +124,8 @@ struct State {
     meetups: MeetupsSection,
     section_reads: usize,
     priority_notice: Option<pingers_client::Notice>,
+    setup_check: SetupCheck,
+    setup_outcome: SetupOutcome,
 }
 
 impl FakeCrates {
@@ -135,6 +142,8 @@ impl FakeCrates {
     pub const REQUEST: LocationRequestId = LocationRequestId::from_bytes([0xd4; 16]);
     /// When every invite link from `create_invite` expires.
     pub const INVITE_EXPIRES: UnixSeconds = UnixSeconds::new(1_800_000_000);
+    /// The host of the server `check_setup_link` names until a test sets another answer.
+    pub const SETUP_SERVER: &str = "pingers.test";
 
     /// Fakes with no Parties, no Meetups, an empty wake outcome, sharing on with the gate
     /// answering `Share`, and a reachable relay.
@@ -176,6 +185,10 @@ impl FakeCrates {
             meetups: MeetupsSection::default(),
             section_reads: 0,
             priority_notice: None,
+            setup_check: SetupCheck::Ready {
+                server: Host::new(Self::SETUP_SERVER)?,
+            },
+            setup_outcome: SetupOutcome::SetUp,
         };
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
@@ -234,6 +247,17 @@ impl FakeCrates {
     /// What every later `report_push_priority` answers (`None` until set).
     pub fn set_priority_notice(&self, notice: Option<pingers_client::Notice>) {
         self.lock().priority_notice = notice;
+    }
+
+    /// What every later `check_setup_link` answers ([`SetupCheck::Ready`] on
+    /// [`FakeCrates::SETUP_SERVER`] until set).
+    pub fn set_setup_check(&self, check: SetupCheck) {
+        self.lock().setup_check = check;
+    }
+
+    /// What every later `use_setup_link` answers ([`SetupOutcome::SetUp`] until set).
+    pub fn set_setup_outcome(&self, outcome: SetupOutcome) {
+        self.lock().setup_outcome = outcome;
     }
 
     /// pingers-meetup-session's section from now on.
@@ -477,6 +501,23 @@ impl SyncPort for FakeCrates {
     async fn register_with_code(&self, code: SecretText) -> Result<(), ClientError> {
         let call = CrateCall::RegisterWithCode(code.expose().to_owned());
         self.answer(CrateName::Sync, call, ())
+    }
+
+    /// Answers what [`FakeCrates::set_setup_check`] last set.
+    async fn check_setup_link(&self, link: &SetupPayload) -> Result<SetupCheck, ClientError> {
+        let check = self.lock().setup_check.clone();
+        let call = CrateCall::CheckSetupLink(link.server.as_str().to_owned());
+        self.answer(CrateName::Sync, call, check)
+    }
+
+    /// Answers what [`FakeCrates::set_setup_outcome`] last set.
+    async fn use_setup_link(&self, link: SetupPayload) -> Result<SetupOutcome, ClientError> {
+        let outcome = self.lock().setup_outcome.clone();
+        let call = CrateCall::UseSetupLink(
+            link.server.as_str().to_owned(),
+            link.registration_code.expose().to_owned(),
+        );
+        self.answer(CrateName::Sync, call, outcome)
     }
 
     async fn section(&self) -> Result<ServerSection, ClientError> {

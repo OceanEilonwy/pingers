@@ -51,6 +51,60 @@ fn setup_steps_chain_with_their_dots() {
 }
 
 #[test]
+fn the_setup_link_step_says_what_its_buttons_do() {
+    let confirm = setup_link_view(SetupLinkState::Confirm {
+        server: "pingers.example.org".into(),
+    });
+    assert_eq!(confirm.heading, "Set up Pingers on this phone");
+    assert!(confirm.body.contains("pingers.example.org"));
+    assert_eq!(
+        (
+            confirm.primary.as_deref(),
+            confirm.action,
+            confirm.not_now.as_deref()
+        ),
+        (
+            Some("Set up"),
+            Some(SetupLinkAction::SetUp),
+            Some("Not now")
+        )
+    );
+    assert!(!confirm.busy);
+
+    let working = setup_link_view(SetupLinkState::Working {
+        server: "pingers.example.org".into(),
+    });
+    assert!(working.busy);
+    assert_eq!(
+        (working.primary, working.action, working.not_now),
+        (None, None, None)
+    );
+
+    let offline = setup_link_view(SetupLinkState::Unreachable {
+        server: "pingers.example.org".into(),
+    });
+    assert_eq!(offline.action, Some(SetupLinkAction::TryAgain));
+    let other = setup_link_view(SetupLinkState::OtherServer {
+        app_server: "pingers.example.org".into(),
+        link_server: "friends.example".into(),
+    });
+    assert!(other.body.contains("friends.example"));
+    assert_eq!(other.action, Some(SetupLinkAction::Leave));
+    assert_eq!(
+        setup_link_view(SetupLinkState::SetUp).primary.as_deref(),
+        Some("Continue")
+    );
+}
+
+#[test]
+fn a_setup_link_state_without_a_host_says_the_link_does_not_work() {
+    assert_eq!(
+        setup_link_view(SetupLinkState::Confirm { server: " ".into() }),
+        setup_link_view(SetupLinkState::Broken)
+    );
+}
+
+#[test]
 fn the_hub_converts_the_phones_facts() -> Result<(), CoreError> {
     let view = snapshot()?.device_settings(&DevicePlatform {
         push_service: PushServiceInfo::PushApp {

@@ -52,7 +52,7 @@ mod request;
 mod server;
 mod tokens;
 
-pub use account::{BEARER_LIFETIME, CodeSource, LeafStanding, Prepared};
+pub use account::{BEARER_LIFETIME, CodeSource, CodeStanding, LeafStanding, Prepared};
 pub use board::NewLease;
 pub use budget::{MIN_REQUEST_TIME, WakeBudget};
 pub use clock::{ClockOffset, ClockStatus, MAX_CORRECTION, MAX_SKEW};

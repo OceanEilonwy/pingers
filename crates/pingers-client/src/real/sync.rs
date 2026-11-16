@@ -22,8 +22,8 @@ use pingers_parties::{LeaveRequest, Outbound, OutgoingCommit, PartiesError, Part
 use pingers_presence::{MailboxPurpose, OutgoingKnock};
 use pingers_proto::{
     AppMessage, BoardCursor, BoardPage, CommitRequest, CommitResponse, CreateGroup, Epoch, GroupId,
-    GroupLogEntry, MailboxId, Padded, SecretText, SequenceNumber, SizeClass, SubscriptionId,
-    WelcomeBytes,
+    GroupLogEntry, MailboxId, Padded, SecretText, SequenceNumber, SetupPayload, SizeClass,
+    SubscriptionId, WelcomeBytes,
 };
 use pingers_store::{MailboxPurpose as StoredPurpose, WakePushes as StoredPushes};
 use pingers_sync::{
@@ -38,7 +38,7 @@ use super::Backend;
 use super::party_log::{self, PartyLog};
 use super::records::{self, Key};
 use super::registrations::priority_window;
-use crate::ports::{ServerSection, SyncPort};
+use crate::ports::{ServerSection, SetupCheck, SetupOutcome, SyncPort};
 use crate::snapshot::{RelayStatus, WakePushes};
 use crate::{ClientError, Fallback, Notice, PushTokens, Unavailable};
 
@@ -64,6 +64,9 @@ const FLUSH_ROUNDS: usize = 3;
 pub(crate) struct Online {
     pub(crate) engine: Arc<SyncEngine>,
     pub(crate) registration_code: Option<SecretText>,
+    /// The build's gateway pins; `None` pins on first use. A setup link's keys are checked
+    /// against them.
+    pub(crate) gateway_pins: Option<pingers_ohttp::KeyPins>,
 }
 
 /// The engine and the outbox.
@@ -78,6 +81,8 @@ pub(crate) struct Net {
     pub(super) learned: super::push::Learned,
     /// The build's registration code for this device's first registration, if any.
     registration_code: Option<SecretText>,
+    /// The build's gateway pins (`Online::gateway_pins`).
+    pub(super) gateway_pins: Option<pingers_ohttp::KeyPins>,
 }
 
 impl Net {
@@ -86,9 +91,13 @@ impl Net {
         online: Option<Online>,
         learned: super::push::Learned,
     ) -> Self {
-        let (engine, registration_code) = match online {
-            Some(online) => (Some(online.engine), online.registration_code),
-            None => (None, None),
+        let (engine, registration_code, gateway_pins) = match online {
+            Some(online) => (
+                Some(online.engine),
+                online.registration_code,
+                online.gateway_pins,
+            ),
+            None => (None, None, None),
         };
         Self {
             backend,
@@ -99,6 +108,7 @@ impl Net {
             key_mismatch: AtomicBool::new(false),
             learned,
             registration_code,
+            gateway_pins,
         }
     }
 
@@ -686,6 +696,14 @@ impl SyncPort for Sync {
             .offer_registration_code(code, CodeSource::Invite)
             .await?;
         self.0.require_account().await
+    }
+
+    async fn check_setup_link(&self, link: &SetupPayload) -> Result<SetupCheck, ClientError> {
+        super::setup::check(&self.0, link).await
+    }
+
+    async fn use_setup_link(&self, link: SetupPayload) -> Result<SetupOutcome, ClientError> {
+        super::setup::set_up(&self.0, link).await
     }
 
     async fn check_reachability(&self) -> Result<RelayStatus, ClientError> {

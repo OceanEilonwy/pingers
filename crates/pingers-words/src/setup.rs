@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! First run, in words (canvas `SetupWelcome`, `SetupBackground`; the notifications step uses
-//! the same layout).
+//! the same layout), and the first-phone setup link's step.
 
-use pingers_screens::setup::{Setup, SetupStep};
+use pingers_screens::setup::{Setup, SetupLink, SetupLinkAction, SetupStep};
 
 use crate::Language;
 
@@ -112,8 +112,116 @@ pub fn setup(language: Language, view: &Setup) -> SetupText {
     }
 }
 
+/// The first-phone setup link's step, in words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SetupLinkText {
+    /// "Set up Pingers on this phone".
+    pub heading: String,
+    /// What it does, or what happened and what to do next.
+    pub body: String,
+    /// The main button ("Set up", "Try again", "Continue", "Close"); `None` while the
+    /// account is being made.
+    pub primary: Option<String>,
+    /// "Not now", while using the link is still on offer.
+    pub not_now: Option<String>,
+}
+
+/// Where the owner finds a new code: the page their appliance shows.
+const SCAN_AGAIN: &str = "Open the setup page on your appliance again and scan its code.";
+
+/// The first-phone setup link's step, in words.
+#[must_use]
+pub fn setup_link(language: Language, view: &SetupLink) -> SetupLinkText {
+    let Language::English = language;
+    let (heading, body) = match view {
+        SetupLink::Confirm { server } => (
+            "Set up Pingers on this phone".to_owned(),
+            format!(
+                "This makes this phone's account on {} with the code from your appliance. This \
+                 phone's invite links then carry the code, so the friends you invite can make \
+                 their accounts too.",
+                server.as_str()
+            ),
+        ),
+        SetupLink::Working { server } => (
+            "Setting up this phone".to_owned(),
+            format!("Making this phone's account on {}…", server.as_str()),
+        ),
+        SetupLink::SetUp => (
+            "This phone is set up".to_owned(),
+            "It has its account now. When you invite friends, your invite links bring them the \
+             code."
+                .to_owned(),
+        ),
+        SetupLink::AlreadySetUp => (
+            "This phone is already set up".to_owned(),
+            "It has its account on this server, so it doesn't need the code.".to_owned(),
+        ),
+        SetupLink::Refused => (
+            "The server didn't accept this code".to_owned(),
+            format!("It may have been reset since the setup page showed it. {SCAN_AGAIN}"),
+        ),
+        SetupLink::OtherServer { app, link } => (
+            "This app is set up for another server".to_owned(),
+            format!(
+                "This link is for {link}, but this app works with {app}. Install the Pingers app \
+                 made for {link}, then scan the code again.",
+                link = link.as_str(),
+                app = app.as_str(),
+            ),
+        ),
+        SetupLink::BuildKeysDiffer { server } => (
+            "This app doesn't have your server's keys yet".to_owned(),
+            format!(
+                "The keys in this link aren't built into this app, so nothing was sent to {}. \
+                 Install the app build made after your server's keys were copied into it, then \
+                 scan the code again.",
+                server.as_str()
+            ),
+        ),
+        SetupLink::ServerKeysDiffer { server } => (
+            "The server's keys don't match this link".to_owned(),
+            format!(
+                "{} answered with other keys than the ones in this link, so the code wasn't \
+                 sent. Check that you scanned your own appliance's setup page, then try again \
+                 later.",
+                server.as_str()
+            ),
+        ),
+        SetupLink::Unreachable { server } => (
+            "Couldn't reach the server".to_owned(),
+            format!(
+                "This phone couldn't reach {}. Check that it's online, then try again.",
+                server.as_str()
+            ),
+        ),
+        SetupLink::Broken => (
+            "This setup link doesn't work".to_owned(),
+            format!("Part of it may be missing. {SCAN_AGAIN}"),
+        ),
+    };
+    let primary = view.primary().map(|action| {
+        match (action, view) {
+            (SetupLinkAction::SetUp, _) => "Set up",
+            (SetupLinkAction::TryAgain, _) => "Try again",
+            (SetupLinkAction::Leave, SetupLink::SetUp | SetupLink::AlreadySetUp) => "Continue",
+            (SetupLinkAction::Leave, _) => "Close",
+        }
+        .to_owned()
+    });
+    SetupLinkText {
+        heading,
+        body,
+        primary,
+        not_now: view.can_put_off().then(|| "Not now".to_owned()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
+
+    use pingers_client::snapshot::Host;
     use pingers_screens::setup::setup as screen;
 
     use super::*;
@@ -161,5 +269,79 @@ mod tests {
         assert_eq!(text.heading, "Know when friends are at a Spot");
         assert_eq!(text.choices, ["Allow", "Don't allow"]);
         assert_eq!(text.progress, "Third of three permissions");
+    }
+
+    fn host(text: &str) -> Result<Host, pingers_client::snapshot::SnapshotError> {
+        Host::new(text)
+    }
+
+    #[test]
+    fn the_setup_link_asks_with_the_servers_name()
+    -> Result<(), pingers_client::snapshot::SnapshotError> {
+        let text = setup_link(
+            EN,
+            &SetupLink::Confirm {
+                server: host("pingers.example.org")?,
+            },
+        );
+        assert_eq!(text.heading, "Set up Pingers on this phone");
+        assert_eq!(
+            text.body,
+            "This makes this phone's account on pingers.example.org with the code from your \
+             appliance. This phone's invite links then carry the code, so the friends you invite \
+             can make their accounts too."
+        );
+        assert_eq!(text.primary.as_deref(), Some("Set up"));
+        assert_eq!(text.not_now.as_deref(), Some("Not now"));
+        Ok(())
+    }
+
+    #[test]
+    fn the_setup_link_says_what_happened_and_what_to_do()
+    -> Result<(), pingers_client::snapshot::SnapshotError> {
+        let server = host("pingers.example.org")?;
+        let working = setup_link(
+            EN,
+            &SetupLink::Working {
+                server: server.clone(),
+            },
+        );
+        assert_eq!(working.primary, None);
+        assert_eq!(working.not_now, None);
+        let done = setup_link(EN, &SetupLink::SetUp);
+        assert_eq!(done.primary.as_deref(), Some("Continue"));
+        assert_eq!(done.not_now, None);
+        assert_eq!(
+            setup_link(EN, &SetupLink::AlreadySetUp).heading,
+            "This phone is already set up"
+        );
+        let refused = setup_link(EN, &SetupLink::Refused);
+        assert_eq!(refused.heading, "The server didn't accept this code");
+        assert!(refused.body.ends_with(SCAN_AGAIN));
+        assert_eq!(refused.primary.as_deref(), Some("Close"));
+        let other = setup_link(
+            EN,
+            &SetupLink::OtherServer {
+                app: server.clone(),
+                link: host("friends.example")?,
+            },
+        );
+        assert_eq!(
+            other.body,
+            "This link is for friends.example, but this app works with pingers.example.org. \
+             Install the Pingers app made for friends.example, then scan the code again."
+        );
+        let keys = setup_link(
+            EN,
+            &SetupLink::BuildKeysDiffer {
+                server: server.clone(),
+            },
+        );
+        assert_eq!(keys.heading, "This app doesn't have your server's keys yet");
+        assert!(keys.body.contains("Install the app build made after"));
+        let offline = setup_link(EN, &SetupLink::Unreachable { server });
+        assert_eq!(offline.primary.as_deref(), Some("Try again"));
+        assert_eq!(offline.not_now.as_deref(), Some("Not now"));
+        Ok(())
     }
 }

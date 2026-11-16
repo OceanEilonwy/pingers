@@ -67,6 +67,18 @@ pub enum CodeSource {
     Invite,
 }
 
+/// What offering a registration code would come to ([`SyncEngine::code_standing`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+pub enum CodeStanding {
+    /// The account is registered: no code is needed or taken.
+    Registered,
+    /// The server refused this very code before: it is not sent again.
+    RefusedBefore,
+    /// Offering it would have it sent with the next registration.
+    Open,
+}
+
 /// This device's membership leaf.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use]
@@ -165,6 +177,27 @@ impl SyncEngine {
                 }
             };
             Ok(accounts.set_registration(&offered)?)
+        })
+        .await
+    }
+
+    /// What offering `code` would come to, read from the store without sending anything: so a
+    /// screen can say a code was refused before instead of offering it again.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Store`].
+    pub async fn code_standing(&self, code: SecretText) -> Result<CodeStanding, SyncError> {
+        blocking(&self.database, move |session| {
+            Ok(match session.account().registration()? {
+                AccountRegistration::Registered { .. } => CodeStanding::Registered,
+                AccountRegistration::Refused {
+                    code: Some(refused),
+                } if bool::from(refused.ct_eq(&code)) => CodeStanding::RefusedBefore,
+                AccountRegistration::Pending { .. } | AccountRegistration::Refused { .. } => {
+                    CodeStanding::Open
+                }
+            })
         })
         .await
     }

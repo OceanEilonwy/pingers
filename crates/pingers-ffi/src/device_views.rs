@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The device-wide screens of the design canvas's section 4, as UniFFI records with their
-//! words from pingers-words: first run, the Settings hub, Quiet hours, Zone times, Wake-ups,
-//! what Home says about wake-ups, the notice at the top of Home, and Privacy's words.
+//! words from pingers-words: first run, the first-phone setup link's step, the Settings hub,
+//! Quiet hours, Zone times, Wake-ups, what Home says about wake-ups, the notice at the top of
+//! Home, and Privacy's words.
 //!
 //! The phone's own facts (which push app wakes Pingers, map downloads, battery and
 //! notification settings, the last wake-up) come in from the app as records; the core's
@@ -98,6 +99,180 @@ pub fn setup_view(step: SetupStep) -> SetupView {
         progress: text.progress,
         primary: text.primary,
         not_now: text.not_now,
+    }
+}
+
+// ---------------------------------------------------------------- The first-phone setup link
+
+/// The first-phone setup link's step: what [`Core::check_setup_link`](crate::Core) answers
+/// (`Confirm`, or why the step stops before asking), what
+/// [`Core::use_setup_link`](crate::Core) answers, and `Working`, which the app shows while that
+/// call runs. Servers are named by host ("pingers.example.org").
+#[derive(Clone, Debug, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum SetupLinkState {
+    /// Asks before making the account.
+    Confirm {
+        /// The server the account would be made on.
+        server: String,
+    },
+    /// The account is being made.
+    Working {
+        /// The server.
+        server: String,
+    },
+    /// The account was made with the link's code.
+    SetUp,
+    /// The account was made before; nothing was offered.
+    AlreadySetUp,
+    /// The server refused this code, now or before (then it was not sent again).
+    Refused,
+    /// The link is for another server than the app's; nothing was sent.
+    OtherServer {
+        /// The app's server.
+        app_server: String,
+        /// The link's server.
+        link_server: String,
+    },
+    /// The build pins keys and the link's served keys are not among them; nothing was sent.
+    BuildKeysDiffer {
+        /// The server.
+        server: String,
+    },
+    /// The gateway key the relay served is not the link's; the code was not sent.
+    ServerKeysDiffer {
+        /// The server.
+        server: String,
+    },
+    /// The relay or the server did not answer; the user may tap "Try again".
+    Unreachable {
+        /// The server.
+        server: String,
+    },
+    /// The link does not decode.
+    Broken,
+}
+
+impl From<screens::setup::SetupLink> for SetupLinkState {
+    fn from(link: screens::setup::SetupLink) -> Self {
+        use screens::setup::SetupLink;
+        let name = |host: &pingers_client::snapshot::Host| host.as_str().to_owned();
+        match link {
+            SetupLink::Confirm { server } => Self::Confirm {
+                server: name(&server),
+            },
+            SetupLink::Working { server } => Self::Working {
+                server: name(&server),
+            },
+            SetupLink::SetUp => Self::SetUp,
+            SetupLink::AlreadySetUp => Self::AlreadySetUp,
+            SetupLink::Refused => Self::Refused,
+            SetupLink::OtherServer { app, link } => Self::OtherServer {
+                app_server: name(&app),
+                link_server: name(&link),
+            },
+            SetupLink::BuildKeysDiffer { server } => Self::BuildKeysDiffer {
+                server: name(&server),
+            },
+            SetupLink::ServerKeysDiffer { server } => Self::ServerKeysDiffer {
+                server: name(&server),
+            },
+            SetupLink::Unreachable { server } => Self::Unreachable {
+                server: name(&server),
+            },
+            SetupLink::Broken => Self::Broken,
+        }
+    }
+}
+
+impl From<SetupLinkState> for screens::setup::SetupLink {
+    /// A host that is not one (the app passes back what the core gave it, so never) makes the
+    /// step say the link does not work.
+    fn from(state: SetupLinkState) -> Self {
+        use pingers_client::snapshot::Host;
+        let host = |text: &str| Host::new(text).ok();
+        let server = |text: &str, make: fn(Host) -> Self| host(text).map_or(Self::Broken, make);
+        match state {
+            SetupLinkState::Confirm { server: text } => {
+                server(&text, |server| Self::Confirm { server })
+            }
+            SetupLinkState::Working { server: text } => {
+                server(&text, |server| Self::Working { server })
+            }
+            SetupLinkState::SetUp => Self::SetUp,
+            SetupLinkState::AlreadySetUp => Self::AlreadySetUp,
+            SetupLinkState::Refused => Self::Refused,
+            SetupLinkState::OtherServer {
+                app_server,
+                link_server,
+            } => match (host(&app_server), host(&link_server)) {
+                (Some(app), Some(link)) => Self::OtherServer { app, link },
+                _ => Self::Broken,
+            },
+            SetupLinkState::BuildKeysDiffer { server: text } => {
+                server(&text, |server| Self::BuildKeysDiffer { server })
+            }
+            SetupLinkState::ServerKeysDiffer { server: text } => {
+                server(&text, |server| Self::ServerKeysDiffer { server })
+            }
+            SetupLinkState::Unreachable { server: text } => {
+                server(&text, |server| Self::Unreachable { server })
+            }
+            SetupLinkState::Broken => Self::Broken,
+        }
+    }
+}
+
+/// What the setup link step's main button does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum SetupLinkAction {
+    /// [`Core::use_setup_link`](crate::Core) ("Set up").
+    SetUp,
+    /// [`Core::use_setup_link`](crate::Core) again ("Try again"): only when tapped.
+    TryAgain,
+    /// Leaves the step, on to first run or Home ("Continue", "Close").
+    Leave,
+}
+
+impl From<screens::setup::SetupLinkAction> for SetupLinkAction {
+    fn from(action: screens::setup::SetupLinkAction) -> Self {
+        match action {
+            screens::setup::SetupLinkAction::SetUp => Self::SetUp,
+            screens::setup::SetupLinkAction::TryAgain => Self::TryAgain,
+            screens::setup::SetupLinkAction::Leave => Self::Leave,
+        }
+    }
+}
+
+/// The setup link step, in words, laid out like a first-run step.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct SetupLinkView {
+    /// "Set up Pingers on this phone".
+    pub heading: String,
+    /// What it does, or what happened and what to do next.
+    pub body: String,
+    /// The main button's words; `None` while the account is being made.
+    pub primary: Option<String>,
+    /// What the main button does.
+    pub action: Option<SetupLinkAction>,
+    /// "Not now", which leaves the step without using the link.
+    pub not_now: Option<String>,
+    /// Whether the account is being made: a progress indicator instead of buttons.
+    pub busy: bool,
+}
+
+/// The setup link step for `state`.
+#[uniffi::export]
+#[must_use]
+pub fn setup_link_view(state: SetupLinkState) -> SetupLinkView {
+    let screen = screens::setup::SetupLink::from(state);
+    let text = pingers_words::setup::setup_link(LANGUAGE, &screen);
+    SetupLinkView {
+        heading: text.heading,
+        body: text.body,
+        primary: text.primary,
+        action: screen.primary().map(SetupLinkAction::from),
+        not_now: text.not_now,
+        busy: matches!(screen, screens::setup::SetupLink::Working { .. }),
     }
 }
 

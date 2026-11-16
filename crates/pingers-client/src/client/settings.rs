@@ -4,9 +4,9 @@
 
 use super::Client;
 use crate::ClientError;
-use crate::ports::SettingChange;
+use crate::ports::{SettingChange, SetupCheck, SetupOutcome};
 use crate::snapshot::{RelayStatus, WakePushes};
-use pingers_proto::SecretText;
+use pingers_proto::{SecretText, SetupPayload};
 
 impl Client {
     /// Changes a device-wide privacy setting.
@@ -61,6 +61,28 @@ impl Client {
     /// [`ClientError::Unavailable`] without an instance.
     pub async fn register_with_code(&self, code: SecretText) -> Result<(), ClientError> {
         self.published(self.crates.sync.register_with_code(code).await)
+            .await
+    }
+
+    /// What a first-phone setup link is to this device, for its confirm screen; sends nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] or [`ClientError::Records`]; [`ClientError::Unavailable`] without
+    /// an instance.
+    pub async fn check_setup_link(&self, link: &SetupPayload) -> Result<SetupCheck, ClientError> {
+        self.crates.sync.check_setup_link(link).await
+    }
+
+    /// Uses a first-phone setup link (its confirm screen's "Set up"): makes this device's
+    /// account with its code, once its server and keys check out.
+    ///
+    /// # Errors
+    ///
+    /// A storage failure; [`ClientError::Unavailable`] without an instance. The network's
+    /// answers are outcomes, not errors.
+    pub async fn use_setup_link(&self, link: SetupPayload) -> Result<SetupOutcome, ClientError> {
+        self.published(self.crates.sync.use_setup_link(link).await)
             .await
     }
 }
