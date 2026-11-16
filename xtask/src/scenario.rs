@@ -1271,6 +1271,7 @@ fn through_landing_page(device: &Device, link: &str) -> Result<String> {
     let joined = Find::tag("join_ask").or(Text::Is("Ask to join".into()));
     let deadline = Deadline::after(NETWORK);
     let mut tapped_open = false;
+    let mut page_without_button: Option<Deadline> = None;
     loop {
         let screen = device.screen()?;
         if screen.find(&joined).is_some() {
@@ -1303,6 +1304,22 @@ fn through_landing_page(device: &Device, link: &str) -> Result<String> {
         } else if let Some(button) = screen.find(&open) {
             device.tap(button)?;
             tapped_open = true;
+        } else if screen
+            .find(&Find::text(Text::StartsWith(
+                "Don't have Pingers yet".into(),
+            )))
+            .is_some()
+        {
+            // The page is up but its script has not shown the button: right after the
+            // certificate warning, Chrome may have loaded the page without it. Once a while,
+            // load the link again.
+            let reload = *page_without_button.get_or_insert_with(|| Deadline::after(UI));
+            if reload.passed() {
+                device.shell(&format!(
+                    "am start -W -a android.intent.action.VIEW -d '{link}' {CHROME}"
+                ))?;
+                page_without_button = None;
+            }
         }
         pause(Duration::from_secs(1));
     }
