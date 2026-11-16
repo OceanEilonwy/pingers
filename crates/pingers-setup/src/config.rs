@@ -344,6 +344,20 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_code_may_be_128_bytes_and_no_more() {
+        let code =
+            |length: usize| file().replace("0123456789abcdef0123456789abcdef", &"c".repeat(length));
+        assert!(Config::parse(&code(128)).is_ok());
+        assert!(matches!(
+            Config::parse(&code(129)),
+            Err(ConfigError::Field {
+                field: "registration_code",
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn domains_are_checked_label_by_label() {
         for good in ["example.org", "a-b.example.co.uk", "x1.io"] {
             assert!(is_domain(good), "{good}");

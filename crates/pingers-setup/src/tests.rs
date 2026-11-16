@@ -387,3 +387,95 @@ async fn an_untrusted_certificate_fails_rather_than_passing() -> TestResult {
     assert_eq!(first.state, checks::State::Failed);
     Ok(())
 }
+
+/// The fakes' config with the map host's loopback origin at `maps`.
+async fn with_map_host(maps: SocketAddr) -> Result<Config, Box<dyn std::error::Error>> {
+    let text = fake_text().await?;
+    let start = text
+        .find("map_host_local = \"")
+        .ok_or("no map_host_local")?;
+    let line_end = text
+        .get(start..)
+        .and_then(|rest| rest.find('\n'))
+        .ok_or("no line end")?;
+    let mut changed = text.clone();
+    changed.replace_range(
+        start..start.saturating_add(line_end),
+        &format!("map_host_local = \"http://{maps}\""),
+    );
+    Ok(Config::parse(&changed)?)
+}
+
+/// A catalog of exactly `length` bytes with no regions.
+fn catalog_of(length: usize) -> Result<String, &'static str> {
+    let empty = r#"{"regions":[],"pad":""}"#;
+    let padding = length.checked_sub(empty.len()).ok_or("too short")?;
+    Ok(format!(
+        r#"{{"regions":[],"pad":"{}"}}"#,
+        "p".repeat(padding)
+    ))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_body_up_to_the_limit_is_read_and_one_byte_more_is_refused() -> TestResult {
+    for (length, read) in [
+        (checks::MAX_BODY_BYTES, true),
+        (checks::MAX_BODY_BYTES.saturating_add(1), false),
+    ] {
+        let catalog = catalog_of(length)?;
+        let maps = serve_fake(Router::new().route(
+            "/catalog.json",
+            get(move || std::future::ready(catalog.clone())),
+        ))
+        .await?;
+        let config = with_map_host(maps).await?;
+        let facts = checks::gather(&config, &Clients::new()?).await;
+        assert_eq!(
+            facts.map_regions.is_ok(),
+            read,
+            "{length}: {:?}",
+            facts.map_regions
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_public_path_that_answers_when_it_must_not_fails() -> TestResult {
+    let (gateway, push) = served_keys()?;
+    let routes = public_routes(gateway, push).route(
+        "/ohttp",
+        axum::routing::post(|| std::future::ready("gateway")),
+    );
+    let (address, der) = tls_fake(routes, &[rustls::NamedGroup::X25519MLKEM768], true).await?;
+    let config = at_localhost(&fake_text().await?, address.port())?;
+    let facts = checks::gather(&config, &Clients::trusting(&[der])?).await;
+    let gateway_hidden = facts.public.get(5).ok_or("no check")?;
+    assert_eq!(
+        gateway_hidden.label,
+        "The gateway is not reachable directly"
+    );
+    assert_eq!(gateway_hidden.state, checks::State::Failed);
+    assert!(
+        gateway_hidden
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("200"))
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_address_that_is_no_url_fails_rather_than_being_untried() -> TestResult {
+    let text = fake_text().await?.replace(
+        "https://maps.example.invalid",
+        "https://maps example.invalid",
+    );
+    let facts = checks::gather(&Config::parse(&text)?, &Clients::new()?).await;
+    // The map host's TLS check (the fourth) and its answer (the seventh).
+    for index in [3, 6] {
+        let check = facts.public.get(index).ok_or("no check")?;
+        assert_eq!(check.state, checks::State::Failed, "{check:?}");
+    }
+    Ok(())
+}

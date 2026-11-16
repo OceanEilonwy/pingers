@@ -256,3 +256,30 @@ fn a_long_detail_is_cut_to_nodos_limit() {
     let exact = crate::checks::Check::new("TLS", State::Ok, "y".repeat(512));
     assert_eq!(exact.detail.map(|detail| detail.len()), Some(512));
 }
+
+#[test]
+fn firebase_is_done_only_when_the_relay_serves_fcm() -> TestResult {
+    let config = config()?;
+    let state = |fcm: bool| {
+        let facts = Facts {
+            push_relay: Ok(PushRelayFacts { pins: pins(3), fcm }),
+            ..running()
+        };
+        build(&config, &facts)
+            .steps
+            .into_iter()
+            .find(|step| step.title == "Firebase wake-ups")
+            .and_then(|step| {
+                step.items.into_iter().find_map(|item| match item {
+                    Item::Check { state, detail, .. } => Some((state, detail)),
+                    _ => None,
+                })
+            })
+    };
+    // A passing check has no detail at all, not an empty one.
+    assert_eq!(state(true), Some((CheckState::Ok, None)));
+    let unipush = state(false).ok_or("no check")?;
+    assert_eq!(unipush.0, CheckState::Failed);
+    assert!(unipush.1.is_some());
+    Ok(())
+}

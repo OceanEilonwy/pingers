@@ -28,7 +28,7 @@ use crate::config::{Config, Site};
 const TIMEOUT: Duration = Duration::from_secs(6);
 
 /// Larger than any key config, push relay config or catalog this page reads.
-const MAX_BODY_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_BODY_BYTES: usize = 256 * 1024;
 
 /// A check's outcome, as the owner page shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
