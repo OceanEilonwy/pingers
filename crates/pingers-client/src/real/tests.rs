@@ -1068,3 +1068,72 @@ async fn parameters_learned_from_a_look_are_not_fetched_again() -> TestResult {
     );
     Ok(())
 }
+
+/// A relay that answers its key config endpoint with an error (here: its gateway is gone) fails
+/// the check with a transport error, not "no relay": the Party's settings must still show the
+/// relay as unreachable, not the last good answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_relay_answering_with_an_error_shows_as_unreachable() -> TestResult {
+    use crate::snapshot::RelayStatus;
+
+    let store = store()?;
+    // A port nothing listens on any more, for the relay's gateway.
+    let gone = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let relay = tokio::spawn(pingers_testkit::harness::run_ohttp_relay(
+        listener,
+        gone,
+        async move {
+            drop(stopped.await);
+        },
+    ));
+    let instance = super::Instance {
+        relay: format!("http://{address}/ohttp"),
+        ..unreachable()?
+    };
+    let net = Arc::new(Net::new(
+        Arc::clone(&store.backend),
+        super::servers::Servers::new(Arc::clone(&store.backend), Some(instance), None),
+    ));
+    let link = net.servers.built_in_link().await?;
+    link.observe(&Ok::<(), pingers_sync::SyncError>(()));
+    assert_eq!(link.relay_status(), RelayStatus::Reachable);
+
+    let answer = super::sync::Sync(Arc::clone(&net))
+        .check_reachability()
+        .await;
+    // The relay may have stopped on its own; either way it is told to.
+    let _sent = stop.send(());
+    relay.await?;
+    assert_eq!(answer?, RelayStatus::Unreachable);
+    assert_eq!(link.relay_status(), RelayStatus::Unreachable);
+    Ok(())
+}
+
+/// What a server's traffic said becomes one notice each, once: a clock off by more than the
+/// correction allows, and a key mismatch, whether the registry or the link noticed it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_server_notice_is_raised_once() -> TestResult {
+    use pingers_sync::{ClockOffset, SyncError};
+
+    use crate::Notice;
+
+    let store = store()?;
+    let net = offline(&store);
+    let link = net.servers.built_in_link().await?;
+    let now = store.clock.now();
+    let skewed = UnixSeconds::new(now.get().saturating_add(3_600));
+    link.observe(&Err::<(), _>(SyncError::ClockSkew {
+        offset: ClockOffset::between(skewed, now),
+    }));
+    link.observe(&Err::<(), _>(SyncError::RelayKeyMismatch));
+    net.servers.raise_key_mismatch();
+    assert_eq!(
+        net.take_notices(),
+        [Notice::RelayKeyMismatch, Notice::ClockSkew]
+    );
+    assert!(net.take_notices().is_empty());
+    Ok(())
+}
