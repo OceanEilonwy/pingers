@@ -720,6 +720,48 @@ async fn a_new_process_seals_for_a_server_when_a_party_there_needs_it() -> TestR
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn with_two_reasons_wake_pushes_are_downgraded_for_the_built_in_server_s() -> TestResult {
+    use pingers_client::snapshot::{PushDelivery, PushDowngrade};
+
+    let world = World::start()?;
+    let (ana, _on_a, _on_b) = ana_on_both(&world).await?;
+    // B's push relay key no longer matches the pin recorded with B; A's build pins no push
+    // relay key at all. Both servers fail to seal, each for its own reason.
+    {
+        let database = Database::open(&ana.database, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+        let session = database.session()?;
+        let b = world.b_server()?;
+        let mut record = session
+            .servers()
+            .list()?
+            .into_iter()
+            .find(|record| record.server == b)
+            .ok_or(TestError::Setup("B is not recorded"))?;
+        record.push_relay_pins = vec![KeyConfigHash::from_bytes([9; 32])];
+        session.servers().put(&record)?;
+    }
+    let ana = ana.reopen(&world, 400).await?;
+    ana.platform
+        .set_push_registration(Some(pingers_testkit::PushRegistration {
+            platform: pingers_proto::PushPlatform::UnifiedPush,
+            token: pingers_proto::PushToken::from_bytes(b"https://push.example/up/ana".to_vec()),
+        }));
+    assert!(
+        ana.client
+            .set_wake_pushes(pingers_client::snapshot::WakePushes::On)
+            .await
+            .is_err(),
+        "no server could be sealed for"
+    );
+    ana.client.publish_snapshot().await?;
+    assert_eq!(
+        ana.client.snapshot().push_delivery,
+        PushDelivery::Downgraded(PushDowngrade::NoPushRelay)
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wake_pushes_go_on_for_the_servers_whose_push_relay_can_be_sealed_to() -> TestResult {
     let world = World::start()?;
     let (ana, _on_a, _on_b) = ana_on_both(&world).await?;
