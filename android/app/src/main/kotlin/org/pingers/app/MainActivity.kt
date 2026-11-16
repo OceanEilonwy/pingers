@@ -36,10 +36,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
@@ -273,6 +275,26 @@ private fun App(repo: PingersRepository, nav: Navigator, pending: Intent?, varia
     }
 }
 
+/** How often a screen waiting on a join reads the mailboxes while it shows. */
+private const val CHECK_JOINS_EVERY_MS = 5_000L
+
+/**
+ * Reads what joins wait for every few seconds while the screen shows and the app is in front:
+ * Asked to join learns it was let in, Invite people sees who asked, even with no wake-up push.
+ */
+@Composable
+private fun CheckJoinsWhileShown(repo: PingersRepository) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                repo.checkJoins()
+                delay(CHECK_JOINS_EVERY_MS)
+            }
+        }
+    }
+}
+
 @Composable
 private fun Screen(route: Route, repo: PingersRepository, nav: Navigator, variant: String?, simulateAlert: () -> Unit) {
     when (route) {
@@ -283,10 +305,16 @@ private fun Screen(route: Route, repo: PingersRepository, nav: Navigator, varian
             NewPartyScreen(repo.newParty.collectAsStateWithLifecycle().value, repo, nav)
         }
         Route.Advanced -> AdvancedScreen(repo.advanced.collectAsStateWithLifecycle().value, repo, nav)
-        Route.Invite -> InviteScreen(repo.invite.collectAsStateWithLifecycle().value, repo, nav)
+        Route.Invite -> {
+            CheckJoinsWhileShown(repo)
+            InviteScreen(repo.invite.collectAsStateWithLifecycle().value, repo, nav)
+        }
         Route.JoinRequest -> JoinRequestScreen(repo.joinRequest.collectAsStateWithLifecycle().value, repo, nav)
         Route.OpenInvite -> OpenInviteScreen(repo.openInvite.collectAsStateWithLifecycle().value, repo, nav)
-        Route.AskedToJoin -> AskedToJoinScreen(repo.askedToJoin.collectAsStateWithLifecycle().value, repo, nav)
+        Route.AskedToJoin -> {
+            CheckJoinsWhileShown(repo)
+            AskedToJoinScreen(repo.askedToJoin.collectAsStateWithLifecycle().value, repo, nav)
+        }
         Route.LetIn -> LetInScreen(repo.letIn.collectAsStateWithLifecycle().value, repo, nav)
         Route.Party -> PartyScreen(repo.party.collectAsStateWithLifecycle().value, repo, nav)
         Route.SpotEditor -> SpotEditorScreen(repo.spotEditor.collectAsStateWithLifecycle().value, repo, nav)

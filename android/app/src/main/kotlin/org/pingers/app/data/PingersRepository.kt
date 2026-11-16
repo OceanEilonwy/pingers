@@ -138,6 +138,12 @@ interface PingersRepository {
      */
     fun askToJoin(name: String, onAsked: () -> Unit)
     fun withdrawJoin()
+    /**
+     * Reads what joins wait for now: this phone's Welcome, and on the inviter's phone the join
+     * requests. Asked to join and Invite people call it every few seconds while they show, since
+     * with no wake-up push (pushes off, or no token yet) nothing else would tell the app.
+     */
+    fun checkJoins()
     /** You're in's "Open <party>": dismisses You're in and opens the Party. */
     fun openJoinedParty()
     /** You're in's "Leave Party": leaves the Party just joined and dismisses You're in. */

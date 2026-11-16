@@ -577,9 +577,15 @@ fn play(
         "A sees the request (InviteApprove)",
         |scene| {
             let a = &scene.a;
+            // Invite people lists the opened invite (it checks for requests while it shows);
+            // Verify opens InviteApprove, "Ben asked to join".
+            a.tap_when(
+                &Find::tag("invite_verify").or(Text::Is("Verify".into())),
+                NETWORK,
+            )?;
             a.wait_for(
                 &Find::text(Text::Is(format!("{JOINER} asked to join"))),
-                NETWORK,
+                UI,
             )?;
             let node = a.wait_for(&Find::tag("approve_code").or(Text::SafetyCode), UI)?;
             let code = safety_code(node.label())
