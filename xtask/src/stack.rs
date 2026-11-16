@@ -978,6 +978,68 @@ mod tests {
         Ok(())
     }
 
+    /// Stand-ins for the service binaries: each `keygen` prints the next of a run of distinct
+    /// 64-hex-digit keys, as the real ones print a fresh key.
+    fn fake_binaries(dir: &Path) -> Result<()> {
+        fs::create_dir_all(dir)?;
+        let counter = dir.join("count");
+        fs::write(&counter, "0")?;
+        for name in ["pingers-push-relay", "pingers-server"] {
+            let script = dir.join(name);
+            fs::write(
+                &script,
+                format!(
+                    "#!/bin/sh\nn=$(($(cat {c}) + 1))\necho \"$n\" > {c}\nprintf '%064x\\n' \"$n\"\n",
+                    c = counter.display()
+                ),
+            )?;
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755))?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_new_stack_gets_fresh_keys_and_a_setup_page_with_its_code() -> Result<()> {
+        let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("../packaging/nodo/dev");
+        let root = std::env::temp_dir().join(format!("pingers-stack-new-{}", std::process::id()));
+        let binaries = root.join("bin");
+        fake_binaries(&binaries)?;
+        let layout = Layout::new(root.join("stack"));
+        fs::create_dir_all(layout.config())?;
+        let code = write_keys(&dev, &binaries, &layout)?;
+        let server = Zeroizing::new(fs::read_to_string(layout.server_config())?);
+        let push = Zeroizing::new(fs::read_to_string(layout.push_relay_config())?);
+        assert_eq!(layout.setup_config(), root.join("stack/config/setup.toml"));
+        write_secret_file(&layout.setup_config(), &setup_config(&dev, &code)?)?;
+        let setup = Zeroizing::new(fs::read_to_string(layout.setup_config())?);
+        fs::remove_dir_all(&root)?;
+        // The code the stack reports is the server's, and the setup page's link carries it.
+        assert_eq!(read_code(&server)?, *code);
+        let page = pingers_setup::Config::parse(&setup)?;
+        assert_eq!(page.registration_code.expose(), code.as_str());
+        // The server learns the relay's key; it holds the relay's credential and its own keys.
+        let parsed = pingers_server::ServerConfig::parse(&server)?;
+        assert_eq!(parsed.learned_push_relays.len(), 1);
+        assert!(parsed.advertised_push_relays.is_empty());
+        assert_eq!(parsed.ohttp_keys.configs().len(), 2);
+        let credential = relay_credential(&push)?;
+        assert!(server.contains(credential.as_str()));
+        assert!(!server.contains("key_config_hash"));
+        Ok(())
+    }
+
+    /// The first registration code in a server configuration.
+    fn read_code(server: &str) -> Result<String> {
+        server
+            .parse::<Table>()?
+            .get("registration_codes")
+            .and_then(Value::as_array)
+            .and_then(|codes| codes.first())
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .context("no registration code")
+    }
+
     #[test]
     fn app_env_lists_every_build_variable() {
         let layout = Layout::new(PathBuf::from("/stack"));
