@@ -100,12 +100,16 @@ async fn asset_links(State(shared): State<Arc<Shared>>) -> Response {
     crate::links::asset_links(shared.links.asset_links.as_ref())
 }
 
-/// `GET /metrics`, for the configured addresses only; to anyone else it does not exist.
+/// `GET /metrics`, for the configured addresses only; to anyone else it does not exist. The
+/// address checked is the client's as the trusted proxies report it: behind a reverse proxy on
+/// loopback every request would otherwise come from an allowed address.
 async fn metrics(
     State(shared): State<Arc<Shared>>,
     Extension(Peer(peer)): Extension<Peer>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
-    if shared.metrics_access.contains(peer.ip()) {
+    let client = shared.trusted_proxies.client(peer.ip(), &headers);
+    if client.is_some_and(|client| shared.metrics_access.contains(client)) {
         shared.metrics.render().into_response()
     } else {
         StatusCode::NOT_FOUND.into_response()

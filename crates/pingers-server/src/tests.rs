@@ -1218,3 +1218,33 @@ fn the_counts_report_runs_only_when_logging_asks_for_it() {
         Some(interval)
     );
 }
+
+/// Behind a reverse proxy on an allowed address, `/metrics` goes by the client the proxy names:
+/// an outside client reaching it through the proxy does not get the counts, an allowed one
+/// does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn metrics_behind_a_trusted_proxy_go_by_the_client_it_names() -> TestResult {
+    let server = start(
+        Setup {
+            metrics: vec![LOOPBACK],
+            trusted_proxies: vec![LOOPBACK],
+            ..Setup::default()
+        },
+        Echo,
+    )
+    .await?;
+    let ask = |client: &str| -> Result<Request<Body>, TestError> {
+        Ok(Request::builder()
+            .method(Method::GET)
+            .uri("http://server/metrics")
+            .header("x-forwarded-for", client)
+            .body(Body::empty())?)
+    };
+    let mut proxy = connect(server.address, LOOPBACK).await?;
+    let outside = send(&mut proxy, ask("192.0.2.1")?).await?;
+    assert_eq!(outside.status(), StatusCode::NOT_FOUND);
+    let mut proxy = connect(server.address, LOOPBACK).await?;
+    let allowed = send(&mut proxy, ask("127.0.0.1")?).await?;
+    assert_eq!(allowed.status(), StatusCode::OK);
+    server.stop().await
+}

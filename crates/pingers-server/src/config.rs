@@ -54,7 +54,8 @@
 //! secret = "<64 hex>"
 //!
 //! [metrics]
-//! allow = ["127.0.0.1"]            # who may GET /metrics; without it there is no such route
+//! allow = ["127.0.0.1"]            # who may GET /metrics (the client, after trusted proxies);
+//!                                  # without it there is no such route
 //!
 //! [[push_relays]]                  # the relays mailbox wakes are forwarded to
 //! relay_id = 1                     # what devices name in RelayRef::Listed
