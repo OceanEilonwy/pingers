@@ -182,3 +182,208 @@ async fn the_page_is_served_on_loopback_with_a_working_link() -> TestResult {
     server.await??;
     Ok(())
 }
+
+/// A TLS server on loopback for `localhost`, with a self-signed certificate (returned, to
+/// trust), offering `groups` and HTTP/2 when `h2`, serving `router`.
+async fn tls_fake(
+    router: Router,
+    groups: &[rustls::NamedGroup],
+    h2: bool,
+) -> Result<(SocketAddr, Vec<u8>), Box<dyn std::error::Error>> {
+    let key = rcgen::KeyPair::generate()?;
+    let certificate =
+        rcgen::CertificateParams::new(vec!["localhost".to_owned()])?.self_signed(&key)?;
+    let der = certificate.der().to_vec();
+    let mut provider = rustls::crypto::aws_lc_rs::default_provider();
+    provider
+        .kx_groups
+        .retain(|group| groups.contains(&group.name()));
+    let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(provider))
+        .with_protocol_versions(&[&rustls::version::TLS13])?
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![rustls::pki_types::CertificateDer::from(der.clone())],
+            rustls::pki_types::PrivateKeyDer::try_from(key.serialize_der())?,
+        )?;
+    config.alpn_protocols = if h2 {
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+    } else {
+        vec![b"http/1.1".to_vec()]
+    };
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let (acceptor, router) = (acceptor.clone(), router.clone());
+            tokio::spawn(async move {
+                if let Ok(stream) = acceptor.accept(stream).await {
+                    let service = hyper_util::service::TowerToHyperService::new(router);
+                    let _ = hyper_util::server::conn::auto::Builder::new(
+                        hyper_util::rt::TokioExecutor::new(),
+                    )
+                    .serve_connection(hyper_util::rt::TokioIo::new(stream), service)
+                    .await;
+                }
+            });
+        }
+    });
+    Ok((address, der))
+}
+
+/// The public routes the checks ask for, answering as a healthy appliance does, with the keys
+/// given.
+fn public_routes(gateway: Vec<u8>, push: Vec<u8>) -> Router {
+    Router::new()
+        .route("/v1/params", get(|| std::future::ready("params")))
+        .route(
+            "/catalog.json",
+            get(|| std::future::ready("{\"regions\":[]}")),
+        )
+        .route(
+            "/v1/ohttp/config",
+            get(move || std::future::ready(gateway.clone())),
+        )
+        .route("/v1/config", get(move || std::future::ready(push.clone())))
+}
+
+/// The fakes' setup config with every public origin at `https://localhost:<port>`.
+fn at_localhost(config: &str, port: u16) -> Result<Config, crate::ConfigError> {
+    let origin = format!("https://localhost:{port}");
+    Config::parse(
+        &config
+            .replace("https://pingers.example.invalid", &origin)
+            .replace("https://ohttp.example.invalid", &origin)
+            .replace("https://push.example.invalid", &origin)
+            .replace("https://maps.example.invalid", &origin),
+    )
+}
+
+/// The key configs the fakes serve, for the public side.
+fn served_keys() -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {
+    let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(7);
+    let served = GatewayKey::generate(1, &mut rng)?
+        .config()
+        .encoded()
+        .to_vec();
+    Ok((served, relay_config(1, 5)?.encode()?))
+}
+
+/// The setup config text of `fakes()`, before parsing.
+async fn fake_text() -> Result<String, Box<dyn std::error::Error>> {
+    let config = fakes().await?.config;
+    Ok(format!(
+        "listen = \"127.0.0.1:9475\"\ndomain = \"example.invalid\"\n\
+         server_id = \"https://pingers.example.invalid\"\n\
+         ohttp_relay_url = \"https://ohttp.example.invalid/ohttp\"\n\
+         push_relay_url = \"https://push.example.invalid\"\nmap_host = \"https://maps.example.invalid\"\n\
+         registration_code = \"0123456789abcdef0123456789abcdef\"\n\
+         gateway_key_config = \"{}\"\npush_relay = \"{}\"\nmap_host_local = \"{}\"\n\
+         github_repository = \"OceanEilonwy/pingers\"\nrelease_tag = \"v1.0.0-rc.1\"\n",
+        config.gateway_key_config, config.push_relay, config.map_host_local
+    ))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_healthy_appliance_passes_every_public_check() -> TestResult {
+    let (gateway, push) = served_keys()?;
+    let (address, der) = tls_fake(
+        public_routes(gateway, push),
+        &[
+            rustls::NamedGroup::X25519MLKEM768,
+            rustls::NamedGroup::X25519,
+        ],
+        true,
+    )
+    .await?;
+    let config = at_localhost(&fake_text().await?, address.port())?;
+    let facts = checks::gather(&config, &Clients::trusting(&[der])?).await;
+    assert_eq!(facts.public.len(), 10);
+    for check in &facts.public {
+        assert_eq!(check.state, checks::State::Ok, "{check:?}");
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn classical_tls_missing_http2_and_other_keys_fail() -> TestResult {
+    // Someone else's keys, X25519 only, and no HTTP/2: what a terminating router in front of
+    // another server would look like.
+    let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(99);
+    let other_gateway = GatewayKey::generate(1, &mut rng)?
+        .config()
+        .encoded()
+        .to_vec();
+    let other_push = relay_config(1, 9)?.encode()?;
+    let (address, der) = tls_fake(
+        public_routes(other_gateway, other_push),
+        &[rustls::NamedGroup::X25519],
+        false,
+    )
+    .await?;
+    let config = at_localhost(&fake_text().await?, address.port())?;
+    let facts = checks::gather(&config, &Clients::trusting(std::slice::from_ref(&der))?).await;
+    let states: Vec<checks::State> = facts.public.iter().map(|check| check.state).collect();
+    // The four TLS checks fail (no post-quantum key exchange); the answers pass; the two key
+    // checks fail.
+    assert_eq!(
+        states,
+        [
+            checks::State::Failed,
+            checks::State::Failed,
+            checks::State::Failed,
+            checks::State::Failed,
+            checks::State::Ok,
+            checks::State::Ok,
+            checks::State::Ok,
+            checks::State::Ok,
+            checks::State::Failed,
+            checks::State::Failed,
+        ]
+    );
+    // Post-quantum but without HTTP/2: only the server's and the relay's TLS checks fail.
+    let (gateway, push) = served_keys()?;
+    let (address, der) = tls_fake(
+        public_routes(gateway, push),
+        &[rustls::NamedGroup::X25519MLKEM768],
+        false,
+    )
+    .await?;
+    let config = at_localhost(&fake_text().await?, address.port())?;
+    let facts = checks::gather(&config, &Clients::trusting(&[der])?).await;
+    let tls: Vec<checks::State> = facts
+        .public
+        .iter()
+        .take(4)
+        .map(|check| check.state)
+        .collect();
+    assert_eq!(
+        tls,
+        [
+            checks::State::Failed,
+            checks::State::Failed,
+            checks::State::Ok,
+            checks::State::Ok
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_untrusted_certificate_fails_rather_than_passing() -> TestResult {
+    let (gateway, push) = served_keys()?;
+    let (address, _der) = tls_fake(
+        public_routes(gateway, push),
+        &[rustls::NamedGroup::X25519MLKEM768],
+        true,
+    )
+    .await?;
+    let config = at_localhost(&fake_text().await?, address.port())?;
+    let facts = checks::gather(&config, &Clients::new()?).await;
+    for check in &facts.public {
+        assert_ne!(check.state, checks::State::Ok, "{check:?}");
+    }
+    let first = facts.public.first().ok_or("no check")?;
+    assert_eq!(first.state, checks::State::Failed);
+    Ok(())
+}

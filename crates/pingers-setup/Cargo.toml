@@ -32,6 +32,8 @@ webpki-roots = { workspace = true }
 zeroize = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
+hyper-util = { workspace = true, features = ["server", "server-auto", "service"] }
+rcgen = { workspace = true }
 pingers-time = { workspace = true }
 rand_chacha = { workspace = true }
 rand_core = { workspace = true }

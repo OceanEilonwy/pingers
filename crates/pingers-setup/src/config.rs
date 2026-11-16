@@ -217,6 +217,17 @@ pub struct Site<'config> {
 }
 
 impl Site<'_> {
+    /// The port: the one the origin names, else 443.
+    #[must_use]
+    pub fn port(&self) -> u16 {
+        let rest = self.origin.strip_prefix("https://").unwrap_or(self.origin);
+        let authority = rest.split('/').next().unwrap_or(rest);
+        authority
+            .rsplit_once(':')
+            .and_then(|(_, port)| port.parse().ok())
+            .unwrap_or(443)
+    }
+
     /// The host name, without the scheme or a port.
     #[must_use]
     pub fn host(&self) -> &str {

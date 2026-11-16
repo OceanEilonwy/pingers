@@ -103,9 +103,24 @@ impl Clients {
     ///
     /// The HTTP client could not be built, or the TLS provider lacks X25519MLKEM768.
     pub fn new() -> Result<Self, String> {
+        Self::trusting(&[])
+    }
+
+    /// The clients, also trusting `extra` (DER certificates) besides the usual roots: for
+    /// tests against a local TLS server.
+    ///
+    /// # Errors
+    ///
+    /// As [`Clients::new`], or a certificate is not DER.
+    pub fn trusting(extra: &[Vec<u8>]) -> Result<Self, String> {
+        let certificates = extra
+            .iter()
+            .map(|der| reqwest::Certificate::from_der(der).map_err(|error| error.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
         let plain = Client::builder()
             .timeout(TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
+            .tls_certs_merge(certificates)
             .build()
             .map_err(|error| error.to_string())?;
         let h2c = Client::builder()
@@ -116,14 +131,14 @@ impl Clients {
         Ok(Self {
             plain,
             h2c,
-            post_quantum: Arc::new(post_quantum_tls()?),
+            post_quantum: Arc::new(post_quantum_tls(extra)?),
         })
     }
 }
 
 /// A TLS client that offers only X25519MLKEM768 and HTTP/2 then HTTP/1.1, verifying against
 /// Mozilla's roots (bundled, so nothing depends on the sandbox's files).
-fn post_quantum_tls() -> Result<rustls::ClientConfig, String> {
+fn post_quantum_tls(extra: &[Vec<u8>]) -> Result<rustls::ClientConfig, String> {
     let mut provider = rustls::crypto::aws_lc_rs::default_provider();
     provider
         .kx_groups
@@ -131,9 +146,14 @@ fn post_quantum_tls() -> Result<rustls::ClientConfig, String> {
     if provider.kx_groups.is_empty() {
         return Err("the TLS library has no X25519MLKEM768".to_owned());
     }
-    let roots = rustls::RootCertStore {
+    let mut roots = rustls::RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
     };
+    for der in extra {
+        roots
+            .add(rustls::pki_types::CertificateDer::from(der.clone()))
+            .map_err(|error| error.to_string())?;
+    }
     let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
         .with_protocol_versions(&[&rustls::version::TLS13])
         .map_err(|error| error.to_string())?
@@ -465,7 +485,7 @@ async fn tls_check(clients: &Clients, site: Site<'_>, needs_h2: bool) -> Check {
     };
     let connector = tokio_rustls::TlsConnector::from(Arc::clone(&clients.post_quantum));
     let attempt = async {
-        let stream = tokio::net::TcpStream::connect((host.as_str(), 443))
+        let stream = tokio::net::TcpStream::connect((host.as_str(), site.port()))
             .await
             .map_err(|_| None)?;
         connector

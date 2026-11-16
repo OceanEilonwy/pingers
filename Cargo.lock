@@ -4012,12 +4012,14 @@ name = "pingers-setup"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "hyper-util",
  "pingers-crypto",
  "pingers-ohttp",
  "pingers-proto",
  "pingers-time",
  "rand_chacha 0.10.0",
  "rand_core 0.10.1",
+ "rcgen",
  "reqwest",
  "rustls",
  "serde",
@@ -6570,6 +6572,7 @@ dependencies = [
  "pingers-proto",
  "pingers-push-relay",
  "pingers-server",
+ "pingers-setup",
  "pingers-time",
  "rand_core 0.10.1",
  "rcgen",
