@@ -179,6 +179,15 @@ pub trait ServerPort: Send + Sync {
         mailbox: MailboxId,
     ) -> impl Future<Output = Result<Vec<Vec<u8>>, PortError>> + Send;
 
+    /// Deletes on `server` the posts this device last read from `mailbox` (none if it read
+    /// none), so handled posts cannot fill it. Asked for every knock mailbox read, decoys
+    /// included, so the requests do not show which held posts.
+    fn delete_read(
+        &self,
+        server: &ServerId,
+        mailbox: MailboxId,
+    ) -> impl Future<Output = Result<(), PortError>> + Send;
+
     /// Takes a registered mailbox on `server` from its pool for `purpose` that lives at least
     /// as long as a lease starting in `lease_start`, or `None` if the pool has none.
     fn take_mailbox(

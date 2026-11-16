@@ -1196,12 +1196,25 @@ where
                 leases.push(*lease);
             }
         }
-        let received = self.receive_knocks(memory.board, keys, &leases).await;
-        if received.is_empty() {
-            return;
+        let Read {
+            received,
+            mailboxes,
+        } = self.receive_knocks(memory.board, keys, &leases).await;
+        if !received.is_empty() {
+            self.decide_knocks(memory.device, memory.board, received)
+                .await;
         }
-        self.decide_knocks(memory.device, memory.board, received)
-            .await;
+        // Decided (or not knocks at all): what was read can go, so it cannot fill the mailbox.
+        for mailbox in mailboxes {
+            let port = self.env.server;
+            if self
+                .port(WakeStep::Mailboxes, port.delete_read(keys.server, mailbox))
+                .await
+                .is_none()
+            {
+                break;
+            }
+        }
     }
 
     /// Every new knock that opens and verifies under one of this device's records.
@@ -1210,13 +1223,14 @@ where
         board: &Board,
         keys: &Keys<'_>,
         leases: &[LiveLease],
-    ) -> Vec<ReceivedKnock> {
+    ) -> Read {
         let Keys {
             server,
             parties,
             active,
         } = *keys;
         let mut received = Vec::new();
+        let mut read_mailboxes = Vec::new();
         // Real records' knock mailboxes and the decoys of the dummy slots, in a random order:
         // the server sees the same number of reads whatever number of Spots has records.
         let mut reads: Vec<MailboxRead> = leases
@@ -1245,6 +1259,7 @@ where
             else {
                 break;
             };
+            read_mailboxes.push(mailbox);
             let MailboxRead::Real {
                 start,
                 own_record,
@@ -1295,7 +1310,10 @@ where
                 });
             }
         }
-        received
+        Read {
+            received,
+            mailboxes: read_mailboxes,
+        }
     }
 
     /// The liveness check and the decision on each received knock (design B.4.4 steps 4 to 6).
@@ -1620,6 +1638,12 @@ fn current_epoch(parties: &[PartyInfo], spot: SpotRef) -> Option<Epoch> {
         .iter()
         .find(|party| party.party == spot.party)
         .map(|party| party.epoch.current)
+}
+
+/// What a round's knock mailbox reads brought, and which mailboxes were read.
+struct Read {
+    received: Vec<ReceivedKnock>,
+    mailboxes: Vec<MailboxId>,
 }
 
 /// One knock mailbox to read: a real record's, or a dummy slot's decoy.

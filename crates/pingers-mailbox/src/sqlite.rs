@@ -322,6 +322,18 @@ impl MailboxStorage for SqliteStorage {
         .collect()
     }
 
+    fn delete_messages_through(
+        &mut self,
+        id: &MailboxId,
+        through: SequenceNumber,
+    ) -> Result<(), StorageError> {
+        self.connection.execute(
+            "DELETE FROM mailbox_msg WHERE mailbox_id = ?1 AND seq <= ?2",
+            params![id.as_bytes().as_slice(), to_sql_integer(through.get())?],
+        )?;
+        Ok(())
+    }
+
     fn delete_expired(&mut self, now: UnixSeconds) -> Result<(), StorageError> {
         self.connection.execute(
             "DELETE FROM mailbox WHERE expires_at <= ?1",

@@ -129,6 +129,12 @@ async fn second_arrival_knocks_and_the_poster_admits_after_a_liveness_check()
         liveness.last().map(|request| request.quality),
         Some(pingers_testkit::FixQuality::High)
     );
+    // The decided knock was deleted from Alice's mailbox, so posts cannot pile up there.
+    let left = town
+        .world
+        .lock()
+        .map_or(1, |world| world.posts(&knock.knock_mailbox));
+    assert_eq!(left, 0);
     let admitted = alice.meetups.admitted();
     let admission = admitted.first().ok_or(TestError::Missing("admission"))?;
     // PSK_meet is bound to the Spot, the record's epoch and the start bucket of Alice's record.

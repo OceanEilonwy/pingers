@@ -346,6 +346,37 @@ fn full_mailbox_refuses_posts_without_consulting_the_limit() -> Result<(), TestE
     Ok(())
 }
 
+/// The reader deletes what it has read, which frees the mailbox for new posts; the numbering
+/// goes on, and nobody without the read key can delete.
+#[test]
+fn the_reader_frees_a_full_mailbox_by_deleting_what_it_read() -> Result<(), TestError> {
+    let mut fixture = Fixture::new(2);
+    let spec = spec(1, hour(), None)?;
+    fixture.service.register(&spec)?;
+    let id = spec.mailbox_id;
+    fixture.post(&id, &knock()?)?;
+    let second = fixture.post(&id, &knock()?)?.sequence;
+    assert!(matches!(
+        fixture.post(&id, &knock()?),
+        Err(MailboxError::Full)
+    ));
+    assert!(matches!(
+        fixture.service.delete_read(&id, &read_key(2), second),
+        Err(MailboxError::WrongReadKey)
+    ));
+    fixture.service.delete_read(&id, &read_key(1), second)?;
+    let third = fixture.post(&id, &knock()?)?.sequence;
+    assert!(third > second);
+    let left = fixture.service.read(&id, &read_key(1), None)?.messages;
+    assert_eq!(
+        left.iter()
+            .map(|message| message.sequence)
+            .collect::<Vec<_>>(),
+        [third]
+    );
+    Ok(())
+}
+
 #[test]
 fn refused_by_the_limit_stores_nothing() -> Result<(), TestError> {
     let mut fixture = Fixture::new(10);

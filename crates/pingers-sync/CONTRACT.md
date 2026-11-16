@@ -39,7 +39,9 @@ B.4.9, B.12, D, E.2). L3: tokio (spawn_blocking, select), no detached tasks.
 - Tokens: `TokenStock::{new(minimum, target), design_default}` (20 / 300), `token_count()`,
   `refill_tokens(&TokenIssuer { public_key, key_id }, bearer, budget) -> Refill`.
 - Mailboxes: `register_mailbox(&NewMailbox { purpose, lifetime, push: Option<PushSeal> })`,
-  `pooled_mailboxes`, `take_mailbox`, `read_mailbox`, `post_to_mailbox`, `delete_mailbox`,
+  `pooled_mailboxes`, `take_mailbox`, `read_mailbox`, `delete_read_messages` (the posts read,
+  through a sequence: the client clears knock mailboxes after deciding and invite mailboxes after
+  handling), `post_to_mailbox`, `delete_mailbox`,
   `forget_expired`. Sealed push: `PushSeal { relay, relay_key, token, urgency }`,
   `new_subscription(seal, lifetime)` (carries the owner key), `remember_subscription(group, sub)`,
   `subscription_owner(id) -> SubscriptionOwnerKey` (derived from the account key; design D,

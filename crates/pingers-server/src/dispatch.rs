@@ -124,6 +124,9 @@ async fn dispatch(shared: &Arc<Shared>, route: Route, request: &BinaryRequest) -
         Route::PostToMailbox => return either(mailbox_routes::post(shared, request).await),
         Route::ReadMailbox => return either(mailbox_routes::read(shared, request).await),
         Route::DeleteMailbox => return either(mailbox_routes::delete(shared, request).await),
+        Route::DeleteMailboxMessages => {
+            return either(mailbox_routes::delete_read(shared, request).await);
+        }
         Route::MailboxPush => return either(mailbox_routes::replace_push(shared, request).await),
         Route::Live => match &shared.live {
             LiveRoute::Groups => groups::uplink,

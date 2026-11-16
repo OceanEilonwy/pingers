@@ -632,6 +632,14 @@ async fn without_pushes_the_reads_do_not_count_the_spots() -> Result<(), TestErr
     let no_spot = reads_of_the_next_wake(&town, &mut outside, "canal", false).await?;
     assert_eq!(one_spot, no_spot);
     assert_eq!(one_spot, pingers_proto::Lease::SLOTS);
+    // Every mailbox read is cleared after the knocks are decided, decoys too.
+    let deletes = inside
+        .server
+        .calls()
+        .iter()
+        .filter(|call| matches!(call, Call::DeleteRead(_)))
+        .count();
+    assert_eq!(deletes, one_spot);
     Ok(())
 }
 

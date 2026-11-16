@@ -225,6 +225,27 @@ impl SyncEngine {
         self.exchange(request, budget).await?.success()?.decode()
     }
 
+    /// Deletes the messages of one of this device's mailboxes up to and including `through`,
+    /// once they are read, so they cannot fill it (design D). Never queued.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::UnknownMailbox`]; [`SyncError::Status`]; as [`SyncEngine::send`].
+    pub async fn delete_read_messages(
+        &self,
+        mailbox: &MailboxId,
+        through: SequenceNumber,
+        budget: WakeBudget,
+    ) -> Result<(), SyncError> {
+        let request = self
+            .with_read_key(mailbox, move |id, key| {
+                ApiRequest::delete_read_messages(id, key, through)
+            })
+            .await?;
+        self.exchange(request, budget).await?.success()?;
+        Ok(())
+    }
+
     /// Posts an already padded body to a mailbox (a knock, a Welcome, a join request), with a
     /// `Mailbox` credential.
     ///

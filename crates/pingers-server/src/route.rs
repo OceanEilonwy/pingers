@@ -44,6 +44,8 @@ pub(crate) enum Route {
     ReadMailbox,
     /// `DELETE /v1/mailboxes/{id}`.
     DeleteMailbox,
+    /// `DELETE /v1/mailboxes/{id}/msgs?through=`: the reader deletes what it has read (Cap).
+    DeleteMailboxMessages,
     /// `PUT /v1/mailboxes/{id}/push`: replaces the sealed push (Cap: the read key).
     MailboxPush,
     /// `POST /v1/groups`.
@@ -134,6 +136,7 @@ impl Route {
             | Self::PostToMailbox
             | Self::ReadMailbox
             | Self::DeleteMailbox
+            | Self::DeleteMailboxMessages
             | Self::MailboxPush
             | Self::CreateGroup
             | Self::Commit
@@ -205,7 +208,11 @@ pub(crate) fn resolve(method: &str, path: &str) -> Resolved {
         ["mailboxes", _, "push"] => by_method(method, &[("PUT", Route::MailboxPush)]),
         ["mailboxes", _, "msgs"] => by_method(
             method,
-            &[("POST", Route::PostToMailbox), ("GET", Route::ReadMailbox)],
+            &[
+                ("POST", Route::PostToMailbox),
+                ("GET", Route::ReadMailbox),
+                ("DELETE", Route::DeleteMailboxMessages),
+            ],
         ),
         ["groups"] => by_method(method, &[("POST", Route::CreateGroup)]),
         ["groups", _] => by_method(method, &[("DELETE", Route::DeleteGroup)]),

@@ -149,6 +149,22 @@ pub(crate) async fn delete(shared: &Shared, request: &BinaryRequest) -> Result<R
     Ok(answer(deleted, |()| Reply::status(StatusCode::NO_CONTENT)))
 }
 
+/// `DELETE /v1/mailboxes/{id}/msgs?through=seq`: Cap (the read key). Deletes the messages
+/// read, up to and including `through`.
+pub(crate) async fn delete_read(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
+    let id = mailbox_id(request)?;
+    let key = read_key(request)?;
+    let through = query(&request.path, "through")
+        .and_then(|text| text.parse().ok())
+        .map(SequenceNumber::new)
+        .ok_or(Reply::status(StatusCode::BAD_REQUEST))?;
+    let deleted = blocking(&shared.mailboxes, move |mailboxes| {
+        mailboxes.delete_read(&id, &key, through)
+    })
+    .await?;
+    Ok(answer(deleted, |()| Reply::status(StatusCode::NO_CONTENT)))
+}
+
 /// `PUT /v1/mailboxes/{id}/push`: Cap (the read key). Replaces the sealed push.
 pub(crate) async fn replace_push(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
     let id = mailbox_id(request)?;

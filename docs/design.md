@@ -974,6 +974,7 @@ POST /v1/mailboxes         (Anon, scope Mailbox) MailboxSpec { mailbox_id: [u8;1
 POST /v1/mailboxes/{id}/msgs (Anon, scope Mailbox)  body: bytes (padded to 1, 4, 8 or 32 KiB)   -> 202
                            // stores the message; if the mailbox has a sealed push, forwards it to the relay
 GET  /v1/mailboxes/{id}/msgs?after=seq (Cap: read_key)   -> { msgs: Vec<(u64, Bytes)> }
+DELETE /v1/mailboxes/{id}/msgs?through=seq   (Cap: read key) the reader deletes the posts it has read, so handled posts cannot fill the mailbox (decided 2026-11-17)
 DELETE /v1/mailboxes/{id}  (Cap: read_key)
 PUT  /v1/mailboxes/{id}/push (Cap: read_key) MailboxPush { push: Option<SealedPush> }   -> 204   // the device's token or the relay key changed, or the seal runs out (B.4.9)
 

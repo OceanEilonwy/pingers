@@ -102,6 +102,18 @@ pub trait MailboxStorage {
         after: Option<SequenceNumber>,
     ) -> Result<Vec<MailboxMessage>, StorageError>;
 
+    /// Deletes the mailbox's messages up to and including `through`, keeping the mailbox and
+    /// its numbering (the next post still gets the next number).
+    ///
+    /// # Errors
+    ///
+    /// A backend error.
+    fn delete_messages_through(
+        &mut self,
+        id: &MailboxId,
+        through: SequenceNumber,
+    ) -> Result<(), StorageError>;
+
     /// Deletes every mailbox, with its messages, that has expired at `now`.
     ///
     /// # Errors
@@ -205,6 +217,17 @@ impl MailboxStorage for MemoryStorage {
             .collect())
     }
 
+    fn delete_messages_through(
+        &mut self,
+        id: &MailboxId,
+        through: SequenceNumber,
+    ) -> Result<(), StorageError> {
+        if let Some(entry) = self.mailboxes.get_mut(id) {
+            entry.messages.retain(|message| message.sequence > through);
+        }
+        Ok(())
+    }
+
     fn delete_expired(&mut self, now: UnixSeconds) -> Result<(), StorageError> {
         self.mailboxes
             .retain(|_id, entry| !entry.mailbox.expired(now));
@@ -266,6 +289,28 @@ pub(crate) mod contract {
         replacing_and_clearing_the_push_keeps_the_messages(make()?)?;
         expiry_deletes_only_expired_mailboxes(make()?)?;
         append_to_an_absent_mailbox_is_refused(make()?)?;
+        deleting_read_messages_keeps_the_rest_and_the_numbering(make()?)?;
+        Ok(())
+    }
+
+    fn deleting_read_messages_keeps_the_rest_and_the_numbering(
+        mut storage: impl MailboxStorage,
+    ) -> Result<(), ContractError> {
+        let id = MailboxId::from_bytes([1; 16]);
+        storage.insert_mailbox(&mailbox(1, 100, None))?;
+        for fill in 1..=3 {
+            storage.append_message(&id, &body(fill)?)?;
+        }
+        storage.delete_messages_through(&id, SequenceNumber::new(2))?;
+        assert_eq!(storage.message_count(&id)?, 1);
+        let next = storage.append_message(&id, &body(4)?)?;
+        assert_eq!(next, SequenceNumber::new(4));
+        let left: Vec<u64> = storage
+            .messages_after(&id, None)?
+            .iter()
+            .map(|message| message.sequence.get())
+            .collect();
+        assert_eq!(left, [3, 4]);
         Ok(())
     }
 

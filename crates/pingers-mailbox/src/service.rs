@@ -182,6 +182,26 @@ impl<S: MailboxStorage, C: Clock, D: RelayDirectory, L: PostLimit> Mailboxes<S, 
         })
     }
 
+    /// `DELETE /v1/mailboxes/{id}/msgs?through=seq`: the holder of the read key deletes the
+    /// messages it has read, up to and including `through`, freeing room in the mailbox
+    /// ([`MailboxRules::max_messages`]) so that posts it has handled cannot fill it.
+    ///
+    /// # Errors
+    ///
+    /// [`MailboxError::WrongReadKey`] if the key does not derive `id`;
+    /// [`MailboxError::NotFound`] if no live mailbox has the id;
+    /// [`MailboxError::Storage`] if the storage fails.
+    pub fn delete_read(
+        &mut self,
+        id: &MailboxId,
+        read_key: &MailboxReadKey,
+        through: SequenceNumber,
+    ) -> Result<(), MailboxError> {
+        check_read_key(id, read_key)?;
+        self.live(id)?;
+        Ok(self.storage.delete_messages_through(id, through)?)
+    }
+
     /// `DELETE /v1/mailboxes/{id}`: deletes the mailbox and its messages now.
     ///
     /// # Errors

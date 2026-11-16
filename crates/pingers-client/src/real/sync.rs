@@ -15,6 +15,7 @@
 //! only its own requests waiting.
 
 use core::time::Duration;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
@@ -108,6 +109,8 @@ pub(crate) struct Net {
     pub(crate) servers: Servers,
     pub(super) probes: super::probe::Probes,
     outbox: Mutex<Vec<Waiting>>,
+    /// The newest post this process read from each mailbox, for `ServerPort::delete_read`.
+    last_reads: Mutex<HashMap<(ServerId, MailboxId), SequenceNumber>>,
 }
 
 impl Net {
@@ -117,6 +120,7 @@ impl Net {
             servers,
             probes: super::probe::Probes::default(),
             outbox: Mutex::new(Vec::new()),
+            last_reads: Mutex::new(HashMap::new()),
         }
     }
 
@@ -747,6 +751,17 @@ impl ServerPort for Net {
                 .read_mailbox(&mailbox, None, WakeBudget::UNLIMITED),
         )
         .await?;
+        if let Some(newest) = messages
+            .messages
+            .iter()
+            .map(|message| message.sequence)
+            .max()
+        {
+            self.last_reads
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert((server.clone(), mailbox), newest);
+        }
         Ok(messages
             .messages
             .into_iter()
@@ -766,6 +781,22 @@ impl ServerPort for Net {
             .take_mailbox_for_lease(stored_purpose(purpose), lease_start)
             .ok()
             .flatten()
+    }
+
+    async fn delete_read(&self, server: &ServerId, mailbox: MailboxId) -> Result<(), PortError> {
+        let through = self
+            .last_reads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&(server.clone(), mailbox))
+            .unwrap_or_else(|| SequenceNumber::new(0));
+        let link = self.port_link(server).await?;
+        on(
+            &link,
+            link.engine
+                .delete_read_messages(&mailbox, through, WakeBudget::UNLIMITED),
+        )
+        .await
     }
 
     fn take_decoy_mailbox(&self, server: &ServerId, lease_start: Bucket) -> Option<MailboxId> {

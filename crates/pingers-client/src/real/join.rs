@@ -309,8 +309,14 @@ pub(crate) async fn poll(net: &Net) -> Result<Vec<ClientEvent>, ClientError> {
         .await?;
     for open in invites {
         let read = transient(read(net, &open.server, &open.invite.mailbox(), open.after).await)?;
-        for message in read.unwrap_or_default() {
+        let messages = read.unwrap_or_default();
+        let newest = messages.iter().map(|message| message.sequence).max();
+        for message in messages {
             events.extend(receive(net, &open, message).await?);
+        }
+        // Handled and its position recorded: the posts can go, so they cannot fill the mailbox.
+        if let Some(newest) = newest {
+            transient(delete_read(net, &open.server, &open.invite.mailbox(), newest).await)?;
         }
     }
     if let Some(event) = transient(complete(net).await)?.flatten() {
@@ -346,6 +352,22 @@ async fn read(
         .await;
     link.observe(&read);
     Ok(read?.messages)
+}
+
+/// Deletes the posts read from one of this device's mailboxes, up to `through`.
+async fn delete_read(
+    net: &Net,
+    server: &ServerId,
+    mailbox: &MailboxId,
+    through: SequenceNumber,
+) -> Result<(), ClientError> {
+    let link = net.link(server).await?;
+    let deleted = link
+        .engine
+        .delete_read_messages(mailbox, through, WakeBudget::UNLIMITED)
+        .await;
+    link.observe(&deleted);
+    Ok(deleted?)
 }
 
 /// Hands one invite post to pingers-parties.

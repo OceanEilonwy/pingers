@@ -31,7 +31,7 @@ enum TestError {
     BadHeader(&'static str),
 }
 
-const ALL: [Route; 28] = [
+const ALL: [Route; 29] = [
     Route::Params,
     Route::CreateAccount,
     Route::Auth,
@@ -47,6 +47,7 @@ const ALL: [Route; 28] = [
     Route::PostToMailbox,
     Route::ReadMailbox,
     Route::DeleteMailbox,
+    Route::DeleteReadMessages,
     Route::CreateGroup,
     Route::Commit,
     Route::PutSubscription,
@@ -107,6 +108,7 @@ fn only_account_routes_are_identified_and_only_the_live_channel_is_a_stream() {
             | Route::PostToMailbox
             | Route::ReadMailbox
             | Route::DeleteMailbox
+            | Route::DeleteReadMessages
             | Route::ReplaceMailboxPush
             | Route::CreateGroup
             | Route::Commit
@@ -143,6 +145,7 @@ fn writes_carry_a_credential_of_their_scope_and_capability_requests_none() {
             | Route::BoardRevokeLease
             | Route::ReadMailbox
             | Route::DeleteMailbox
+            | Route::DeleteReadMessages
             | Route::ReplaceMailboxPush
             | Route::DeleteSubscription
             | Route::ReadGroupMessages

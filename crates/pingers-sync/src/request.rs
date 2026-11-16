@@ -73,6 +73,8 @@ pub enum Route {
     ReadMailbox,
     /// `DELETE /v1/mailboxes/{id}`.
     DeleteMailbox,
+    /// `DELETE /v1/mailboxes/{id}/msgs?through=`: the messages read.
+    DeleteReadMessages,
     /// `POST /v1/groups`.
     CreateGroup,
     /// `POST /v1/groups/{id}/commit`.
@@ -133,6 +135,7 @@ impl Route {
             | Self::PostToMailbox
             | Self::ReadMailbox
             | Self::DeleteMailbox
+            | Self::DeleteReadMessages
             | Self::ReplaceMailboxPush
             | Self::CreateGroup
             | Self::Commit
@@ -171,6 +174,7 @@ impl Route {
             | Self::BoardRevokeLease
             | Self::ReadMailbox
             | Self::DeleteMailbox
+            | Self::DeleteReadMessages
             | Self::ReplaceMailboxPush
             | Self::DeleteSubscription
             | Self::ReadGroupMessages
@@ -569,6 +573,26 @@ impl ApiRequest {
             Route::DeleteMailbox,
             "DELETE",
             format!("/v1/mailboxes/{}", id_hex(mailbox.as_bytes())),
+        )
+        .with_read_key(read_key)
+    }
+
+    /// `DELETE /v1/mailboxes/{id}/msgs?through=seq`, authorised by the read key: deletes the
+    /// messages read, up to and including `through`.
+    #[must_use]
+    pub fn delete_read_messages(
+        mailbox: &MailboxId,
+        read_key: &MailboxReadKey,
+        through: SequenceNumber,
+    ) -> Self {
+        Self::new(
+            Route::DeleteReadMessages,
+            "DELETE",
+            format!(
+                "/v1/mailboxes/{}/msgs?through={}",
+                id_hex(mailbox.as_bytes()),
+                through.get()
+            ),
         )
         .with_read_key(read_key)
     }

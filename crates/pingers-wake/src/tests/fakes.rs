@@ -116,6 +116,7 @@ pub(crate) enum CallKind {
     Page,
     PostKnock,
     ReadMailbox,
+    DeleteRead,
     Refill,
 }
 
@@ -141,6 +142,7 @@ pub(crate) enum Call {
     Page,
     PostKnock(MailboxId),
     ReadMailbox(MailboxId),
+    DeleteRead(MailboxId),
     Refill,
 }
 
@@ -465,6 +467,13 @@ impl ServerPort for FakeServer {
         Some(MailboxId::from_bytes([
             tag, count, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ]))
+    }
+
+    async fn delete_read(&self, server: &ServerId, mailbox: MailboxId) -> Result<(), PortError> {
+        self.gate(server, CallKind::DeleteRead, Call::DeleteRead(mailbox))
+            .await?;
+        lock(self.world(server)?).mailboxes.remove(&mailbox);
+        Ok(())
     }
 
     fn take_decoy_mailbox(&self, server: &ServerId, lease_start: Bucket) -> Option<MailboxId> {

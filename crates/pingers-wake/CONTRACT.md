@@ -87,7 +87,9 @@ pingers-meetup-session and the shell.
   lease through `ServerPort::take_decoy_mailbox`, only beyond a reserve kept for real records)
   is read too, in a random order among the real ones, so every lease has
   `Lease::SLOTS` reads whatever number of Spots has records; a decoy's posts are ignored. A
-  knock is decided once (keyed by its reply mailbox). Knocks, decisions and unanswered-knock notices
+  knock is decided once (keyed by its reply mailbox). After the decisions every mailbox read is
+  cleared with `ServerPort::delete_read` (decoys too, so the requests do not show which held
+  posts), so handled knocks cannot fill it. Knocks, decisions and unanswered-knock notices
   are kept per board; mailbox reads go to the board's server.
 - **Liveness**: one GPS fix per wake with knocks to decide, shared by every round;
   `FreshFix::InsideSpot` only for a fix inside the fence (not the exit band); Focus and the
