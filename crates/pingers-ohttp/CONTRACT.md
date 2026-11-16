@@ -12,7 +12,10 @@ gateway. HPKE suite fixed: X25519 / HKDF-SHA256 / AES-128-GCM.
 - One-shot: `encapsulate_request(&KeyConfig, &BinaryRequest, rng) -> EncapsulatedRequest
   { message, response_context }`, `ResponseContext::open(self, bytes)`;
   `Gateway::new(keys)`, `Gateway::decapsulate(bytes) -> DecapsulatedRequest { request,
-  responder }`, `Responder::seal(self, &BinaryResponse, rng)`.
+  responder }`, `Responder::seal(self, &BinaryResponse, rng)`. Padded to size classes:
+  `encapsulate_request_classed`, `Responder::seal_classed` (`REQUEST_CLASSES`,
+  `RESPONSE_CLASSES`, `MAX_SEALED_RESPONSE`); every anonymous one-shot request and response
+  uses them, so a request or response says only which class it is in.
 - Chunked: `ChunkedClient::start(&KeyConfig, &BinaryRequest, rng) -> ChunkedClientStart
   { preamble, client }`, `ChunkedClient::{seal_chunk, response_decoder}`,
   `ResponseChunkDecoder::{feed, finish}`; `ChunkedGateway::{accept, request, request_decoder,

@@ -135,9 +135,9 @@ async fn one_shot(shared: &Arc<Shared>, mut body: Body) -> Response {
     };
     let reply = answer(shared, Channel::Oblivious, &decapsulated.request).await;
     let inner_status = reply.status;
-    let sealed = reply
-        .into_binary()
-        .and_then(|response| shared.with_rng(|rng| decapsulated.responder.seal(&response, rng)));
+    let sealed = reply.into_binary().and_then(|response| {
+        shared.with_rng(|rng| decapsulated.responder.seal_classed(&response, rng))
+    });
     match sealed {
         Ok(sealed) => {
             shared.metrics.record(Channel::Oblivious, inner_status);

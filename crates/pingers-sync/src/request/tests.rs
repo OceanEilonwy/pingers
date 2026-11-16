@@ -460,3 +460,102 @@ fn the_binary_request_adds_the_credential_after_the_fixed_headers() {
         .collect();
     assert_eq!(names, [READ_KEY_HEADER, AUTHORIZATION]);
 }
+
+/// The two credentials an anonymous write may carry, at their real sizes: an RLN proof and a
+/// Privacy Pass token.
+fn credentials() -> Result<[Header; 2], TestError> {
+    let proof = crate::credential::proof_header(&pingers_proto::RlnAuth {
+        root: [1; 32],
+        scope: pingers_proto::RlnScope::Mailbox,
+        bucket: UnixSeconds::new(1_800_000_000).bucket(),
+        x: [2; 32],
+        y: [3; 32],
+        nullifier: [4; 32],
+        proof: [5; 128],
+    })?;
+    let token = pingers_anon::PrivacyPassToken::from_bytes(vec![6; 146]);
+    let token = Header {
+        name: AUTHORIZATION.to_owned(),
+        value: token.authorization().as_bytes().to_vec(),
+    };
+    Ok([proof, token])
+}
+
+/// The encapsulated length of `request` with `credential`, as the relay sees it.
+fn sealed_length(
+    request: &ApiRequest,
+    credential: Option<Header>,
+    config: &pingers_ohttp::KeyConfig,
+) -> Result<usize, TestError> {
+    let mut rng = pingers_testkit::seeded_rng(9);
+    let sealed = pingers_ohttp::encapsulate_request_classed(
+        config,
+        &request.to_binary(credential),
+        &mut rng,
+    )
+    .map_err(|_error| TestError::BadHeader("encapsulation"))?;
+    Ok(sealed.message.len())
+}
+
+/// The relay sees one length for a knock post, a mailbox read, and a group read and post,
+/// whichever credential the write carries (design B.12: requests padded to size classes).
+#[test]
+fn anonymous_requests_of_one_class_look_alike_to_the_relay() -> Result<(), TestError> {
+    let config = pingers_ohttp::GatewayKey::generate(1, &mut pingers_testkit::seeded_rng(8))
+        .map_err(|_error| TestError::BadHeader("gateway key"))?
+        .config();
+    let key = key();
+    let signer = GroupSigner {
+        key: &key,
+        now: UnixSeconds::new(1_800_000_000),
+    };
+    let mailbox = MailboxId::from_bytes([7; 16]);
+    let read_key = MailboxReadKey::from_bytes(Zeroizing::new([8; 32]));
+    let knock = Padded::pad(&[9; 600], SizeClass::Bytes1024)?;
+    let message = |size: usize| AppMessage {
+        epoch: Epoch::new(3),
+        body: MlsMessageBytes::from_bytes(vec![0x0a; size]),
+        delivery: Delivery::Stored,
+        wake: Some(Urgency::Alert),
+    };
+    let mut lengths = Vec::new();
+    for credential in credentials()? {
+        // Writes carry a credential: a knock and a group post (a location-sized and a
+        // chat-sized MLS message).
+        lengths.push(sealed_length(
+            &ApiRequest::post_to_mailbox(&mailbox, &knock),
+            Some(credential.clone()),
+            &config,
+        )?);
+        for size in [400, 1_300] {
+            lengths.push(sealed_length(
+                &ApiRequest::post_group_message(&group(), &message(size), &signer)?,
+                Some(credential.clone()),
+                &config,
+            )?);
+        }
+    }
+    // Reads carry none.
+    lengths.push(sealed_length(
+        &ApiRequest::read_mailbox(&mailbox, &read_key, None),
+        None,
+        &config,
+    )?);
+    lengths.push(sealed_length(
+        &ApiRequest::read_mailbox(&mailbox, &read_key, Some(SequenceNumber::new(41))),
+        None,
+        &config,
+    )?);
+    lengths.push(sealed_length(
+        &ApiRequest::read_group_messages(&group(), Some(SequenceNumber::new(12)), &signer)?,
+        None,
+        &config,
+    )?);
+    let first_class = pingers_ohttp::REQUEST_CLASSES[0];
+    // 7 header, 32 encapsulated key, 16 tag.
+    assert!(
+        lengths.iter().all(|length| *length == first_class + 55),
+        "{lengths:?}"
+    );
+    Ok(())
+}

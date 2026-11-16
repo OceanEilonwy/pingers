@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use hyper::header::CONTENT_TYPE;
 use hyper::{Method, Request, StatusCode};
-use pingers_ohttp::{BinaryRequest, BinaryResponse, KeyConfig, encapsulate_request};
+use pingers_ohttp::{BinaryRequest, BinaryResponse, KeyConfig, encapsulate_request_classed};
 use pingers_proto::KeyConfigHash;
 use pingers_time::{MonotonicTime, Timer};
 
@@ -90,7 +90,8 @@ pub struct OhttpConfig {
     pub backoff: Backoff,
     /// Live channel tuning.
     pub live: LiveSettings,
-    /// The largest one-shot response accepted (a board page is up to 256 KiB, design B.4.3).
+    /// The largest one-shot response accepted: every sealed response is padded to a size class
+    /// (pingers-ohttp `RESPONSE_CLASSES`), the largest `MAX_SEALED_RESPONSE` long.
     pub max_response_bytes: usize,
 }
 
@@ -105,7 +106,7 @@ impl OhttpConfig {
             timeouts: Timeouts::default(),
             backoff: Backoff::default(),
             live: LiveSettings::default(),
-            max_response_bytes: 1024 * 1024,
+            max_response_bytes: pingers_ohttp::MAX_SEALED_RESPONSE,
         }
     }
 }
@@ -204,7 +205,7 @@ impl Shared {
     ) -> Result<BinaryResponse, SendError> {
         let config = self.key_config(index).await?;
         let encapsulated = self
-            .with_rng(|rng| encapsulate_request(&config, request, rng))
+            .with_rng(|rng| encapsulate_request_classed(&config, request, rng))
             .map_err(|error| SendError::Failed(error.into()))?;
         let endpoint = self.relay(index)?.request_endpoint();
         let post = post(endpoint, OHTTP_REQUEST, OutBody::full(encapsulated.message))

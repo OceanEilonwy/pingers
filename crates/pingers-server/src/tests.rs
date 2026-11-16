@@ -279,6 +279,29 @@ async fn oblivious(
     Ok((status, Some(encapsulated.response_context.open(&sealed)?)))
 }
 
+/// The length of the sealed response to `inner_request`, as the relay sees it, and the opened
+/// response.
+async fn sealed_response(
+    server: &Running,
+    inner_request: &BinaryRequest,
+) -> Result<(usize, BinaryResponse), TestError> {
+    let mut client = connect(server.gateway, LOOPBACK).await?;
+    let encapsulated = encapsulate_request(&server.config, inner_request, &mut rng(3))?;
+    let response = send(
+        &mut client,
+        request(
+            Method::POST,
+            "/ohttp",
+            Some("message/ohttp-req"),
+            Body::from(encapsulated.message),
+        )?,
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let sealed = read_all(response).await?;
+    Ok((sealed.len(), encapsulated.response_context.open(&sealed)?))
+}
+
 fn inner_status(response: Option<&BinaryResponse>) -> Option<u16> {
     response.map(|response| response.status.get())
 }

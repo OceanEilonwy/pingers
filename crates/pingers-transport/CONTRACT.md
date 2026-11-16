@@ -16,6 +16,9 @@ Client network I/O (architecture §3, design B.12 and B.4.9). L2: tokio, hyper, 
   anonymous one-shots and the live channel. `key_config_hash()`, `repin(KeyPin)`.
   `Relay::new(request_url, key_config_url)`; `KeyPin::{Pinned(KeyConfigHash), FirstUse}`.
   Tuning (`timeouts`, `backoff`, `live`, `max_response_bytes`) are public fields with defaults.
+  Every one-shot OHTTP request is padded to a size class (pingers-ohttp
+  `encapsulate_request_classed`); the default `max_response_bytes` is pingers-ohttp's
+  `MAX_SEALED_RESPONSE`, the largest padded response.
 - `DirectTransport::new(&DirectConfig::new(https_origin, TlsRoots), Arc<dyn Timer>)`:
   `Identified` only.
 - `TlsRoots::{mozilla, from_der}`; `TokioTimer`; `TransportRng = Box<dyn CryptoRng + Send>`.

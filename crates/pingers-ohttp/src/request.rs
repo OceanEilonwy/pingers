@@ -11,6 +11,30 @@ use crate::{BinaryRequest, BinaryResponse, GatewayKey, KeyConfig, OhttpError};
 /// The length of the header plus the encapsulated key that start every request.
 pub(crate) const ENCAPSULATION_LENGTH: usize = REQUEST_HEADER_LENGTH + X25519_KEY_LENGTH;
 
+/// The lengths a one-shot request's Binary HTTP encoding is padded to (RFC 9292 §3.8),
+/// smallest first ([`encapsulate_request_classed`]): its size then says only which class it is
+/// in, not its path, headers or credential. The largest, with the 55 bytes of encapsulation,
+/// is the gateway's 64 KiB request limit.
+pub const REQUEST_CLASSES: [usize; 4] = [2_048, 8_192, 32_768, 65_472];
+
+/// The lengths a one-shot response's encoding is padded to, smallest first
+/// ([`Responder::seal_classed`]). 320 KiB holds a full board page (design B.4.3); the largest,
+/// 1 MiB and 8 KiB, holds the largest map host answer the server relays (1 MiB and 4 KiB).
+pub const RESPONSE_CLASSES: [usize; 5] = [4_096, 16_384, 65_536, 327_680, 1_056_768];
+
+/// The longest sealed response: the largest class with its 16-byte response nonce and 16-byte
+/// tag. A client reading one-shot responses accepts this much.
+pub const MAX_SEALED_RESPONSE: usize = 1_056_768 + 32;
+
+/// The smallest of `classes` that holds `length` bytes.
+fn class_for(length: usize, classes: &[usize]) -> Result<usize, OhttpError> {
+    classes
+        .iter()
+        .copied()
+        .find(|class| *class >= length)
+        .ok_or(OhttpError::LongerThanPadding)
+}
+
 /// An encapsulated request ready to POST to the relay as `message/ohttp-req`, and the context
 /// that opens its one response.
 pub struct EncapsulatedRequest {
@@ -70,6 +94,23 @@ pub fn encapsulate_request_padded(
     rng: &mut impl CryptoRng,
 ) -> Result<EncapsulatedRequest, OhttpError> {
     seal_request(config, &padded(request.encode()?, padded_length)?, rng)
+}
+
+/// As [`encapsulate_request`], with the encoded request padded with zeros to the smallest of
+/// [`REQUEST_CLASSES`] that holds it: every request in one class has the same length.
+///
+/// # Errors
+///
+/// [`OhttpError::LongerThanPadding`] if the encoded request is longer than the largest class;
+/// otherwise as [`encapsulate_request`].
+pub fn encapsulate_request_classed(
+    config: &KeyConfig,
+    request: &BinaryRequest,
+    rng: &mut impl CryptoRng,
+) -> Result<EncapsulatedRequest, OhttpError> {
+    let encoded = request.encode()?;
+    let length = class_for(encoded.len(), &REQUEST_CLASSES)?;
+    seal_request(config, &padded(encoded, length)?, rng)
 }
 
 fn seal_request(
@@ -211,7 +252,34 @@ impl Responder {
         padded_length: usize,
         rng: &mut impl CryptoRng,
     ) -> Result<Vec<u8>, OhttpError> {
-        let encoded = padded(response.encode()?, padded_length)?;
+        self.seal_padded_encoded(response.encode()?, padded_length, rng)
+    }
+
+    /// As [`Responder::seal`], with the encoded response padded with zeros to the smallest of
+    /// [`RESPONSE_CLASSES`] that holds it: every response in one class has the same length, so
+    /// an empty answer cannot be told from a full one in its class.
+    ///
+    /// # Errors
+    ///
+    /// [`OhttpError::LongerThanPadding`] if the encoded response is longer than the largest
+    /// class; otherwise as [`Responder::seal`].
+    pub fn seal_classed(
+        self,
+        response: &BinaryResponse,
+        rng: &mut impl CryptoRng,
+    ) -> Result<Vec<u8>, OhttpError> {
+        let encoded = response.encode()?;
+        let length = class_for(encoded.len(), &RESPONSE_CLASSES)?;
+        self.seal_padded_encoded(encoded, length, rng)
+    }
+
+    fn seal_padded_encoded(
+        self,
+        encoded: Vec<u8>,
+        padded_length: usize,
+        rng: &mut impl CryptoRng,
+    ) -> Result<Vec<u8>, OhttpError> {
+        let encoded = padded(encoded, padded_length)?;
         self.inner
             .encapsulate(&encoded, rng)
             .map_err(|_| OhttpError::Internal)

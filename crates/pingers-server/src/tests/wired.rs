@@ -171,6 +171,38 @@ fn mailbox_path(key: &[u8; 32], rest: &str) -> String {
     format!("/v1/mailboxes/{}{rest}", hex::encode(id.as_bytes()))
 }
 
+/// Every sealed response in one size class has one length: an empty mailbox read, one with a
+/// knock in it, an accepted post and a refusal all look alike to the relay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sealed_responses_of_one_class_look_alike_to_the_relay() -> TestResult {
+    let server = start(Setup::default(), Echo).await?;
+    let wallet = Wallet::fetch(&server, 1, 2).await?;
+    let key = [9_u8; 32];
+    let register = inner(
+        "POST",
+        "/v1/mailboxes".to_owned(),
+        Vec::new(),
+        spec(&key, None)?,
+    );
+    let (registered, _) = super::sealed_response(&server, &wallet.pay(register)?).await?;
+    let path = mailbox_path(&key, "/msgs");
+    let read = inner("GET", path.clone(), read_key_header(&key), Vec::new());
+    let (empty, opened) = super::sealed_response(&server, &read).await?;
+    assert!(MailboxMessages::decode(&opened.body)?.messages.is_empty());
+    let knock = Padded::pad(&[1; 900], SizeClass::Bytes1024)?;
+    let post = inner("POST", path.clone(), Vec::new(), knock.as_bytes().to_vec());
+    let (posted, _) = super::sealed_response(&server, &wallet.pay(post)?).await?;
+    let (full, opened) = super::sealed_response(&server, &read).await?;
+    assert_eq!(MailboxMessages::decode(&opened.body)?.messages.len(), 1);
+    let wrong_key = inner("GET", path, read_key_header(&[8; 32]), Vec::new());
+    let (refused, opened) = super::sealed_response(&server, &wrong_key).await?;
+    assert_eq!(opened.status.get(), 403);
+    // 16 bytes of response nonce and 16 of tag around the padded response.
+    let class = pingers_ohttp::RESPONSE_CLASSES[0] + 32;
+    assert_eq!([registered, empty, posted, full, refused], [class; 5]);
+    server.stop().await
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mailboxes_register_post_read_and_delete_through_ohttp() -> TestResult {
     let server = start(Setup::default(), Echo).await?;
