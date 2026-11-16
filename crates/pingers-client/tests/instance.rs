@@ -56,23 +56,26 @@ async fn a_join_goes_ahead_without_a_push_token_and_every_join_needs_a_real_link
     let rig = rig(&harness, &config, harness_pins(&harness)?).await?;
     let link = harness_link(&harness, &config)?;
     let name = pingers_client::snapshot::Name::new("Bob")?;
-    // No token from the platform yet: the request would go without a subscription (the device
-    // polls instead), so the link is read next, and this one holds no invite.
-    assert!(matches!(
-        rig.client.open_invite(link.clone(), name.clone()).await,
-        Err(ClientError::Parties(_))
-    ));
+    let asked = |rig: &Rig| {
+        matches!(
+            rig.client.snapshot().joining,
+            Some(pingers_client::snapshot::Joining::Asked { .. })
+        )
+    };
+    // No token from the platform yet: the request goes without a subscription (the device reads
+    // its reply mailbox itself); nobody reads this invite mailbox, so the join stays asked.
+    rig.client.open_invite(link.clone(), name.clone()).await?;
+    assert!(asked(&rig));
+    rig.client.withdraw_join().await?;
+    assert_eq!(rig.client.snapshot().joining, None);
     rig.platform.set_push_registration(Some(PushRegistration {
         platform: PushPlatform::UnifiedPush,
         token: PushToken::from_bytes(b"https://push.harness.invalid/up/abc".to_vec()),
     }));
     // With a token the subscription is sealed to the pinned push relay key and the request
-    // goes out; nobody reads this invite mailbox, so the join stays asked.
+    // goes out the same way.
     rig.client.open_invite(link, name).await?;
-    assert!(matches!(
-        rig.client.snapshot().joining,
-        Some(pingers_client::snapshot::Joining::Asked { .. })
-    ));
+    assert!(asked(&rig));
     rig.client.withdraw_join().await?;
     assert_eq!(rig.client.snapshot().joining, None);
     // Withdrawn, there is nothing left to withdraw; and a link that is not an invite starts
