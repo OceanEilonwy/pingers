@@ -797,8 +797,9 @@ fn play(
             // An emulator has no Wi-Fi or cell location, so the OS geofences (which ride on the
             // low-power location a real phone always has) only see a fix when Pingers asks
             // for one. Opening the app at the Spot, as a person arriving would, runs a wake
-            // that asks; once a minute until the Meetup shows.
-            if round.is_multiple_of(12) {
+            // that asks, and each wake fills one more mailbox (a knock needs a reply mailbox,
+            // a record a knock mailbox); every fourth round until the Meetup shows.
+            if round.is_multiple_of(4) {
                 for device in [&scene.a, &scene.b] {
                     // Another app on top stops Pingers' activity for certain (the launcher may be
                     // busy being updated).
