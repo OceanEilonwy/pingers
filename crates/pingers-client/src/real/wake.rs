@@ -203,7 +203,7 @@ impl WakePort for Wake {
             WakeInput::Foreground(Foreground::Visible) => {
                 self.meetups.screen(MeetupScreen::Open).await?;
                 opened = true;
-                WakeTrigger::Scheduled
+                WakeTrigger::Opened
             }
             WakeInput::Foreground(Foreground::Hidden) => {
                 self.meetups.screen(MeetupScreen::Closed).await?;
