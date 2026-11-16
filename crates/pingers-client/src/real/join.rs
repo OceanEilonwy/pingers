@@ -81,7 +81,7 @@ pub(crate) async fn open_invite(net: &Net, link: InviteUrl, name: Name) -> Resul
         other => other?,
     };
     net.push([prepared]);
-    net.flush().await.map(drop)
+    net.flush().await
 }
 
 /// Registers an invite mailbox if none is pooled, for a new invite link.
@@ -186,7 +186,7 @@ pub(crate) async fn withdraw(net: &Net) -> Result<(), ClientError> {
         })
         .await?;
     net.push(outbound);
-    net.flush().await.map(drop)
+    net.flush().await
 }
 
 /// Forgets the "You're in" state once the user opened the Party.
@@ -225,7 +225,7 @@ pub(crate) async fn decide(
                 pingers_parties::Outbound::Commit(admission.commit),
                 admission.close_invite,
             ]);
-            net.flush().await.map(drop)
+            net.flush().await
         }
         JoinDecision::Refuse => {
             net.backend

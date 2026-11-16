@@ -60,7 +60,7 @@ impl Parties {
     /// Hands `outbound` to pingers-sync and sends what it can now.
     async fn send(&self, outbound: impl IntoIterator<Item = Outbound>) -> Result<(), ClientError> {
         self.net.push(outbound);
-        self.net.flush().await.map(drop)
+        self.net.flush().await
     }
 
     fn links(&self) -> std::sync::MutexGuard<'_, HashMap<PartyId, SharedLink>> {
