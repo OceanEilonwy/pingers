@@ -233,12 +233,7 @@ impl Net {
             pin,
         };
         let transport = network::router(route, trust, outside)?;
-        let engine = network::engine(
-            server,
-            Arc::clone(&transport),
-            self.servers.backend_database(),
-            outside,
-        )?;
+        let engine = network::engine(server, Arc::clone(&transport), self.servers.backend())?;
         engine
             .check_relay(WakeBudget::UNLIMITED)
             .await

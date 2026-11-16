@@ -5,8 +5,8 @@ B.4.9, B.12, D, E.2). L3: tokio (spawn_blocking, select), no detached tasks.
 
 ## API (what pingers-wake, pingers-parties, pingers-meetup-session and pingers-client use)
 
-- `SyncEngine::new(SyncParts { transport, database, clock, timer, rng }, SyncSettings { server,
-  role, credentials, token_stock, commit_attempts, queue_capacity })`. `transport` is the
+- `SyncEngine::new(SyncParts { transport, database, clock, timer, rng, self_test }, SyncSettings {
+  server, role, credentials, token_stock, commit_attempts, queue_capacity, self_test })`. `transport` is the
   pingers-transport `Router`; `database` the store: each store step opens its own session on the blocking pool, so the
   cross-process lock is held per step and the engine can live for the whole process.
 - **One engine per server** (2026-11-14): every store step runs in a pingers-store
@@ -15,6 +15,9 @@ B.4.9, B.12, D, E.2). L3: tokio (spawn_blocking, select), no detached tasks.
   upload); the server must have a `server` row first. The account key in `identity` is the
   device's and is registered on every server; each server records the gateway key hash its
   account was made with (`servers().server_pin`).
+  The prover self-test is the device's, not a server's: its result is one device-wide row, and
+  the engines of a process share one `SelfTestSlot` (`SyncParts::self_test`), so
+  `start_prover_self_test` on a second engine answers `AlreadyRunning` while the first runs.
 - Registration refusals: `SyncError::RegistrationCodeRequired` (refused without a code) and
   `SyncError::RegistrationCodeRefused` (refused the code offered); `CodeSource::{Build, Invite,
   User}`.

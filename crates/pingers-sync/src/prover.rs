@@ -4,8 +4,10 @@
 //!
 //! Until a self-test has passed, the main app uses Privacy Pass like an extension. The test
 //! takes about 21 proof times (8 s on an emulator, tens of seconds on a slow phone), so it runs
-//! in the background: [`SyncEngine::start_prover_self_test`] starts it and returns, and the
-//! engine owns the task. Its result is kept in the store:
+//! in the background: [`SyncEngine::start_prover_self_test`] starts it and returns. The test
+//! is of this device's prover, not of a server, so the engines of a process (one per server)
+//! share one [`SelfTestSlot`]: one test runs at a time, whichever engine started it. Its result
+//! is kept in the store:
 //!
 //! - passed: proofs are used until the parameters change (a new `PARAMETERS_ID`);
 //! - too slow: tested again after [`RETEST_AFTER`], since a phone that was busy or hot may pass
@@ -14,7 +16,7 @@
 //!   again for these parameters.
 
 use core::time::Duration;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use pingers_anon::{
     PARAMETERS_ID, SelfTestPlan, SelfTestReport, SelfTestVerdict, prover_self_test,
@@ -26,6 +28,30 @@ use rand_core::SeedableRng as _;
 
 use crate::engine::{device_blocking, lock};
 use crate::{ProcessRole, SyncEngine, SyncError};
+
+/// Where the process's one background self-test runs: every engine of the process holds a
+/// clone ([`crate::SyncParts::self_test`]), so a second engine finds the test already running
+/// instead of starting another. The test is stopped when the last clone goes.
+#[derive(Clone, Default)]
+pub struct SelfTestSlot {
+    running: Arc<RunningSelfTest>,
+}
+
+/// The task, owned by every clone of a [`SelfTestSlot`] together.
+#[derive(Default)]
+struct RunningSelfTest {
+    task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl Drop for RunningSelfTest {
+    /// Stops waiting for the test. (A proof already on the blocking pool finishes; its result
+    /// is recorded or dropped with the store.)
+    fn drop(&mut self) {
+        if let Some(task) = lock(&self.task).take() {
+            task.abort();
+        }
+    }
+}
 
 /// How long a "too slow" result stands before the prover is tested again.
 pub const RETEST_AFTER: Duration = Duration::from_hours(7 * 24);
@@ -165,8 +191,8 @@ impl SyncEngine {
     }
 
     /// Starts the configured self-test (`SyncSettings::self_test`) in the background if this is
-    /// the main app, no valid result is stored, and no test is running. Returns at once; the
-    /// engine owns the task and aborts it when dropped. Until a test passes, requests carry
+    /// the main app, no valid result is stored, and no test is running in this process (in any
+    /// engine sharing its [`SelfTestSlot`]). Returns at once; the slot owns the task. Until a test passes, requests carry
     /// Privacy Pass tokens.
     ///
     /// # Errors
@@ -178,7 +204,7 @@ impl SyncEngine {
         {
             return Ok(SelfTestStart::NotDue);
         }
-        let mut running = lock(&self.self_test);
+        let mut running = lock(&self.self_test.running.task);
         if running.as_ref().is_some_and(|task| !task.is_finished()) {
             return Ok(SelfTestStart::AlreadyRunning);
         }

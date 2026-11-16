@@ -891,6 +891,7 @@ impl World {
                 clock: Arc::new(self.clock.clone()),
                 timer: Arc::new(self.clock.clone()),
                 rng: Box::new(seeded_rng(seed)),
+                self_test: pingers_sync::SelfTestSlot::default(),
             },
             SyncSettings {
                 server: self.server_id.clone(),

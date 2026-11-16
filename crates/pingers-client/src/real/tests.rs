@@ -86,6 +86,7 @@ fn store() -> Result<Store, Box<dyn std::error::Error>> {
     let seeds = Arc::new(AtomicU64::new(0));
     let backend = Arc::new(Backend {
         database: Arc::new(database),
+        self_test: pingers_sync::SelfTestSlot::default(),
         outside: Outside {
             prover_self_test: pingers_sync::SelfTestPlan::new(
                 core::num::NonZeroU8::MIN,
@@ -906,5 +907,51 @@ async fn an_admission_the_client_cannot_carry_out_is_reported() -> TestResult {
             .await;
         assert_eq!(outcome, Err(PortError::Unavailable));
     }
+    Ok(())
+}
+
+/// The self-test is of this device's prover, not of a server: with Parties on two servers, the
+/// second server's engine finds the first one's test running instead of starting another.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn engines_of_two_servers_run_one_self_test() -> TestResult {
+    let store = store()?;
+    let mut engines = Vec::new();
+    for origin in ["https://a.test", "https://b.test"] {
+        let server = ServerId::new(origin.to_owned())?;
+        let record = pingers_store::ServerRecord {
+            server: server.clone(),
+            ohttp_relays: vec!["https://relay.invalid".to_owned()],
+            push_relay: None,
+            gateway_pins: vec![KeyConfigHash::from_bytes([1; 32])],
+            push_relay_pins: Vec::new(),
+            trust: pingers_store::ServerTrust::Confirmed,
+        };
+        session(&store, move |session| Ok(session.servers().put(&record)?)).await?;
+        let relays = ["https://relay.invalid".to_owned()];
+        let transport = super::network::router(
+            super::network::Route {
+                server: &server,
+                relays: &relays,
+                pin: pingers_transport::KeyPin::Pinned(pingers_ohttp::KeyPins::from(
+                    KeyConfigHash::from_bytes([1; 32]),
+                )),
+            },
+            &super::Trust::Mozilla,
+            &store.backend.outside,
+        )?;
+        engines.push(super::network::engine(&server, transport, &store.backend)?);
+    }
+    let [first, second] = engines.as_slice() else {
+        return Err("two engines".into());
+    };
+    assert_eq!(
+        first.start_prover_self_test().await?,
+        pingers_sync::SelfTestStart::Started
+    );
+    // A proof takes far longer than this call: the first engine's test is still running.
+    assert_eq!(
+        second.start_prover_self_test().await?,
+        pingers_sync::SelfTestStart::AlreadyRunning
+    );
     Ok(())
 }

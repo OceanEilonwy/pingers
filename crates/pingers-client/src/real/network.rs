@@ -14,13 +14,13 @@ use pingers_transport::{
 };
 
 use pingers_proto::AnonymousCredential;
-use pingers_store::{Database, ServerRecord, ServerTrust};
+use pingers_store::{ServerRecord, ServerTrust};
 use pingers_sync::{
     CommitAttempts, CredentialPolicy, ProcessRole, ProverStatus, QueueCapacity, SyncEngine,
     SyncParts, SyncSettings, TokenStock,
 };
 
-use super::Outside;
+use super::{Backend, Outside};
 use crate::ClientError;
 
 /// Where this device's server, OHTTP relay and push relay are, and the keys they must have.
@@ -176,16 +176,17 @@ pub(crate) fn router(
 pub(crate) fn engine(
     server: &ServerId,
     transport: Arc<dyn Transport>,
-    database: &Arc<Database>,
-    outside: &Outside,
+    backend: &Backend,
 ) -> Result<Arc<SyncEngine>, ClientError> {
+    let outside = &backend.outside;
     Ok(Arc::new(SyncEngine::new(
         SyncParts {
             transport,
-            database: Arc::clone(database),
+            database: Arc::clone(&backend.database),
             clock: Arc::clone(&outside.clock),
             timer: Arc::clone(&outside.timer),
             rng: (outside.rng)(),
+            self_test: backend.self_test.clone(),
         },
         SyncSettings {
             server: server.clone(),

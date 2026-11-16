@@ -196,8 +196,8 @@ impl Servers {
         }
     }
 
-    pub(crate) fn backend_database(&self) -> &Arc<pingers_store::Database> {
-        &self.backend.database
+    pub(crate) fn backend(&self) -> &Backend {
+        &self.backend
     }
 
     /// Raises `Notice::RelayKeyMismatch` for a server that has no link (yet).
@@ -361,12 +361,7 @@ impl Servers {
             pin: KeyPin::Pinned(pins),
         };
         let transport = network::router(route, &self.trust, outside)?;
-        let engine = network::engine(
-            &record.server,
-            Arc::clone(&transport),
-            &self.backend.database,
-            outside,
-        )?;
+        let engine = network::engine(&record.server, Arc::clone(&transport), &self.backend)?;
         let built_in = self
             .built_in
             .as_ref()

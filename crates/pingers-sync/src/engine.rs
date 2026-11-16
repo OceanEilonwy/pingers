@@ -20,6 +20,7 @@ use crate::credential::{
 };
 use crate::membership::TreeCache;
 use crate::pool::WakePush;
+use crate::prover::SelfTestSlot;
 use crate::queue::QueueCapacity;
 use crate::{
     ApiRequest, CommitAttempts, QueuePolicy, Route, Sending, SyncError, TokenStock, WakeBudget,
@@ -42,6 +43,9 @@ pub struct SyncParts {
     pub timer: Arc<dyn Timer>,
     /// Randomness.
     pub rng: SyncRng,
+    /// Where the prover self-test runs: one per process, cloned into each of its engines,
+    /// since the test is of this device's prover and not of a server.
+    pub self_test: SelfTestSlot,
 }
 
 /// How the engine behaves.
@@ -228,18 +232,9 @@ pub struct SyncEngine {
     pub(crate) wake_push: Mutex<Option<WakePush>>,
     /// The membership tree between refreshes (`membership.rs`).
     pub(crate) tree_cache: Mutex<Option<TreeCache>>,
-    /// The background prover self-test, while one runs (`prover.rs`).
-    pub(crate) self_test: Mutex<Option<tokio::task::JoinHandle<()>>>,
-}
-
-impl Drop for SyncEngine {
-    /// The engine owns its background self-test: stop waiting for it. (A proof already on the
-    /// blocking pool finishes; its result is recorded or dropped with the store.)
-    fn drop(&mut self) {
-        if let Some(task) = lock(&self.self_test).take() {
-            task.abort();
-        }
-    }
+    /// The process's background prover self-test, shared with its other engines
+    /// (`prover.rs`).
+    pub(crate) self_test: SelfTestSlot,
 }
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -290,7 +285,7 @@ impl SyncEngine {
             wake_push: Mutex::new(None),
             server: settings.server.clone(),
             tree_cache: Mutex::new(None),
-            self_test: Mutex::new(None),
+            self_test: parts.self_test,
             settings: Mutex::new(settings),
         }
     }

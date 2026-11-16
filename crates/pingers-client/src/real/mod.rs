@@ -97,6 +97,7 @@ impl Crates {
         let backend = Arc::new(Backend {
             database: Arc::new(database),
             outside,
+            self_test: pingers_sync::SelfTestSlot::default(),
         });
         let servers = servers::Servers::new(
             Arc::clone(&backend),
@@ -129,6 +130,8 @@ impl Crates {
 pub(crate) struct Backend {
     database: Arc<Database>,
     outside: Outside,
+    /// The one prover self-test of the process, shared by every server's engine.
+    self_test: pingers_sync::SelfTestSlot,
 }
 
 impl Backend {
