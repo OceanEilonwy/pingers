@@ -134,8 +134,8 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             PingersTheme {
-                // Test tags as view resource ids, so UI Automator on the host finds them (ui/E2eTags.kt).
-                Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
+                // Debug builds: test tags as view resource ids, so UI Automator on the host finds them (ui/E2eTags.kt).
+                Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = BuildConfig.DEBUG }) {
                     if (onboarded) {
                         App(repo, nav, pending, variant) { pending = null }
                     } else if (firstRunSetupLink) {

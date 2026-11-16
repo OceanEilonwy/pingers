@@ -51,6 +51,6 @@ object Fcm {
         val app = context.applicationContext
         FirebaseMessaging.getInstance().token
             .addOnSuccessListener { Push.setFcmToken(app, it) }
-            .addOnFailureListener { Log.w(TAG, "no FCM token: ${it.message}") }
+            .addOnFailureListener { Log.w(TAG, "no FCM token: ${it.forLog()}") }
     }
 }

@@ -77,6 +77,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import org.pingers.app.SecureScreen
 import org.pingers.app.Navigator
 import androidx.compose.ui.platform.testTag
 import org.pingers.app.ui.E2eTags
@@ -212,6 +213,7 @@ private fun MapAvatar(person: Person, size: Dp, modifier: Modifier = Modifier) {
 
 @Composable
 fun MeetupScreen(state: MeetupState, repo: PingersRepository, nav: Navigator) {
+    SecureScreen()
     val w = words()
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
         val frame = state.mapFrame
@@ -536,6 +538,7 @@ private val PinAt = MapPoint(195f, 256f)
 
 @Composable
 fun MeetPointScreen(state: MeetPointState, repo: PingersRepository, nav: Navigator) {
+    SecureScreen()
     val density = LocalDensity.current
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {

@@ -116,7 +116,7 @@ object Push {
             try {
                 PlatformHost.sink.onPush(platform, payload, priority)
             } catch (e: RuntimeException) {
-                Log.w(TAG, "core failed on push: ${e.message}")
+                Log.w(TAG, "core failed on push: ${e.forLog()}")
             }
         }
     }

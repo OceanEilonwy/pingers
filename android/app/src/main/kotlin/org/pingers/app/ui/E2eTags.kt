@@ -2,8 +2,9 @@ package org.pingers.app.ui
 
 /**
  * Test tags for the two-emulator scenario (`cargo xtask e2e-emulators`, xtask/src/scenario.rs).
- * MainActivity exposes them as view resource ids (`testTagsAsResourceId`), so UI Automator on
- * the host finds them in `uiautomator dump`. They name what a control does, not how it looks,
+ * MainActivity exposes them as view resource ids (`testTagsAsResourceId`) in debug builds only,
+ * so UI Automator on the host finds them in `uiautomator dump`; a release build does not hand its
+ * screen structure to other apps that read it. They name what a control does, not how it looks,
  * so a redesign keeps them. The scenario falls back to the visible text where a tag is missing,
  * which is how it finds the flow-A screens until they carry the tags listed below.
  */

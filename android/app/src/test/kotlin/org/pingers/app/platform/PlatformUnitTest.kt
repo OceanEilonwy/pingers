@@ -48,6 +48,23 @@ class PlatformUnitTest {
     }
 
     @Test
+    fun aReleaseLogNamesOnlyTheExceptionClass() {
+        val failure = IllegalStateException("https://pingers.example/j#v1.secret")
+        assertEquals("IllegalStateException", failure.forLog(debug = false))
+        assertEquals("IllegalStateException: https://pingers.example/j#v1.secret", failure.forLog(debug = true))
+    }
+
+    @Test
+    fun aCachedFixIsAgedOnTheMonotonicClock() {
+        val second = 1_000_000_000L
+        val now = 100 * second
+        assertEquals(true, ContinuousRequest.isCachedFixYoung(now - 4 * second, now))
+        assertEquals(false, ContinuousRequest.isCachedFixYoung(now - 5 * second, now))
+        // A fix stamped after now (another boot, or a bad provider) is not taken as young.
+        assertEquals(false, ContinuousRequest.isCachedFixYoung(now + second, now))
+    }
+
+    @Test
     fun secureStoreKeepsOnlyWrappedValues() {
         val store = store()
         val dbKey = ByteArray(32) { it.toByte() }

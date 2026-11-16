@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.pingers.app.BuildConfig
 import org.pingers.app.R
+import org.pingers.app.platform.forLog
 import org.pingers.app.platform.PhoneLog
 import uniffi.pingers.AreaEditor
 import uniffi.pingers.CodeAnswer
@@ -283,7 +284,7 @@ class CoreRepository(
         return try {
             block(s)
         } catch (e: CoreException) {
-            Log.i(TAG, "$what: ${e.message}")
+            Log.i(TAG, "$what: ${e.forLog()}")
             null
         }
     }
@@ -332,7 +333,7 @@ class CoreRepository(
             try {
                 uniffi.pingers.quietHoursEditor(draft.on, draft.from, draft.to)
             } catch (e: CoreException) {
-                Log.i(TAG, "quiet hours: ${e.message}")
+                Log.i(TAG, "quiet hours: ${e.forLog()}")
                 _quietHours.value
             }
         }
@@ -575,7 +576,7 @@ class CoreRepository(
             try {
                 block(c)
             } catch (e: CoreException) {
-                Log.w(TAG, "$what: ${e.message}")
+                Log.w(TAG, "$what: ${e.forLog()}")
                 onError(e.message ?: res.getString(R.string.core_unavailable))
             }
             refresh()
@@ -720,7 +721,7 @@ class CoreRepository(
             val look = try {
                 c.probeServer(url)
             } catch (e: CoreException) {
-                Log.w(TAG, "look up server: ${e.message}")
+                Log.w(TAG, "look up server: ${e.forLog()}")
                 if (partyDraft.server.host == url) {
                     partyDraft = partyDraft.copy(server = partyDraft.server.copy(check = uniffi.pingers.Reachability.Unreachable))
                     createError = e.message
@@ -805,7 +806,7 @@ class CoreRepository(
         return try {
             block(c).also { refresh() }
         } catch (e: CoreException) {
-            Log.w(TAG, "$what: ${e.message}")
+            Log.w(TAG, "$what: ${e.forLog()}")
             null
         }
     }
@@ -945,7 +946,7 @@ class CoreRepository(
         try {
             change(area)
         } catch (e: CoreException) {
-            Log.i(TAG, "draw: ${e.message}")
+            Log.i(TAG, "draw: ${e.forLog()}")
         }
         _drawArea.value = drawState()
     }
@@ -963,7 +964,7 @@ class CoreRepository(
         val vertices = try {
             area.polygon()
         } catch (e: CoreException) {
-            Log.i(TAG, "use area: ${e.message}")
+            Log.i(TAG, "use area: ${e.forLog()}")
             return
         }
         spotDraft = spotDraft.copy(shape = uniffi.pingers.ShapeKind.AREA, area = vertices)

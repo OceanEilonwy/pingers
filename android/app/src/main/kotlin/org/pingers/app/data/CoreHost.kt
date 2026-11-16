@@ -9,6 +9,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.pingers.app.platform.forLog
 import org.pingers.app.BuildConfig
 import org.pingers.app.platform.AndroidPlatform
 import org.pingers.app.platform.CoreNotification
@@ -110,7 +111,7 @@ object CoreHost {
                 Log.i(TAG, "core opened")
             }
         } catch (e: CoreException) {
-            fail("core did not open: ${e.message}")
+            fail("core did not open: ${e.forLog()}")
         } catch (e: PlatformException) {
             fail("secure store unavailable: ${e.error}")
         }

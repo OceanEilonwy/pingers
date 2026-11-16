@@ -37,6 +37,18 @@ data class ContinuousRequest(val highAccuracy: Boolean, val intervalMillis: Long
         const val MAX_CACHED_AGE_MILLIS = 5_000L
 
         /**
+         * Whether a cached fix taken at [fixElapsedNanos] (`Location.elapsedRealtimeNanos`) is
+         * young enough at [nowElapsedNanos] (`SystemClock.elapsedRealtimeNanos()`). Measured on
+         * the monotonic clock: a fix's wall-clock time comes from the provider and the phone's
+         * clock can be set back, either of which could make an old fix look new. A fix from the
+         * future (another boot) is not young.
+         */
+        fun isCachedFixYoung(fixElapsedNanos: Long, nowElapsedNanos: Long): Boolean {
+            val age = nowElapsedNanos - fixElapsedNanos
+            return age >= 0 && age < MAX_CACHED_AGE_MILLIS * 1_000_000L
+        }
+
+        /**
          * Backgrounded Meetup: send on 20 m movement or 60 s (the core drops to a 5-minute
          * keep-alive when stationary on its own). Compass open: GPS at 1 Hz.
          */

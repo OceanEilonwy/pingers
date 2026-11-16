@@ -1,5 +1,6 @@
 package org.pingers.app.ui.screens
 
+import org.pingers.app.SecureScreen
 import org.pingers.app.ui.map.LocalMaps
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -392,6 +393,7 @@ private val QrCode: ImageVector = ImageVector.Builder("qr", 160.dp, 160.dp, 21f,
 
 @Composable
 fun InviteScreen(state: InviteState, repo: PingersRepository, nav: Navigator) {
+    SecureScreen()
     val context = LocalContext.current
     val shareTitle = stringResource(R.string.invite_share_title, state.partyName)
     Page(

@@ -28,11 +28,11 @@ class LocationService : Service() {
             running = true
         } catch (e: SecurityException) {
             // Location permission was revoked: a location service can't be foreground without it.
-            Log.w(TAG, "foreground refused: ${e.message}")
+            Log.w(TAG, "foreground refused: ${e.forLog()}")
             stopSelf()
         } catch (e: IllegalStateException) {
             // ForegroundServiceStartNotAllowedException (Android 12+) is an IllegalStateException.
-            Log.w(TAG, "foreground refused: ${e.message}")
+            Log.w(TAG, "foreground refused: ${e.forLog()}")
             stopSelf()
         }
         // A stop asked for while this start was on its way: Android requires startForeground
@@ -80,11 +80,11 @@ class LocationService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && e is ForegroundServiceStartNotAllowedException) {
                 Log.w(TAG, "foreground service not allowed from the background")
             } else {
-                Log.w(TAG, "service not started: ${e.message}")
+                Log.w(TAG, "service not started: ${e.forLog()}")
             }
             false
         } catch (e: SecurityException) {
-            Log.w(TAG, "service not started: ${e.message}")
+            Log.w(TAG, "service not started: ${e.forLog()}")
             false
         }
 

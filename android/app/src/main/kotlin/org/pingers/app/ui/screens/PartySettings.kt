@@ -47,6 +47,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.pingers.app.SecureScreen
 import org.pingers.app.Navigator
 import org.pingers.app.R
 import org.pingers.app.Route
@@ -274,6 +275,7 @@ private val LeaveIcons: List<ImageVector> = listOf(PIcons.Pin, PIcons.Lock, PIco
 
 @Composable
 fun SafetyCodesScreen(state: SafetyCodesView?, repo: PingersRepository, nav: Navigator) {
+    SecureScreen()
     LaunchedEffect(Unit) { repo.openSafetyCodes() }
     if (state == null) return Waiting()
     Page(top = { TopBar(state.title, { nav.back() }, stringResource(R.string.cd_back), subtitle = state.subtitle) }, spacing = 0) {

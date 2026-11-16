@@ -31,7 +31,7 @@ class Geofences(
         try {
             store.put(STORE_KEY, encode(regions).toByteArray())
         } catch (e: PlatformException) {
-            Log.w(TAG, "geofences not saved for restore: ${e.message}")
+            Log.w(TAG, "geofences not saved for restore: ${e.forLog()}")
         }
         registrar.replace(regions, responsivenessMillis)
     }

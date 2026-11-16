@@ -6,6 +6,7 @@ import android.location.LocationManager
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
 import androidx.core.location.LocationListenerCompat
 import androidx.core.location.LocationManagerCompat
 import androidx.core.location.LocationRequestCompat
@@ -42,7 +43,7 @@ class ManagerFixes(context: Context, private val sink: () -> CoreSink) : FixSour
         // A recent enough fix answers at once, as Fused Location's max update age does.
         if (quality == FixQuality.BALANCED) {
             val last = manager.getLastKnownLocation(provider(quality))
-            if (last != null && System.currentTimeMillis() - last.time < ContinuousRequest.MAX_CACHED_AGE_MILLIS) {
+            if (last != null && ContinuousRequest.isCachedFixYoung(last.elapsedRealtimeNanos, SystemClock.elapsedRealtimeNanos())) {
                 executor.execute { sink().onFix(last.toFix()) }
                 return
             }

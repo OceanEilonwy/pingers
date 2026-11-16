@@ -31,7 +31,7 @@ class GmsGeofences(private val context: Context) : GeofenceRegistrar {
                 .addGeofences(regions.map { it.toGeofence(responsivenessMillis) })
                 .build()
             client.addGeofences(request, pending)
-                .addOnFailureListener { e -> Log.w(Geofences.TAG, "geofence registration failed: ${e.message}") }
+                .addOnFailureListener { e -> Log.w(Geofences.TAG, "geofence registration failed: ${e.forLog()}") }
         }
     }
 
