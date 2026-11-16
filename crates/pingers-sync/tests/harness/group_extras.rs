@@ -30,8 +30,9 @@ async fn subscriptions_state_and_deletion() -> TestResult {
                 subscriptions: Vec::new(),
                 state: Some(SealedSnapshot::from_bytes(vec![5; 10])),
             },
+            // A Meetup group: only those are deleted on request (a Party group answers 403).
             pingers_sync::GroupStart {
-                lifetime: pingers_sync::GroupLifetime::Party,
+                lifetime: pingers_sync::GroupLifetime::Meetup,
                 epoch: Epoch::new(0),
             },
             budget,

@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use pingers_crypto::{LogAuthKeyPair, PushRelayPrivateKey};
-use pingers_proto::{GroupId, SubscriptionId, TimeToLive};
+use pingers_proto::{GroupId, TimeToLive};
 use pingers_store::MailboxPurpose;
 use pingers_sync::{
     ApiRequest, CredentialPolicy, Delivered, GroupSigner, NewMailbox, ProverStatus, Route, Sending,

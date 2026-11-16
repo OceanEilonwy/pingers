@@ -348,11 +348,12 @@ impl SyncEngine {
         budget: WakeBudget,
     ) -> Result<(), SyncError> {
         let owner = self.subscription_owner(subscription)?;
-        let owned = OwnedSubscription {
+        let speaking = OwnedSubscription {
             id: *subscription,
             owner: &owner,
         };
-        let request = ApiRequest::delete_subscription(call.group, &owned, &self.signer(call.key))?;
+        let request =
+            ApiRequest::delete_subscription(call.group, &speaking, &self.signer(call.key))?;
         let response = self.exchange(request, budget).await?;
         if response.status() != 404 {
             response.success()?;

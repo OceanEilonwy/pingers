@@ -421,7 +421,7 @@ fn subscription_requests_are_signed_by_the_owner_too() -> Result<(), TestError> 
     let id = SubscriptionId::from_bytes([0x5b; 16]);
     let account = pingers_crypto::AccountSigningKey::from_bytes(Zeroizing::new([0x12; 32]));
     let owner = pingers_crypto::SubscriptionOwnerKey::derive(&account, &id)?;
-    let owned = OwnedSubscription { id, owner: &owner };
+    let speaking = OwnedSubscription { id, owner: &owner };
     let subscription = Subscription {
         id,
         push: pingers_proto::SealedPush {
@@ -436,8 +436,8 @@ fn subscription_requests_are_signed_by_the_owner_too() -> Result<(), TestError> 
     };
     for request in [
         ApiRequest::put_subscription(&group(), &subscription, &signer, &owner)?,
-        ApiRequest::delete_subscription(&group(), &owned, &signer)?,
-        ApiRequest::live(&group(), Some(&owned), &signer)?,
+        ApiRequest::delete_subscription(&group(), &speaking, &signer)?,
+        ApiRequest::live(&group(), Some(&speaking), &signer)?,
     ] {
         let signature: [u8; 64] = hex::decode(header(&request, SUBSCRIPTION_SIGNATURE_HEADER)?)
             .ok()

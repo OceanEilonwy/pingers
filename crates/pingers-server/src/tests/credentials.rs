@@ -1373,12 +1373,12 @@ async fn subscriptions_are_bound_to_their_owner_key() -> TestResult {
     assert_eq!(renewed.status.get(), 204);
     let (_own_sender, _own_client, _own_body) =
         super::open_live_with(&server, &head(Some(&victim))?).await?;
-    let (_sender, listener, mut heard) =
+    let (_sender, other, mut other_body) =
         super::open_live_with(&server, &creator.request("POST", "/live", Vec::new())?).await?;
     let sent = call(&server, &uplink(head(Some(&victim))?)).await?;
     assert_eq!(sent.status.get(), 202);
-    let mut decoder = listener.response_decoder();
-    assert_eq!(next_payload(&mut heard, &mut decoder).await?, frame);
+    let mut decoder = other.response_decoder();
+    assert_eq!(next_payload(&mut other_body, &mut decoder).await?, frame);
     let deleted = call(
         &server,
         &owner_signed(&victim, creator.request("DELETE", &path, Vec::new())?)?,

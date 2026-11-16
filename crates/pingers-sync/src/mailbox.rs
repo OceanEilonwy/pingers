@@ -4,15 +4,17 @@
 //! mailboxes and group subscriptions. What the posts mean is the owner's business.
 
 use pingers_crypto::{
-    MailboxReadKey, PushRelayPublicKey, PushTokenToSeal, SubscriptionOwnerKey, mailbox_id,
-    push_bind_for_mailbox, push_bind_for_subscription, seal_push_token,
+    AccountSigningKey, MailboxReadKey, PushRelayPublicKey, PushTokenToSeal, SubscriptionOwnerKey,
+    account_id, mailbox_id, push_bind_for_mailbox, push_bind_for_subscription, seal_push_token,
 };
 use pingers_proto::{
     GroupId, MailboxId, MailboxMessages, MailboxSpec, MessageAccepted, Padded, PushBind,
     PushHandle, PushRelayKeyId, PushTokenPlaintext, RelayRef, SealedPush, SequenceNumber,
     Subscription, SubscriptionId, TimeToLive, Urgency,
 };
-use pingers_store::{Mailbox, MailboxPurpose, MailboxState, SealStamp, StoredSubscription};
+use pingers_store::{
+    Identity, Mailbox, MailboxPurpose, MailboxState, SealStamp, StoredSubscription,
+};
 use pingers_time::UnixSeconds;
 
 use crate::registrations::stamp_of;
@@ -304,18 +306,28 @@ impl SyncEngine {
     ///
     /// # Errors
     ///
-    /// [`SyncError::NoCredential`] before this device has an account; [`SyncError::Store`];
-    /// [`SyncError::Crypto`].
+    /// [`SyncError::Store`]; [`SyncError::Crypto`].
     pub fn subscription_owner(
         &self,
         id: &SubscriptionId,
     ) -> Result<SubscriptionOwnerKey, SyncError> {
         let session = self.database.session()?;
-        let identity = session
-            .server(&self.server())?
-            .identity()
-            .load()?
-            .ok_or(SyncError::NoCredential)?;
+        let session = session.server(&self.server())?;
+        // The device's account key is made here if no account exists yet (a joiner's
+        // subscription travels in its join request before it registers); registering later
+        // keeps the first key made, as `ensure_identity` does.
+        let identity = session.transaction(|session| {
+            if let Some(identity) = session.identity().load()? {
+                return Ok::<_, SyncError>(identity);
+            }
+            let fresh = self.with_rng(AccountSigningKey::generate);
+            let identity = Identity {
+                account: account_id(&fresh.public_key()),
+                signing_key: fresh,
+            };
+            session.identity().save(&identity)?;
+            Ok(identity)
+        })?;
         Ok(SubscriptionOwnerKey::derive(&identity.signing_key, id)?)
     }
 

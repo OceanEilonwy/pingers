@@ -172,10 +172,10 @@ impl GroupNetwork for GroupLogs {
             .map(|id| link.engine.subscription_owner(&id).map(|owner| (id, owner)))
             .transpose()
             .map_err(|error| network_error(&error))?;
-        let owned = owner
+        let speaking = owner
             .as_ref()
             .map(|(id, owner)| OwnedSubscription { id: *id, owner });
-        let request = ApiRequest::live(group, owned.as_ref(), &Self::signer(&link, auth))
+        let request = ApiRequest::live(group, speaking.as_ref(), &Self::signer(&link, auth))
             .map_err(|error| network_error(&error))?;
         let result = link.engine.open_live(request).await;
         link.observe(&result);

@@ -84,13 +84,14 @@ fn attach(
     let subscription = match named {
         None => None,
         Some(id) => {
-            let held = shared
+            let stored = shared
                 .groups
                 .subscription(&group, &id)
                 .map_err(|error| status_of(&error))?;
-            match held {
-                Some(held) => {
-                    check_owner_signature(head, &held.owner, &[]).map_err(|reply| reply.status)?;
+            match stored {
+                Some(stored) => {
+                    check_owner_signature(head, &stored.owner, &[])
+                        .map_err(|reply| reply.status)?;
                     Some(id)
                 }
                 None => None,
