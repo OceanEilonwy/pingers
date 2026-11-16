@@ -768,6 +768,15 @@ impl ServerPort for Net {
             .flatten()
     }
 
+    fn take_decoy_mailbox(&self, server: &ServerId, lease_start: Bucket) -> Option<MailboxId> {
+        self.servers
+            .loaded(server)?
+            .engine
+            .take_decoy_for_lease(lease_start)
+            .ok()
+            .flatten()
+    }
+
     async fn maintain_push_registrations(&self, server: &ServerId) -> Result<(), PortError> {
         Net::maintain_push_registrations(self, server)
             .await

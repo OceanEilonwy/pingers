@@ -82,8 +82,12 @@ pingers-meetup-session and the shell.
   `MailboxReads::EveryWake` ("No wake-up pushes"). Every live real record's knock mailbox is
   read, whether or not its Spot has keys, so a suppressed device reads like any other. This
   includes records held when the wake began that its own upload replaced, so a knock is not
-  lost to a re-post, and a knock sent in the same wake counts for the tie-break. A knock is
-  decided once (keyed by its reply mailbox). Knocks, decisions and unanswered-knock notices
+  lost to a re-post, and a knock sent in the same wake counts for the tie-break. Each dummy
+  slot's decoy knock mailbox (`LeaseSlot::decoy_mailbox`, taken from the knock pool with the
+  lease through `ServerPort::take_decoy_mailbox`, only beyond a reserve kept for real records)
+  is read too, in a random order among the real ones, so every lease has
+  `Lease::SLOTS` reads whatever number of Spots has records; a decoy's posts are ignored. A
+  knock is decided once (keyed by its reply mailbox). Knocks, decisions and unanswered-knock notices
   are kept per board; mailbox reads go to the board's server.
 - **Liveness**: one GPS fix per wake with knocks to decide, shared by every round;
   `FreshFix::InsideSpot` only for a fix inside the fence (not the exit band); Focus and the

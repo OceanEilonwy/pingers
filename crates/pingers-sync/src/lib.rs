@@ -68,7 +68,7 @@ pub use mailbox::{Delivered, NewMailbox, PushSeal};
 pub use membership::MembershipRefresh;
 /// The prover self-test plan `SyncSettings::self_test` takes (pingers-anon's).
 pub use pingers_anon::SelfTestPlan;
-pub use pool::{LEASE_BUCKETS, PoolRefill, PoolTarget, WakePush};
+pub use pool::{DECOY_RESERVE, LEASE_BUCKETS, PoolRefill, PoolTarget, WakePush};
 pub use prover::{RETEST_AFTER, SelfTestSlot, SelfTestStanding, SelfTestStart};
 pub use queue::{QueueCapacity, QueuePolicy, Sending};
 pub use registrations::{GroupMembership, Maintained, Maintenance, Pushes, RENEW_AHEAD};

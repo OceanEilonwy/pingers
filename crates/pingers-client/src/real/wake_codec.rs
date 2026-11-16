@@ -2,6 +2,7 @@
 //! pingers-wake's [`WakeSnapshot`] as a client record. The snapshot holds no coordinates.
 //!
 //! Version 2 starts with [`MARKER`] and the version byte, then keeps one board per server.
+//! Version 3 adds each dummy slot's decoy knock mailbox; version 2 is read with none.
 //! The first layout had no version: it started with the Spot count (never `u32::MAX`) and held
 //! one board's leases, knocks and last upload, which [`load`] moves into a board for the
 //! server the client was using.
@@ -23,7 +24,10 @@ use crate::ClientError;
 const MARKER: u32 = u32::MAX;
 
 /// The layout [`save`] writes.
-const VERSION: u8 = 2;
+const VERSION: u8 = 3;
+
+/// The layout before decoy mailboxes, still read.
+const VERSION_WITHOUT_DECOYS: u8 = 2;
 
 /// The stored snapshot, or the empty one on a fresh install. A snapshot in the first layout
 /// has its board data put under `legacy_server` (the server of the client's instance); with no
@@ -98,6 +102,9 @@ fn encode_board_memory(writer: &mut Writer, board: &BoardSnapshot) {
                 writer.u64(real.epoch.get());
                 writer.fixed(real.knock_mailbox.as_bytes());
             });
+            writer.option(slot.decoy_mailbox, |writer, decoy| {
+                writer.fixed(decoy.as_bytes());
+            });
         }
     }
     writer.len(board.sent_knocks.len());
@@ -133,14 +140,16 @@ fn decode(
         let spot_count = usize::try_from(first).map_err(|_too_long| corrupt())?;
         return decode_first_layout(reader, spot_count, legacy_server);
     }
-    if reader.byte()? != VERSION {
-        return Err(corrupt());
-    }
+    let decoys = match reader.byte()? {
+        VERSION => Decoys::Stored,
+        VERSION_WITHOUT_DECOYS => Decoys::Absent,
+        _ => return Err(corrupt()),
+    };
     let spots = reader.list(decode_spot)?;
     let last_in_zone = reader.option(time)?;
     let boards = reader.list(|reader| {
         let server = ServerId::new(reader.text()?).map_err(|_bad| corrupt())?;
-        Ok(decode_board_memory(reader)?.on(server))
+        Ok(decode_board_memory(reader, decoys)?.on(server))
     })?;
     let epochs = reader.list(decode_epoch)?;
     let peer_activity = reader.list(decode_activity)?;
@@ -165,7 +174,7 @@ fn decode_first_layout(
     }
     let last_in_zone = reader.option(time)?;
     // The board data is read in full either way, so the epochs after it decode.
-    let board = decode_board_memory(reader)?;
+    let board = decode_board_memory(reader, Decoys::Absent)?;
     let epochs = reader.list(decode_epoch)?;
     let peer_activity = reader.list(decode_activity)?;
     let boards = legacy_server
@@ -221,12 +230,23 @@ impl BoardMemory {
     }
 }
 
-fn decode_board_memory(reader: &mut Reader<'_>) -> Result<BoardMemory, ClientError> {
+/// Whether a layout stores each slot's decoy mailbox.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Decoys {
+    Stored,
+    Absent,
+}
+
+fn decode_board_memory(
+    reader: &mut Reader<'_>,
+    decoys: Decoys,
+) -> Result<BoardMemory, ClientError> {
     let leases = reader.list(|reader| {
         let start = Bucket::from_index(reader.u64()?).map_err(|_bad| corrupt())?;
         let mut lease_slots = [LeaseSlot {
             randomness: RecordRandomness::from_bytes([0; RecordRandomness::LENGTH]),
             real: None,
+            decoy_mailbox: None,
         }; Lease::SLOTS];
         for slot in &mut lease_slots {
             *slot = LeaseSlot {
@@ -238,6 +258,12 @@ fn decode_board_memory(reader: &mut Reader<'_>) -> Result<BoardMemory, ClientErr
                         knock_mailbox: MailboxId::from_bytes(reader.fixed()?),
                     })
                 })?,
+                decoy_mailbox: match decoys {
+                    Decoys::Stored => {
+                        reader.option(|reader| Ok(MailboxId::from_bytes(reader.fixed()?)))?
+                    }
+                    Decoys::Absent => None,
+                },
             };
         }
         Ok(LiveLease {

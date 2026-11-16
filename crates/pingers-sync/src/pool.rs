@@ -14,6 +14,10 @@ use crate::{NewMailbox, NotSentReason, PushSeal, SyncEngine, SyncError, WakeBudg
 /// Buckets a lease is live for (design F.1, `L = 4`).
 pub const LEASE_BUCKETS: BucketCount = BucketCount::new(4);
 
+/// The pooled knock mailboxes a decoy may never take: enough for a full lease of real records
+/// (`Lease::SLOTS`), so reading decoys never leaves a Spot without a record.
+pub const DECOY_RESERVE: u32 = 4;
+
 /// The sealed pushes this device registers, set by the client from the platform's push
 /// tokens. Without it ("No wake-up pushes") mailboxes and subscriptions carry no push.
 #[derive(Clone, Debug)]
@@ -127,6 +131,35 @@ impl SyncEngine {
         lease_start: Bucket,
     ) -> Result<Option<MailboxId>, SyncError> {
         self.take_mailbox_until(purpose, lease_end(lease_start)?)
+    }
+
+    /// Takes a pooled knock mailbox for a lease starting in `lease_start` to stand as a dummy
+    /// slot's decoy (read like a real record's, so reads do not count Spots), but only while
+    /// the pool keeps [`DECOY_RESERVE`] more for real records: decoys never starve them.
+    /// Synchronous, like [`SyncEngine::take_mailbox_for_lease`].
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Store`]; [`SyncError::OutOfRange`].
+    pub fn take_decoy_for_lease(
+        &self,
+        lease_start: Bucket,
+    ) -> Result<Option<MailboxId>, SyncError> {
+        let until = lease_end(lease_start)?;
+        let session = self.database.session()?;
+        let server = session.server(&self.server())?;
+        server.transaction(|server| {
+            let pooled = server
+                .mailboxes()
+                .pooled_count(MailboxPurpose::Knock, until)?;
+            if pooled <= DECOY_RESERVE {
+                return Ok(None);
+            }
+            Ok(server
+                .mailboxes()
+                .take_pooled(MailboxPurpose::Knock, until)?
+                .map(|mailbox| mailbox.id()))
+        })
     }
 
     /// Takes a pooled mailbox of `purpose` that lives at least until `until` (an invite's

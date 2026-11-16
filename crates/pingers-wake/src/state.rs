@@ -29,6 +29,11 @@ pub struct LeaseSlot {
     pub randomness: RecordRandomness,
     /// The real record, or `None` for a dummy.
     pub real: Option<RealRecord>,
+    /// For a dummy, the decoy knock mailbox taken from the pool with the lease and read like a
+    /// real record's, so every lease has [`Lease::SLOTS`] mailboxes read and the reads do not
+    /// show how many Spots the device has records for (design B.4.4). `None` for a real
+    /// record, or when the pool had none to spare.
+    pub decoy_mailbox: Option<MailboxId>,
 }
 
 /// A lease the server may hold. A lease is remembered before it is uploaded, so a wake that
@@ -51,6 +56,11 @@ impl LiveLease {
         self.slots
             .iter()
             .filter_map(|slot| slot.real.map(|real| (slot, real)))
+    }
+
+    /// The decoy mailboxes of its dummy slots.
+    pub(crate) fn decoys(&self) -> impl Iterator<Item = MailboxId> + '_ {
+        self.slots.iter().filter_map(|slot| slot.decoy_mailbox)
     }
 }
 

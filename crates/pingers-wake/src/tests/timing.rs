@@ -578,7 +578,60 @@ async fn without_pushes_every_wake_reads_the_mailboxes() -> Result<(), TestError
         .iter()
         .filter(|call| matches!(call, Call::ReadMailbox(_)))
         .count();
-    assert_eq!(reads, 1);
+    // Whole leases' worth: the real record's mailbox and the decoys of the dummy slots.
+    assert!(reads > 0);
+    assert_eq!(reads % pingers_proto::Lease::SLOTS, 0);
+    Ok(())
+}
+
+/// The `ReadMailbox` calls of one scheduled wake a minute on, with a fix at `spot`.
+async fn reads_of_the_next_wake(
+    town: &Town,
+    phone: &mut super::Phone,
+    spot: &str,
+    inside: bool,
+) -> Result<usize, TestError> {
+    phone.server.take_calls();
+    town.advance(Duration::from_mins(1));
+    let fixture = town.spot(spot)?;
+    phone.platform.script_fix(if inside {
+        fixture.fix_inside(phone.now())
+    } else {
+        fixture.fix_outside(phone.now())?
+    });
+    phone.wake(WakeTrigger::Scheduled).await?;
+    Ok(phone
+        .server
+        .calls()
+        .iter()
+        .filter(|call| matches!(call, Call::ReadMailbox(_)))
+        .count())
+}
+
+/// "No wake-up pushes" reads mailboxes on every wake, and as many whatever number of Spots the
+/// device has records for: each dummy slot's decoy mailbox is read with the real ones, so the
+/// server cannot count a device's Spots by its reads.
+#[tokio::test]
+async fn without_pushes_the_reads_do_not_count_the_spots() -> Result<(), TestError> {
+    let town = Town::new()?;
+    let mut inside = town.phone(0)?;
+    let mut outside = town.phone(1)?;
+    for phone in [&mut inside, &mut outside] {
+        phone.settings.mailbox_reads = crate::MailboxReads::EveryWake;
+    }
+    inside
+        .enter(town.spot("anchor")?, town.spot_ref("anchor")?)
+        .await?;
+    outside
+        .platform
+        .script_fix(town.spot("canal")?.fix_outside(outside.now())?);
+    outside.wake(WakeTrigger::Scheduled).await?;
+    assert_eq!(inside.real_records(), 1);
+    assert_eq!(outside.real_records(), 0);
+    let one_spot = reads_of_the_next_wake(&town, &mut inside, "anchor", true).await?;
+    let no_spot = reads_of_the_next_wake(&town, &mut outside, "canal", false).await?;
+    assert_eq!(one_spot, no_spot);
+    assert_eq!(one_spot, pingers_proto::Lease::SLOTS);
     Ok(())
 }
 
@@ -686,6 +739,7 @@ async fn restore_keeps_every_stored_field() -> Result<(), TestError> {
         slots: [crate::LeaseSlot {
             randomness: record,
             real: None,
+            decoy_mailbox: None,
         }; pingers_proto::Lease::SLOTS],
     };
     let snapshot = crate::WakeSnapshot {

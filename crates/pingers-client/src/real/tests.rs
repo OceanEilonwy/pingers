@@ -207,6 +207,7 @@ async fn a_full_wake_snapshot_round_trips_through_the_store() -> TestResult {
     let mut slots = [LeaseSlot {
         randomness: RecordRandomness::from_bytes([2; 16]),
         real: None,
+        decoy_mailbox: Some(MailboxId::from_bytes([8; 16])),
     }; Lease::SLOTS];
     if let Some(slot) = slots.last_mut() {
         *slot = LeaseSlot {
@@ -216,6 +217,7 @@ async fn a_full_wake_snapshot_round_trips_through_the_store() -> TestResult {
                 epoch: Epoch::new(4),
                 knock_mailbox: MailboxId::from_bytes([9; 16]),
             }),
+            decoy_mailbox: None,
         };
     }
     let knock = |seed: u8, status| SentKnock {
@@ -292,6 +294,7 @@ async fn a_first_layout_wake_snapshot_moves_into_the_instance_servers_board() ->
         slots: [LeaseSlot {
             randomness: RecordRandomness::from_bytes([2; 16]),
             real: None,
+            decoy_mailbox: None,
         }; Lease::SLOTS],
     };
     let decided = DecidedKnock {

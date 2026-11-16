@@ -467,6 +467,14 @@ impl ServerPort for FakeServer {
         ]))
     }
 
+    fn take_decoy_mailbox(&self, server: &ServerId, lease_start: Bucket) -> Option<MailboxId> {
+        // As pingers-sync does: never below a full lease's worth for real records.
+        if lock(&self.inner).pool <= pingers_proto::Lease::SLOTS {
+            return None;
+        }
+        self.take_mailbox(server, MailboxPurpose::Knock, lease_start)
+    }
+
     async fn maintain_push_registrations(&self, server: &ServerId) -> Result<(), PortError> {
         self.gate(server, CallKind::Refill, Call::Refill).await
     }

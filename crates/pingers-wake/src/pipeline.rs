@@ -987,6 +987,11 @@ where
         let start = self.now.bucket();
         let real = self.real_slots(memory, keys, start);
         let real_records = real.len();
+        // Every dummy slot gets a decoy knock mailbox from the same pool, read with the real
+        // ones, so the mailbox reads per lease do not count the device's Spots.
+        let decoys: Vec<MailboxId> = (real_records..pingers_proto::Lease::SLOTS)
+            .map_while(|_| self.env.server.take_decoy_mailbox(server, start))
+            .collect();
         let revoke_key = RevokeKey::generate(self.rng);
         let built = build_lease(
             &LeaseInputs {
@@ -996,7 +1001,7 @@ where
             },
             self.rng,
         )?;
-        let live = remember(start, &built.slots, parties);
+        let live = remember(start, &built.slots, parties, &decoys);
         // Remembered before the upload: if the wake stops mid-request the server may still
         // hold it, so its records must be skipped and knocks on them answered.
         memory.board.leases.push(live);
@@ -1212,24 +1217,42 @@ where
             active,
         } = *keys;
         let mut received = Vec::new();
-        let records: Vec<(Bucket, RecordRandomness, RealRecord)> = leases
+        // Real records' knock mailboxes and the decoys of the dummy slots, in a random order:
+        // the server sees the same number of reads whatever number of Spots has records.
+        let mut reads: Vec<MailboxRead> = leases
             .iter()
             .flat_map(|lease| {
                 lease
                     .real_records()
-                    .map(move |(slot, real)| (lease.start, slot.randomness, real))
+                    .map(move |(slot, real)| MailboxRead::Real {
+                        start: lease.start,
+                        own_record: slot.randomness,
+                        real,
+                    })
+                    .chain(lease.decoys().map(MailboxRead::Decoy))
             })
             .collect();
-        for (start, own_record, real) in records {
+        shuffle(&mut reads, self.rng);
+        for read in reads {
+            let mailbox = match read {
+                MailboxRead::Real { real, .. } => real.knock_mailbox,
+                MailboxRead::Decoy(mailbox) => mailbox,
+            };
             let port = self.env.server;
             let Some(posts) = self
-                .port(
-                    WakeStep::Mailboxes,
-                    port.read_mailbox(server, real.knock_mailbox),
-                )
+                .port(WakeStep::Mailboxes, port.read_mailbox(server, mailbox))
                 .await
             else {
                 break;
+            };
+            let MailboxRead::Real {
+                start,
+                own_record,
+                real,
+            } = read
+            else {
+                // Nobody knocks on a decoy: whatever it holds is not read.
+                continue;
             };
             let Some(keys) = active
                 .iter()
@@ -1599,26 +1622,58 @@ fn current_epoch(parties: &[PartyInfo], spot: SpotRef) -> Option<Epoch> {
         .map(|party| party.epoch.current)
 }
 
-/// What the client remembers of a built lease.
+/// One knock mailbox to read: a real record's, or a dummy slot's decoy.
+#[derive(Clone, Copy)]
+enum MailboxRead {
+    Real {
+        start: Bucket,
+        own_record: RecordRandomness,
+        real: RealRecord,
+    },
+    Decoy(MailboxId),
+}
+
+/// Fisher-Yates, from `rng`.
+fn shuffle<T>(items: &mut [T], rng: &mut impl CryptoRng) {
+    for index in (1..items.len()).rev() {
+        let bound = u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1);
+        // The modulo bias over 2^64 is negligible for a list of a few reads.
+        let pick = usize::try_from(rng.next_u64().checked_rem(bound).unwrap_or(0)).unwrap_or(0);
+        items.swap(index, pick);
+    }
+}
+
+/// What the client remembers of a built lease, its dummy slots given `decoys` in order.
 fn remember(
     start: Bucket,
     slots: &[pingers_presence::SlotRecord; pingers_proto::Lease::SLOTS],
     parties: &[PartyInfo],
+    decoys: &[MailboxId],
 ) -> LiveLease {
+    let mut decoys = decoys.iter().copied();
     LiveLease {
         start,
-        slots: slots.map(|slot| LeaseSlot {
-            randomness: slot.randomness,
-            real: match slot.content {
-                SlotContent::Real {
-                    spot,
-                    knock_mailbox,
-                } => current_epoch(parties, spot).map(|epoch| RealRecord {
+        slots: slots.map(|slot| match slot.content {
+            SlotContent::Real {
+                spot,
+                knock_mailbox,
+            } => {
+                let real = current_epoch(parties, spot).map(|epoch| RealRecord {
                     spot,
                     epoch,
                     knock_mailbox,
-                }),
-                SlotContent::Dummy => None,
+                });
+                LeaseSlot {
+                    randomness: slot.randomness,
+                    real,
+                    // A record of a Party that is gone is still read, as a decoy.
+                    decoy_mailbox: real.is_none().then_some(knock_mailbox),
+                }
+            }
+            SlotContent::Dummy => LeaseSlot {
+                randomness: slot.randomness,
+                real: None,
+                decoy_mailbox: decoys.next(),
             },
         }),
     }

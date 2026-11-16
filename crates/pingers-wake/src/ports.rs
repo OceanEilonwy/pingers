@@ -188,6 +188,11 @@ pub trait ServerPort: Send + Sync {
         lease_start: Bucket,
     ) -> Option<MailboxId>;
 
+    /// Takes a pooled knock mailbox on `server` for a lease starting in `lease_start` as a
+    /// dummy slot's decoy, or `None` if the pool has none to spare beyond what real records
+    /// need (decoys must never starve them).
+    fn take_decoy_mailbox(&self, server: &ServerId, lease_start: Bucket) -> Option<MailboxId>;
+
     /// Makes at most one push registration on `server` (design E.2, F.3): seals one stale
     /// mailbox or subscription there again (a new push token or relay key, pushes switched on
     /// or off, a seal running out), or else registers one new mailbox for its pool. One per
