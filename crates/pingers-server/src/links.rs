@@ -5,9 +5,11 @@
 //! Android open this server's links in the app directly (App Links).
 //!
 //! The invite is in the link's fragment, which browsers never send: the server only ever sees
-//! `GET /j`. The page is static, the same for every invite and cacheable; its script reads the
-//! fragment on the phone and forwards it to `pingers://join#<invite>`, or on Android to each
-//! configured app in turn through an intent URL. No request is logged
+//! `GET /j`. The page is static, the same for every invite and cacheable; its script makes no
+//! request, checks the fragment's shape on the phone and forwards it to `pingers://join#<invite>`,
+//! or on Android to the first configured app through an intent URL (and the second through
+//! "Try the other Pingers build"), falling back to the install page. A dishonest server could
+//! serve a script that reads the fragment; design D and "What your server sees" say so. No request is logged
 //! (the server keeps counts only, by channel and outcome).
 
 use axum::body::Bytes;

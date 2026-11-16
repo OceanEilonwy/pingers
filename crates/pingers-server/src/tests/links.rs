@@ -77,11 +77,28 @@ async fn the_landing_page_is_static_strict_and_names_no_invite() -> TestResult {
     assert!(script.contains("\"pingers://join#\""));
     // Invites and the owner's setup link (#s1.) both go to the app.
     assert!(script.contains("#[vs]1"));
-    // On Android, an intent URL naming each app in turn, the install page last.
+    // On Android, an intent URL naming the app, falling back to the install page.
     assert!(script.contains("intent://join#Intent;scheme=pingers;package="));
     assert!(script.contains("S.browser_fallback_url="));
-    assert!(script.contains("\"/j?app=\""));
-    assert!(!script.contains("fetch(") && !script.contains("XMLHttpRequest"));
+    // It makes no request of any kind: no fetch, no XHR, no beacon, no reload of this page,
+    // and it uses the fragment only to hand it on.
+    for request in [
+        "fetch(",
+        "XMLHttpRequest",
+        "sendBeacon",
+        "WebSocket",
+        "EventSource",
+        "location.href =",
+        "location.assign",
+        "location.replace",
+        "/j?app=",
+        "document.title",
+        "textContent",
+        "innerHTML",
+    ] {
+        assert!(!script.contains(request), "{request}");
+    }
+    assert_eq!(script.matches("window.location.hash").count(), 1);
 
     let style = send(
         &mut client,

@@ -76,7 +76,7 @@ const ACTIVITY: &str = "org.pingers.app.MainActivity";
 const STACK_HOST: &str = "10.0.2.2";
 /// The landing page's title (pingers-server's assets/landing.html), which Chrome shows in the dump
 /// even when none of the page reaches it.
-const LANDING_TITLE: &str = "Pingers invite";
+const LANDING_TITLE: &str = "Pingers link";
 /// The browser on the Play images.
 const CHROME: &str = "com.android.chrome";
 /// The ntfy app, the UnifiedPush distributor on the emulators.

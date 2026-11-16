@@ -4,7 +4,8 @@
 //! [`facts`] decides which statements are true for a [`PrivacyConfiguration`]: what the server
 //! can see, what it never sees, and notes about the relays. [`server_sees`] writes them. The
 //! release default (three operators, wake-up pushes on, membership proofs, relay working) gives
-//! exactly the canvas's two "can see" and five "never sees" lines; each departure from it
+//! exactly the canvas's two "can see" and five "never sees" lines (and the note about invite
+//! links opened in a browser, which is always true); each departure from it
 //! changes the lists as design A.2 says it changes what the server learns.
 
 use pingers_screens::party::Overlap;
@@ -55,6 +56,9 @@ pub enum Note {
     RelayUnreachable,
     /// A relay key does not match its pin: anonymous traffic stopped.
     RelayKeyMismatch,
+    /// An invite link opened in a browser loads this server's landing page, whose script a
+    /// dishonest server could change to read the invite. Always.
+    BrowserLinks,
 }
 
 /// Which statements are true for a configuration.
@@ -100,6 +104,7 @@ pub fn facts(configuration: &PrivacyConfiguration) -> Facts {
         RelayStatus::Unreachable => notes.push(Note::RelayUnreachable),
         RelayStatus::KeyMismatch => notes.push(Note::RelayKeyMismatch),
     }
+    notes.push(Note::BrowserLinks);
     Facts {
         can_see,
         never_sees,
@@ -167,6 +172,10 @@ pub fn note(language: Language, note: Note) -> String {
         Note::RelayKeyMismatch => {
             "The privacy relay's key doesn't match the one your party agreed on. Pingers has \
              stopped anonymous traffic until it does."
+        }
+        Note::BrowserLinks => {
+            "An invite link opened in a browser loads a page from this server, and a dishonest \
+             server could change that page to read the invite. Open invite links in Pingers."
         }
     }
     .into()
@@ -311,7 +320,7 @@ mod tests {
                 "Whether you're paused, in Focus, or in an exclusion zone",
             ]
         );
-        assert!(text.notes.is_empty());
+        assert_eq!(text.notes, [note(EN, Note::BrowserLinks)]);
         assert_eq!(text.security_link, "How Pingers keeps you private");
         Ok(())
     }
@@ -366,7 +375,7 @@ mod tests {
     #[test]
     fn one_operator_running_both_relays_is_a_note() {
         let facts = facts(&configuration(vec![Overlap::RelayRunsPushRelay]));
-        assert_eq!(facts.notes, [Note::RelaysShareOperator]);
+        assert_eq!(facts.notes, [Note::RelaysShareOperator, Note::BrowserLinks]);
         assert_eq!(facts.can_see, [CanSee::CheckIns, CanSee::MeetupForming]);
     }
 
@@ -409,10 +418,22 @@ mod tests {
         let mut snapshot = fixtures::snapshot()?;
         snapshot.relay = RelayStatus::Unreachable;
         let text = server_sees(EN, &screen(&snapshot, fixtures::climbing_crew())?);
-        assert_eq!(text.notes, [note(EN, Note::RelayUnreachable)]);
+        assert_eq!(
+            text.notes,
+            [
+                note(EN, Note::RelayUnreachable),
+                note(EN, Note::BrowserLinks)
+            ]
+        );
         snapshot.relay = RelayStatus::KeyMismatch;
         let text = server_sees(EN, &screen(&snapshot, fixtures::climbing_crew())?);
-        assert_eq!(text.notes, [note(EN, Note::RelayKeyMismatch)]);
+        assert_eq!(
+            text.notes,
+            [
+                note(EN, Note::RelayKeyMismatch),
+                note(EN, Note::BrowserLinks)
+            ]
+        );
         Ok(())
     }
 
@@ -463,7 +484,7 @@ mod tests {
             ]
         );
         // The server's operator runs both relays: the can-see lines already say so.
-        assert_eq!(facts.notes, []);
+        assert_eq!(facts.notes, [Note::BrowserLinks]);
         let text = server_sees(EN, &view);
         assert_eq!(text.hosting, None);
         assert_eq!(text.can_see.len(), 5);
