@@ -480,6 +480,31 @@ mod tests {
         Ok(crate::joining::encode_approval(&approval)?)
     }
 
+    /// Writes old invite records for `party`, with their list and index entries.
+    fn write_old_invites(
+        session: &Session,
+        party: &PartyId,
+        invites: &[(MailboxId, Vec<u8>)],
+    ) -> Result<(), TestError> {
+        let mailboxes: Vec<MailboxId> = invites.iter().map(|(mailbox, _)| *mailbox).collect();
+        write(
+            session,
+            &party_record_key(party, INVITES),
+            &mailbox_list(&mailboxes)?,
+        )?;
+        for (mailbox, record) in invites {
+            let mut key = party_record_key(party, INVITE);
+            key.extend_from_slice(mailbox.as_bytes());
+            write(session, &key, record)?;
+            write(
+                session,
+                &record_key(INVITE_INDEX, mailbox.as_bytes()),
+                party.as_bytes(),
+            )?;
+        }
+        Ok(())
+    }
+
     #[test]
     fn old_invite_and_join_records_move_into_the_tables_once() -> Result<(), TestError> {
         let device = Device::new(1)?;
@@ -500,24 +525,21 @@ mod tests {
             MailboxId::from_bytes([9; 16]),
             MailboxId::from_bytes([10; 16]),
         );
-        write(session, &key(INVITES, &[]), &mailbox_list(&[open, used])?)?;
-        write(
-            session,
-            &key(INVITE, open.as_bytes()),
-            &old_invite(1, None, Some(3)),
-        )?;
-        write(
-            session,
-            &key(INVITE, used.as_bytes()),
-            &old_invite(2, Some(ben), None),
-        )?;
-        for mailbox in [open, used] {
-            write(
-                session,
-                &record_key(INVITE_INDEX, mailbox.as_bytes()),
-                party.as_bytes(),
-            )?;
+        let cancelled = MailboxId::from_bytes([11; 16]);
+        let mut revoked = old_invite(3, None, None);
+        // The status byte, after the version, the secret and two times.
+        if let Some(status) = revoked.get_mut(49) {
+            *status = 2;
         }
+        write_old_invites(
+            session,
+            &party,
+            &[
+                (open, old_invite(1, None, Some(3))),
+                (used, old_invite(2, Some(ben), None)),
+                (cancelled, revoked),
+            ],
+        )?;
         // Cy's request came through an invite whose record is gone: it is dropped.
         let approvals = [(ben, open), (cy, gone)];
         let replies: Vec<MailboxId> = approvals.iter().map(|(reply, _)| *reply).collect();
@@ -553,6 +575,7 @@ mod tests {
                 vec![
                     (open, InviteState::Open, Some(3)),
                     (used, InviteState::Used { admitted: ben }, None),
+                    (cancelled, InviteState::Revoked, None),
                 ]
             );
             assert_eq!(
@@ -612,6 +635,20 @@ mod tests {
             &record_key(JOINING, reply.as_bytes()),
             &joining.finish(),
         )?;
+        // A join made without wake-up pushes, on a build without X-Wing.
+        let bare = MailboxId::from_bytes([11; 16]);
+        let mut joining = Writer::new();
+        joining.variable(&payload.encode()?)?;
+        joining.variable(b"Ed")?;
+        joining.byte(0);
+        joining.variable(&[6; 4])?;
+        joining.byte(0);
+        joining.u64(31);
+        write(
+            session,
+            &record_key(JOINING, bare.as_bytes()),
+            &joining.finish(),
+        )?;
         let lifecycle = device.parties();
         lifecycle.upgrade_records()?;
         let check = || -> Result<(), TestError> {
@@ -626,6 +663,12 @@ mod tests {
                 join.quantum_resistant,
                 Some(KeyPackageBytes::from_bytes(vec![7; 5]))
             );
+            let bare = session
+                .party_joins()
+                .get(&bare)?
+                .ok_or(PartiesError::UnknownJoin)?;
+            assert_eq!(bare.subscription, None);
+            assert_eq!(bare.quantum_resistant, None);
             assert!(session.kv_keys_with_prefix(PREFIX)?.is_empty());
             Ok(())
         };
