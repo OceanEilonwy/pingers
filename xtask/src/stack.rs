@@ -972,4 +972,41 @@ mod tests {
         fs::remove_dir_all(&outside)?;
         Ok(())
     }
+
+    #[test]
+    fn each_run_puts_in_or_takes_out_the_fcm_table_without_reading_the_key() -> Result<()> {
+        let outside = std::env::temp_dir().join(format!("xtask-set-fcm-{}", std::process::id()));
+        let layout = Layout::new(outside.join("stack"));
+        fs::create_dir_all(layout.config())?;
+        fs::write(layout.push_relay_config(), "listen = \"127.0.0.1:9472\"\n")?;
+        let key = outside.join("account.json");
+        fs::write(&key, "key text that must stay out")?;
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let with_fcm = StackOptions {
+            fcm_service_account: Some(key.clone()),
+            fcm_project: Some("demo".to_owned()),
+            ..StackOptions::default()
+        };
+        set_fcm(&layout, workspace, &with_fcm)?;
+        let written = fs::read_to_string(layout.push_relay_config())?.parse::<Table>()?;
+        let fcm = written
+            .get("fcm")
+            .and_then(Value::as_table)
+            .context("an [fcm] table")?;
+        assert_eq!(
+            fcm.get("service_account_file").and_then(Value::as_str),
+            key.to_str()
+        );
+        assert_eq!(
+            written.get("listen").and_then(Value::as_str),
+            Some("127.0.0.1:9472")
+        );
+        assert!(!fs::read_to_string(layout.push_relay_config())?.contains("key text"));
+        set_fcm(&layout, workspace, &StackOptions::default())?;
+        let written = fs::read_to_string(layout.push_relay_config())?.parse::<Table>()?;
+        assert!(written.get("fcm").is_none());
+        assert!(written.get("listen").is_some());
+        fs::remove_dir_all(&outside)?;
+        Ok(())
+    }
 }
