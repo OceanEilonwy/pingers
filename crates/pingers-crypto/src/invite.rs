@@ -153,26 +153,62 @@ impl core::fmt::Debug for JoinCode {
     }
 }
 
+/// The key packages a join request carries: a classical one always, and an X-Wing one when the
+/// joiner's build can make it (the link does not say which suite the Party uses).
+#[derive(Clone, Copy, Debug)]
+pub struct JoinKeyPackages<'packages> {
+    /// The classical key package, as carried.
+    pub classical: &'packages [u8],
+    /// The X-Wing key package, as carried, or `None`.
+    pub quantum_resistant: Option<&'packages [u8]>,
+}
+
 /// The join code for a request: `be64(HMAC-SHA256(HKDF-Expand(invite_secret,
-/// "pingers/v1/join-code", 32), key_package)[..8]) mod 10^12`.
+/// "pingers/v1/join-code", 32), be32(len(classical)) || classical || be32(len(x_wing)) ||
+/// x_wing)[..8]) mod 10^12`, where `x_wing` is empty when the request carries none.
 ///
 /// The joiner computes it when it builds the request and the inviter when it opens it, so both
-/// show it before anyone is let in. The key package carries the joiner's signature and init
-/// keys and is signed by the former, so the code names exactly the leaf the inviter would add.
+/// show it before anyone is let in. It covers both key packages, so whichever one the Party's
+/// suite makes the inviter add is covered. Each carries the joiner's signature and init keys and
+/// is signed by the former, so the code names exactly the leaf the inviter would add.
 /// Someone who intercepted the link cannot read the real joiner's request (only the inviter
 /// holds the invite mailbox's read key), so they can only guess: one chance in `10^12`.
 ///
 /// # Errors
 ///
-/// [`CryptoError::Internal`] if HKDF or HMAC fails.
-pub fn join_code(secret: &InviteSecret, key_package: &[u8]) -> Result<JoinCode, CryptoError> {
+/// [`CryptoError::WrongLength`] if a key package is 4 GiB or longer; [`CryptoError::Internal`]
+/// if HKDF or HMAC fails.
+pub fn join_code(
+    secret: &InviteSecret,
+    key_packages: JoinKeyPackages<'_>,
+) -> Result<JoinCode, CryptoError> {
     let key = join_code_key(secret)?;
-    let mac = primitives::hmac_sha256(&key, &[key_package])?;
+    let classical = key_packages.classical;
+    let quantum_resistant = key_packages.quantum_resistant.unwrap_or_default();
+    let mac = primitives::hmac_sha256(
+        &key,
+        &[
+            &length_prefix(classical)?,
+            classical,
+            &length_prefix(quantum_resistant)?,
+            quantum_resistant,
+        ],
+    )?;
     let mut first = [0; 8];
     for (target, source) in first.iter_mut().zip(mac.iter()) {
         *target = *source;
     }
     Ok(JoinCode(u64::from_be_bytes(first) % JOIN_CODE_MODULUS))
+}
+
+/// `be32(len(bytes))`.
+fn length_prefix(bytes: &[u8]) -> Result<[u8; 4], CryptoError> {
+    u32::try_from(bytes.len())
+        .map(u32::to_be_bytes)
+        .map_err(|_too_long| CryptoError::WrongLength {
+            expected: usize::try_from(u32::MAX).unwrap_or(usize::MAX),
+            actual: bytes.len(),
+        })
 }
 
 /// `HKDF-Expand(invite_secret, "pingers/v1/join-code", 32)`.
@@ -199,14 +235,40 @@ mod tests {
         );
     }
 
+    fn classical(key_package: &[u8]) -> JoinKeyPackages<'_> {
+        JoinKeyPackages {
+            classical: key_package,
+            quantum_resistant: None,
+        }
+    }
+
     #[test]
     fn codes_differ_by_key_package_and_secret_and_hide_in_debug() -> Result<(), CryptoError> {
         let secret = InviteSecret::from_bytes(Zeroizing::new([1; 32]));
         let other = InviteSecret::from_bytes(Zeroizing::new([2; 32]));
-        let code = join_code(&secret, b"key package")?;
-        assert_eq!(code, join_code(&secret, b"key package")?);
-        assert_ne!(code, join_code(&secret, b"key packagf")?);
-        assert_ne!(code, join_code(&other, b"key package")?);
+        let code = join_code(&secret, classical(b"key package"))?;
+        assert_eq!(code, join_code(&secret, classical(b"key package"))?);
+        assert_ne!(code, join_code(&secret, classical(b"key packagf"))?);
+        assert_ne!(code, join_code(&other, classical(b"key package"))?);
+        // The X-Wing key package is covered too, and the length prefixes keep the boundary
+        // between the two from sliding.
+        let both = |x_wing: &'static [u8]| JoinKeyPackages {
+            classical: b"key package",
+            quantum_resistant: Some(x_wing),
+        };
+        assert_ne!(code, join_code(&secret, both(b"x-wing"))?);
+        assert_ne!(
+            join_code(&secret, both(b"x-wing"))?,
+            join_code(&secret, both(b"x-winh"))?
+        );
+        let slid = JoinKeyPackages {
+            classical: b"key packagex",
+            quantum_resistant: Some(b"-wing"),
+        };
+        assert_ne!(
+            join_code(&secret, both(b"x-wing"))?,
+            join_code(&secret, slid)?
+        );
         assert_eq!(format!("{code:?}"), "JoinCode(redacted)");
         Ok(())
     }

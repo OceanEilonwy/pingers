@@ -28,10 +28,6 @@
 //!
 //! # Known gaps
 //!
-//! - **The OHTTP relay is a stand-in.** pingers-ohttp-relay has no library target yet, so the
-//!   harness runs a forward-only relay of its own that behaves the same way (strips the client,
-//!   streams both directions). TODO(wave 2 follow-up): call `pingers_ohttp_relay::serve` once
-//!   it exists.
 //! - **The relay-only rule cannot bite on loopback**: relay and test clients connect from the
 //!   same address. pingers-server's own tests check the rule with two loopback addresses.
 
@@ -73,6 +69,10 @@ pub struct HarnessConfig {
     /// The operator's registration codes (design B.1): empty, the server takes any
     /// registration; otherwise `POST /v1/accounts` must present one of them.
     pub registration_codes: Vec<String>,
+    /// Whether the server accepts RLN membership proofs (on by default; off is the operator's
+    /// kill switch, design B.4.8 fallback 3).
+    #[cfg(feature = "harness")]
+    pub membership_proofs: pingers_server::MembershipProofs,
 }
 
 impl Default for HarnessConfig {
@@ -83,6 +83,8 @@ impl Default for HarnessConfig {
             seed: 0,
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
             registration_codes: Vec::new(),
+            #[cfg(feature = "harness")]
+            membership_proofs: pingers_server::MembershipProofs::On,
         }
     }
 }

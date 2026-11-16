@@ -33,6 +33,7 @@ harness = [
   "dep:pingers-push-relay",
   "dep:pingers-mailbox",
   "dep:pingers-ohttp",
+  "dep:pingers-ohttp-relay",
   "dep:pingers-crypto",
   "dep:axum",
   "dep:hyper",
@@ -63,6 +64,7 @@ pingers-mailbox = { workspace = true, optional = true }
 # The binaries' library targets have no workspace entry (nothing else depends on them).
 pingers-push-relay = { path = "../pingers-push-relay", optional = true }
 pingers-server = { path = "../pingers-server", optional = true }
+pingers-ohttp-relay = { path = "../pingers-ohttp-relay", optional = true }
 axum = { workspace = true, optional = true }
 hyper = { workspace = true, optional = true }
 hyper-util = { workspace = true, optional = true, features = ["server", "service"] }

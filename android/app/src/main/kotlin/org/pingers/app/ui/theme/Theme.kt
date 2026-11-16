@@ -48,6 +48,12 @@ object Pc {
     val GreenText = Color(0xFF1F7A45)
     /** Withdraw request, Don't let in. */
     val Red = Color(0xFFB42318)
+    /** A notice that something stopped (canvas Notices): background, border, body text. */
+    val RedTint = Color(0xFFFDECEA)
+    val RedLine = Color(0xFFF5C2BC)
+    val RedBrown = Color(0xFF6E1A12)
+    /** The border of the orange fault cards (Wake-ups, reduced privacy). */
+    val OrangeLine = Color(0xFFFFD9C7)
     val Teal = Color(0xFF0F7B74)
     val Plum = Color(0xFF7A3E9D)
     val LockScreen = Color(0xFF1C2230)

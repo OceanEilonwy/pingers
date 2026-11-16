@@ -32,7 +32,7 @@ struct File {
 
 /// Parsed and checked configuration.
 #[derive(Clone, Debug)]
-pub(crate) struct Config {
+pub struct Config {
     /// Where the relay accepts HTTP/2 connections.
     pub(crate) listen: SocketAddr,
     /// The one gateway every request goes to.
@@ -50,7 +50,8 @@ pub(crate) struct Config {
 
 /// Why a configuration was refused.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ConfigError {
+#[non_exhaustive]
+pub enum ConfigError {
     /// Not valid TOML, or a field is missing, unknown or of the wrong type.
     Syntax(String),
     /// A gateway URL is not an absolute `http` URL.
@@ -102,7 +103,11 @@ fn path(value: Option<String>, default: &str, field: &'static str) -> Result<Str
 
 impl Config {
     /// Parses the configuration file's text.
-    pub(crate) fn parse(text: &str) -> Result<Self, ConfigError> {
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError`] if the text is not a valid configuration.
+    pub fn parse(text: &str) -> Result<Self, ConfigError> {
         let file: File = toml::from_str(text)
             .map_err(|error| ConfigError::Syntax(error.message().to_owned()))?;
         let config = Self {
@@ -121,6 +126,12 @@ impl Config {
             return Err(ConfigError::SamePaths);
         }
         Ok(config)
+    }
+
+    /// Where the relay accepts connections.
+    #[must_use]
+    pub const fn listen(&self) -> SocketAddr {
+        self.listen
     }
 }
 

@@ -57,7 +57,7 @@ pub use identity::{
     verify_registration,
 };
 pub use invite::{
-    InviteSecret, JoinCode, join_code, open_join_request, seal_join_request,
+    InviteSecret, JoinCode, JoinKeyPackages, join_code, open_join_request, seal_join_request,
     seal_join_request_in_class,
 };
 pub use keyed_hash::{KeyedHash, KeyedHashKey, KeyedHashPurpose, keyed_hash};

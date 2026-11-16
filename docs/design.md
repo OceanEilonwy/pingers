@@ -410,6 +410,13 @@ Proving-time basis: the mopro project reports Semaphore (depth 32) proofs at abo
 2. the prover fails the on-device self-test (95th percentile above 1.5 s),
 3. the operator has disabled proofs, or the app has (kill switch for a circuit or parameter fault).
 
+Implementation notes (2026-11-14):
+
+- **Self-test.** Once per set of proving parameters the main app checks, in the background, that the embedded key is the PSE ceremony's, that its proofs verify and that the verifier refuses a tampered one, and times 20 proofs after a warm-up; it passes when the 95th percentile (nearest rank: the 19th) is at most 1.5 s. Until it passes the main app uses tokens. A "too slow" result is tested again after a week; a parameter or verification fault is not.
+- **Within a wake.** The tree copy and this device's Merkle path are refreshed at most hourly (when the copy's root is no longer the current one) and the path is stored, so a proof costs one store read plus the Groth16 proof itself. A proof is made only when the wake's remaining budget covers the self-test's 95th percentile plus the time to send the request; otherwise the request spends a token. Measured on an x86_64 Android emulator (host GPU, KVM): 366 to 386 ms median, 400 to 486 ms p95, 367 to 425 ms for the first proof of a process, 17 MiB peak RSS; the self-test passed in about 8 s with a p95 of 369 to 415 ms (`crates/pingers-anon/BENCHMARK.md`).
+- **Refills.** `/v1/params` advertises `privacy_pass_daily_limit`; the device records it and what it was issued today, and asks for the shortfall capped by what is left. A 429 carries what is left, which the device adopts and asks for once more. A spent allowance leaves the stock until the next UTC day.
+- **Operator switch.** `membership_proofs = "off"` in the server configuration lists only Privacy Pass in `/v1/params` and refuses proofs (trigger 3); devices read the parameters before preparing credentials.
+
 The fallback is shown in "What your server sees". Proof devices and token devices are distinguishable as classes; acceptable while both are large.
 
 #### B.4.9 Delivery: mailboxes, sealed push tokens and the push relay
@@ -895,7 +902,8 @@ GET  /v1/params            -> Params { anon_auth: Vec<Rln|PP>, rln_slashing: boo
                                        ohttp_relays: Vec<Url>,
                                        push_relays: Vec<PushRelayInfo { relay_id, url, key_config_hash, operator: String }>,
                                        allow_custom_push_relays: bool, server_operator: String, server_time,
-                                       map_host: Option<Url> }   // the map host this server recommends (B.12)
+                                       map_host: Option<Url>,     // the map host this server recommends (B.12)
+                                       privacy_pass_daily_limit: u16 }   // tokens per account per UTC day (300); devices size refills by it
 
 // --- accounts (Acct) ---
 POST /v1/accounts          RegisterReq  { sig_pk: [u8;32], proof: Sig, reg_code: Option<String> } -> { account_id }
@@ -914,6 +922,8 @@ GET  /v1/rln/leaves?after=n (no auth, cacheable)
 
 // --- Privacy Pass (Acct) ---
 POST /v1/pp/issue          IssueReq     { blinded: Vec<BlindedElement> }   -> { evaluated: Vec<..>, proof, key_id }
+                           // | 429 PrivacyPassAllowance { remaining: u16, resets_at }: the batch would pass the daily
+                           //   limit and nothing was issued; ask for at most `remaining` (or wait for `resets_at`)
 GET  /v1/pp/keys                                                           -> { keys: Vec<PublicKeyInfo> }
 
 // --- blind board (Anon, scope Board) ---
@@ -1002,8 +1012,8 @@ The relay opens `blob` with `info = "pingers/v1/push" ‖ bind`, reads `platform
 Join flow A (decided 2026-11-14): the link carries nothing about the Party, every joiner is let in by the inviter after comparing a code, and the link stops working once someone is let in.
 
 - Link: `https://<host>/j#v1.<base64url(cbor[ server, invite_mailbox, invite_secret[32], inviter_fpr[8], expires, reg_code? ])>`. No Party name, members, colour, suite or use count, so a link that leaks (forwarded, or read by the app that carried it) reveals only the server. `inviter_fpr` is `account_id(inviter_pk)[..8]`. `reg_code` is the operator's registration code (B.1), present when the inviter registered with one, so the joiner's first `POST /v1/accounts` needs no typing; like the link it is a bearer capability. The fragment never reaches the server. The QR code encodes the same string.
-- Joiner registers an account on that server, registers a one-time reply mailbox, then posts to `invite_mailbox` an invite post `[0, { key_package, display_name, reply_mailbox, party_sub | null }]`, sealed as `nonce || XChaCha20-Poly1305(HKDF(invite_secret,"join"), …)` and padded to a mailbox size class. `party_sub` is its sealed push subscription for the Party group, or null with wake-up pushes off: such a member joins all the same and reads the group on its own wakes.
-- **Join code.** Both phones show `code = be64(HMAC-SHA256(HKDF-Expand(invite_secret, "pingers/v1/join-code", 32), key_package)[..8]) mod 10^12`, 12 digits as `4821 0937 5512`, as soon as the request exists: the joiner computes it when it builds the request, the inviter when it opens it. It binds the request to the link and to the joiner's key package (which carries, and is signed by, the joiner's signature key). Someone who intercepted the link can post their own request, but cannot read the real joiner's (only the inviter holds the invite mailbox's read key), so their code matches by chance only, once in 10^12. Vectors: `vectors/crypto/join-code.json`.
+- Joiner registers an account on that server, registers a one-time reply mailbox, then posts to `invite_mailbox` an invite post `[0, { key_package, key_package_xwing | null, display_name, reply_mailbox, party_sub | null }]`. The link does not name the Party's suite, so the joiner sends a classical key package and, when its build can make one, an X-Wing one; the inviter adds the one its Party's suite needs, and a quantum-resistant Party refuses a request without an X-Wing one, sealed as `nonce || XChaCha20-Poly1305(HKDF(invite_secret,"join"), …)` and padded to a mailbox size class. `party_sub` is its sealed push subscription for the Party group, or null with wake-up pushes off: such a member joins all the same and reads the group on its own wakes.
+- **Join code.** Both phones show `code = be64(HMAC-SHA256(HKDF-Expand(invite_secret, "pingers/v1/join-code", 32), be32(len(kp)) || kp || be32(len(kp_xwing)) || kp_xwing)[..8]) mod 10^12` (`kp_xwing` empty when the request carries none), 12 digits as `4821 0937 5512`, as soon as the request exists: the joiner computes it when it builds the request, the inviter when it opens it. It binds the request to the link and to both of the joiner's key packages (each carries, and is signed by, the joiner's signature key), so whichever one the inviter adds is covered. Someone who intercepted the link can post their own request, but cannot read the real joiner's (only the inviter holds the invite mailbox's read key), so their code matches by chance only, once in 10^12. Vectors: `vectors/crypto/join-code.json`.
 - Inviter's device reads the invite mailbox (on its push, or every wake with pushes off; posts are handled once, in order) and shows "Ben asked to join" with the code. The joiner reads its code out, in person or on a call. "Codes match · Let Ben in" commits `Add` (with `subs_add = [party_sub]` when there is one), posts the Welcome to `reply_mailbox`, marks the invite used, drops any other request through it and deletes the invite mailbox. "Don't let in" sends nothing; the joiner never hears back.
 - The joiner can withdraw ("Withdraw request"): it posts `[1, reply_mailbox]` under the same seal, deletes its reply mailbox and forgets the join; the inviter drops the waiting request. The pairing of request and reply mailbox is known only to the two phones; the server sees mailbox ids, so a server that also held the link could withdraw a request (denial only).
 - Joiner checks that the group in the Welcome contains a leaf whose key matches `inviter_fpr`, fetches the state snapshot, publishes its roster profile, and is in: only now does it learn the Party's name, members and Spots ("Ana let you in"), and it keeps the code that was checked.

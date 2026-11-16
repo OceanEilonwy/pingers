@@ -1,57 +1,61 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Reference relay binary.
-//!
-//! A small reference OHTTP relay (forward only, full-duplex streaming, no logs) so relay
-//! operators have something to run. It never decrypts anything.
-//!
-//! Usage: `pingers-ohttp-relay <config.toml>` (format in `config.rs`).
-//!
-//! - **One gateway.** Every encapsulated request goes to the configured gateway URL, whatever
-//!   the client asks for; the optional key config route goes to the configured key config URL.
-//! - **Strips the client.** Requests are rebuilt with only the body and its media type
-//!   (`message/ohttp-req` or `message/ohttp-chunked-req`); responses with only the status,
-//!   the OHTTP media type and `cache-control: no-store`. The client's address is never passed
-//!   on or stored.
-//! - **Streams.** Bodies are forwarded frame by frame in both directions, so a chunked OHTTP
-//!   exchange (design B.4.9) is full duplex over HTTP/2.
-//! - **No logs.** Nothing is written about requests, addresses or failures; only a startup
-//!   error is printed, by `main`'s return.
-//! - **HTTP/2 only, without TLS** (prior knowledge, both sides): terminate TLS for clients in
-//!   front of the relay, for example with a TCP-level TLS proxy, and keep the gateway leg on a
-//!   private network or tunnel. The gateway accepts only its configured relays (design B.12).
+//! Reference relay binary: `pingers-ohttp-relay <config.toml>` (format in
+//! `pingers_ohttp_relay::Config`). Reads the file, binds, and serves with
+//! `pingers_ohttp_relay::serve` until Ctrl-C; everything else is in the library.
 #![forbid(unsafe_code)]
 
-mod config;
-mod relay;
-#[cfg(test)]
-mod tests;
-
+use std::io::{self, Write as _};
+use std::process::ExitCode;
 use std::sync::Arc;
 
-use anyhow::Context as _;
+use pingers_ohttp_relay::{Config, ConfigError, Relay, serve};
 
-fn main() -> anyhow::Result<()> {
-    let path = std::env::args_os()
-        .nth(1)
-        .context("usage: pingers-ohttp-relay <config.toml>")?;
-    let text = std::fs::read_to_string(&path).context("reading the configuration file")?;
-    let config = config::Config::parse(&text)?;
+/// Why the relay did not start, or stopped.
+#[derive(Debug, thiserror::Error)]
+enum StartError {
+    #[error("usage: pingers-ohttp-relay <config.toml>")]
+    Usage,
+    #[error("reading the configuration file: {0}")]
+    Read(#[source] io::Error),
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+    #[error("starting the runtime: {0}")]
+    Runtime(#[source] io::Error),
+    #[error("binding the listen address: {0}")]
+    Bind(#[source] io::Error),
+    #[error("accepting connections: {0}")]
+    Serve(#[source] io::Error),
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            let _ignored = writeln!(io::stderr(), "pingers-ohttp-relay: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<(), StartError> {
+    let path = std::env::args_os().nth(1).ok_or(StartError::Usage)?;
+    let text = std::fs::read_to_string(&path).map_err(StartError::Read)?;
+    let config = Config::parse(&text)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .context("starting the runtime")?;
+        .map_err(StartError::Runtime)?;
     runtime.block_on(async move {
-        let listener = tokio::net::TcpListener::bind(config.listen)
+        let listener = tokio::net::TcpListener::bind(config.listen())
             .await
-            .context("binding the listen address")?;
-        let relay = Arc::new(relay::Relay::new(config));
-        relay::serve(listener, relay, async {
+            .map_err(StartError::Bind)?;
+        serve(listener, Arc::new(Relay::new(config)), async {
             // If signals cannot be watched, run until killed.
             if tokio::signal::ctrl_c().await.is_err() {
                 std::future::pending::<()>().await;
             }
         })
         .await
-        .context("accepting connections")
+        .map_err(StartError::Serve)
     })
 }

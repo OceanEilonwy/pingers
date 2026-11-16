@@ -185,10 +185,62 @@ impl CborBody for PrivacyPassKeys {
     }
 }
 
+/// A number of Privacy Pass tokens an account may be issued: the daily limit a server
+/// advertises in `Params`, or what is left of it today (design B.4.8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TokenAllowance(u16);
+
+impl TokenAllowance {
+    /// No tokens.
+    pub const NONE: Self = Self(0);
+
+    /// `tokens` tokens.
+    #[must_use]
+    pub const fn new(tokens: u16) -> Self {
+        Self(tokens)
+    }
+
+    /// The count.
+    #[must_use]
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+}
+
+/// The body of a `429` to `POST /v1/pp/issue`: the batch would exceed the account's daily
+/// allowance, so nothing was issued. Says how many tokens the account may still be issued
+/// today and when the next day's allowance starts, so the device asks for at most that.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivacyPassAllowance {
+    /// Tokens the account may still be issued today.
+    pub remaining: TokenAllowance,
+    /// When the next (UTC) day starts and the full allowance is available again.
+    pub resets_at: UnixSeconds,
+}
+
+/// Layout: `[remaining, resets at]`.
+impl CborBody for PrivacyPassAllowance {
+    fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
+        writer.array(2)?;
+        writer.unsigned(self.remaining.get());
+        writer.unsigned(self.resets_at.get());
+        Ok(())
+    }
+
+    fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
+        array_of(decoder, 2)?;
+        Ok(Self {
+            remaining: TokenAllowance::new(decoder.u16()?),
+            resets_at: UnixSeconds::new(decoder.u64()?),
+        })
+    }
+}
+
 versioned_cbor!(
     PrivacyPassIssueRequest,
     PrivacyPassIssueResponse,
-    PrivacyPassKeys
+    PrivacyPassKeys,
+    PrivacyPassAllowance
 );
 
 #[cfg(test)]
@@ -220,6 +272,23 @@ mod tests {
         assert_eq!(PrivacyPassKeys::decode(&encoded)?, keys);
         // `[1, [[[h'01'*32, h'02'*49, 100, 200], ...]]]`
         assert_eq!(encoded.get(..4), Some(&[0x82, 0x01, 0x81, 0x82][..]));
+        Ok(())
+    }
+
+    #[test]
+    fn an_allowance_round_trips_with_its_fixed_layout() -> Result<(), ProtoError> {
+        use crate::{WireDecode as _, WireEncode as _};
+        let allowance = PrivacyPassAllowance {
+            remaining: TokenAllowance::new(19),
+            resets_at: UnixSeconds::new(86_400),
+        };
+        let encoded = allowance.encode()?;
+        // `[1, [19, 86400]]`
+        assert_eq!(
+            encoded,
+            [0x82, 0x01, 0x82, 0x13, 0x1a, 0x00, 0x01, 0x51, 0x80]
+        );
+        assert_eq!(PrivacyPassAllowance::decode(&encoded)?, allowance);
         Ok(())
     }
 

@@ -9,10 +9,10 @@
 //! members and Spots from the Welcome and the state snapshot.
 
 use pingers_crypto::{
-    InviteSecret, JoinCode, LogAuthKeyPair, join_code, open_join_request, open_state_snapshot,
-    seal_join_request,
+    InviteSecret, JoinCode, JoinKeyPackages, LogAuthKeyPair, join_code, open_join_request,
+    open_state_snapshot, seal_join_request,
 };
-use pingers_mls::{CipherSuitePolicy, KeyPackagePurpose, MlsContext};
+use pingers_mls::{CipherSuitePolicy, KeyPackagePurpose, MlsContext, MlsError};
 use pingers_proto::{
     DisplayName, GroupId, InvitePayload, InvitePost, JoinRequest, KeyPackageBytes, LeafIndex,
     MailboxId, Padded, PartyId, SealedSnapshot, SecretBytes, SecretText, SequenceNumber,
@@ -321,11 +321,18 @@ impl PartyLifecycle<'_> {
                 InviteStatus::Expired => return Ok(JoinRequestOutcome::Refused(Refusal::Expired)),
                 InviteStatus::Revoked => return Ok(JoinRequestOutcome::Refused(Refusal::Revoked)),
             }
+            if stored_settings(session, &party)?.post_quantum == PostQuantum::QuantumResistant
+                && request.quantum_resistant_key_package.is_none()
+            {
+                return Ok(JoinRequestOutcome::Refused(
+                    Refusal::NoQuantumResistantKeyPackage,
+                ));
+            }
             let pending = PendingJoin {
                 join: JoinId::new(request.reply_mailbox),
                 invite,
                 name: request.display_name.clone(),
-                code: join_code(&secret, request.key_package.as_bytes())?,
+                code: join_code(&secret, key_packages(&request))?,
                 asked_at: now,
             };
             store_approval(
@@ -437,31 +444,46 @@ impl PartyLifecycle<'_> {
                 .take_pooled(MailboxPurpose::Reply, now)?
                 .ok_or(PartiesError::NoPooledMailbox)?;
             let context = MlsContext::new(session, &identity.signing_key);
-            // The link does not say which suite the Party uses (see CONTRACT.md).
+            // The link does not say which suite the Party uses, so the request carries a classical
+            // key package and, where this build can make one, an X-Wing one.
             let key_package = context.create_key_package(
                 KeyPackagePurpose::Party,
                 CipherSuitePolicy::Classical,
                 rng,
             )?;
+            let quantum_resistant = match context.create_key_package(
+                KeyPackagePurpose::Party,
+                CipherSuitePolicy::QuantumResistant,
+                rng,
+            ) {
+                Ok(key_package) => Some(key_package),
+                Err(MlsError::UnsupportedSuite) => None,
+                Err(error) => return Err(error.into()),
+            };
             let reply_mailbox = reply.id();
             let secret = InviteSecret::from_bytes(Zeroizing::new(*payload.invite_secret.expose()));
-            let code = join_code(&secret, key_package.as_bytes())?;
             let subscription = details
                 .subscription
                 .as_ref()
                 .map(|subscription| subscription.id);
-            let post = InvitePost::Join(Box::new(JoinRequest {
-                key_package: key_package.clone(),
+            let request = JoinRequest {
+                key_package,
+                quantum_resistant_key_package: quantum_resistant,
                 display_name: details.display_name.clone(),
                 reply_mailbox,
                 party_subscription: details.subscription,
-            }));
+            };
+            let code = join_code(&secret, key_packages(&request))?;
+            let key_package = request.key_package.clone();
+            let quantum_resistant = request.quantum_resistant_key_package.clone();
+            let post = InvitePost::Join(Box::new(request));
             let sealed = seal_join_request(&secret, &post.encode()?, rng)?;
             let joining = Joining {
                 payload: payload.clone(),
                 name: details.display_name,
                 subscription,
                 key_package,
+                quantum_resistant,
                 asked_at: now,
             };
             records::write(session, &Key::Joining(&reply_mailbox), &joining.encode()?)?;
@@ -508,6 +530,9 @@ impl PartyLifecycle<'_> {
             let identity = identity(session)?;
             MlsContext::new(session, &identity.signing_key)
                 .delete_key_package(&joining.key_package)?;
+            if let Some(key_package) = &joining.quantum_resistant {
+                MlsContext::new(session, &identity.signing_key).delete_key_package(key_package)?;
+            }
             records::delete(session, &Key::Joining(&reply))?;
             let secret =
                 InviteSecret::from_bytes(Zeroizing::new(*joining.payload.invite_secret.expose()));
@@ -682,6 +707,17 @@ impl PartyLifecycle<'_> {
     }
 }
 
+/// The key packages a request carries, for its join code.
+fn key_packages(request: &JoinRequest) -> JoinKeyPackages<'_> {
+    JoinKeyPackages {
+        classical: request.key_package.as_bytes(),
+        quantum_resistant: request
+            .quantum_resistant_key_package
+            .as_ref()
+            .map(KeyPackageBytes::as_bytes),
+    }
+}
+
 /// Opens and decodes an invite post; `None` if it is not from a holder of the link.
 fn open_post(secret: &InviteSecret, post: &Padded) -> Option<InvitePost> {
     let plaintext = open_join_request(secret, post.as_bytes()).ok()?;
@@ -712,7 +748,17 @@ fn admit(
     let context = MlsContext::new(session, &identity.signing_key);
     let mut group = context.party_group(&row.group)?;
     let epoch = group.epoch();
-    let commit = group.add_members(core::slice::from_ref(&approval.request.key_package), rng)?;
+    // The key package of the Party's suite; a request without the one a quantum-resistant
+    // Party needs was refused when it arrived.
+    let key_package = match stored_settings(session, party)?.post_quantum {
+        PostQuantum::Classical => &approval.request.key_package,
+        PostQuantum::QuantumResistant => approval
+            .request
+            .quantum_resistant_key_package
+            .as_ref()
+            .ok_or(PartiesError::Internal)?,
+    };
+    let commit = group.add_members(core::slice::from_ref(key_package), rng)?;
     let added = Some(Added {
         subscription: approval.request.party_subscription.clone(),
         reply: approval.request.reply_mailbox,
@@ -813,7 +859,7 @@ fn pending_join(
     Ok(PendingJoin {
         join: JoinId::new(approval.request.reply_mailbox),
         invite: InviteId::for_mailbox(approval.invite),
-        code: join_code(&secret, approval.request.key_package.as_bytes())?,
+        code: join_code(&secret, key_packages(&approval.request))?,
         name: approval.request.display_name,
         asked_at: approval.asked_at,
     })
@@ -863,6 +909,7 @@ struct Joining {
     name: DisplayName,
     subscription: Option<SubscriptionId>,
     key_package: KeyPackageBytes,
+    quantum_resistant: Option<KeyPackageBytes>,
     asked_at: UnixSeconds,
 }
 
@@ -876,7 +923,14 @@ fn load_joining(session: &Session, join: JoinId) -> Result<Joining, PartiesError
 impl Joining {
     fn code(&self) -> Result<JoinCode, PartiesError> {
         let secret = InviteSecret::from_bytes(Zeroizing::new(*self.payload.invite_secret.expose()));
-        Ok(join_code(&secret, self.key_package.as_bytes())?)
+        let key_packages = JoinKeyPackages {
+            classical: self.key_package.as_bytes(),
+            quantum_resistant: self
+                .quantum_resistant
+                .as_ref()
+                .map(KeyPackageBytes::as_bytes),
+        };
+        Ok(join_code(&secret, key_packages)?)
     }
 
     fn encode(&self) -> Result<Zeroizing<Vec<u8>>, PartiesError> {
@@ -891,6 +945,13 @@ impl Joining {
             }
         }
         writer.variable(self.key_package.as_bytes())?;
+        match &self.quantum_resistant {
+            None => writer.byte(0),
+            Some(key_package) => {
+                writer.byte(1);
+                writer.variable(key_package.as_bytes())?;
+            }
+        }
         writer.u64(self.asked_at.get());
         Ok(Zeroizing::new(writer.finish()))
     }
@@ -905,6 +966,11 @@ impl Joining {
             _ => return Err(reader.malformed()),
         };
         let key_package = KeyPackageBytes::from_bytes(reader.variable()?.to_vec());
+        let quantum_resistant = match reader.byte()? {
+            0 => None,
+            1 => Some(KeyPackageBytes::from_bytes(reader.variable()?.to_vec())),
+            _ => return Err(reader.malformed()),
+        };
         let asked_at = UnixSeconds::new(reader.u64()?);
         reader.end()?;
         Ok(Self {
@@ -912,6 +978,7 @@ impl Joining {
             name,
             subscription,
             key_package,
+            quantum_resistant,
             asked_at,
         })
     }

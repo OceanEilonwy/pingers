@@ -89,9 +89,119 @@ pub fn maps(language: Language, configuration: &MapsConfiguration) -> MapsText {
     }
 }
 
+/// Downloaded maps (canvas `DownloadedMaps`), in words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DownloadedMapsText {
+    /// "Downloaded maps".
+    pub title: String,
+    /// "Back to Settings", for screen readers.
+    pub back: String,
+    /// How maps are downloaded and shown.
+    pub intro: String,
+    /// "On this phone".
+    pub installed: String,
+    /// "Available".
+    pub available: String,
+    /// "Update available".
+    pub update_available: String,
+    /// "Update".
+    pub update: String,
+    /// "Delete".
+    pub delete: String,
+    /// "Download".
+    pub download: String,
+    /// "This area".
+    pub this_area: String,
+    /// "From maps.pingers.org".
+    pub host_title: String,
+    /// Who the host is and what it sees.
+    pub host_detail: String,
+    /// "Map data from OpenStreetMap contributors".
+    pub attribution: String,
+}
+
+/// Downloaded maps, in words.
+#[must_use]
+pub fn downloaded_maps(
+    language: Language,
+    configuration: &MapsConfiguration,
+) -> DownloadedMapsText {
+    let Language::English = language;
+    let who = match configuration.source {
+        MapHostSource::UserOverride => "The map host you chose.",
+        MapHostSource::Server => "The map host your Pingers server recommends.",
+        MapHostSource::Publisher => "The Pingers app's default map host.",
+    };
+    let sees = if configuration.through_relay {
+        "It sees which areas you download, not your internet address: downloads go through your \
+         privacy relay."
+    } else {
+        "It sees your internet address when you download a map, and which areas you download."
+    };
+    DownloadedMapsText {
+        title: "Downloaded maps".into(),
+        back: "Back to Settings".into(),
+        intro: "Maps are downloaded whole, one area at a time, and shown from this phone. Nobody \
+                learns which part of the map you look at or what you search for."
+            .into(),
+        installed: "On this phone".into(),
+        available: "Available".into(),
+        update_available: "Update available".into(),
+        update: "Update".into(),
+        delete: "Delete".into(),
+        download: "Download".into(),
+        this_area: "This area".into(),
+        host_title: format!("From {}", configuration.host),
+        host_detail: format!("{who} {sees} Never where you are, your Parties or your Spots."),
+        attribution: "Map data from OpenStreetMap contributors".into(),
+    }
+}
+
+/// A download under way: "Downloading 120 MB of 312 MB".
+#[must_use]
+pub fn downloading(
+    language: Language,
+    done: pingers_screens::device::Bytes,
+    total: pingers_screens::device::Bytes,
+) -> String {
+    format!(
+        "Downloading {} of {}",
+        crate::device::size(language, done),
+        crate::device::size(language, total)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn downloaded_maps_read_like_the_canvas() {
+        let text = downloaded_maps(
+            Language::English,
+            &MapsConfiguration {
+                host: "maps.pingers.org".into(),
+                source: MapHostSource::Publisher,
+                through_relay: false,
+            },
+        );
+        assert_eq!(text.title, "Downloaded maps");
+        assert_eq!(text.host_title, "From maps.pingers.org");
+        assert_eq!(
+            text.host_detail,
+            "The Pingers app's default map host. It sees your internet address when you download \
+             a map, and which areas you download. Never where you are, your Parties or your Spots."
+        );
+        assert_eq!(text.attribution, "Map data from OpenStreetMap contributors");
+        assert_eq!(
+            downloading(
+                Language::English,
+                pingers_screens::device::Bytes::new(120_000_000),
+                pingers_screens::device::Bytes::new(312_000_000)
+            ),
+            "Downloading 120 MB of 312 MB"
+        );
+    }
 
     #[test]
     fn the_relay_setting_changes_what_the_host_sees() {

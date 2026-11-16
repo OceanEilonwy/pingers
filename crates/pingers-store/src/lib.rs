@@ -83,7 +83,12 @@
 //!   passes them. Queued requests and own positions carry their group, and triggers delete
 //!   them when that Meetup ends or that Party is deleted (a cascade included), so no group
 //!   request outlives its group (style guide §8). None of these tables is in design C.2.
-//! - **A knock's grant secret waits in `knock_key`** (schema version 5), keyed by the knock's
+//! - **The main app's proving state** (schema version 5, not in design C.2): `rln_tree_state`
+//!   records which hourly root the leaf copy reproduces and this device's Merkle path in it, so a
+//!   proof reads one row instead of rebuilding the tree; `pp_allowance` the server's daily token
+//!   limit and what was issued today, so a refill never exceeds it; `prover_self_test` the last
+//!   self-test and the parameters it tested.
+//! - **A knock's grant secret waits in `knock_key`** (schema version 6), keyed by the knock's
 //!   reply mailbox, with the Meetup subscription the knock carried: the Welcome arrives in
 //!   that mailbox, and joining takes the row ([`KnockKeys`]). Rows of unanswered knocks are
 //!   deleted once no Welcome can come; leaving the Party cascades. Not in design C.2.
@@ -136,6 +141,10 @@ pub use repo::meetup::{
 pub use repo::party::{
     AlwaysAllow, Identities, Identity, LocationVisibility, Member, Members, Parties, Party,
     Verification,
+};
+pub use repo::prover::{
+    PATH_LENGTH, ProverSelfTests, ProverVerdict, RlnTreeStates, SelfTestRecord, StoredPath,
+    TokenAllowances, TokenLedger, TreeState,
 };
 pub use repo::relay::{
     ActiveFallback, FallbackKind, Fallbacks, PushRelay, PushRelays, RelaySource, Settings,

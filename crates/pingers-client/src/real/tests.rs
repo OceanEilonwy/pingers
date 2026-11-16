@@ -89,6 +89,10 @@ fn store() -> Result<Store, Box<dyn std::error::Error>> {
     let backend = Arc::new(Backend {
         database: Arc::new(database),
         outside: Outside {
+            prover_self_test: pingers_sync::SelfTestPlan::new(
+                core::num::NonZeroU8::MIN,
+                core::time::Duration::from_millis(1_500),
+            ),
             clock: Arc::new(clock.clone()),
             timer: Arc::new(clock.clone()),
             rng: Arc::new(move || {

@@ -3,7 +3,8 @@
 
 use pingers_screens::common::{PartyColour, PrivacyLevel};
 use pingers_screens::party::{
-    Advanced, DraftPrivacy, NewParty, Overlap, PartyView, Reachability, SpotShape,
+    Advanced, CodeAnswer, DraftPrivacy, NewParty, Overlap, PartyCode, PartyView, Reachability,
+    SpotShape,
 };
 
 use crate::Language;
@@ -11,6 +12,12 @@ use crate::common::{area, colour, distance, privacy_level};
 
 /// "New party": the screen's title and Home's button.
 pub const NEW_PARTY: &str = "New party";
+
+/// "The app's server".
+const BUILT_IN: &str = "The app's server";
+
+/// "Another server".
+const ANOTHER: &str = "Another server";
 
 /// A colour swatch: its value and spoken name.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,8 +57,22 @@ pub struct NewPartyText {
     pub colour_label: String,
     /// The swatches.
     pub swatches: Vec<Swatch>,
-    /// "pingers.flat7.org · Full privacy".
-    pub server_row: String,
+    /// "Server".
+    pub server_label: String,
+    /// "The app's server".
+    pub built_in: String,
+    /// "server.pingers.org · built in".
+    pub built_in_detail: String,
+    /// "Another server".
+    pub another: String,
+    /// "Enter its address, like pingers.example.org".
+    pub another_detail: String,
+    /// "pingers.example.org", the address field's placeholder.
+    pub another_placeholder: String,
+    /// "Advanced".
+    pub advanced: String,
+    /// "Relays and encryption · Full privacy".
+    pub advanced_detail: String,
     /// "You'll invite people and add Spots once the party is created."
     pub later: String,
     /// "Create party".
@@ -65,6 +86,10 @@ pub struct AdvancedText {
     pub title: String,
     /// The privacy banner.
     pub privacy: PrivacyText,
+    /// "Which server", for screen readers.
+    pub server_choice_label: String,
+    /// "The app's server", "Another server".
+    pub server_choices: [String; 2],
     /// "Server".
     pub server_label: String,
     /// The server check.
@@ -179,7 +204,14 @@ pub fn new_party(language: Language, view: &NewParty) -> NewPartyText {
                 name: colour(language, *swatch),
             })
             .collect(),
-        server_row: format!("{} · {}", view.server.as_str(), privacy.level),
+        server_label: "Server".into(),
+        built_in: BUILT_IN.into(),
+        built_in_detail: format!("{} · built in", view.built_in.as_str()),
+        another: ANOTHER.into(),
+        another_detail: "Enter its address, like pingers.example.org".into(),
+        another_placeholder: "pingers.example.org".into(),
+        advanced: "Advanced".into(),
+        advanced_detail: format!("Relays and encryption · {}", privacy.level),
         later: "You'll invite people and add Spots once the party is created.".into(),
         create: "Create party".into(),
     }
@@ -192,6 +224,8 @@ pub fn advanced(language: Language, view: &Advanced) -> AdvancedText {
     AdvancedText {
         title: "Advanced".into(),
         privacy: draft_privacy(language, &view.privacy),
+        server_choice_label: "Which server".into(),
+        server_choices: [BUILT_IN.into(), ANOTHER.into()],
         server_label: "Server".into(),
         server_check: check(language, "Server", &view.server.check),
         server_help: "The server that hosts this party. Everyone who joins uses it, and it can't \
@@ -211,6 +245,77 @@ pub fn advanced(language: Language, view: &Advanced) -> AdvancedText {
                             member needs a recent app."
             .into(),
         done: crate::common::done(language),
+    }
+}
+
+/// "This server needs a code", in words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PartyCodeText {
+    /// "Back to New party", for screen readers.
+    pub back: String,
+    /// "This server needs a code".
+    pub title: String,
+    /// "You chose pingers.flat7.org for Climbing crew. …"
+    pub body: String,
+    /// "pingers.flat7.org".
+    pub server: String,
+    /// "Run by Flat 7".
+    pub operator: String,
+    /// "Registration code".
+    pub code_label: String,
+    /// What the server does with the code, and what the account is.
+    pub code_help: String,
+    /// Why the code was refused, once it was.
+    pub refused: Option<String>,
+    /// "No Party was created. …", once refused.
+    pub nothing_created: Option<String>,
+    /// "People you invite won't need a code: their invite link carries it."
+    pub invitees: String,
+    /// "Create party", or "Try again" once refused.
+    pub create: String,
+}
+
+/// "This server needs a code", in words.
+#[must_use]
+pub fn party_code(language: Language, view: &PartyCode) -> PartyCodeText {
+    let Language::English = language;
+    let operator = view
+        .operator
+        .as_ref()
+        .map(|operator| operator.as_str().to_owned());
+    let refused = view.answer == CodeAnswer::Refused;
+    PartyCodeText {
+        back: "Back to New party".into(),
+        title: "This server needs a code".into(),
+        body: format!(
+            "You chose {} for {}. It only lets people with a code from whoever runs it create \
+             Parties there.",
+            view.server.as_str(),
+            view.party_name.as_str()
+        ),
+        server: view.server.as_str().to_owned(),
+        operator: operator.as_ref().map_or_else(
+            || "Who runs it isn't published yet".to_owned(),
+            |operator| format!("Run by {operator}"),
+        ),
+        code_label: "Registration code".into(),
+        code_help: "This server sees the code once, when it sets up your account there. The \
+                    account is a random key made on this phone: no name, phone number or email."
+            .into(),
+        refused: refused.then(|| match &operator {
+            Some(operator) => format!(
+                "The server didn't accept this code. Check it for typing mistakes, or ask \
+                 {operator} for a new one."
+            ),
+            None => "The server didn't accept this code. Check it for typing mistakes, or ask \
+                     whoever runs it for a new one."
+                .to_owned(),
+        }),
+        nothing_created: refused.then(|| {
+            "No Party was created. You can try again, or go back and pick another server.".into()
+        }),
+        invitees: "People you invite won't need a code: their invite link carries it.".into(),
+        create: if refused { "Try again" } else { "Create party" }.into(),
     }
 }
 
@@ -252,7 +357,7 @@ pub struct PartyText {
     pub meetups_note: String,
     /// "pingers.flat7.org · Full privacy".
     pub server_row: String,
-    /// "What this party's server can see".
+    /// "Party settings: server, invites, leave".
     pub server_subtitle: String,
     /// "Invite people", the button's spoken label.
     pub invite: String,
@@ -284,7 +389,7 @@ pub fn party(language: Language, view: &PartyView) -> PartyText {
             view.server.as_str(),
             privacy_level(language, view.privacy)
         ),
-        server_subtitle: crate::server::party_subtitle(language),
+        server_subtitle: "Party settings: server, invites, leave".into(),
         invite: crate::invite::TITLE.into(),
     }
 }
@@ -297,8 +402,9 @@ mod tests {
     use pingers_screens::common::{DraftText, Operator};
     use pingers_screens::fixtures::{self, FixtureError};
     use pingers_screens::party::{
-        PartyDraft, PushRelayChoice, ServiceDraft, advanced as advanced_screen,
-        new_party as new_party_screen, party as party_screen,
+        CodeAnswer, PartyDraft, PushRelayChoice, ServerChoice, ServiceDraft,
+        advanced as advanced_screen, new_party as new_party_screen, party as party_screen,
+        party_code as party_code_screen,
     };
     use pingers_screens::snapshot::{PostQuantum, WakePushes};
 
@@ -310,6 +416,8 @@ mod tests {
         Ok(PartyDraft {
             name: DraftText::new("Climbing crew".into()),
             colour: PartyColour::Blue,
+            server_choice: ServerChoice::BuiltIn,
+            built_in: pingers_screens::common::Host::new("server.pingers.org")?,
             server: ServiceDraft {
                 host: DraftText::new("pingers.flat7.org".into()),
                 check: Reachability::Reachable(Operator::new("Flat 7")?),
@@ -330,7 +438,15 @@ mod tests {
         ready.relay.check = Reachability::Reachable(Operator::new("Quietpath")?);
         let text = new_party(EN, &new_party_screen(&ready, WakePushes::On));
         assert_eq!(text.title, "New party");
-        assert_eq!(text.server_row, "pingers.flat7.org · Full privacy");
+        assert_eq!(text.server_label, "Server");
+        assert_eq!(text.built_in, "The app's server");
+        assert_eq!(text.built_in_detail, "server.pingers.org · built in");
+        assert_eq!(text.another, "Another server");
+        assert_eq!(
+            text.another_detail,
+            "Enter its address, like pingers.example.org"
+        );
+        assert_eq!(text.advanced_detail, "Relays and encryption · Full privacy");
         assert_eq!(text.swatches.len(), 5);
         assert_eq!(
             text.swatches.get(1).map(|swatch| swatch.name.as_str()),
@@ -438,7 +554,10 @@ mod tests {
             ]
         );
         assert_eq!(text.server_row, "pingers.flat7.org · Full privacy");
-        assert_eq!(text.server_subtitle, "What this party's server can see");
+        assert_eq!(
+            text.server_subtitle,
+            "Party settings: server, invites, leave"
+        );
         assert_eq!(text.invite, "Invite people");
         assert_eq!(
             (text.spots_heading.as_str(), text.add_spot.as_str()),
@@ -459,6 +578,44 @@ mod tests {
             spot_shape(EN, SpotShape::Area(SquareMeters::new(500.0)?)),
             "Drawn area · 500 m²"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn the_code_screen_reads_like_the_canvas() -> Result<(), FixtureError> {
+        let mut chosen = draft()?;
+        chosen.server_choice = ServerChoice::Another;
+        let typed = DraftText::new("spring-otter-4471".into());
+        let text = party_code(
+            EN,
+            &party_code_screen(&chosen, &typed, CodeAnswer::NotTried)?,
+        );
+        assert_eq!(text.title, "This server needs a code");
+        assert_eq!(
+            text.body,
+            "You chose pingers.flat7.org for Climbing crew. It only lets people with a code from \
+             whoever runs it create Parties there."
+        );
+        assert_eq!(text.operator, "Run by Flat 7");
+        assert_eq!(text.code_label, "Registration code");
+        assert_eq!((text.refused, text.nothing_created), (None, None));
+        assert_eq!(text.create, "Create party");
+        let refused = party_code(
+            EN,
+            &party_code_screen(&chosen, &typed, CodeAnswer::Refused)?,
+        );
+        assert_eq!(
+            refused.refused.as_deref(),
+            Some(
+                "The server didn't accept this code. Check it for typing mistakes, or ask Flat 7 \
+                 for a new one."
+            )
+        );
+        assert_eq!(
+            refused.nothing_created.as_deref(),
+            Some("No Party was created. You can try again, or go back and pick another server.")
+        );
+        assert_eq!(refused.create, "Try again");
         Ok(())
     }
 }

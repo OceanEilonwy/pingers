@@ -59,6 +59,9 @@ pub struct Outside {
     pub timer: Arc<dyn Timer>,
     /// Makes a random generator for one operation.
     pub rng: Arc<dyn Fn() -> SessionRng + Send + Sync>,
+    /// The prover self-test run before this device proves (design B.4.8): the design's 20 timed
+    /// proofs in production. Tests on a manual timer measure nothing and pass a one-proof plan.
+    pub prover_self_test: pingers_sync::SelfTestPlan,
 }
 
 impl Outside {
@@ -70,6 +73,7 @@ impl Outside {
             clock: Arc::new(SystemClock),
             timer: Arc::new(TokioTimer::new()),
             rng: Arc::new(|| Box::new(UnwrapErr(SysRng))),
+            prover_self_test: pingers_sync::SelfTestPlan::DESIGN,
         }
     }
 }

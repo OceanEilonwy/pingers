@@ -183,6 +183,10 @@ pub struct JoinRequest {
     /// The joiner's MLS `KeyPackage`, which the inviter adds; authenticated by the seal. The
     /// join code both phones show is derived from it (pingers-crypto's `join_code`).
     pub key_package: KeyPackageBytes,
+    /// The joiner's X-Wing `KeyPackage` too, for a quantum-resistant Party (the link does not
+    /// say which suite the Party uses, so a joiner sends both); `None` on a build that cannot
+    /// make one. The inviter adds whichever the Party's suite needs.
+    pub quantum_resistant_key_package: Option<KeyPackageBytes>,
     /// Shown to the inviter.
     pub display_name: DisplayName,
     /// Where the inviter posts the Welcome.
@@ -193,12 +197,16 @@ pub struct JoinRequest {
     pub party_subscription: Option<Subscription>,
 }
 
-/// Layout: `[key package, display name (text), reply mailbox (16 bytes), party subscription or
-/// null]`.
+/// Layout: `[key package, X-Wing key package or null, display name (text), reply mailbox (16
+/// bytes), party subscription or null]`.
 impl CborBody for JoinRequest {
     fn encode_body(&self, writer: &mut Writer) -> Result<(), ProtoError> {
-        writer.array(4)?;
+        writer.array(5)?;
         writer.bytes(self.key_package.as_bytes())?;
+        writer.option(
+            self.quantum_resistant_key_package.as_ref(),
+            |writer, key_package| writer.bytes(key_package.as_bytes()),
+        )?;
         writer.text(self.display_name.as_str())?;
         writer.bytes(self.reply_mailbox.as_bytes())?;
         writer.option(self.party_subscription.as_ref(), |writer, subscription| {
@@ -207,9 +215,12 @@ impl CborBody for JoinRequest {
     }
 
     fn decode_body(decoder: &mut Decoder<'_>) -> Result<Self, ProtoError> {
-        cbor::array_of(decoder, 4)?;
+        cbor::array_of(decoder, 5)?;
         Ok(Self {
             key_package: KeyPackageBytes::from_bytes(decoder.bytes()?.to_vec()),
+            quantum_resistant_key_package: cbor::option(decoder, |decoder| {
+                Ok(KeyPackageBytes::from_bytes(decoder.bytes()?.to_vec()))
+            })?,
             display_name: DisplayName::new(decoder.str()?.to_owned())?,
             reply_mailbox: MailboxId::from_bytes(cbor::fixed_bytes(decoder)?),
             party_subscription: cbor::option(decoder, Subscription::decode_body)?,

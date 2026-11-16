@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! The blind board's requests (design B.4.3, D) for pingers-wake, and the membership tree's
-//! leaf list (design B.4.8), which the main app keeps whole so it never asks for its own path.
+//! The blind board's requests (design B.4.3, D) for pingers-wake, and the server's parameters.
 
-use pingers_anon::LeafValue;
 use pingers_crypto::RevokeKey;
 use pingers_proto::{
     BoardCursor, BoardPage, BoardSyncRequest, BoardSyncResponse, Lease, LeaseId, LeaseReplacement,
-    MembershipIndex, MembershipLeaves, Params, ReadBoard, SecretBytes,
+    Params, ReadBoard, SecretBytes,
 };
-use pingers_store::{LastUpload, TreeLeaf, TreePosition};
+use pingers_store::LastUpload;
 
 use crate::engine::blocking;
 use crate::mailbox::Delivered;
@@ -22,16 +20,6 @@ pub struct NewLease {
     pub revoke_key: RevokeKey,
     /// Whether to read the board after the append.
     pub read: ReadBoard,
-}
-
-/// What a membership refresh changed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[must_use]
-pub struct MembershipRefresh {
-    /// Leaves appended to the local tree.
-    pub added: usize,
-    /// Leaves the server lists as zeroed (banned or deleted devices), all set to zero.
-    pub zeroed: usize,
 }
 
 impl SyncEngine {
@@ -118,6 +106,7 @@ impl SyncEngine {
             .success()?
             .decode()?;
         let _: ClockStatus = self.observe_server_time(params.server_time);
+        self.apply_params(&params).await?;
         Ok(params)
     }
 
@@ -154,63 +143,5 @@ impl SyncEngine {
             .send(ApiRequest::revoke_lease(lease, revoke_key), sending)
             .await?;
         Delivered::from_outcome(outcome, |_| Ok(()))
-    }
-
-    /// Brings the local membership tree up to the server's (`GET /v1/rln/leaves`,
-    /// anonymous and without a credential): appends new leaves page by page and zeroes the
-    /// listed positions. Main app only in practice, since only it proves.
-    ///
-    /// # Errors
-    ///
-    /// [`SyncError::Status`]; [`SyncError::Store`]; as [`SyncEngine::send`].
-    pub async fn refresh_membership(
-        &self,
-        budget: WakeBudget,
-    ) -> Result<MembershipRefresh, SyncError> {
-        let mut refresh = MembershipRefresh {
-            added: 0,
-            zeroed: 0,
-        };
-        loop {
-            let held = blocking(&self.database, |session| {
-                Ok(session.rln_tree().leaves()?.len())
-            })
-            .await?;
-            let after = MembershipIndex::new(
-                u32::try_from(held).map_err(|_| SyncError::OutOfRange("tree"))?,
-            );
-            let page: MembershipLeaves = self
-                .exchange(ApiRequest::rln_leaves(after), budget)
-                .await?
-                .success()?
-                .decode()?;
-            let added = page.leaves.len();
-            refresh.zeroed = page.zeroed.len();
-            blocking(&self.database, move |session| {
-                session.transaction(|session| {
-                    let tree = session.rln_tree();
-                    for (value, position) in page.leaves.iter().zip(after.get()..) {
-                        tree.set_leaf(&TreeLeaf {
-                            position: TreePosition::new(position),
-                            value: LeafValue::from_bytes(*value),
-                        })?;
-                    }
-                    for position in &page.zeroed {
-                        tree.set_leaf(&TreeLeaf {
-                            position: TreePosition::new(position.get()),
-                            value: LeafValue::from_bytes([0; 32]),
-                        })?;
-                    }
-                    // Cached interior nodes are stale once leaves change.
-                    tree.clear_nodes()?;
-                    Ok::<_, SyncError>(())
-                })
-            })
-            .await?;
-            refresh.added = refresh.added.saturating_add(added);
-            if added == 0 {
-                return Ok(refresh);
-            }
-        }
     }
 }

@@ -1,6 +1,11 @@
 package org.pingers.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.semantics.Role
+import org.pingers.app.data.Tint
+import org.pingers.app.ui.components.InitialsCircle
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -67,13 +72,14 @@ import org.pingers.app.ui.theme.heading
 
 @Composable
 fun OpenInviteScreen(state: OpenInviteState, repo: PingersRepository, nav: Navigator) {
-    var name by rememberSaveable(state.name) { mutableStateOf(state.name) }
+    var name by rememberSaveable { mutableStateOf("") }
+    val joinAs = state.joinAs
     JoinPage(
         bottom = {
             state.error?.let { Text(it, style = body(14.sp, color = Pc.OrangeText)) }
             PillButton(
                 state.ask, { repo.askToJoin(name) { nav.replace(Route.AskedToJoin) } },
-                Modifier.testTag(E2eTags.JOIN_ASK), enabled = name.isNotBlank(),
+                Modifier.testTag(E2eTags.JOIN_ASK), enabled = joinAs != null || name.isNotBlank(),
             )
             SecondaryButton(state.notNow, Pc.Ink) { if (!nav.back()) nav.reset(Route.Home) }
         },
@@ -90,13 +96,33 @@ fun OpenInviteScreen(state: OpenInviteState, repo: PingersRepository, nav: Navig
                 }
             }
         }
-        Card(radius = 20.dp, padding = PaddingValues(horizontal = 18.dp, vertical = 16.dp)) {
-            Text(state.nameLabel, style = body(13.sp, 600, Pc.Muted))
-            Spacer(Modifier.height(10.dp))
-            PField(
-                name, { name = it }, state.nameLabel, Modifier.testTag(E2eTags.JOIN_NAME),
-                shape = RoundedCornerShape(12.dp),
-            )
+        if (joinAs != null) {
+            // "You'll join as Ben · Change": the name set in Settings; Change opens Your name.
+            Card(radius = 20.dp, padding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    InitialsCircle(joinAs.avatar, Tint.Butter.color(), 40.dp, 14)
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        Text(joinAs.title, style = body(15.sp, 600))
+                        Text(joinAs.subtitle, style = body(12.sp, color = Pc.Muted))
+                    }
+                    Box(
+                        Modifier.heightIn(min = 44.dp).clickable(role = Role.Button) { nav.go(Route.YourName) }.testTag(E2eTags.JOIN_CHANGE_NAME),
+                        contentAlignment = Alignment.Center,
+                    ) { Text(joinAs.change, style = body(14.sp, 600, Pc.Blue)) }
+                }
+            }
+        } else {
+            // No name yet: what is typed here becomes Your name.
+            Card(radius = 20.dp, padding = PaddingValues(horizontal = 18.dp, vertical = 16.dp)) {
+                Text(state.nameLabel, style = body(13.sp, 600, Pc.Muted))
+                Spacer(Modifier.height(10.dp))
+                PField(
+                    name, { name = it }, state.nameLabel, Modifier.testTag(E2eTags.JOIN_NAME),
+                    shape = RoundedCornerShape(12.dp),
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(state.nameHelp, style = body(12.sp, color = Pc.Muted, lineHeight = 1.4f))
+            }
         }
     }
 }

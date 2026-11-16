@@ -148,6 +148,7 @@ fn invite_payload() -> Result<VectorFile> {
 /// his Party subscription.
 struct Join {
     key_package: Vec<u8>,
+    x_wing_key_package: Vec<u8>,
     reply: Vec<u8>,
     subscription_id: Vec<u8>,
 }
@@ -156,6 +157,7 @@ impl Join {
     fn new() -> Self {
         Self {
             key_package: ramp(0x40, 40),
+            x_wing_key_package: ramp(0x90, 24),
             reply: ramp(0x51, 16),
             subscription_id: ramp(0x61, 16),
         }
@@ -169,11 +171,14 @@ impl Join {
         ])
     }
 
-    /// The unversioned body `[key package, name, reply mailbox, last]`, `last` given encoded
-    /// (a subscription, `null`, or something malformed).
-    fn body_with_last(&self, name: &str, last: Vec<u8>) -> Vec<u8> {
+    /// The unversioned body `[key package, X-Wing key package or null, name, reply mailbox,
+    /// last]`, `last` given encoded (a subscription, `null`, or something malformed). Bob
+    /// sends an X-Wing key package only when he has a subscription, so both shapes of each
+    /// optional field appear.
+    fn body_with_last(&self, name: &str, last: Vec<u8>, x_wing: bool) -> Vec<u8> {
         array([
             bytes(&self.key_package),
+            optional(x_wing.then_some(self.x_wing_key_package.as_slice()), bytes),
             text(name),
             bytes(&self.reply),
             last,
@@ -182,14 +187,27 @@ impl Join {
 
     /// The unversioned body with a subscription, or `null` without one.
     fn body(&self, name: &str, subscription: Option<&[u8]>) -> Vec<u8> {
-        self.body_with_last(name, optional(subscription, <[u8]>::to_vec))
+        self.body_with_last(
+            name,
+            optional(subscription, <[u8]>::to_vec),
+            subscription.is_some(),
+        )
     }
 
-    /// The inputs of a case, led by `extra`; `subscription_id` `""` means no subscription.
+    /// The inputs of a case, led by `extra`; `""` means no X-Wing key package or no subscription
+    /// (Bob sends both or neither).
     fn inputs(&self, extra: Vec<(String, Json)>, name: &str, with_subscription: bool) -> Json {
         let mut pairs = extra;
         pairs.extend([
             ("key_package".to_owned(), hex(&self.key_package)),
+            (
+                "x_wing_key_package".to_owned(),
+                if with_subscription {
+                    hex(&self.x_wing_key_package)
+                } else {
+                    Json::from("")
+                },
+            ),
             ("display_name".to_owned(), Json::from(name)),
             ("reply_mailbox".to_owned(), hex(&self.reply)),
         ]);
@@ -216,7 +234,7 @@ fn join_request() -> Result<VectorFile> {
     let longest = "é".repeat(100);
     proto_file(
         "join-request-encoding",
-        "Join request plaintext (sealed with seal_join_request, posted to the invite mailbox) as canonical CBOR: [key package, display name, reply mailbox, party subscription or null when the joiner has wake-up pushes off] (design D, invite flow). Inside an invite post it is nested as [0, this body] (invite-post-encoding)",
+        "Join request plaintext (sealed with seal_join_request, posted to the invite mailbox) as canonical CBOR: [key package, X-Wing key package or null when the joiner cannot make one, display name, reply mailbox, party subscription or null when the joiner has wake-up pushes off] (design D, invite flow). Inside an invite post it is nested as [0, this body] (invite-post-encoding)",
         vec![
             case(
                 "bob",
@@ -245,7 +263,7 @@ fn join_request() -> Result<VectorFile> {
             ),
             case(
                 "subscription-not-an-array",
-                object! { "encoding": hex(&versioned(join.body_with_last("Bob", uint(0)))) },
+                object! { "encoding": hex(&versioned(join.body_with_last("Bob", uint(0), false))) },
                 error("Cbor"),
             ),
         ],

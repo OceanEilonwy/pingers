@@ -197,7 +197,24 @@ mod tests {
     fn generated_files_match_the_committed_files() -> TestResult {
         let root = crate::workspace_root()?;
         let files = generate()?;
-        assert_eq!(files.len(), 21);
+        // It writes every committed file in the directories it owns, so none is left to a
+        // hand edit (and adding a file to the generator needs no count changed here).
+        let mut committed = Vec::new();
+        for directory in ["vectors/proto", "vectors/meetup"] {
+            for entry in fs::read_dir(root.join(directory))? {
+                let path = entry?.path();
+                if path
+                    .extension()
+                    .is_some_and(|extension| extension == "json")
+                {
+                    committed.push(path.strip_prefix(&root)?.to_path_buf());
+                }
+            }
+        }
+        committed.sort();
+        let mut generated: Vec<_> = files.iter().map(|file| file.path.clone()).collect();
+        generated.sort();
+        assert_eq!(generated, committed);
         assert_eq!(stale_files(&root, &files), Vec::<&Path>::new());
         Ok(())
     }

@@ -41,9 +41,9 @@ use pingers_quota::{Admission, QuotaError};
 use pingers_time::{Clock as _, UnixSeconds};
 use rand_core::Rng as _;
 
-use crate::Shared;
 use crate::dispatch::Reply;
 use crate::wire::{base64url_decode, header, hex_array};
+use crate::{MembershipProofs, Shared};
 
 /// The request header carrying an Anon credential.
 pub(crate) const AUTHORIZATION: &str = "authorization";
@@ -103,7 +103,7 @@ fn refusal(error: &QuotaError) -> Reply {
         QuotaError::Anon(_)
         | QuotaError::NullifierReused
         | QuotaError::DoubleSpend
-        | QuotaError::DailyLimit => forbidden(),
+        | QuotaError::DailyLimit(_) => forbidden(),
         QuotaError::TimeOutOfRange
         | QuotaError::RootMismatch
         | QuotaError::CorruptField { .. }
@@ -123,7 +123,9 @@ pub(crate) fn admit(
 ) -> Result<Admission, Reply> {
     match credential(request)? {
         Credential::Rln(auth) => {
-            if auth.scope != scope {
+            // The operator turned proofs off (design B.4.8 fallback 3): a proof is never
+            // good here, and `/v1/params` no longer lists them.
+            if auth.scope != scope || shared.params.membership_proofs == MembershipProofs::Off {
                 return Err(forbidden());
             }
             let digest = request_digest(&request.method, &request.path, &request.body)

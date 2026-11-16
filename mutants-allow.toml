@@ -85,3 +85,7 @@ reason = "caught as a timeout, not missed: a channel that always yields a frame 
 [[mutant]]
 name = "crates/pingers-meetup-session/src/live.rs: replace receive -> Result<Option<Vec<u8>>, pingers_transport::TransportError> with Ok(Some(vec![1]))"
 reason = "caught as a timeout, not missed: a channel that always yields a frame makes the task loop without ever waiting, starving the tests until cargo-mutants gives up"
+
+[[mutant]]
+name = "crates/pingers-anon/src/circuit.rs: replace ceremony::matches_ceremony -> bool with true"
+reason = "equivalent for every build: the only key compiled in is the ceremony's, so the check is true either way. The comparator it calls (ceremony::matches) is tested with each field altered, and the self-test's handling of a false answer is tested with an injected check."

@@ -68,7 +68,16 @@ import org.pingers.app.ui.screens.MeetupEndedScreen
 import org.pingers.app.ui.screens.MeetupScreen
 import org.pingers.app.ui.screens.NewPartyScreen
 import org.pingers.app.ui.screens.Onboarding
-import org.pingers.app.ui.screens.OnboardingScreen
+import org.pingers.app.ui.screens.SetupScreen
+import org.pingers.app.ui.screens.SettingsScreen
+import org.pingers.app.ui.screens.YourNameScreen
+import org.pingers.app.ui.screens.QuietHoursScreen
+import org.pingers.app.ui.screens.ZoneTimesScreen
+import org.pingers.app.ui.screens.WakeupsScreen
+import org.pingers.app.ui.screens.PartySettingsScreen
+import org.pingers.app.ui.screens.SafetyCodesScreen
+import org.pingers.app.ui.screens.LeavePartySheet
+import org.pingers.app.ui.screens.PartyCodeScreen
 import org.pingers.app.ui.screens.PartyScreen
 import org.pingers.app.ui.screens.PrivacyScreen
 import org.pingers.app.ui.screens.SecurityScreen
@@ -94,8 +103,10 @@ class MainActivity : ComponentActivity() {
         )
         super.onCreate(savedInstanceState)
         val fake = debuggable(this) && intent.getBooleanExtra(EXTRA_FAKE, false)
+        // Debug builds only: `--es variant shared` and the like pick a screen's state (android/README.md).
+        val variant = if (debuggable(this)) intent.getStringExtra(EXTRA_VARIANT) else null
         repo = if (fake) {
-            FakeRepository(resources, lifecycleScope)
+            FakeRepository(resources, lifecycleScope, variant)
         } else {
             CoreRepositories.get(applicationContext).also(::follow)
         }
@@ -106,10 +117,23 @@ class MainActivity : ComponentActivity() {
                 var onboarded by remember { mutableStateOf(fake || Onboarding.done(this)) }
                 // Test tags as view resource ids, so UI Automator on the host finds them (ui/E2eTags.kt).
                 Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
-                    if (onboarded) App(repo, nav, pending) { pending = null } else OnboardingScreen { onboarded = true }
+                    if (onboarded) {
+                        App(repo, nav, pending, variant) { pending = null }
+                    } else {
+                        SetupScreen(repo) {
+                            Onboarding.finish(this@MainActivity)
+                            onboarded = true
+                        }
+                    }
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Push app, battery, notifications: any may have changed in Android's settings meanwhile.
+        repo.refreshPhone()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -154,12 +178,13 @@ class MainActivity : ComponentActivity() {
 private const val EXTRA_SCREEN = "screen"
 private const val EXTRA_FAKE = "fake"
 private const val EXTRA_MAP_HOST = "map_host"
+private const val EXTRA_VARIANT = "variant"
 
 private fun debuggable(context: android.content.Context) =
     context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
 
 @Composable
-private fun App(repo: PingersRepository, nav: Navigator, pending: Intent?, consumed: () -> Unit) {
+private fun App(repo: PingersRepository, nav: Navigator, pending: Intent?, variant: String?, consumed: () -> Unit) {
     val context = LocalContext.current
     val activity = context as ComponentActivity
     val route = nav.current
@@ -238,14 +263,14 @@ private fun App(repo: PingersRepository, nav: Navigator, pending: Intent?, consu
             label = "screen",
         ) { r ->
             CompositionLocalProvider(LocalMaps provides maps, LocalOpenMapRegions provides openRegions) {
-                if (r == Route.MapRegions) MapRegionsScreen(maps, regionsAround, nav) else Screen(r, repo, nav, simulateAlert)
+                if (r == Route.MapRegions) MapRegionsScreen(maps, regionsAround, nav) else Screen(r, repo, nav, variant, simulateAlert)
             }
         }
     }
 }
 
 @Composable
-private fun Screen(route: Route, repo: PingersRepository, nav: Navigator, simulateAlert: () -> Unit) {
+private fun Screen(route: Route, repo: PingersRepository, nav: Navigator, variant: String?, simulateAlert: () -> Unit) {
     when (route) {
         Route.Home -> HomeScreen(repo.home.collectAsStateWithLifecycle().value, repo, nav, simulateAlert)
         Route.NewParty -> {
@@ -278,5 +303,31 @@ private fun Screen(route: Route, repo: PingersRepository, nav: Navigator, simula
         Route.LocationRequest -> LocationRequestScreen(repo.locationRequest.collectAsStateWithLifecycle().value, repo, nav)
         Route.MeetupEnded -> MeetupEndedScreen(repo.meetupEnded.collectAsStateWithLifecycle().value, nav)
         Route.MapRegions -> {}
+        // Debug builds open first run with `--es screen Setup` (`--es variant background` or
+        // `notifications` for steps 2 and 3); it ends back on Home.
+        Route.Setup -> SetupScreen(
+            repo,
+            when (variant) {
+                "background" -> uniffi.pingers.SetupStep.BACKGROUND
+                "notifications" -> uniffi.pingers.SetupStep.NOTIFICATIONS
+                else -> uniffi.pingers.SetupStep.LOCATION
+            },
+        ) { nav.reset(Route.Home) }
+        Route.Settings -> SettingsScreen(repo.deviceSettings.collectAsStateWithLifecycle().value, nav)
+        Route.YourName -> YourNameScreen(repo.yourName.collectAsStateWithLifecycle().value, repo, nav)
+        Route.QuietHours -> QuietHoursScreen(repo.quietHours.collectAsStateWithLifecycle().value, repo, nav)
+        Route.ZoneTimes -> ZoneTimesScreen(repo.zoneTimes.collectAsStateWithLifecycle().value, repo, nav)
+        Route.Wakeups -> WakeupsScreen(repo.wakeups.collectAsStateWithLifecycle().value, repo, nav)
+        Route.PartySettings -> PartySettingsScreen(repo.partySettings.collectAsStateWithLifecycle().value, repo, nav)
+        Route.SafetyCodes -> SafetyCodesScreen(repo.safetyCodes.collectAsStateWithLifecycle().value, repo, nav)
+        Route.LeaveParty -> Box(Modifier.fillMaxSize()) {
+            PartySettingsScreen(repo.partySettings.collectAsStateWithLifecycle().value, repo, nav)
+            LeavePartySheet(repo.leaveParty.collectAsStateWithLifecycle().value, repo, nav)
+        }
+        Route.PartyCode -> PartyCodeScreen(
+            repo.partyCode.collectAsStateWithLifecycle().value,
+            repo.registrationCode.collectAsStateWithLifecycle().value,
+            repo, nav,
+        )
     }
 }
