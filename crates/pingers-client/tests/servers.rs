@@ -657,6 +657,30 @@ async fn leaving_the_party_on_b_posts_the_leave_to_b_once() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn leaving_a_party_with_wake_ups_deletes_its_subscription_on_that_server() -> TestResult {
+    let world = World::start()?;
+    let (ana, _on_a, _on_b) = ana_on_both(&world).await?;
+    ana.platform
+        .set_push_registration(Some(pingers_testkit::PushRegistration {
+            platform: pingers_proto::PushPlatform::UnifiedPush,
+            token: pingers_proto::PushToken::from_bytes(b"https://push.example/up/ana".to_vec()),
+        }));
+    ana.client
+        .set_wake_pushes(pingers_client::snapshot::WakePushes::On)
+        .await?;
+    // A Party made with wake-ups on holds a subscription in its group on B.
+    let choir = ana.create_party(Some(world.b_server()?), "Choir").await?;
+    let before = relayed_answers(world.b()?).await?;
+    ana.client.leave_party(choir).await?;
+    assert_eq!(
+        relayed_answers(world.b()?).await?,
+        before.saturating_add(2),
+        "the leave proposal, then the subscription's deletion, through B's relay"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wake_pushes_go_on_for_the_servers_whose_push_relay_can_be_sealed_to() -> TestResult {
     let world = World::start()?;
     let (ana, _on_a, _on_b) = ana_on_both(&world).await?;
