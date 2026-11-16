@@ -207,7 +207,10 @@ impl WakePort for Wake {
             );
         let pipeline = Box::pin(self.pipeline(trigger)).await;
         // Joins are read even when the pipeline failed (no fix, a board that would not sync).
-        let joins = if joins_due || self.wake_pushes().await? == WakePushes::NoWakePushes {
+        let joins = if joins_due
+            || self.wake_pushes().await? == WakePushes::NoWakePushes
+            || super::join::waits_unannounced(&self.net).await?
+        {
             super::join::poll(&self.net).await?
         } else {
             Vec::new()

@@ -46,13 +46,13 @@ const REPLY_LIFETIME: Duration = Duration::from_hours(24);
 /// An invite mailbox lives as long as the invite it serves.
 const INVITE_MAILBOX_LIFETIME: Duration = pingers_parties::INVITE_LIFETIME;
 
-/// Posts a join request for `link` under `name` ("Ask to join"). With wake-up pushes off the
-/// request carries no subscription: the join still works, without wake-ups.
+/// Posts a join request for `link` under `name` ("Ask to join"). With wake-up pushes off, or
+/// on but without the platform's push token yet, the request carries no subscription: the join
+/// still works, and the device reads its reply mailbox itself ([`poll`]).
 ///
 /// # Errors
 ///
-/// [`Unavailable::NoPushToken`] with pushes on but no token yet; [`ClientError::Parties`] for
-/// a bad or expired link; [`ClientError::Sync`].
+/// [`ClientError::Parties`] for a bad or expired link; [`ClientError::Sync`].
 pub(crate) async fn open_invite(net: &Net, link: InviteUrl, name: Name) -> Result<(), ClientError> {
     let engine = net.engine()?;
     // A registration code in the link is for the first registration on the link's own server
@@ -68,7 +68,11 @@ pub(crate) async fn open_invite(net: &Net, link: InviteUrl, name: Name) -> Resul
     let subscription = match net.ensure_wake_push().await {
         Ok(()) => engine
             .party_subscription(TimeToLive::new(PARTY_SUBSCRIPTION).map_err(|_never| corrupt())?)?,
-        Err(ClientError::Unavailable(Unavailable::WakePushesOff)) => None,
+        // No wake-ups (pushes off, or no token from the platform yet): the join still works;
+        // the device then reads its reply mailbox on its own wakes and while it waits on screen.
+        Err(ClientError::Unavailable(Unavailable::WakePushesOff | Unavailable::NoPushToken)) => {
+            None
+        }
         Err(error) => return Err(error),
     };
     let link = InviteLink::from_text(link.as_str().to_owned());
@@ -166,6 +170,18 @@ async fn pending(net: &Net) -> Result<Option<Pending>, ClientError> {
             })
         })
         .await
+}
+
+/// Whether this device waits on a join no push will announce (asked without a subscription):
+/// then every wake reads its reply mailbox.
+///
+/// # Errors
+///
+/// A storage failure.
+pub(crate) async fn waits_unannounced(net: &Net) -> Result<bool, ClientError> {
+    Ok(pending(net)
+        .await?
+        .is_some_and(|pending| pending.subscription.is_none()))
 }
 
 /// Withdraws the join this device asked for ("Withdraw request").

@@ -1,3 +1,5 @@
+import java.net.URI
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -207,6 +209,13 @@ android {
             buildConfigField("String", variable.removePrefix("PINGERS_"), "\"$value\"")
         }
         deployment("pingersServerHost", "PINGERS_SERVER_HOST", "https://pingers.invalid")
+        // The manifest's verified App Links filter names the server's host (no scheme, port or
+        // path): https://pingers.example.org:8443 gives pingers.example.org.
+        val serverOrigin = providers.gradleProperty("pingersServerHost")
+            .orElse(providers.environmentVariable("PINGERS_SERVER_HOST"))
+            .getOrElse("https://pingers.invalid")
+        manifestPlaceholders["pingersServerHost"] =
+            URI(serverOrigin).host ?: throw GradleException("PINGERS_SERVER_HOST must be an https:// origin")
         deployment("pingersOhttpRelay", "PINGERS_OHTTP_RELAY", "https://ohttp.pingers.invalid")
         deployment("pingersPushRelay", "PINGERS_PUSH_RELAY", "https://push.pingers.invalid")
         // The key config hashes the gateway and the push relay may have: for each, the key
