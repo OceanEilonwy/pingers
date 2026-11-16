@@ -340,8 +340,8 @@ async fn an_invite_links_registration_code_registers_the_joiner() -> Result<(), 
         push_relay_pins: Vec::new(),
         registration_code: Some(SecretText::new(CODE.to_owned())),
     })?;
-    // Opening the link registers the account with the link's code first; the join itself
-    // then waits for a push token, which this device has none of.
+    // Opening the link registers the account with the link's code first; the join then goes
+    // out without a subscription, as this device has no push token yet.
     let opened = tokio::time::timeout(
         STEP,
         client.open_invite(
@@ -351,12 +351,7 @@ async fn an_invite_links_registration_code_registers_the_joiner() -> Result<(), 
     )
     .await
     .map_err(|_elapsed| TestError::Setup("opening the invite did not finish"))?;
-    assert!(matches!(
-        opened,
-        Err(ClientError::Unavailable(
-            pingers_client::Unavailable::NoPushToken
-        ))
-    ));
+    assert!(opened.is_ok(), "{opened:?}");
     let database = Database::open(&path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
     let session = database.session()?;
     let scoped = session.server(&ServerId::new(harness.endpoints().server_id.clone())?)?;
@@ -364,6 +359,7 @@ async fn an_invite_links_registration_code_registers_the_joiner() -> Result<(), 
         scoped.account().registration()?,
         AccountRegistration::Registered { code: Some(code) } if code.expose() == CODE
     ));
-    assert_eq!(scoped.privacy_pass_tokens().count()?, 300);
+    // The day's 300 tokens, less the reply mailbox's registration and the join request.
+    assert_eq!(scoped.privacy_pass_tokens().count()?, 298);
     Ok(())
 }

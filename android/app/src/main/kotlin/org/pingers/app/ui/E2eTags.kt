@@ -39,6 +39,8 @@ object E2eTags {
     const val APPROVE_CODE = "approve_code"
     /** InviteApprove: "Codes match · Let <name> in". */
     const val APPROVE_LET_IN = "approve_let_in"
+    /** Invite people: "Verify" on an opened invite, which opens InviteApprove. */
+    const val INVITE_VERIFY = "invite_verify"
     /** JoinA1: "Change" on "You'll join as Ben", which opens Your name. */
     const val JOIN_CHANGE_NAME = "join_change_name"
 

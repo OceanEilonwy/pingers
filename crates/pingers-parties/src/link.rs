@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Invite links: `https://<host>/j#v1.<base64url(InvitePayload)>` (design D, invite flow).
+//! Invite links: `https://<host>/j#v1.<base64url(InvitePayload)>` (design D, invite flow), and
+//! the `pingers://join#v1.<...>` form the server's landing page at `/j` hands to the app.
 
 use core::fmt;
 
@@ -9,6 +10,9 @@ use zeroize::Zeroizing;
 use crate::PartiesError;
 
 const PATH_AND_VERSION: &str = "/j#v1.";
+
+/// The app's own scheme, as the landing page forwards a link to it.
+const APP_PREFIX: &str = "pingers://join#v1.";
 
 /// An invite link or the string in its QR code. It carries the invite secret in its fragment,
 /// so it is zeroed on drop and its `Debug` prints nothing of it.
@@ -42,24 +46,30 @@ impl InviteLink {
         &self.0
     }
 
-    /// Decodes the link's payload, checking that the link's origin is the payload's server.
+    /// Decodes the link's payload. A link of any server works: the payload names its server.
+    /// An `https://` link must be on that server (a link that moved elsewhere is refused); a
+    /// `pingers://join#v1.` link, as the landing page forwards it, has no origin to check.
     ///
     /// # Errors
     ///
-    /// [`PartiesError::InvalidLink`] if the link is not `<server>/j#v1.<base64url>` or its
-    /// origin differs from the server inside; [`PartiesError::Proto`] if the payload does not
-    /// decode.
+    /// [`PartiesError::InvalidLink`] if the link is neither `<server>/j#v1.<base64url>` nor
+    /// `pingers://join#v1.<base64url>`, or its origin differs from the server inside;
+    /// [`PartiesError::Proto`] if the payload does not decode.
     pub fn payload(&self) -> Result<InvitePayload, PartiesError> {
-        let (origin, fragment) = self
-            .0
-            .split_once(PATH_AND_VERSION)
-            .ok_or(PartiesError::InvalidLink)?;
+        let (origin, fragment) = if let Some(fragment) = self.0.strip_prefix(APP_PREFIX) {
+            (None, fragment)
+        } else {
+            let (origin, fragment) = self
+                .0
+                .split_once(PATH_AND_VERSION)
+                .ok_or(PartiesError::InvalidLink)?;
+            (Some(origin), fragment)
+        };
         let bytes = Zeroizing::new(base64url_decode(fragment).ok_or(PartiesError::InvalidLink)?);
         let payload = InvitePayload::decode(&bytes)?;
-        if payload.server.as_str() == origin {
-            Ok(payload)
-        } else {
-            Err(PartiesError::InvalidLink)
+        match origin {
+            Some(origin) if origin != payload.server.as_str() => Err(PartiesError::InvalidLink),
+            _ => Ok(payload),
         }
     }
 }
@@ -196,6 +206,27 @@ mod tests {
         assert!(link.as_str().starts_with("https://pingers.example/j#v1."));
         assert_eq!(link.payload()?, payload()?);
         assert_eq!(format!("{link:?}"), "InviteLink(redacted)");
+        Ok(())
+    }
+
+    #[test]
+    fn the_landing_page_s_app_form_carries_the_same_invite() -> Result<(), TestError> {
+        let link = InviteLink::new(&payload()?)?;
+        let fragment = link
+            .as_str()
+            .split_once('#')
+            .map(|(_, fragment)| fragment)
+            .ok_or(TestError::Unexpected("a fragment"))?;
+        let app = InviteLink::from_text(format!("pingers://join#{fragment}"));
+        assert_eq!(app.payload()?, payload()?);
+        // Another scheme or host is not the app's form.
+        for other in ["pingers://joins#", "pingerz://join#", "pingers://join/"] {
+            let text = format!("{other}{fragment}");
+            assert!(matches!(
+                InviteLink::from_text(text).payload(),
+                Err(PartiesError::InvalidLink)
+            ));
+        }
         Ok(())
     }
 

@@ -452,6 +452,7 @@ class FakeRepository(
     override fun askToJoin(name: String, onAsked: () -> Unit) = onAsked()
 
     override fun withdrawJoin() = Unit
+    override fun checkJoins() = Unit
 
     override fun openJoinedParty() = openParty(cc)
 

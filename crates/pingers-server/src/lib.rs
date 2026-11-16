@@ -46,6 +46,7 @@ mod forwarded;
 mod gateway;
 mod groups;
 mod http;
+mod links;
 mod live;
 mod live_groups;
 mod mailbox_routes;
@@ -83,8 +84,9 @@ pub use crate::admin::{
     Command, OhttpSecret, new_ohttp_secret, os_ohttp_secret, pin_set, pins_output,
 };
 pub use crate::config::{
-    AddressList, CertificateSource, ConfigError, Database, Logging, MapHostGateway,
-    MembershipProofs, OhttpKeys, RelayAllowList, Required, ServedKey, ServerConfig,
+    AddressList, AndroidPackage, AppLinks, CertificateFingerprint, CertificateSource, ConfigError,
+    Database, Logging, MapHostGateway, MembershipProofs, OhttpKeys, RelayAllowList, Required,
+    ServedKey, ServerConfig,
 };
 pub use crate::error::ServerError;
 pub use crate::forwarded::TrustedProxies;
@@ -182,6 +184,8 @@ pub(crate) struct Shared {
     pub(crate) quota: Quota,
     pub(crate) sessions: Sessions,
     pub(crate) params: PublishedParams,
+    /// The invite landing page and, when App Links are configured, `assetlinks.json`.
+    pub(crate) links: crate::links::LinkPages,
     pub(crate) tasks: Tasks,
     /// Where map downloads through the relay are forwarded; `None` without a map host.
     pub(crate) map_relay: Option<map_relay::MapRelay>,
@@ -451,6 +455,7 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
         live_channels: LiveChannels::default(),
         quota,
         sessions: Sessions::default(),
+        links: crate::links::LinkPages::render(config.app_links.as_ref()),
         params: PublishedParams {
             server_operator: config.server_operator,
             ohttp_relays: config.ohttp_relay_urls,

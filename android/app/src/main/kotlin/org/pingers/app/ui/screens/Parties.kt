@@ -438,6 +438,7 @@ private fun InvitationRow(inv: Invitation, repo: PingersRepository, nav: Navigat
                 Box(
                     Modifier
                         .height(48.dp)
+                        .testTag(E2eTags.INVITE_VERIFY)
                         .clickable(role = Role.Button) {
                             repo.openJoinRequest(inv.id)
                             nav.go(Route.JoinRequest)

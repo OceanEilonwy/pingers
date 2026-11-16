@@ -4,3 +4,6 @@
 # Firebase configuration: kept outside the repository (pingers.googleServicesJson); the
 # build copies it under android/app/build/generated/google-services/.
 google-services.json
+
+# Claude Code worktrees and session files that other tools create inside the checkout.
+/.claude/
