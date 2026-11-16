@@ -19,14 +19,6 @@ use super::sync::{KNOCK_POOL, MAILBOX_LIFETIME, Net};
 use crate::snapshot::{PushDelivery, PushDowngrade};
 use crate::{ClientError, Unavailable};
 
-/// Whether `error` is the store's (the only failures a push maintenance step reports).
-const fn is_store(error: &ClientError) -> bool {
-    matches!(
-        error,
-        ClientError::Store(_) | ClientError::Records(_) | ClientError::Sync(SyncError::Store(_))
-    )
-}
-
 impl Net {
     /// A sealed subscription for a group this device is creating on `server` (a Party, a
     /// Meetup), if wake-up pushes can be sealed for that server now; `None` otherwise, and a
@@ -44,7 +36,11 @@ impl Net {
         };
         match self.ensure_wake_push(server).await {
             Ok(()) => {}
-            Err(error) if is_store(&error) => return Err(error),
+            Err(
+                error @ (ClientError::Store(_)
+                | ClientError::Records(_)
+                | ClientError::Sync(SyncError::Store(_))),
+            ) => return Err(error),
             Err(_) => return Ok(None),
         }
         let lifetime = TimeToLive::new(TOKEN_LIFETIME).map_err(|_never| corrupt())?;
@@ -96,7 +92,11 @@ impl Net {
                 link.clear_wake_push();
                 Ok(Pushes::Off)
             }
-            Err(error) if is_store(&error) => Err(error),
+            Err(
+                error @ (ClientError::Store(_)
+                | ClientError::Records(_)
+                | ClientError::Sync(SyncError::Store(_))),
+            ) => Err(error),
             Err(_) => Ok(Pushes::Unknown),
         }
     }
@@ -243,9 +243,14 @@ impl Net {
     /// A storage failure.
     pub(crate) async fn maintain_now(&self) -> Result<(), ClientError> {
         for link in self.servers.all().await? {
-            match self.maintain_push_registrations(&link.server).await {
-                Err(error) if is_store(&error) => return Err(error),
-                Ok(_) | Err(_) => {}
+            // Only a storage failure stops the round; another server is still tried.
+            if let Err(
+                error @ (ClientError::Store(_)
+                | ClientError::Records(_)
+                | ClientError::Sync(SyncError::Store(_))),
+            ) = self.maintain_push_registrations(&link.server).await
+            {
+                return Err(error);
             }
         }
         Ok(())
@@ -283,32 +288,5 @@ impl Net {
             None
         };
         Ok(downgrade.map_or(PushDelivery::Full, PushDelivery::Downgraded))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use pingers_store::StoreError;
-
-    use super::*;
-
-    /// Only a storage failure stops a push maintenance step; anything else waits for the next.
-    #[test]
-    fn only_storage_failures_count_as_the_store_s() {
-        for failure in [
-            ClientError::Store(StoreError::Busy),
-            ClientError::Records(pingers_mls::StorageError::Unavailable),
-            ClientError::Sync(SyncError::Store(StoreError::Busy)),
-        ] {
-            assert!(is_store(&failure), "{failure:?}");
-        }
-        for other in [
-            ClientError::Internal,
-            Unavailable::NoPushToken.into(),
-            SyncError::PushRelayKeyMismatch.into(),
-        ] {
-            assert!(!is_store(&other), "{other:?}");
-        }
     }
 }
