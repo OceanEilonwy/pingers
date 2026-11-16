@@ -12,17 +12,17 @@ use pingers_proto::{
     Padded, PartyId, SizeClass, Subscription, SubscriptionId, Urgency,
 };
 use pingers_store::{
-    Identity, LocationVisibility, Member, MemberName, Party, PartyName, Session, Verification,
+    Identity, InviteState, LocationVisibility, Member, MemberName, Party, PartyName, Session,
+    Verification,
 };
 use pingers_time::Clock;
 use rand_core::CryptoRng;
 
 use crate::codec::{Reader, Writer};
-use crate::invite::{InviteRecord, StoredStatus};
-use crate::joining::Approval;
+use crate::joining::{Approval, encode_approval, read_approval};
 use crate::ops::{PartyOperation, Profile, Snapshot, spot_wins};
-use crate::records::{self, Key};
 use crate::roster::{Myself, RosterMember, RosterView};
+use crate::roster_history;
 use crate::settings::StoredSettings;
 use crate::{
     Outbound, OutgoingCommit, PartiesError, PartySettings, RelayChoice, SafetyCode, WelcomeDelivery,
@@ -132,7 +132,7 @@ impl PendingCommit {
         match self {
             Self::Add(approval) => {
                 writer.byte(0);
-                writer.variable(&approval.encode()?)?;
+                writer.variable(&encode_approval(approval)?)?;
             }
             Self::Remove => writer.byte(1),
             Self::Proposals => writer.byte(2),
@@ -146,7 +146,7 @@ impl PendingCommit {
         let pending = match reader.byte()? {
             0 => {
                 let mut inner = Reader::new(reader.variable()?, "pending join");
-                let approval = Approval::read(&mut inner)?;
+                let approval = read_approval(&mut inner)?;
                 inner.end()?;
                 Self::Add(Box::new(approval))
             }
@@ -211,7 +211,7 @@ impl<'session> PartyLifecycle<'session> {
                 post_quantum: new.settings.post_quantum,
             };
             stored.write(session, &party_id)?;
-            records::record_roster(session, &party_id, group.epoch(), &group.roster())?;
+            roster_history::record_roster(session, &party_id, group.epoch(), &group.roster())?;
             if let Some(subscription) = &new.subscription {
                 set_subscription(session, &party_id, own_key, Some(subscription.id))?;
             }
@@ -298,11 +298,11 @@ impl<'session> PartyLifecycle<'session> {
     /// [`PartiesError::UnknownParty`]; [`PartiesError::Malformed`] if a record is corrupt.
     pub fn roster_view(&self, party: &PartyId) -> Result<RosterView, PartiesError> {
         party_row(self.session, party)?;
-        let epochs = records::epochs(self.session, party)?;
+        let epochs = roster_history::epochs(self.session, party)?;
         let current = *epochs.first().ok_or(PartiesError::Internal)?;
         let mut rosters = Vec::new();
         for epoch in epochs {
-            if let Some(roster) = records::roster_at(self.session, party, epoch)? {
+            if let Some(roster) = roster_history::roster_at(self.session, party, epoch)? {
                 rosters.push((epoch, roster));
             }
         }
@@ -713,10 +713,10 @@ pub(crate) fn stored_settings(
 }
 
 pub(crate) fn current_roster(session: &Session, party: &PartyId) -> Result<Roster, PartiesError> {
-    let epoch = *records::epochs(session, party)?
+    let epoch = *roster_history::epochs(session, party)?
         .first()
         .ok_or(PartiesError::Internal)?;
-    records::roster_at(session, party, epoch)?.ok_or(PartiesError::Internal)
+    roster_history::roster_at(session, party, epoch)?.ok_or(PartiesError::Internal)
 }
 
 /// The Party's state for a new member, leaving out the profiles of `excluded` keys (members
@@ -905,7 +905,7 @@ fn apply_roster_change(
             }
         }
     }
-    records::record_roster(session, &row.id, summary.epoch, roster)?;
+    roster_history::record_roster(session, &row.id, summary.epoch, roster)?;
     Ok(CommitApplied {
         party: row.id,
         epoch: summary.epoch,
@@ -981,7 +981,7 @@ pub(crate) fn apply_operation(
     }
 }
 
-/// Deletes a Party with its MLS group and records; returns requests deleting the invite
+/// Deletes a Party with its MLS group and rows; returns requests deleting the invite
 /// mailboxes still open on the server (a used or cancelled invite's mailbox went already).
 fn delete_party(
     session: &Session,
@@ -989,15 +989,14 @@ fn delete_party(
     row: &Party,
 ) -> Result<Vec<Outbound>, PartiesError> {
     let mut outbound = Vec::new();
-    for mailbox in records::read_mailbox_list(session, &Key::Invites(&row.id))? {
-        let bytes = records::read(session, &Key::Invite(&row.id, &mailbox))?
-            .ok_or(PartiesError::UnknownInvite)?;
-        if InviteRecord::decode(&bytes)?.status == StoredStatus::Open {
-            outbound.push(Outbound::DeleteMailbox { mailbox });
+    for invite in session.party_invites().list(&row.id)? {
+        if invite.state == InviteState::Open {
+            outbound.push(Outbound::DeleteMailbox {
+                mailbox: invite.mailbox,
+            });
         }
     }
     context.delete_group(&row.group)?;
-    records::delete_party(session, &row.id)?;
     session.parties().delete(&row.id)?;
     Ok(outbound)
 }

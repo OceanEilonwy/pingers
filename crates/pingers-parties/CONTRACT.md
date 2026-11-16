@@ -116,19 +116,23 @@ pooled `Reply` one; with none, `NoPooledMailbox`.
 - **Per-Party state in store tables** (2026-11-14): settings, roster history, members' subscription
   ids, the in-flight commit and a waiting profile live in pingers-store's schema-v6 tables
   (`party_configs`, `rosters`, `member_subscriptions`, `pending_commits`, `profiles_waiting`),
-  which cascade with the Party; invites, waiting join requests and joins in progress stay records
-  while join flow A settles. `upgrade_records` moves the old records of those five kinds into the
-  tables (one transaction per Party, idempotent); pingers-client runs it when it opens the
-  database. A Spot tombstone, own or received, clears the Spot's presence row.
+  which cascade with the Party. Invites, waiting join requests, joins in progress and how this
+  device joined a Party live in the schema-v7 tables (2026-11-16: `party_invites`,
+  `join_approvals`, which go with their invite, `party_joins` and `joined_via`); this crate keeps
+  no key-value records any more. `upgrade_records` moves old records of every kind into the
+  tables (one transaction per Party, then one for joins in progress, found with pingers-store's
+  `kv_keys_with_prefix`; idempotent; a waiting request whose invite record is gone is dropped);
+  pingers-client runs it when it opens the database. A Spot tombstone, own or received, clears
+  the Spot's presence row.
 
 ## Requests to lower crates
 
 1. **pingers-proto** wire types for Party operations and the snapshot: done (2026-11-14,
    `PartyOperation`, `PartySnapshot`, with vectors and fuzz targets).
-2. **pingers-store** tables: done for settings, roster history, subscriptions, the in-flight
-   commit and the waiting profile (schema v6); a Spot tombstone clears its presence row
-   (`Presence::clear`). Invites, waiting join requests and joins in progress move once join
-   flow A has landed on main.
+2. **pingers-store** tables: done. Settings, roster history, subscriptions, the in-flight commit
+   and the waiting profile (schema v6, 2026-11-14); invites, waiting join requests, joins in
+   progress and `joined_via` (schema v7, 2026-11-16). A Spot tombstone clears its presence row
+   (`Presence::clear`).
 3. **pingers-crypto** `safety_number` and `inviter_fingerprint`: done (2026-11-14).
 4. **A joiner's suite** (owner decision 2026-11-14): the link keeps the suite out, so a join
    request carries a classical key package and, where the build can make one, an X-Wing one;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! A small fixed-layout byte codec for this crate's local records (settings, the pending
-//! commit, invites, roster history, subscriptions), which never leave the device. Wire values
+//! A small fixed-layout byte codec for what this crate keeps opaquely (the in-flight commit) and
+//! for reading its old key-value records, which never leave the device. Wire values
 //! (Party operations, the state snapshot) are pingers-proto's. Integers are big-endian;
 //! variable-length fields carry a `be32` length.
 

@@ -22,8 +22,7 @@
 //! it. [`RosterView`] implements `pingers_presence::RosterLookup` for knock verification;
 //! its `current_epoch` follows every merged commit.
 //!
-//! The crate's CONTRACT.md lists the decisions and the interim parts that wait on lower
-//! crates.
+//! The crate's CONTRACT.md lists the decisions and what this crate asked of lower crates.
 #![forbid(unsafe_code)]
 
 mod codec;
@@ -36,8 +35,8 @@ mod link;
 mod ops;
 mod outbound;
 mod profile;
-mod records;
 mod roster;
+mod roster_history;
 mod safety;
 mod settings;
 mod spots;
