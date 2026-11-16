@@ -7,6 +7,8 @@ server_id = "https://10.0.2.2:9443"
 server_operator = "Local test"
 ohttp_relay_urls = ["https://10.0.2.2:9444/ohttp"]
 map_host = "https://10.0.2.2:9446"
+# Map downloads through the relay are forwarded to the map host's own gateway, on this machine.
+map_host_gateway = "http://127.0.0.1:9474"
 logging = "counts"
 counts_interval_s = 60
 # A debug app build presents it with PINGERS_DEV_REGISTRATION_CODE (docs/deploy-nodo.md).
@@ -14,6 +16,13 @@ registration_codes = ["dev-registration-code"]
 delivery_db = "target/dev-stack/groups.sqlite"
 quota_db = "target/dev-stack/quota.sqlite"
 mailbox_db = "target/dev-stack/mailboxes.sqlite"
+
+# Debug app builds (`.debug` package ids, signed with the local debug keystore) open this
+# stack's invite links directly. Replace the fingerprint with your own debug keystore's:
+#   keytool -list -v -keystore ~/.android/debug.keystore -storepass android
+[app_links]
+packages = ["org.pingers.app.debug", "org.pingers.app.foss.debug"]
+certificates = ["C1:07:CB:BC:EF:B3:BE:DD:52:A6:17:85:92:D9:AE:C5:A9:E1:12:05:A6:C4:92:90:A0:AF:7D:BA:08:F9:6F:1C"]
 
 [ohttp]
 listen = "127.0.0.1:9471"

@@ -3538,6 +3538,8 @@ dependencies = [
  "pingers-crypto",
  "pingers-gate",
  "pingers-geo",
+ "pingers-map-downloads",
+ "pingers-map-host",
  "pingers-meetup",
  "pingers-meetup-session",
  "pingers-mls",
@@ -3631,6 +3633,8 @@ dependencies = [
  "pingers-client",
  "pingers-gate",
  "pingers-geo",
+ "pingers-map-downloads",
+ "pingers-map-packs",
  "pingers-meetup",
  "pingers-proto",
  "pingers-screens",
@@ -3681,23 +3685,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "pingers-map-downloads"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "pingers-crypto",
+ "pingers-map-host",
+ "pingers-map-packs",
+ "pingers-ohttp",
+ "pingers-proto",
+ "pingers-testkit",
+ "pingers-time",
+ "pingers-transport",
+ "rand_core 0.10.1",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "pingers-map-host"
 version = "0.1.0"
 dependencies = [
  "axum",
  "hex",
+ "pingers-crypto",
  "pingers-map-packs",
+ "pingers-ohttp",
  "pingers-testkit",
  "pingers-time",
  "pingers-transport",
+ "rand_chacha 0.10.0",
+ "rand_core 0.10.1",
  "reqwest",
  "serde",
  "serde_json",
- "sha2 0.11.1",
  "thiserror",
  "tokio",
  "tokio-util",
  "toml 1.2.1+spec-1.1.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -3705,10 +3732,9 @@ name = "pingers-map-packs"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "hex",
+ "pingers-crypto",
  "serde",
  "serde_json",
- "sha2 0.11.1",
  "thiserror",
  "toml 1.2.1+spec-1.1.0",
 ]
@@ -3989,6 +4015,7 @@ dependencies = [
  "pingers-gate",
  "pingers-geo",
  "pingers-mailbox",
+ "pingers-map-downloads",
  "pingers-meetup",
  "pingers-meetup-session",
  "pingers-ohttp",

@@ -8,7 +8,7 @@ use pingers_proto::PushHandle;
 use super::Client;
 use crate::ClientError;
 use crate::forward::emit;
-use crate::ports::{Foreground, GeofenceTransition, WakeInput, WakeOutcome};
+use crate::ports::{ClientEvent, Foreground, GeofenceTransition, WakeInput, WakeOutcome};
 
 impl Client {
     /// A location fix arrived.
@@ -90,7 +90,12 @@ impl Client {
             self.platform.schedule_wake(after);
         }
         for event in outcome.events {
-            emit(self.events.as_ref(), event);
+            self.emit(event);
         }
+    }
+
+    /// Makes the [`Events`](crate::Events) call `event` stands for.
+    pub(super) fn emit(&self, event: ClientEvent) {
+        emit(self.events.as_ref(), event);
     }
 }

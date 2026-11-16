@@ -54,7 +54,8 @@ pub struct Manifest {
     pub max_zoom: u8,
     /// The date of the Protomaps build it was cut from, `YYYY-MM-DD`.
     pub build_date: String,
-    /// The build it was cut from.
+    /// The build it was cut from. Manifests the app wrote before 2026-11-14 leave it out.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source: String,
     /// The PMTiles pack.
     pub pack: FileEntry,

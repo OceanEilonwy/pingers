@@ -46,9 +46,11 @@ mod forwarded;
 mod gateway;
 mod groups;
 mod http;
+mod links;
 mod live;
 mod live_groups;
 mod mailbox_routes;
+mod map_relay;
 mod metrics;
 mod quota_routes;
 mod route;
@@ -82,8 +84,9 @@ pub use crate::admin::{
     Command, OhttpSecret, new_ohttp_secret, os_ohttp_secret, pin_set, pins_output,
 };
 pub use crate::config::{
-    AddressList, CertificateSource, ConfigError, Database, Logging, MembershipProofs, OhttpKeys,
-    RelayAllowList, Required, ServedKey, ServerConfig,
+    AddressList, AndroidPackage, AppLinks, CertificateFingerprint, CertificateSource, ConfigError,
+    Database, Logging, MapHostGateway, MembershipProofs, OhttpKeys, RelayAllowList, Required,
+    ServedKey, ServerConfig,
 };
 pub use crate::error::ServerError;
 pub use crate::forwarded::TrustedProxies;
@@ -181,7 +184,11 @@ pub(crate) struct Shared {
     pub(crate) quota: Quota,
     pub(crate) sessions: Sessions,
     pub(crate) params: PublishedParams,
+    /// The invite landing page and, when App Links are configured, `assetlinks.json`.
+    pub(crate) links: crate::links::LinkPages,
     pub(crate) tasks: Tasks,
+    /// Where map downloads through the relay are forwarded; `None` without a map host.
+    pub(crate) map_relay: Option<map_relay::MapRelay>,
     rng: Mutex<ChaCha20Rng>,
 }
 
@@ -286,6 +293,26 @@ fn push_relay_roots(
         }
     };
     reqwest::Certificate::from_pem_bundle(&pem).map_err(ServerError::HttpClient)
+}
+
+/// The client for the map host's gateway, if this server names a map host.
+fn map_relay(
+    config: &ServerConfig,
+    timer: &Arc<dyn Timer>,
+) -> Result<Option<map_relay::MapRelay>, ServerError> {
+    config
+        .map_host_gateway
+        .clone()
+        .map(|gateway| {
+            map_relay::MapRelay::new(
+                gateway,
+                Arc::clone(timer),
+                config.request_timeout,
+                push_relay_roots(config.push_relay_ca.as_ref())?,
+            )
+            .map_err(ServerError::HttpClient)
+        })
+        .transpose()
 }
 
 /// The mailboxes, in their configured store.
@@ -393,6 +420,7 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
         push_relay_roots(config.push_relay_ca.as_ref())?,
     )
     .map_err(ServerError::HttpClient)?;
+    let map_relay = map_relay(&config, &timer)?;
     let live = match live.backend() {
         LiveBackend::Delivery => LiveRoute::Groups,
         LiveBackend::Custom => LiveRoute::Custom(Arc::new(live)),
@@ -421,11 +449,13 @@ pub async fn serve_with<C: Clock + 'static, T: Timer + 'static, L: LiveChannel>(
             groups: Arc::clone(&groups),
             directory,
         }),
+        map_relay,
         mailboxes,
         groups,
         live_channels: LiveChannels::default(),
         quota,
         sessions: Sessions::default(),
+        links: crate::links::LinkPages::render(config.app_links.as_ref()),
         params: PublishedParams {
             server_operator: config.server_operator,
             ohttp_relays: config.ohttp_relay_urls,

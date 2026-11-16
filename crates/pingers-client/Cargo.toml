@@ -21,6 +21,8 @@ pingers-meetup = { workspace = true }
 pingers-meetup-session = { workspace = true }
 pingers-mls = { workspace = true }
 pingers-ohttp = { workspace = true }
+# Region map downloads (design B.12), so the shell makes no network calls.
+pingers-map-downloads = { workspace = true }
 pingers-parties = { workspace = true }
 pingers-presence = { workspace = true }
 pingers-proto = { workspace = true }
@@ -38,6 +40,8 @@ zeroize = { workspace = true }
 pingers-time = { workspace = true, features = ["test-util"] }
 rand_chacha = { workspace = true }
 pingers-testkit = { workspace = true, features = ["client", "harness"] }
+# A real map host for the relayed download test (tests/maps.rs).
+pingers-map-host = { workspace = true }
 tokio = { workspace = true }
 
 [lints]

@@ -40,7 +40,29 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Invite links: pingers://join#<party id and key package secret>. -->
+            <!-- Invite links of the build's own server, https://<server>/j#v1.<invite>: verified
+                 App Links (the server serves /.well-known/assetlinks.json), so a tap opens the
+                 app without asking. The host comes from PINGERS_SERVER_HOST (any port matches). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="${pingersServerHost}"
+                    android:pathPrefix="/j" />
+            </intent-filter>
+            <!-- Invite links of any other server: not verifiable. Android 10 and 11 offer Pingers
+                 in their "Open with" chooser; from Android 12 such links open in the browser,
+                 and the server's landing page hands them to the app. -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="*" android:pathPrefix="/j" />
+            </intent-filter>
+            <!-- pingers://join#v1.<invite>: what a server's landing page at /j forwards to (an
+                 intent:// URL there carries the invite as the extra "invite" instead). -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

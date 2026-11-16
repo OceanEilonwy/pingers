@@ -11,6 +11,8 @@
 //! - `/status`: JSON for an operator's status panel, `Cache-Control: no-store`: `service`,
 //!   `version`, `status` (`ok`), `mode` (`pre-extracted` or `cache`) and `hosted` (the
 //!   configured prefixes). No counts, no disk use, nothing about requests.
+//! - `POST /ohttp` and `GET /ohttp-keys`: the OHTTP gateway for downloads through a privacy
+//!   relay ([`crate::gateway`]).
 //! - Anything else: 404 with no body.
 //!
 //! No cookies are set and no request detail is kept; see [`crate::counts`].
@@ -54,11 +56,20 @@ pub struct Host {
     pub cache: Option<Arc<Cache>>,
     /// `Retry-After` for regions being prepared.
     pub retry_after_seconds: u32,
+    /// The OHTTP gateway for downloads through a privacy relay.
+    pub gateway: Arc<crate::gateway::RelayGateway>,
 }
 
 /// The router for a host.
 pub fn router(host: Arc<Host>) -> Router {
-    Router::new().fallback(handle).with_state(host)
+    Router::new()
+        .route("/ohttp", axum::routing::post(crate::gateway::post))
+        .route(
+            "/ohttp-keys",
+            axum::routing::get(crate::gateway::key_config),
+        )
+        .fallback(handle)
+        .with_state(host)
 }
 
 async fn handle(
@@ -72,7 +83,7 @@ async fn handle(
     response
 }
 
-async fn respond(
+pub(crate) async fn respond(
     host: &Arc<Host>,
     method: &Method,
     uri: &Uri,
@@ -214,6 +225,7 @@ async fn catalog_response(host: &Arc<Host>, head: bool, headers: &HeaderMap) -> 
             CACHE_CONTROL,
             HeaderValue::from_static("public, max-age=300"),
         ),
+        (ACCEPT_RANGES, HeaderValue::from_static("bytes")),
         (X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
         (ETAG, etag.clone()),
     ];
@@ -229,16 +241,61 @@ async fn catalog_response(host: &Arc<Host>, head: bool, headers: &HeaderMap) -> 
         );
     }
     let len = u64::try_from(body.len()).unwrap_or(u64::MAX);
+    // Ranges as for files, so a client fetching through a relay can take a large catalog in
+    // pieces of one size (pinned to this version with If-Range).
+    let range = match headers.get(RANGE).and_then(|value| value.to_str().ok()) {
+        Some(value) if if_range_holds(headers, &etag) => parse_range(value, len),
+        Some(_) | None => RangeAnswer::Full,
+    };
+    let (status, part, content_range) = match range {
+        RangeAnswer::Full => (StatusCode::OK, body, None),
+        RangeAnswer::Partial(range) => {
+            let part = usize::try_from(range.start)
+                .ok()
+                .zip(usize::try_from(range.end).ok())
+                .and_then(|(start, end)| body.get(start..=end));
+            let Some(part) = part else {
+                return status_only(StatusCode::INTERNAL_SERVER_ERROR);
+            };
+            (
+                StatusCode::PARTIAL_CONTENT,
+                part.to_vec(),
+                Some(format!("bytes {}-{}/{len}", range.start, range.end)),
+            )
+        }
+        RangeAnswer::Unsatisfiable => {
+            let Ok(content_range) = HeaderValue::from_str(&format!("bytes */{len}")) else {
+                return status_only(StatusCode::INTERNAL_SERVER_ERROR);
+            };
+            return respond_with(
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                &Headers {
+                    common: &common,
+                    extra: &[(CONTENT_RANGE, content_range)],
+                },
+                Body::empty(),
+                0,
+            );
+        }
+    };
+    let count = u64::try_from(part.len()).unwrap_or(u64::MAX);
+    let mut extra = vec![(CONTENT_LENGTH, HeaderValue::from(count))];
+    if let Some(content_range) = content_range {
+        let Ok(value) = HeaderValue::from_str(&content_range) else {
+            return status_only(StatusCode::INTERNAL_SERVER_ERROR);
+        };
+        extra.push((CONTENT_RANGE, value));
+    }
     let (body, sent) = if head {
         (Body::empty(), 0)
     } else {
-        (Body::from(body), len)
+        (Body::from(part), count)
     };
     respond_with(
-        StatusCode::OK,
+        status,
         &Headers {
             common: &common,
-            extra: &[(CONTENT_LENGTH, HeaderValue::from(len))],
+            extra: &extra,
         },
         body,
         sent,

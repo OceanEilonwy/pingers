@@ -2,7 +2,7 @@
 //! Opening the database, sessions under the cross-process lock, and transactions.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use rusqlite::Connection;
@@ -86,15 +86,36 @@ pub struct Session {
     _lock: ProcessLock,
 }
 
+/// Held while a connection is opened and keyed, so no connection is keyed before SQLCipher
+/// has finished initialising.
+///
+/// SQLite marks itself initialised and only then runs SQLCipher's initialisation, outside its
+/// own mutex. A second thread opening a database in that window gets a connection at once and
+/// its `PRAGMA key` fails ("An error occurred with PRAGMA key"), because SQLCipher is not ready
+/// yet. The first open in a process runs the whole initialisation inside `Connection::open`, so
+/// opening under this lock makes every other open wait for it. In the app this is a push wake
+/// and the UI opening the store at the same moment when the process starts. The store is the
+/// only SQLite user in the client process, so guarding its opens is enough. Keying is cheap
+/// (a raw key, no KDF), so holding the lock for it costs nothing measurable.
+static OPENING: Mutex<()> = Mutex::new(());
+
+/// Opens `path` and keys the connection, under [`OPENING`].
+pub(crate) fn open_keyed(path: &Path, key: &DatabaseKey) -> Result<Connection, StoreError> {
+    // The lock guards no data, so a panic while it was held leaves nothing inconsistent.
+    let _opening = OPENING.lock().unwrap_or_else(PoisonError::into_inner);
+    // Read-write, create if absent; no SQLite mutex because the session's own Mutex
+    // already serialises use of the connection.
+    let connection = Connection::open(path)?;
+    // SQLCipher logs decryption failures to stderr (logcat on Android) by default; the
+    // app logs nothing (style guide §9).
+    connection.execute_batch("PRAGMA cipher_log_level = NONE;")?;
+    connection.execute_batch(&key.duplicate().pragma())?;
+    Ok(connection)
+}
+
 impl Session {
     fn connect(lock: ProcessLock, path: &Path, key: &DatabaseKey) -> Result<Self, StoreError> {
-        // Read-write, create if absent; no SQLite mutex because the session's own Mutex
-        // already serialises use of the connection.
-        let connection = Connection::open(path)?;
-        // SQLCipher logs decryption failures to stderr (logcat on Android) by default; the
-        // app logs nothing (style guide §9).
-        connection.execute_batch("PRAGMA cipher_log_level = NONE;")?;
-        connection.execute_batch(&key.duplicate().pragma())?;
+        let connection = open_keyed(path, key)?;
         // The first read fails with "not a database" if the key is wrong.
         connection.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))?;
         // Freed pages are overwritten with zeros, so deleted keys and messages do not linger

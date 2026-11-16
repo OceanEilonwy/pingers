@@ -1,0 +1,24 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Pingers invite</title>
+<link rel="stylesheet" href="/j/landing.css">
+<script src="/j/landing.js" defer></script>
+</head>
+<body>
+<main data-apps="{{apps}}">
+<h1>You've been invited to a Party</h1>
+<p>Pingers lets friends find out they're nearby. Open this invite in the Pingers app to ask to join.</p>
+<p id="missing" hidden>This invite link is incomplete. Ask the person who sent it for a new one.</p>
+<p id="retry" hidden>Pingers did not open: this tries the other Pingers build. Tap Open in Pingers again.</p>
+<p><a id="open" class="button" href="#" hidden>Open in Pingers</a></p>
+<p class="small">Don't have Pingers yet? <a id="install" href="https://github.com/OceanEilonwy/pingers/blob/main/docs/install.md">Get Pingers</a>, then come back to this link.</p>
+<noscript><p class="small">This page needs JavaScript to hand the invite to the app. The invite stays on your phone: it is never sent to this server.</p></noscript>
+<p class="small">The invite is in the part of the link after #, which your browser never sends to this server.</p>
+</main>
+</body>
+</html>

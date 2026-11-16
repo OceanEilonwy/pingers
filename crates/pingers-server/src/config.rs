@@ -12,6 +12,10 @@
 //! signups_per_hour = 60            # new accounts the server takes per hour
 //! ohttp_relay_urls = ["https://relay.example/ohttp"]   # advertised in /v1/params
 //! map_host = "https://maps.example"                   # optional, advertised in /v1/params
+//! map_host_gateway = "http://127.0.0.1:9474"          # optional: where map downloads through
+//!                                  # the relay are forwarded (the map host's own OHTTP gateway,
+//!                                  # /ohttp and /ohttp-keys under it): https://, or http:// to a
+//!                                  # loopback address literal only. Default: map_host
 //! delivery_db = "/var/lib/pingers/groups.sqlite"       # optional: without it, in memory
 //! quota_db = "/var/lib/pingers/quota.sqlite"           # optional: accounts, bearer digests,
 //!                                  # the membership tree, issuer keys (without it, in memory)
@@ -64,6 +68,12 @@
 //!                                  # key's pin as `pingers-push-relay pins` prints it: 43
 //!                                  # base64url characters (KeyConfigHash::to_pin)
 //! operator = "Push Relay Ltd"
+//!
+//! [app_links]                      # optional: the Android apps that may open this server's
+//!                                  # invite links (https://<server>/j) directly, served at
+//!                                  # /.well-known/assetlinks.json (404 without this table)
+//! packages = ["org.pingers.app", "org.pingers.app.foss"]
+//! certificates = ["AA:44:E4:54:...:18:16"]   # SHA-256 of the signing certificates
 //! ```
 //!
 //! Every field above `[ohttp]` other than `listen` and `server_id` is optional; so are those
@@ -162,6 +172,13 @@ pub enum ConfigError {
     /// `map_host` was not an `https://` URL.
     #[error("configuration: map_host must start with https://")]
     MapHostUrl,
+    /// `map_host_gateway` is neither `https://` nor `http://` to a loopback address literal,
+    /// or is given without `map_host`.
+    #[error(
+        "configuration: map_host_gateway must be https://, or http:// to a loopback address, \
+         and needs map_host"
+    )]
+    MapHostGateway,
     /// A push relay's `key_config_hash` is not a pin (43 base64url characters, as
     /// `pingers-push-relay pins` prints), or only one of `key_config_hash` and `operator` is
     /// given.
@@ -170,6 +187,13 @@ pub enum ConfigError {
          given with operator"
     )]
     RelayInfo,
+    /// An `[app_links]` package id is not a Java package name, a certificate is not a SHA-256
+    /// fingerprint (32 hex pairs separated by colons), or a list is empty.
+    #[error(
+        "configuration: app_links needs package ids like org.pingers.app and SHA-256 \
+         fingerprints like AA:44:...:16"
+    )]
+    AppLinks,
     /// A duration or count is zero.
     #[error("configuration: {field} must be positive")]
     OutOfRange {
@@ -349,6 +373,9 @@ pub struct ServerConfig {
     pub advertised_push_relays: Vec<PushRelayInfo>,
     /// The map host advertised in `/v1/params`, if this server names one.
     pub map_host: Option<MapHostUrl>,
+    /// Where map downloads through the relay are forwarded: `map_host_gateway`, or `map_host`
+    /// itself (design B.12). `None` without a map host.
+    pub map_host_gateway: Option<MapHostGateway>,
     /// Extra trust roots for the push relays' TLS certificates, besides the system's.
     pub push_relay_ca: Option<CertificateSource>,
     /// Where group logs, subscriptions and snapshots are kept.
@@ -388,6 +415,9 @@ pub struct ServerConfig {
     pub push_timeout: Duration,
     /// How often expired board segments and mailboxes are swept.
     pub expire_interval: Duration,
+    /// The Android apps that may open this server's invite links directly (App Links), served
+    /// at `/.well-known/assetlinks.json`; `None`: that path is 404.
+    pub app_links: Option<AppLinks>,
     /// Whether RLN membership proofs are accepted (design B.4.8 fallback 3).
     pub membership_proofs: MembershipProofs,
 }
@@ -401,6 +431,80 @@ pub enum MembershipProofs {
     On,
     /// Only Privacy Pass tokens: the operator's kill switch for a circuit or parameter fault.
     Off,
+}
+
+/// The apps Android verifies for this server's `https://<server>/j` links.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppLinks {
+    /// Their package ids (Play and F-Droid builds; `.debug` for local builds).
+    pub packages: Vec<AndroidPackage>,
+    /// The SHA-256 fingerprints of the certificates they are signed with.
+    pub certificates: Vec<CertificateFingerprint>,
+}
+
+/// An Android package id, such as `org.pingers.app`: two or more dot-separated parts, each a
+/// letter then letters, digits or underscores.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AndroidPackage(String);
+
+impl AndroidPackage {
+    /// Checks the form.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::AppLinks`].
+    pub fn new(id: String) -> Result<Self, ConfigError> {
+        let part = |part: &str| {
+            part.chars()
+                .next()
+                .is_some_and(|first| first.is_ascii_alphabetic())
+                && part
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_')
+        };
+        if id.split('.').count() >= 2 && id.split('.').all(part) {
+            Ok(Self(id))
+        } else {
+            Err(ConfigError::AppLinks)
+        }
+    }
+
+    /// The id.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A signing certificate's SHA-256 fingerprint as `keytool` prints it: 32 upper-case hex pairs
+/// separated by colons.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CertificateFingerprint(String);
+
+impl CertificateFingerprint {
+    /// Checks the form; lower-case hex is accepted and kept upper-case.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::AppLinks`].
+    pub fn new(fingerprint: &str) -> Result<Self, ConfigError> {
+        let pairs: Vec<&str> = fingerprint.split(':').collect();
+        if pairs.len() == 32
+            && pairs
+                .iter()
+                .all(|pair| pair.len() == 2 && pair.chars().all(|digit| digit.is_ascii_hexdigit()))
+        {
+            Ok(Self(fingerprint.to_ascii_uppercase()))
+        } else {
+            Err(ConfigError::AppLinks)
+        }
+    }
+
+    /// The fingerprint.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// Where one of the server's stores is kept.
@@ -458,6 +562,7 @@ impl ServerConfig {
             ohttp_relay_urls: Vec::new(),
             advertised_push_relays: Vec::new(),
             map_host: None,
+            map_host_gateway: None,
             push_relay_ca: None,
             delivery_store: Database::Memory,
             quota_store: Database::Memory,
@@ -476,6 +581,7 @@ impl ServerConfig {
             push_relays: ListedRelays::default(),
             push_timeout: Duration::from_secs(default_push_timeout()),
             expire_interval: Duration::from_secs(default_expire_interval()),
+            app_links: None,
             membership_proofs: MembershipProofs::On,
         }
     }
@@ -520,6 +626,7 @@ struct File {
     #[serde(default)]
     ohttp_relay_urls: Vec<String>,
     map_host: Option<String>,
+    map_host_gateway: Option<String>,
     delivery_db: Option<PathBuf>,
     quota_db: Option<PathBuf>,
     push_relay_ca: Option<PathBuf>,
@@ -543,8 +650,16 @@ struct File {
     expire_interval_s: u64,
     #[serde(default)]
     push_relays: Vec<FilePushRelay>,
+    app_links: Option<FileAppLinks>,
     #[serde(default)]
     membership_proofs: MembershipProofs,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileAppLinks {
+    packages: Vec<String>,
+    certificates: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -683,6 +798,10 @@ impl ServerConfig {
             .collect::<Result<Vec<_>, _>>()?;
         let server_id = ServerId::new(file.server_id).map_err(|_| ConfigError::ServerId)?;
         let push = push_relays(file.push_relays)?;
+        let map_host = file
+            .map_host
+            .map(|url| MapHostUrl::new(url).map_err(|_| ConfigError::MapHostUrl))
+            .transpose()?;
         Ok(Self {
             listen: file.listen,
             server_operator: file
@@ -708,10 +827,11 @@ impl ServerConfig {
                 .map(|url| RelayUrl::new(url).map_err(|_| ConfigError::OhttpRelayUrl))
                 .collect::<Result<_, _>>()?,
             advertised_push_relays: push.advertised,
-            map_host: file
-                .map_host
-                .map(|url| MapHostUrl::new(url).map_err(|_| ConfigError::MapHostUrl))
-                .transpose()?,
+            map_host_gateway: MapHostGateway::from_settings(
+                map_host.as_ref().map(MapHostUrl::as_str),
+                file.map_host_gateway,
+            )?,
+            map_host,
             push_relay_ca: file.push_relay_ca.map(CertificateSource::File),
             delivery_store: file.delivery_db.map_or(Database::Memory, Database::File),
             quota_store: file.quota_db.map_or(Database::Memory, Database::File),
@@ -748,9 +868,28 @@ impl ServerConfig {
             push_relays: push.listed,
             push_timeout: positive_seconds("push_timeout_s", file.push_timeout_s)?,
             expire_interval: positive_seconds("expire_interval_s", file.expire_interval_s)?,
+            app_links: file.app_links.map(app_links).transpose()?,
             membership_proofs: file.membership_proofs,
         })
     }
+}
+
+fn app_links(file: FileAppLinks) -> Result<AppLinks, ConfigError> {
+    if file.packages.is_empty() || file.certificates.is_empty() {
+        return Err(ConfigError::AppLinks);
+    }
+    Ok(AppLinks {
+        packages: file
+            .packages
+            .into_iter()
+            .map(AndroidPackage::new)
+            .collect::<Result<_, _>>()?,
+        certificates: file
+            .certificates
+            .iter()
+            .map(|certificate| CertificateFingerprint::new(certificate))
+            .collect::<Result<_, _>>()?,
+    })
 }
 
 fn line_of(text: &str, offset: usize) -> usize {
@@ -786,6 +925,45 @@ fn gateway_key(mut key: FileKey) -> Result<GatewayKey, ConfigError> {
     key.secret.zeroize();
     decoded.map_err(|_| ConfigError::BadHex)?;
     GatewayKey::from_bytes(key.key_id, secret).map_err(ConfigError::BadKey)
+}
+
+/// Where the server forwards map requests that arrive through the relay: the origin of the
+/// map host's own OHTTP gateway (`POST {origin}/ohttp`, `GET {origin}/ohttp-keys`). The only
+/// place they go: the server is no open proxy (design B.12).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapHostGateway {
+    origin: String,
+}
+
+impl MapHostGateway {
+    /// `map_host_gateway` if set, else `map_host`; `None` without a map host. The gateway
+    /// takes the push relays' rule (`https://`, or `http://` to a loopback address literal),
+    /// since both are services the server itself calls.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::MapHostGateway`] for any other URL, or a gateway without a map host.
+    pub fn from_settings(
+        map_host: Option<&str>,
+        gateway: Option<String>,
+    ) -> Result<Option<Self>, ConfigError> {
+        let origin = match (map_host, gateway) {
+            (None, None) => return Ok(None),
+            (None, Some(_)) => return Err(ConfigError::MapHostGateway),
+            (Some(host), None) => host.to_owned(),
+            (Some(_), Some(gateway)) => gateway,
+        };
+        let checked = PushRelayUrl::new(origin).map_err(|_| ConfigError::MapHostGateway)?;
+        Ok(Some(Self {
+            origin: checked.as_str().trim_end_matches('/').to_owned(),
+        }))
+    }
+
+    /// The gateway's origin, without a trailing slash.
+    #[must_use]
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
 }
 
 #[cfg(test)]

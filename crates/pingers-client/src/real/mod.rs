@@ -19,6 +19,7 @@
 
 mod board_seen;
 mod join;
+mod maps;
 mod meetup_network;
 mod meetup_watch;
 mod meetups;
@@ -131,6 +132,12 @@ impl Crates {
             Arc::clone(&net),
             Arc::clone(&platform),
         ));
+        let roots = instance.map_or(Trust::Mozilla, |instance| instance.trust.clone());
+        let maps = Arc::new(maps::Maps::new(
+            Arc::clone(&backend),
+            Arc::clone(&net),
+            roots.roots()?,
+        )?);
         Ok(Self {
             parties: Arc::new(parties::Parties::new(
                 Arc::clone(&backend),
@@ -144,6 +151,7 @@ impl Crates {
                 net,
             )),
             meetups,
+            maps,
         })
     }
 }

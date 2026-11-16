@@ -37,6 +37,8 @@ pub(crate) enum Key<'id> {
     PushRelayPin,
     /// The join this device started from an invite link: its reply mailbox and subscription.
     PendingJoin,
+    /// The map host gateway key taken on first use, and the host it is for.
+    MapHostPin,
     /// The Party this device was just let into, until the user opens it ("You're in").
     LetIn,
 }
@@ -60,6 +62,7 @@ impl Key<'_> {
             Self::ServerMapHost => key.extend_from_slice(b"server-map-host"),
             Self::PushRelayPin => key.extend_from_slice(b"push-relay-pin"),
             Self::PendingJoin => key.extend_from_slice(b"pending-join"),
+            Self::MapHostPin => key.extend_from_slice(b"map-host-pin"),
             Self::LetIn => key.extend_from_slice(b"let-in"),
         }
         key

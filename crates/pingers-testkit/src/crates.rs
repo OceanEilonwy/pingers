@@ -7,13 +7,14 @@
 //! sections a test sets for snapshots. A test can make one crate fail to check that the
 //! client passes the error on.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use async_trait::async_trait;
 use pingers_client::ports::{
-    AllowListChange, ClientEvent, JoinDecision, MeetupsPort, MeetupsSection, PartiesPort,
-    PartiesSection, PartyDraft, PipelineSection, ServerSection, SettingChange, SpotDraft, SyncPort,
-    WakeInput, WakeOutcome, WakePort,
+    AllowListChange, ClientEvent, JoinDecision, MapDownload, MapHosts, MapRoute, MapsPort,
+    MeetupsPort, MeetupsSection, PartiesPort, PartiesSection, PartyDraft, PipelineSection,
+    ServerSection, SettingChange, SpotDraft, SyncPort, WakeInput, WakeOutcome, WakePort,
 };
 use pingers_client::snapshot::{
     DailyWindow, HideTrail, InviteLink, InviteUrl, Name, PauseInFocus, QuietHoursPreference,
@@ -21,6 +22,9 @@ use pingers_client::snapshot::{
 };
 use pingers_client::{ClientError, Crates, PushTokens};
 use pingers_gate::{FocusState, GateDecision, GateError, LocationSharing, MinuteOfDay};
+use pingers_map_downloads::catalog::Catalog;
+use pingers_map_downloads::install::DownloadProgress;
+use pingers_map_downloads::{MapsError, RegionManifest};
 use pingers_meetup::{LocationAnswer, LocationVisibility, MeetPointDraft};
 use pingers_proto::{
     ChatBody, ChatMessageId, GroupId, LeafIndex, LocationRequestId, MailboxId, PartyId, SecretText,
@@ -50,6 +54,8 @@ pub enum CrateName {
     Wake,
     /// pingers-meetup-session.
     Meetups,
+    /// pingers-map-downloads.
+    Maps,
 }
 
 /// One port call and its arguments.
@@ -64,6 +70,7 @@ pub enum CrateCall {
     OpenInvite(InviteUrl, Name),
     WithdrawJoin,
     DismissJoin,
+    CheckJoins,
     DecideJoin(PartyId, MailboxId, JoinDecision),
     CancelInvite(PartyId, MailboxId),
     SetDisplayName(Name),
@@ -87,6 +94,11 @@ pub enum CrateCall {
     AnswerLocationRequest(GroupId, LocationRequestId, LocationAnswer),
     RevokeLocation(GroupId, LeafIndex),
     LeaveMeetup(GroupId),
+    MapCatalog(MapHosts, MapRoute),
+    DownloadMap(MapDownload),
+    InstalledMaps(PathBuf),
+    DeleteMap(PathBuf, String),
+    ForgetMapHostKey,
 }
 
 /// The four fake crates. Clones share state.
@@ -181,6 +193,7 @@ impl FakeCrates {
             sync: Arc::new(self.clone()),
             wake: Arc::new(self.clone()),
             meetups: Arc::new(self.clone()),
+            maps: Arc::new(self.clone()),
         }
     }
 
@@ -277,6 +290,41 @@ fn error(crate_name: CrateName) -> ClientError {
         CrateName::Meetups => {
             ClientError::MeetupSession(pingers_meetup_session::SessionError::Internal)
         }
+        CrateName::Maps => ClientError::Maps(MapsError::Internal),
+    }
+}
+
+/// No map hosts: catalogs are empty and downloads find nothing; the maps directory is real.
+#[async_trait]
+impl MapsPort for FakeCrates {
+    async fn catalog(&self, hosts: MapHosts, route: MapRoute) -> Result<Catalog, ClientError> {
+        let call = CrateCall::MapCatalog(hosts, route);
+        self.answer(CrateName::Maps, call, Catalog::default())
+    }
+
+    async fn download(
+        &self,
+        job: MapDownload,
+        _progress: Arc<dyn DownloadProgress>,
+    ) -> Result<RegionManifest, ClientError> {
+        self.answer(CrateName::Maps, CrateCall::DownloadMap(job), ())?;
+        Err(ClientError::Maps(MapsError::NotOffered))
+    }
+
+    async fn installed(&self, directory: PathBuf) -> Result<Vec<RegionManifest>, ClientError> {
+        let call = CrateCall::InstalledMaps(directory.clone());
+        self.answer(CrateName::Maps, call, ())?;
+        Ok(pingers_map_downloads::install::installed(&directory).await?)
+    }
+
+    async fn delete(&self, directory: PathBuf, id: String) -> Result<(), ClientError> {
+        let call = CrateCall::DeleteMap(directory.clone(), id.clone());
+        self.answer(CrateName::Maps, call, ())?;
+        Ok(pingers_map_downloads::install::delete(&directory, &id).await?)
+    }
+
+    async fn forget_key_pin(&self) -> Result<(), ClientError> {
+        self.answer(CrateName::Maps, CrateCall::ForgetMapHostKey, ())
     }
 }
 
@@ -309,6 +357,10 @@ impl PartiesPort for FakeCrates {
 
     async fn dismiss_join(&self) -> Result<(), ClientError> {
         self.answer(CrateName::Parties, CrateCall::DismissJoin, ())
+    }
+
+    async fn check_joins(&self) -> Result<Vec<ClientEvent>, ClientError> {
+        self.answer(CrateName::Parties, CrateCall::CheckJoins, Vec::new())
     }
 
     async fn decide_join(

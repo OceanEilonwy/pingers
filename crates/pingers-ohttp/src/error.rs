@@ -47,6 +47,9 @@ pub enum OhttpError {
     /// A pin is not a base64url SHA-256, or a pin set is empty.
     #[error("malformed key pin")]
     InvalidPin,
+    /// A message is longer than the padded length asked for.
+    #[error("message longer than its padded length")]
+    LongerThanPadding,
     /// The HPKE layer reported an error the types should have ruled out.
     #[error("internal OHTTP error")]
     Internal,

@@ -16,48 +16,42 @@ class MapsTest {
         index = PackFile(id.replace('/', '.') + ".places.tsv", 5, "bb", 3),
     )
 
-    private val override = MapHost("https://maps.mine.example", MapHostSource.UserOverride)
-    private val server = MapHost("https://maps.flat7.org", MapHostSource.Server)
-    private val publisher = MapHost("https://maps.pingers.example", MapHostSource.Publisher)
-
-    @Test
-    fun eachRegionComesFromTheFirstHostThatHasIt() {
-        val offers = resolveRegions(
-            listOf(
-                HostCatalog.Listed(override, listOf(CatalogEntry.Ready(manifest("oceania/australia/victoria")))),
-                HostCatalog.Failed(server),
-                HostCatalog.Listed(
-                    publisher,
-                    listOf(
-                        CatalogEntry.Ready(manifest("oceania/australia/victoria", "2026-11-13")),
-                        CatalogEntry.Ready(manifest("europe/germany/berlin")),
-                    ),
+    /** A catalog offer as the core hands it over, for a region with [buildDate]. */
+    private fun offer(id: String, buildDate: String) = RegionOffer.of(
+        uniffi.pingers.MapOffer(
+            uniffi.pingers.MapEntry.Ready(
+                uniffi.pingers.MapManifest(
+                    id = id, name = id.substringAfterLast('/'), group = null,
+                    west = 144.95, south = -37.825, east = 144.98, north = -37.805,
+                    maxZoom = 15u, buildDate = buildDate,
+                    pack = uniffi.pingers.MapFile(id.replace('/', '.') + ".pmtiles", 10u, "aa", null),
+                    index = uniffi.pingers.MapFile(id.replace('/', '.') + ".places.tsv", 5u, "bb", 3u),
                 ),
             ),
-        ).associate { it.id to it.host }
-        // The override carries Victoria, so the publisher never serves it, even with newer data...
-        assertEquals(override, offers["oceania/australia/victoria"])
-        // ...but Berlin, which the override lacks, falls back to the publisher for that region only.
-        assertEquals(publisher, offers["europe/germany/berlin"])
-    }
+            uniffi.pingers.MapHostInfo("https://maps.pingers.example", uniffi.pingers.MapHostSource.PUBLISHER),
+        ),
+    )
 
     @Test
-    fun theServersHostComesBeforeThePublishers() {
-        val offers = resolveRegions(
-            listOf(
-                HostCatalog.Listed(server, listOf(CatalogEntry.OnDemand("europe/germany/berlin", "Berlin", "Germany", null))),
-                HostCatalog.Listed(publisher, listOf(CatalogEntry.Ready(manifest("europe/germany/berlin")))),
-            ),
-        )
-        assertEquals(listOf(server), offers.map { it.host })
-        assertTrue(offers.single().entry is CatalogEntry.OnDemand)
+    fun offersFromTheCoreKeepTheirManifestAndHost() {
+        val offer = offer("oceania/australia/victoria", "2026-11-12")
+        assertEquals(manifest("oceania/australia/victoria"), (offer.entry as CatalogEntry.Ready).manifest)
+        assertEquals(MapHost("https://maps.pingers.example", MapHostSource.Publisher), offer.host)
+        assertEquals("maps.pingers.example", offer.host.name)
     }
 
     @Test
     fun updatesAreOfferedForNewerBuildsOnly() {
         val installed = manifest("oceania/australia/victoria")
-        assertTrue(updateAvailable(installed, RegionOffer(CatalogEntry.Ready(manifest("oceania/australia/victoria", "2026-11-20")), publisher)))
-        assertFalse(updateAvailable(installed, RegionOffer(CatalogEntry.Ready(installed), publisher)))
+        assertTrue(updateAvailable(installed, offer("oceania/australia/victoria", "2026-11-20")))
+        assertFalse(updateAvailable(installed, offer("oceania/australia/victoria", "2026-11-12")))
+    }
+
+    @Test
+    fun everyCoreFailureHasItsOwnWords() {
+        val failures = uniffi.pingers.MapFailure.entries.map(::failureOf)
+        assertEquals(failures.size, failures.toSet().size)
+        assertEquals(Failure.KeyChanged, failureOf(uniffi.pingers.MapFailure.KEY_CHANGED))
     }
 
     @Test

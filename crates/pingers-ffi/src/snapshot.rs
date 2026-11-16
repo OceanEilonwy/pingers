@@ -571,6 +571,16 @@ mod tests {
                 },
             }
         );
+        // The drawn zone's row carries the same vertices as its fence, so the map draws it.
+        let crate::Fence::Polygon { vertices } = &work.fence else {
+            return Err(CoreError::invalid("a drawn zone"));
+        };
+        assert_eq!(
+            work.shape,
+            crate::ZoneShape::Area {
+                points: vertices.clone()
+            }
+        );
         let name = snapshot.your_name();
         assert_eq!(name.name.as_deref(), Some("Sam"));
         assert_eq!(name.title, "Your name");

@@ -5,12 +5,21 @@ server_id = "$(pingers-server.server_id)"
 server_operator = "$(pingers-server.operator)"
 ohttp_relay_urls = ["$(pingers-server.ohttp_relay_url)"]
 map_host = "$(pingers-server.map_host)"
+# Map downloads through the privacy relay go to pingers-map-host's own gateway on this device,
+# on loopback: the server needs no internet access for them, and sees no region (design B.12).
+map_host_gateway = "$(pingers-map-host.gateway-url)"
 logging = "$(pingers-server.logging)"
 # Only devices presenting this code can make an account (design B.1). Generated on install.
 registration_codes = ["$(pingers-server.registration_code)"]
 delivery_db = "/var/lib/apps/pingers-server/groups.sqlite"
 quota_db = "/var/lib/apps/pingers-server/quota.sqlite"
 mailbox_db = "/var/lib/apps/pingers-server/mailboxes.sqlite"
+
+# Invite links (https://<server_id>/j) open in the app directly: the official builds' package ids
+# (Play and F-Droid) and the signing certificate (docs/deploy-nodo.md, "App Links").
+[app_links]
+packages = ["org.pingers.app", "org.pingers.app.foss"]
+certificates = ["$(pingers-server.app_signing_certificate)"]
 
 [ohttp]
 # The gateway's own listener (P1): only POST /ohttp and GET /v1/ohttp/config, reachable by
