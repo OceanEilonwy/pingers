@@ -257,7 +257,8 @@ impl MailboxStorage for SqliteStorage {
                 push.handle,
             ],
         )?;
-        Ok(())
+        // The sealed push it replaces is overwritten in the log too.
+        self.truncate_wal()
     }
 
     fn append_message(
@@ -327,10 +328,13 @@ impl MailboxStorage for SqliteStorage {
         id: &MailboxId,
         through: SequenceNumber,
     ) -> Result<(), StorageError> {
-        self.connection.execute(
+        let deleted = self.connection.execute(
             "DELETE FROM mailbox_msg WHERE mailbox_id = ?1 AND seq <= ?2",
             params![id.as_bytes().as_slice(), to_sql_integer(through.get())?],
         )?;
+        if deleted > 0 {
+            self.truncate_wal()?;
+        }
         Ok(())
     }
 
@@ -344,9 +348,9 @@ impl MailboxStorage for SqliteStorage {
 }
 
 impl SqliteStorage {
-    /// Copies the write-ahead log into the database and empties it, so deleted mailboxes
-    /// (already overwritten in the database by `secure_delete`) do not survive in the log
-    /// file. A no-op for an in-memory database.
+    /// Copies the write-ahead log into the database and empties it, so deleted mailboxes,
+    /// messages the reader deleted and replaced sealed pushes (already overwritten in the
+    /// database by `secure_delete`) do not survive in the log file. A no-op for an in-memory database.
     fn truncate_wal(&self) -> Result<(), StorageError> {
         self.connection
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
@@ -386,6 +390,34 @@ mod tests {
             storage.append_message(&stored.id, &Padded::pad(b"again", SizeClass::Bytes1024)?)?,
             SequenceNumber::new(2)
         );
+        drop(storage);
+        std::fs::remove_dir_all(&directory).map_err(|_io| StorageError::Corrupt)?;
+        Ok(())
+    }
+
+    /// Messages the reader deleted leave no trace in the database or its write-ahead log.
+    #[test]
+    fn deleted_messages_leave_the_log_too() -> Result<(), ContractError> {
+        let directory = std::env::temp_dir().join(format!(
+            "pingers-mailbox-read-delete-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).map_err(|_io| StorageError::Corrupt)?;
+        let path = directory.join("mailboxes.sqlite");
+        let stored = mailbox(1, 100, None);
+        let knock = [0x5A_u8; 64];
+        let mut storage = SqliteStorage::open(&path)?;
+        storage.insert_mailbox(&stored)?;
+        storage.append_message(&stored.id, &Padded::pad(&knock, SizeClass::Bytes1024)?)?;
+        storage.delete_messages_through(&stored.id, SequenceNumber::new(1))?;
+        for file in [path.clone(), directory.join("mailboxes.sqlite-wal")] {
+            let bytes = std::fs::read(&file).unwrap_or_default();
+            assert!(
+                !bytes.windows(knock.len()).any(|window| window == knock),
+                "{} still holds the message",
+                file.display()
+            );
+        }
         drop(storage);
         std::fs::remove_dir_all(&directory).map_err(|_io| StorageError::Corrupt)?;
         Ok(())
