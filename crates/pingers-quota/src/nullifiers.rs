@@ -82,6 +82,18 @@ impl Nullifiers {
         if !accepted {
             return Err(QuotaError::StaleBucket);
         }
+        // The cheap checks first: a nullifier already spent on another request in this bucket is
+        // refused before the proof costs a pairing check (root and request digest come first
+        // inside `verify`).
+        {
+            let sets = self.sets.lock().map_err(|_| QuotaError::Poisoned)?;
+            let spent = sets
+                .get(&auth.bucket)
+                .and_then(|set| set.get(&auth.nullifier));
+            if spent.is_some_and(|x| x != &expected) {
+                return Err(QuotaError::NullifierReused);
+            }
+        }
         let proof = verify(
             auth,
             &VerificationContext {

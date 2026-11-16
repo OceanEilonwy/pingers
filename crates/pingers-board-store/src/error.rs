@@ -20,6 +20,9 @@ pub enum BoardError {
     /// The cursor is older than [`crate::CURSOR_LIFETIME`].
     #[error("board cursor expired")]
     CursorExpired,
+    /// The cursor was already used: each cursor is good for one page.
+    #[error("board cursor already used")]
+    CursorSpent,
     /// A page size of zero or above [`pingers_proto::BoardPage::MAX_RECORDS`].
     #[error("page size out of range")]
     PageSize,

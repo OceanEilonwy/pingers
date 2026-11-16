@@ -10,7 +10,7 @@ use pingers_proto::{
     BoardCursor, BoardPage, BoardSyncRequest, BoardSyncResponse, LeaseId, ReadBoard, Record,
     RevokeCommitment, SecretBytes, SegmentHash, SegmentInfo,
 };
-use pingers_time::{Bucket, BucketCount, Clock};
+use pingers_time::{Bucket, BucketCount, Clock, UnixSeconds};
 use rand_core::CryptoRng;
 
 use crate::BoardError;
@@ -19,6 +19,14 @@ use crate::cursor::{CursorKey, ReadPosition};
 /// A segment accepts appends while its start bucket is the current or the previous bucket
 /// (pingers-presence `check_lease`); from the second bucket after its start it is closed.
 const CLOSED_AFTER: BucketCount = BucketCount::new(2);
+
+/// The length of a cursor's random nonce, its first bytes (pingers-crypto's board-cursor seal).
+const CURSOR_NONCE_LENGTH: usize = 24;
+
+/// The most used cursors remembered at once. Each cursor needs a credential-gated board sync,
+/// and is remembered only for [`crate::CURSOR_LIFETIME`]; past this, pages are refused until
+/// some expire.
+const MAX_SPENT_CURSORS: usize = 262_144;
 
 /// How many records a page carries: between 1 and [`BoardPage::MAX_RECORDS`]
 /// (`Params.board_page_records`).
@@ -93,6 +101,9 @@ pub struct Board<C> {
     page_size: PageSize,
     segments: BTreeMap<Bucket, Segment>,
     leases: HashMap<LeaseId, LeaseEntry>,
+    /// Cursors already used, by their nonce, with when they stop being current: each cursor
+    /// is good for one page (an answer cannot be fetched twice to amplify a read).
+    spent: HashMap<[u8; CURSOR_NONCE_LENGTH], UnixSeconds>,
 }
 
 impl<C: Clock> Board<C> {
@@ -105,6 +116,7 @@ impl<C: Clock> Board<C> {
             page_size,
             segments: BTreeMap::new(),
             leases: HashMap::new(),
+            spent: HashMap::new(),
         }
     }
 
@@ -182,10 +194,21 @@ impl<C: Clock> Board<C> {
         rng: &mut impl CryptoRng,
     ) -> Result<BoardPage, BoardError> {
         let position = ReadPosition::open(&self.cursor_key, cursor)?;
-        if !position.is_current(self.clock.now()) {
+        let now = self.clock.now();
+        if !position.is_current(now) {
             return Err(BoardError::CursorExpired);
         }
         self.expire();
+        let nonce: [u8; CURSOR_NONCE_LENGTH] = cursor
+            .as_bytes()
+            .first_chunk()
+            .copied()
+            .ok_or(BoardError::BadCursor)?;
+        if self.spent.contains_key(&nonce) || self.spent.len() >= MAX_SPENT_CURSORS {
+            return Err(BoardError::CursorSpent);
+        }
+        let until = position.expires_at().ok_or(BoardError::Internal)?;
+        self.spent.insert(nonce, until);
         self.page_from(position, rng)
     }
 
@@ -210,7 +233,9 @@ impl<C: Clock> Board<C> {
     /// goes when bucket `b0 + 4` starts. Every operation calls this first; the server may also
     /// call it on a timer to free memory sooner.
     pub fn expire(&mut self) {
-        let now = self.clock.now().bucket();
+        let instant = self.clock.now();
+        self.spent.retain(|_nonce, until| *until > instant);
+        let now = instant.bucket();
         self.segments
             .retain(|start, _segment| !segment_expired(*start, now));
         let segments = &self.segments;

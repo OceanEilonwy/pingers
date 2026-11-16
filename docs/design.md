@@ -1027,6 +1027,10 @@ Welcome messages travel as mailbox posts. Invites reuse mailboxes (below). There
 | Live channels | 256 per group; 240 stored frames per channel per bucket (ephemeral frames are not stored or counted) | 429 |
 | Mailbox posts | `mailbox_posts_per_bucket` (60) per mailbox | 429 |
 | Push relay key configs | fetched from the relay at most once per 5 minutes (30 s after a failure), however many ask | cached |
+| Map downloads (`POST /v1/maps/ohttp`, no credential: anonymous and relayed) | 1800 forwarded per minute from all clients together, 32 at once; upstream answers read with a cap (1 MiB + 4 KiB), abandoned as soon as they pass it | 429, 502 |
+| Map host key config (`GET /v1/maps/ohttp-keys`) | fetched from the map host at most once per 5 minutes, however many ask | cached |
+| Board cursors | each good for one page within its 10 minutes, so a page cannot be fetched again to amplify a read | 410 |
+| RLN proofs, order of checks | bucket, then a nullifier already spent on another request in the bucket, then root and request digest, and only then the proof (a pairing check) | 403 |
 
 **Push relay API** (a separate service, B.4.9):
 

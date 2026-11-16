@@ -38,6 +38,7 @@
 
 mod admin;
 mod board_routes;
+mod capped;
 mod config;
 mod credential;
 mod dispatch;

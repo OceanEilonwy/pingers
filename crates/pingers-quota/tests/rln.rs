@@ -137,6 +137,14 @@ fn a_nullifier_reused_for_another_request_in_the_bucket_is_rejected() -> Result<
         world.admit(&reused),
         Err(QuotaError::NullifierReused)
     ));
+    // That check comes before the proof is verified: with a broken proof the answer is the
+    // same, so a spent nullifier costs no pairing check.
+    let mut broken = world.prove(&list, b"third", 0)?;
+    broken.auth.proof = [0; 128];
+    assert!(matches!(
+        world.admit(&broken),
+        Err(QuotaError::NullifierReused)
+    ));
     // The rejected share is not kept: the first request still replays.
     assert_eq!(world.nullifiers.tracked()?, 1);
     let next_slot = world.prove(&list, b"second", 1)?;

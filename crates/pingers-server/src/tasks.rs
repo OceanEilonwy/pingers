@@ -107,11 +107,13 @@ impl HttpPushRelay {
                 if status != reqwest::StatusCode::OK {
                     return Err(RelayUnreachable);
                 }
-                let body = response.bytes().await.map_err(|_| RelayUnreachable)?;
-                if body.len() > MAX_RELAY_CONFIG_BYTES || !kind.decodes(&body) {
+                let body = crate::capped::body(response, MAX_RELAY_CONFIG_BYTES)
+                    .await
+                    .ok_or(RelayUnreachable)?;
+                if !kind.decodes(&body) {
                     return Err(RelayUnreachable);
                 }
-                Ok(Some(body.to_vec()))
+                Ok(Some(body))
             };
             tokio::select! {
                 fetched = fetched => fetched,

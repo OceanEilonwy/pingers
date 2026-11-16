@@ -592,3 +592,25 @@ proptest! {
         }
     }
 }
+
+/// Each cursor is good for one page: fetching it again (to make the server read and send the
+/// same page twice) is refused, while the next page's cursor still works.
+#[test]
+fn a_cursor_is_good_for_one_page() -> Result<(), TestError> {
+    let mut fixture = Fixture::new(1)?;
+    let now = fixture.now();
+    let cursor = fixture
+        .sync(&lease(1, now), ReadBoard::Read)?
+        .page
+        .and_then(|page| page.next)
+        .ok_or(TestError::NoCursor)?;
+    let second = fixture.board.page(&cursor, &mut fixture.rng)?;
+    assert!(matches!(
+        fixture.board.page(&cursor, &mut fixture.rng),
+        Err(BoardError::CursorSpent)
+    ));
+    if let Some(next) = second.next {
+        fixture.board.page(&next, &mut fixture.rng)?;
+    }
+    Ok(())
+}

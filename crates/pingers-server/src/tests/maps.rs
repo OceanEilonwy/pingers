@@ -222,3 +222,48 @@ async fn answers_up_to_the_map_hosts_largest_are_forwarded() -> TestResult {
     assert_eq!(inner_status(over.as_ref()), Some(502));
     server.stop().await
 }
+
+/// The key config route needs no credential, so it does not reach the map host each time: the
+/// config is kept for `KEY_CACHE_TTL` and fetched again after.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_map_host_key_config_is_cached() -> TestResult {
+    let fetches = Arc::new(Mutex::new(0_usize));
+    let keys = GatewayKey::generate(1, &mut rng(6))?
+        .config()
+        .encoded()
+        .to_vec();
+    let counted = Arc::clone(&fetches);
+    let app = Router::new().route(
+        "/ohttp-keys",
+        get(move || {
+            *counted.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+            let served = keys.clone();
+            async move { served }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind((LOOPBACK, 0)).await?;
+    let address = listener.local_addr()?;
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let mut config = configured(Setup::default())?;
+    config.map_host_gateway = MapHostGateway::from_settings(
+        Some("https://maps.example"),
+        Some(format!("http://{address}")),
+    )?;
+    let server = run(config, Echo).await?;
+    let ask = inner("GET", "/v1/maps/ohttp-keys");
+    let count = || *fetches.lock().unwrap_or_else(PoisonError::into_inner);
+    for _ in 0..3 {
+        let mut relay = connect(server.gateway, LOOPBACK).await?;
+        let (_, answer) = oblivious(&mut relay, &server.config, &ask).await?;
+        assert_eq!(inner_status(answer.as_ref()), Some(200));
+    }
+    assert_eq!(count(), 1);
+    server.clock.advance(crate::map_relay::KEY_CACHE_TTL);
+    let mut relay = connect(server.gateway, LOOPBACK).await?;
+    let (_, answer) = oblivious(&mut relay, &server.config, &ask).await?;
+    assert_eq!(inner_status(answer.as_ref()), Some(200));
+    assert_eq!(count(), 2);
+    server.stop().await
+}

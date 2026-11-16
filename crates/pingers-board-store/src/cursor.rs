@@ -53,6 +53,11 @@ impl ReadPosition {
         }
     }
 
+    /// When the read stops being current: [`CURSOR_LIFETIME`] after it began.
+    pub(crate) fn expires_at(&self) -> Option<UnixSeconds> {
+        self.issued.checked_add(CURSOR_LIFETIME)
+    }
+
     /// Whether the read is still within [`CURSOR_LIFETIME`] at `now`.
     pub(crate) fn is_current(&self, now: UnixSeconds) -> bool {
         now.saturating_duration_since(self.issued) < CURSOR_LIFETIME

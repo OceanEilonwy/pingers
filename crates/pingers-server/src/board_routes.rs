@@ -23,7 +23,7 @@ fn status_of(error: &BoardError) -> StatusCode {
         BoardError::RevokeKeyMismatch => StatusCode::FORBIDDEN,
         BoardError::UnknownLease => StatusCode::NOT_FOUND,
         BoardError::BadCursor => StatusCode::BAD_REQUEST,
-        BoardError::CursorExpired => StatusCode::GONE,
+        BoardError::CursorExpired | BoardError::CursorSpent => StatusCode::GONE,
         BoardError::PageSize | BoardError::Crypto(_) | BoardError::Internal | _ => {
             StatusCode::INTERNAL_SERVER_ERROR
         }
