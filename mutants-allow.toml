@@ -154,3 +154,7 @@ reason = "caught as a timeout, not missed: every connection is then closed as so
 [[mutant]]
 name = "crates/pingers-anon/src/circuit.rs: replace ceremony::matches_ceremony -> bool with true"
 reason = "equivalent for every build: the only key compiled in is the ceremony's, so the check is true either way. The comparator it calls (ceremony::matches) is tested with each field altered, and the self-test's handling of a false answer is tested with an injected check."
+
+[[mutant]]
+name = "crates/pingers-client/src/real/sync.rs: replace && with || in Net::flush"
+reason = "equivalent in effect: with || a round that sent something but queued nothing new runs again, which only retries at once the requests it just kept (they went back in the outbox); every request still goes out at most once and the rounds stay bounded by FLUSH_ROUNDS"
