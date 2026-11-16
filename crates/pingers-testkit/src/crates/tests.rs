@@ -373,3 +373,23 @@ fn clones_share_one_state() -> TestResult {
     assert!(now(fakes.crates().meetups.leave_meetup(MEETUP))?.is_err());
     Ok(())
 }
+
+#[test]
+fn raised_events_reach_the_one_receiver_handed_out() -> TestResult {
+    let fakes = FakeCrates::new()?;
+    let mut events = fakes.take_events().ok_or(TestError::Pending)?;
+    // The client takes the receiver once; a second ask gets nothing.
+    assert!(fakes.take_events().is_none());
+    fakes.raise(ClientEvent::MeetupMessage(MEETUP));
+    fakes.raise(ClientEvent::MeetupEnded(MEETUP));
+    assert_eq!(
+        events.try_recv().ok(),
+        Some(ClientEvent::MeetupMessage(MEETUP))
+    );
+    assert_eq!(
+        events.try_recv().ok(),
+        Some(ClientEvent::MeetupEnded(MEETUP))
+    );
+    assert!(events.try_recv().is_err());
+    Ok(())
+}

@@ -1058,3 +1058,57 @@ async fn two_meetups_at_one_spot_come_down_to_one() -> TestResult {
         "one Meetup for Ana and Ben after two formed",
     ))
 }
+
+/// The server showed Ana and Ben different boards: each phone kept another hash for the same
+/// closed segment. The one who joins sends the segments it read as its first message (design
+/// B.4.3); the one already in the Meetup finds they differ and its shell is told.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn members_shown_different_boards_are_told() -> TestResult {
+    use pingers_proto::{SeenSegment, SegmentHash};
+
+    let config = HarnessConfig::default();
+    let harness = InProcessHarness::start(&config)?;
+    let off = |seed| Who {
+        seed,
+        pushes: Pushes::Off,
+    };
+    let ana = Phone::new(&harness, &config, off(12)).await?;
+    let ben = Phone::new(&harness, &config, off(13)).await?;
+    let party = party_of_two(&ana, &ben).await?;
+    spot(&ana, party).await?;
+    // A day ahead, so no segment the real board shows replaces it or pushes it out.
+    let start = ana
+        .clock
+        .now()
+        .checked_add(Duration::from_hours(24))
+        .ok_or(TestError::Missing("a time a day ahead"))?
+        .bucket();
+    for (phone, hash) in [(&ana, [1; 32]), (&ben, [2; 32])] {
+        let database = Database::open(
+            &phone.database,
+            DatabaseKey::from_bytes(Zeroizing::new(KEY)),
+        )?;
+        database.session()?.board_seen().record(&SeenSegment {
+            start,
+            hash: SegmentHash::from_bytes(hash),
+        })?;
+    }
+    meet(&ana, &ben).await?;
+    let told = RecordedEvent::Notice(pingers_client::Notice::BoardEquivocation);
+    let heard = |phone: &Phone| phone.events.events().contains(&told);
+    for _frame in 0..20 {
+        if heard(&ana) || heard(&ben) {
+            return Ok(());
+        }
+        for phone in [&ana, &ben] {
+            phone.clock.advance(Duration::from_secs(3));
+            phone.at_the_spot().await?;
+        }
+        let _heard = tokio::time::timeout(
+            Duration::from_millis(500),
+            ana.told("the boards differ", told),
+        )
+        .await;
+    }
+    Err(TestError::Missing("a notice that the boards differ"))
+}

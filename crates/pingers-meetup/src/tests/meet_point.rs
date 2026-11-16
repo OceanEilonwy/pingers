@@ -37,6 +37,8 @@ fn a_meet_point_reaches_everyone_with_the_next_lamport() -> TestResult {
                 lamport: Lamport::new(1),
             })
         );
+        // Every device knows who set it, for "set by Ben".
+        assert_eq!(net.session(leaf)?.meet_point_set_by(), Some(BEN));
         assert_eq!(changed(&net.take_events(leaf)?), 1);
     }
     // The next write, from anyone, has a higher Lamport value.
