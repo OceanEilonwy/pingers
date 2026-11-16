@@ -912,7 +912,7 @@ fn welcome_from_a_group_without_the_inviter_is_refused() -> Result<(), TestError
     let created = invite(&alice, &party, &mut rng)?;
     // Bob holds a link naming someone else as the inviter.
     let mut payload = created.link.payload()?;
-    payload.inviter_fingerprint = InviterFingerprint::from_bytes([0; 8]);
+    payload.inviter_fingerprint = InviterFingerprint::from_bytes([0; 16]);
     let forged = InviteLink::new(&payload)?;
     let posted = post_join(&bob, forged.as_str(), &mut rng)?;
     asked(&alice, created.invite, 1, &posted)?;
@@ -1863,5 +1863,44 @@ fn leaving_one_party_keeps_the_other_partys_invites() -> Result<(), TestError> {
         InviteStatus::Open
     );
     assert_eq!(alice.parties().invites(&second)?.len(), 1);
+    Ok(())
+}
+
+/// Party operations all pad to one class: a circle, a polygon with the most vertices and the
+/// longest name, and a profile have one size once padded.
+#[test]
+fn every_party_operation_pads_to_one_class() -> Result<(), TestError> {
+    use crate::lifecycle::OPERATION_CLASS;
+    use crate::ops::PartyOperation;
+    use pingers_geo::{Coordinate, Fence, Polygon};
+
+    let party = PartyId::from_bytes([1; 16]);
+    let creator = pingers_crypto::AccountPublicKey::from_bytes([2; 32]);
+    let circle = foreign_spot(party, creator)?;
+    let count = pingers_geo::MAXIMUM_POLYGON_VERTICES;
+    let vertices = (0..count)
+        .map(|index| {
+            let angle = core::f64::consts::TAU * f64::from(u32::try_from(index).unwrap_or(0))
+                / f64::from(u32::try_from(count).unwrap_or(1));
+            Coordinate::new(51.5 + 0.001 * angle.sin(), -0.12 + 0.001 * angle.cos())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let polygon = pingers_store::Spot {
+        name: SpotName::new("n".repeat(pingers_store::SpotName::MAX_BYTES))?,
+        fence: Fence::Polygon(Polygon::new(vertices)?),
+        ..circle.clone()
+    };
+    let profile = PartyOperation::Profile {
+        name: pingers_store::MemberName::new("Ana".into())?,
+        subscription: None,
+    };
+    for operation in [
+        PartyOperation::Spot(circle),
+        PartyOperation::Spot(polygon),
+        profile,
+    ] {
+        let padded = pingers_proto::Padded::pad(&operation.encode()?, OPERATION_CLASS)?;
+        assert_eq!(padded.as_bytes().len(), OPERATION_CLASS.size());
+    }
     Ok(())
 }

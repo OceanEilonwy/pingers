@@ -20,24 +20,25 @@ use crate::{
     Subscription,
 };
 
-/// The first 8 bytes of the inviter's MLS leaf signature key hash: the joiner checks that the
-/// group in the Welcome contains a leaf that matches (design D). `Debug` does not print it.
+/// The inviter's account id (`SHA-256(leaf signature key)[..16]`): the joiner checks that the
+/// group in the Welcome contains a leaf that matches (design D). 16 bytes, so no other key
+/// can be made to match it (8 bytes were within reach of a search). `Debug` does not print it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct InviterFingerprint([u8; 8]);
+pub struct InviterFingerprint([u8; 16]);
 
 impl InviterFingerprint {
     /// Length in bytes.
-    pub const LENGTH: usize = 8;
+    pub const LENGTH: usize = 16;
 
     /// Wraps fingerprint bytes.
     #[must_use]
-    pub const fn from_bytes(bytes: [u8; 8]) -> Self {
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
         Self(bytes)
     }
 
     /// The fingerprint bytes.
     #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 8] {
+    pub const fn as_bytes(&self) -> &[u8; 16] {
         &self.0
     }
 }
@@ -111,7 +112,7 @@ impl InvitePayload {
 }
 
 /// Layout: `[server (text), invite mailbox (16 bytes), invite secret (32 bytes), inviter
-/// fingerprint (8 bytes), expires (seconds), gateway pins (array of 32-byte hashes, 1 to 4),
+/// fingerprint (16 bytes), expires (seconds), gateway pins (array of 32-byte hashes, 1 to 4),
 /// push relay pins (array of 32-byte hashes, 0 to 4), map host pins (array of 32-byte hashes, 0
 /// to 4), registration code (text, only when present)]`. Without a code the array has eight
 /// elements.
@@ -369,7 +370,7 @@ mod tests {
                 server: ServerId::new("https://pingers.example".to_owned())?,
                 invite_mailbox: MailboxId::from_bytes([1; 16]),
                 invite_secret: SecretBytes::new([2; 32]),
-                inviter_fingerprint: InviterFingerprint::from_bytes([3; 8]),
+                inviter_fingerprint: InviterFingerprint::from_bytes([3; 16]),
                 expires: UnixSeconds::new(4),
                 gateway_pins: pins(gateway),
                 push_relay_pins: pins(push),
@@ -396,7 +397,7 @@ mod tests {
     fn debug_hides_names_and_fingerprints() -> Result<(), ProtoError> {
         let name = DisplayName::new(String::from("Ben"))?;
         assert_eq!(format!("{name:?}"), "DisplayName(redacted)");
-        let fingerprint = InviterFingerprint::from_bytes([1; 8]);
+        let fingerprint = InviterFingerprint::from_bytes([1; 16]);
         assert_eq!(format!("{fingerprint:?}"), "InviterFingerprint(redacted)");
         Ok(())
     }

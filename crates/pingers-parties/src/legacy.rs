@@ -655,7 +655,7 @@ mod tests {
             server: ServerId::new("https://pingers.example".into())?,
             invite_mailbox: MailboxId::from_bytes([6; 16]),
             invite_secret: SecretBytes::new([3; 32]),
-            inviter_fingerprint: InviterFingerprint::from_bytes([4; 8]),
+            inviter_fingerprint: InviterFingerprint::from_bytes([4; 16]),
             expires: UnixSeconds::new(900),
             gateway_pins: vec![pingers_proto::KeyConfigHash::from_bytes([8; 32])],
             push_relay_pins: Vec::new(),

@@ -413,7 +413,7 @@ fn harness_link(
         server: ServerId::new(harness.endpoints().server_id.clone())?,
         invite_mailbox: pingers_proto::MailboxId::from_bytes([3; 16]),
         invite_secret: pingers_proto::SecretBytes::new([4; 32]),
-        inviter_fingerprint: pingers_proto::InviterFingerprint::from_bytes([5; 8]),
+        inviter_fingerprint: pingers_proto::InviterFingerprint::from_bytes([5; 16]),
         expires: pingers_time::Clock::now(&config.clock)
             .checked_add(std::time::Duration::from_hours(1))
             .ok_or(TestError::Setup("time"))?,

@@ -752,13 +752,19 @@ pub(crate) fn snapshot(
     })
 }
 
-/// Seals a Party operation as an application message (stored, quiet wake: design G.2).
+/// Every Party operation is padded to this one class before it is sealed, so its size says
+/// nothing about which operation it is, a circle or a polygon, or how many vertices: the
+/// largest, a Spot with the most vertices and the longest name, fits.
+pub(crate) const OPERATION_CLASS: SizeClass = SizeClass::Bytes4096;
+
+/// Seals a Party operation as an application message (stored, quiet wake: design G.2), padded
+/// to [`OPERATION_CLASS`].
 pub(crate) fn seal_operation(
     group: &mut Group<'_, Session, PartyGroup>,
     operation: &PartyOperation,
     rng: &mut impl CryptoRng,
 ) -> Result<Outbound, PartiesError> {
-    let padded = Padded::pad_smallest(&operation.encode()?, &SizeClass::MAILBOX_POST)?;
+    let padded = Padded::pad(&operation.encode()?, OPERATION_CLASS)?;
     let body = group.seal_application(&padded, rng)?;
     Ok(Outbound::GroupMessage {
         group: group.group_id(),

@@ -106,7 +106,8 @@ pooled `Reply` one; with none, `NoPooledMailbox`.
   must be at least `MINIMUM_SPOT_RADIUS`; polygons are checked by `Polygon::new` on create and
   on receipt.
 - **Party operations** (profile, Spot) are pingers-proto `PartyOperation`s, padded to the
-  smallest mailbox class and sent stored with a Quiet wake (design G.2). The snapshot is a
+  one class, 4 KiB (`OPERATION_CLASS`: the largest Spot fits), so their size says nothing about
+  which operation or shape, and sent stored with a Quiet wake (design G.2). The snapshot is a
   pingers-proto `PartySnapshot`. It is padded to 1, 4, 16 or 48 KiB (`snapshot_padding.rs`) before it
   is sealed under the state key, and unpadded when opened. Commits wake Quiet.
 - **Settings**: server and suite are fixed at creation; a joiner takes the server from the

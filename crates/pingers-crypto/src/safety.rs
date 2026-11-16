@@ -91,8 +91,9 @@ fn key_digits(key: &AccountPublicKey, out: &mut [u8]) {
     }
 }
 
-/// The 8-byte inviter fingerprint in an invite link: the first 8 bytes of the inviter's account
-/// id, `SHA-256(pk)[..8]` (design D gives `inviter_fpr[8]` without a formula; decision).
+/// The inviter fingerprint in an invite link: the inviter's whole account id,
+/// `SHA-256(pk)[..16]` (design D: `inviter_fpr[16]`, widened from 8
+/// bytes on 2026-11-17 so that no other key can be searched for that matches it).
 #[must_use]
 pub fn inviter_fingerprint(key: &AccountPublicKey) -> InviterFingerprint {
     let id = account_id(key);

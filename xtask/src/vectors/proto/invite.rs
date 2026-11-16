@@ -34,7 +34,7 @@ impl Invite<'_> {
     }
 
     fn fingerprint() -> Vec<u8> {
-        ramp(0x08, 8)
+        ramp(0x08, 16)
     }
 
     /// `[server, mailbox, secret, fingerprint, expires, gateway pins, push relay pins, map host

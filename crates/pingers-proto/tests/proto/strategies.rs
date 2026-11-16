@@ -217,7 +217,7 @@ pub(crate) fn invite_payload() -> impl Strategy<Value = InvitePayload> {
         }),
         bytes16(),
         bytes32(),
-        uniform::<_, 8>(any::<u8>()),
+        uniform::<_, 16>(any::<u8>()),
         unix_seconds(),
         (
             proptest::collection::vec(bytes32(), 1..=InvitePayload::MAX_PINS),

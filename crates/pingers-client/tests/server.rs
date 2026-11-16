@@ -371,7 +371,7 @@ async fn an_invite_links_registration_code_registers_the_joiner() -> Result<(), 
         server: ServerId::new(harness.endpoints().server_id.clone())?,
         invite_mailbox: pingers_proto::MailboxId::from_bytes([3; 16]),
         invite_secret: pingers_proto::SecretBytes::new([4; 32]),
-        inviter_fingerprint: pingers_proto::InviterFingerprint::from_bytes([5; 8]),
+        inviter_fingerprint: pingers_proto::InviterFingerprint::from_bytes([5; 16]),
         expires: clock
             .now()
             .checked_add(std::time::Duration::from_hours(1))

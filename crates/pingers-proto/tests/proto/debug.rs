@@ -140,7 +140,7 @@ fn structs_holding_secrets_compare_every_field() -> Result<(), ProtoError> {
         server: ServerId::new(String::from("https://a.example"))?,
         invite_mailbox: MailboxId::from_bytes([1; 16]),
         invite_secret: SecretBytes::new([2; 32]),
-        inviter_fingerprint: InviterFingerprint::from_bytes([3; 8]),
+        inviter_fingerprint: InviterFingerprint::from_bytes([3; 16]),
         expires: UnixSeconds::new(4),
         gateway_pins: vec![pingers_proto::KeyConfigHash::from_bytes([5; 32])],
         push_relay_pins: Vec::new(),
@@ -170,7 +170,7 @@ fn structs_holding_secrets_compare_every_field() -> Result<(), ProtoError> {
             ..invite.clone()
         },
         InvitePayload {
-            inviter_fingerprint: InviterFingerprint::from_bytes([9; 8]),
+            inviter_fingerprint: InviterFingerprint::from_bytes([9; 16]),
             ..invite.clone()
         },
         InvitePayload {

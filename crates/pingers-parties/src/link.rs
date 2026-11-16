@@ -192,7 +192,7 @@ mod tests {
             server: ServerId::new("https://pingers.example".into())?,
             invite_mailbox: MailboxId::from_bytes([3; 16]),
             invite_secret: SecretBytes::new([4; 32]),
-            inviter_fingerprint: InviterFingerprint::from_bytes([5; 8]),
+            inviter_fingerprint: InviterFingerprint::from_bytes([5; 16]),
             expires: UnixSeconds::new(1_000_000),
             gateway_pins: vec![pingers_proto::KeyConfigHash::from_bytes([6; 32])],
             push_relay_pins: Vec::new(),
