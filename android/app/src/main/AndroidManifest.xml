@@ -52,8 +52,9 @@
                     android:host="${pingersServerHost}"
                     android:pathPrefix="/j" />
             </intent-filter>
-            <!-- Invite links of any other server: not verifiable, so Android offers Pingers in
-                 its "Open with" chooser. -->
+            <!-- Invite links of any other server: not verifiable. Android 10 and 11 offer Pingers
+                 in their "Open with" chooser; from Android 12 such links open in the browser,
+                 and the server's landing page hands them to the app. -->
             <intent-filter android:autoVerify="false">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
