@@ -1030,49 +1030,106 @@ mod tests {
         }
     }
 
-    /// Records the join events that reach the app.
+    /// Records the name of every event that reaches the app.
     #[derive(Default)]
-    struct JoinEvents(Mutex<Vec<&'static str>>);
+    struct EveryEvent(Mutex<Vec<&'static str>>);
 
-    impl Events for JoinEvents {
-        fn parties_changed(&self) {}
-        fn join_requested(&self, _: PartyId) {
+    impl EveryEvent {
+        fn note(&self, name: &'static str) {
             self.0
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .push("join_requested");
+                .push(name);
         }
-        fn let_in(&self, _: PartyId) {
-            self.0
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push("let_in");
-        }
-        fn meetup_started(&self, _: MeetupId) {}
-        fn meetup_updated(&self, _: MeetupId) {}
-        fn meetup_message(&self, _: MeetupId) {}
-        fn peer_location(&self, _: MeetupId, _: MemberId) {}
-        fn location_request(&self, _: MeetupId, _: MemberId, _: LocationRequestId) {}
-        fn location_access_changed(&self, _: MeetupId, _: MemberId) {}
-        fn meetup_ended(&self, _: MeetupId) {}
-        fn notice(&self, _: Notice) {}
-        fn privacy_status_changed(&self) {}
-        fn notify(&self, _: crate::notifications::CoreNotification) {}
     }
 
+    impl Events for EveryEvent {
+        fn parties_changed(&self) {
+            self.note("parties_changed");
+        }
+        fn join_requested(&self, _: PartyId) {
+            self.note("join_requested");
+        }
+        fn let_in(&self, _: PartyId) {
+            self.note("let_in");
+        }
+        fn meetup_started(&self, _: MeetupId) {
+            self.note("meetup_started");
+        }
+        fn meetup_updated(&self, _: MeetupId) {
+            self.note("meetup_updated");
+        }
+        fn meetup_message(&self, _: MeetupId) {
+            self.note("meetup_message");
+        }
+        fn peer_location(&self, _: MeetupId, _: MemberId) {
+            self.note("peer_location");
+        }
+        fn location_request(&self, _: MeetupId, _: MemberId, _: LocationRequestId) {
+            self.note("location_request");
+        }
+        fn location_access_changed(&self, _: MeetupId, _: MemberId) {
+            self.note("location_access_changed");
+        }
+        fn meetup_ended(&self, _: MeetupId) {
+            self.note("meetup_ended");
+        }
+        fn notice(&self, _: Notice) {
+            self.note("notice");
+        }
+        fn privacy_status_changed(&self) {
+            self.note("privacy_status_changed");
+        }
+        fn notify(&self, _: crate::notifications::CoreNotification) {
+            self.note("notify");
+        }
+    }
+
+    /// Every pingers-client event reaches the app as its own call (before the core follows a
+    /// client, a live event has nothing to notify).
     #[test]
-    fn join_events_reach_the_app() {
-        let events = Arc::new(JoinEvents::default());
+    fn every_client_event_reaches_the_app() {
+        use pingers_client::Events as _;
+        let events = Arc::new(EveryEvent::default());
         let adapter = crate::callbacks::EventsAdapter::new(
             events.clone(),
             crate::notifications::Notifier::new(events.clone()),
         );
         let party = pingers_proto::PartyId::from_bytes([1; 16]);
-        pingers_client::Events::join_requested(&adapter, party);
-        pingers_client::Events::let_in(&adapter, party);
+        let meetup = pingers_proto::GroupId::from_bytes([2; 32]);
+        let peer = pingers_proto::LeafIndex::new(1);
+        adapter.parties_changed();
+        adapter.join_requested(party);
+        adapter.let_in(party);
+        adapter.meetup_started(meetup);
+        adapter.meetup_updated(meetup);
+        adapter.meetup_message(meetup);
+        adapter.peer_location(meetup, peer);
+        adapter.location_request(
+            meetup,
+            peer,
+            pingers_proto::LocationRequestId::from_bytes([3; 16]),
+        );
+        adapter.location_access_changed(meetup, peer, pingers_meetup::ExactLocation::Private);
+        adapter.meetup_ended(meetup);
+        adapter.notice(pingers_client::Notice::ClockSkew);
+        adapter.privacy_status_changed();
         assert_eq!(
             *events.0.lock().unwrap_or_else(PoisonError::into_inner),
-            ["join_requested", "let_in"]
+            [
+                "parties_changed",
+                "join_requested",
+                "let_in",
+                "meetup_started",
+                "meetup_updated",
+                "meetup_message",
+                "peer_location",
+                "location_request",
+                "location_access_changed",
+                "meetup_ended",
+                "notice",
+                "privacy_status_changed",
+            ]
         );
     }
 
