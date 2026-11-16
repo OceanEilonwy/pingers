@@ -56,15 +56,14 @@ impl InviteLink {
     /// `pingers://join#v1.<base64url>`, or its origin differs from the server inside;
     /// [`PartiesError::Proto`] if the payload does not decode.
     pub fn payload(&self) -> Result<InvitePayload, PartiesError> {
-        let (origin, fragment) = match self.0.strip_prefix(APP_PREFIX) {
-            Some(fragment) => (None, fragment),
-            None => {
-                let (origin, fragment) = self
-                    .0
-                    .split_once(PATH_AND_VERSION)
-                    .ok_or(PartiesError::InvalidLink)?;
-                (Some(origin), fragment)
-            }
+        let (origin, fragment) = if let Some(fragment) = self.0.strip_prefix(APP_PREFIX) {
+            (None, fragment)
+        } else {
+            let (origin, fragment) = self
+                .0
+                .split_once(PATH_AND_VERSION)
+                .ok_or(PartiesError::InvalidLink)?;
+            (Some(origin), fragment)
         };
         let bytes = Zeroizing::new(base64url_decode(fragment).ok_or(PartiesError::InvalidLink)?);
         let payload = InvitePayload::decode(&bytes)?;

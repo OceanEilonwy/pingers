@@ -253,6 +253,9 @@ pub trait PartiesPort: Send + Sync {
     async fn withdraw_join(&self) -> Result<(), ClientError>;
     /// Forgets the "You're in" state once the user opened the Party.
     async fn dismiss_join(&self) -> Result<(), ClientError>;
+    /// Reads what joins wait for now (invite requests, the Welcome), returning the events to raise:
+    /// for "Asked to join", which polls while it is on screen when no push will come.
+    async fn check_joins(&self) -> Result<Vec<ClientEvent>, ClientError>;
     /// Lets in or turns away someone who asked to join, by their request.
     async fn decide_join(
         &self,

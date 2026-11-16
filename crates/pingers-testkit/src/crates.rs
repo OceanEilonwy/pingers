@@ -11,9 +11,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use async_trait::async_trait;
 use pingers_client::ports::{
-    AllowListChange, JoinDecision, MeetupsPort, MeetupsSection, PartiesPort, PartiesSection,
-    PartyDraft, PipelineSection, ServerSection, SettingChange, SpotDraft, SyncPort, WakeInput,
-    WakeOutcome, WakePort,
+    AllowListChange, ClientEvent, JoinDecision, MeetupsPort, MeetupsSection, PartiesPort,
+    PartiesSection, PartyDraft, PipelineSection, ServerSection, SettingChange, SpotDraft, SyncPort,
+    WakeInput, WakeOutcome, WakePort,
 };
 use pingers_client::snapshot::{
     DailyWindow, HideTrail, InviteLink, InviteUrl, Name, PauseInFocus, QuietHoursPreference,
@@ -63,6 +63,7 @@ pub enum CrateCall {
     OpenInvite(InviteUrl, Name),
     WithdrawJoin,
     DismissJoin,
+    CheckJoins,
     DecideJoin(PartyId, MailboxId, JoinDecision),
     CancelInvite(PartyId, MailboxId),
     SetDisplayName(Name),
@@ -288,6 +289,10 @@ impl PartiesPort for FakeCrates {
 
     async fn dismiss_join(&self) -> Result<(), ClientError> {
         self.answer(CrateName::Parties, CrateCall::DismissJoin, ())
+    }
+
+    async fn check_joins(&self) -> Result<Vec<ClientEvent>, ClientError> {
+        self.answer(CrateName::Parties, CrateCall::CheckJoins, Vec::new())
     }
 
     async fn decide_join(

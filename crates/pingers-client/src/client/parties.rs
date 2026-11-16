@@ -60,6 +60,22 @@ impl Client {
             .await
     }
 
+    /// Reads what joins wait for now: the inviter's join requests and this device's Welcome. Asked
+    /// to join calls it while on screen, since without wake-up pushes nothing else would tell it.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Store`] or [`ClientError::Records`]; network failures wait for the next call.
+    pub async fn check_joins(&self) -> Result<(), ClientError> {
+        let events = self
+            .published(self.crates.parties.check_joins().await)
+            .await?;
+        for event in events {
+            self.emit(event);
+        }
+        Ok(())
+    }
+
     /// Lets in or turns away someone who asked to join, by their request (Ben asked to join).
     ///
     /// # Errors
