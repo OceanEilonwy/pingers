@@ -1171,6 +1171,9 @@ fn set_ntfy_server(device: &Device, server: &str) -> Result<()> {
 /// animations off, the phone away from the Spot, and Home on screen.
 fn install_pingers(device: &Device, apk: &Path, package: &str) -> Result<()> {
     let _ignored = device.adb(&["uninstall", package]);
+    // The Play Store updates apps in the background of a fresh image, Chrome among them,
+    // and kills them mid-step; nothing here needs it (Play services, which FCM uses, stays).
+    let _ignored = device.shell("pm disable-user --user 0 com.android.vending");
     device.adb(&["install", "-r", "-g", &apk.display().to_string()])?;
     for setting in [
         "window_animation_scale",
