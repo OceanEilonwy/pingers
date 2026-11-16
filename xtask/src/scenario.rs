@@ -89,6 +89,8 @@ const UI: Duration = Duration::from_secs(20);
 const NETWORK: Duration = Duration::from_secs(120);
 /// Waits for presence (the entry rule, wakes, the knock) and for the Meetup to end.
 const PRESENCE: Duration = Duration::from_secs(360);
+/// How long to wait for another stack directory's stack to stop before starting ours.
+const FOREIGN_STACK: Duration = Duration::from_mins(45);
 
 /// What the command line asked for.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -322,9 +324,10 @@ fn setup_and_play(
     // The stack: one already running, or one of our own for this run.
     let mut own_stack: Option<Supervisor> = None;
     setup_step(report, "local stack up", || {
-        if stack::front_is_up() {
+        if stack::front_is_up() && layout.owns_running_stack() {
             return Ok("using the stack already running".to_owned());
         }
+        wait_out_foreign_stack()?;
         let prepared = stack::prepare(workspace, &options.stack)?;
         own_stack = Some(stack::start(&prepared)?);
         Ok(format!(
@@ -423,6 +426,30 @@ fn setup_and_play(
     drop(emulators);
     drop(own_stack);
     result
+}
+
+/// Another stack directory's stack (another worktree's run) can hold the ports, with keys this
+/// app is not built for: waits for it to stop rather than talk to it.
+fn wait_out_foreign_stack() -> Result<()> {
+    if !stack::front_is_up() {
+        return Ok(());
+    }
+    writeln!(
+        io::stderr(),
+        "e2e: another stack holds the ports; waiting up to {} min for it to stop",
+        FOREIGN_STACK.as_secs() / 60
+    )?;
+    let deadline = Deadline::after(FOREIGN_STACK);
+    while stack::front_is_up() {
+        if deadline.passed() {
+            bail!(
+                "another stack directory's stack still holds the ports after {} min",
+                FOREIGN_STACK.as_secs() / 60
+            );
+        }
+        pause(Duration::from_secs(10));
+    }
+    Ok(())
 }
 
 /// A step before the phones exist: no evidence but the message.

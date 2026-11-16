@@ -174,6 +174,11 @@ impl Layout {
     fn run(&self) -> PathBuf {
         self.root.join("run")
     }
+    /// Whether this layout's stack is the one running: its supervisor keeps a pid file while
+    /// it runs. Another stack directory's stack can hold the same ports, with other keys.
+    pub(crate) fn owns_running_stack(&self) -> bool {
+        self.run().join("stack.pids").is_file()
+    }
     /// The app's build variables, one `NAME=value` per line.
     pub(crate) fn app_env(&self) -> PathBuf {
         self.root.join("app.env")
@@ -809,6 +814,18 @@ mod tests {
         );
         assert_eq!(StackOptions::parse(&strings(&["--dir"])), None);
         assert_eq!(StackOptions::parse(&strings(&["--other"])), None);
+    }
+
+    #[test]
+    fn a_layout_owns_the_running_stack_only_with_its_pid_file() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("xtask-owns-stack-{}", std::process::id()));
+        let layout = Layout::new(root.clone());
+        fs::create_dir_all(layout.run())?;
+        assert!(!layout.owns_running_stack());
+        fs::write(layout.run().join("stack.pids"), "1 pingers-server\n")?;
+        assert!(layout.owns_running_stack());
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]
