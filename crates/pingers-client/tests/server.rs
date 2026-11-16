@@ -578,6 +578,57 @@ async fn with_wake_pushes_off_new_mailboxes_carry_no_push() -> Result<(), TestEr
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn once_the_platform_drops_its_token_new_mailboxes_carry_no_push() -> Result<(), TestError> {
+    let config = HarnessConfig {
+        registration_codes: vec![CODE.to_owned()],
+        ..HarnessConfig::default()
+    };
+    let clock = config.clock.clone();
+    let harness = InProcessHarness::start(&config)?;
+    let server = ServerId::new(harness.endpoints().server_id.clone())?;
+    let dir = TestDir::new()?;
+    let path = dir.0.join("pingers.db");
+    let platform = FakePlatform::new(clock.clone());
+    platform.set_push_registration(Some(token("https://up.invalid/a")));
+    let build = Build {
+        code: Some(CODE),
+        platform: platform.clone(),
+    };
+    let client = open_on(&harness, &clock, path.clone(), build).await?;
+    client.set_wake_pushes(WakePushes::On).await?;
+    tokio::time::timeout(
+        STEP,
+        client.create_party(PartyDraft {
+            name: Name::new("Climbing")?,
+            my_name: Name::new("Ana")?,
+            colour: PartyColour::Blue,
+            post_quantum: PostQuantum::Off,
+            server: None,
+        }),
+    )
+    .await
+    .map_err(|_elapsed| TestError::Setup("creating the Party did not finish"))??;
+    let live = || -> Result<Vec<pingers_store::Mailbox>, TestError> {
+        let database = Database::open(&path, DatabaseKey::from_bytes(Zeroizing::new(KEY)))?;
+        let session = database.session()?;
+        Ok(session.server(&server)?.mailboxes().live(clock.now())?)
+    };
+    let before: Vec<_> = live()?.iter().map(pingers_store::Mailbox::id).collect();
+    // The platform takes its token back (UnifiedPush unregistered): nothing new is sealed to
+    // it, so the next wake's pool mailbox carries no push.
+    platform.set_push_registration(None);
+    client.push_tokens_changed().await?;
+    client.on_wake().await?;
+    let added: Vec<_> = live()?
+        .into_iter()
+        .filter(|mailbox| !before.contains(&mailbox.id()))
+        .collect();
+    assert!(!added.is_empty(), "the wake filled the pool");
+    assert!(added.iter().all(|mailbox| mailbox.push.is_none()));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_new_display_name_is_published_to_existing_parties() -> Result<(), TestError> {
     let config = HarnessConfig {
         registration_codes: vec![CODE.to_owned()],
