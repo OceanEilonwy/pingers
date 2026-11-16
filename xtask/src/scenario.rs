@@ -800,7 +800,12 @@ fn play(
             // that asks; once a minute until the Meetup shows.
             if round.is_multiple_of(12) {
                 for device in [&scene.a, &scene.b] {
-                    device.shell("input keyevent KEYCODE_HOME")?;
+                    // Another app on top stops Pingers' activity for certain (the launcher may be
+                    // busy being updated).
+                    device.shell("am start -W -a android.settings.SETTINGS")?;
+                }
+                pause(Duration::from_secs(2));
+                for device in [&scene.a, &scene.b] {
                     device.shell(&format!("am start -W -n {}/{ACTIVITY}", scene.package))?;
                 }
             }
