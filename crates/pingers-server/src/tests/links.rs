@@ -84,14 +84,42 @@ async fn the_landing_page_is_static_strict_and_names_no_invite() -> TestResult {
     assert_eq!(style.status(), StatusCode::OK);
     assert!(header(&style, CONTENT_TYPE).starts_with("text/css"));
 
-    // A query is the same page; the server keeps only counts by channel and outcome, never a
-    // path, so nothing of a link survives the request.
-    let queried = send(
-        &mut client,
-        request(Method::GET, "/j?from=share", None, Body::empty())?,
+    server.stop().await
+}
+
+/// Browsers never send the fragment; a client that put the invite in the request anyway, as a
+/// query or a percent-encoded `#`, gets the same page, and the invite reaches neither the
+/// counts the server keeps nor its counts log, which writes exactly those counts
+/// (`CountsReport`: the metrics' rendering).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_invite_in_the_request_is_never_logged() -> TestResult {
+    const INVITE: &str = "v1.c2VjcmV0LWludml0ZQ";
+    let server = run(
+        configured(Setup {
+            metrics: vec![OTHER_LOOPBACK],
+            ..Setup::default()
+        })?,
+        Echo,
     )
     .await?;
-    assert_eq!(queried.status(), StatusCode::OK);
+    let mut client = connect(server.address, LOOPBACK).await?;
+    for path in [
+        format!("/j?{INVITE}"),
+        format!("/j%23{INVITE}"),
+        format!("/j/?from=share#{INVITE}"),
+    ] {
+        let Ok(sent) = request(Method::GET, &path, None, Body::empty()) else {
+            // The HTTP client itself refuses a fragment in the request: nothing is sent.
+            continue;
+        };
+        let response = send(&mut client, sent).await?;
+        assert!(
+            response.status() == StatusCode::OK || response.status() == StatusCode::NOT_FOUND,
+            "{path}: {}",
+            response.status()
+        );
+        drop(read_all(response).await?);
+    }
     let mut operator = connect(server.address, OTHER_LOOPBACK).await?;
     let metrics = send(
         &mut operator,
@@ -99,8 +127,9 @@ async fn the_landing_page_is_static_strict_and_names_no_invite() -> TestResult {
     )
     .await?;
     let metrics = String::from_utf8(read_all(metrics).await?)?;
-    assert!(!metrics.contains("/j"), "{metrics}");
-    assert!(!metrics.contains("share"), "{metrics}");
+    for leak in ["/j", "share", "v1.", "c2VjcmV0"] {
+        assert!(!metrics.contains(leak), "{leak}: {metrics}");
+    }
     server.stop().await
 }
 
