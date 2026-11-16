@@ -202,3 +202,27 @@ async fn an_extension_spends_tokens_even_where_proofs_are_accepted() -> TestResu
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refusal_that_leaves_nothing_is_remembered_until_the_next_day() -> TestResult {
+    let world = World::start()?;
+    // Another install of the same account took the whole day's tokens.
+    let other = world.device_with_stock(whole_day()?)?;
+    assert!(matches!(
+        other.stock_tokens().await?,
+        Refill::Fetched { added: 300, .. }
+    ));
+    let device = world.device_with_stock(whole_day()?)?;
+    assert!(matches!(
+        device.stock_tokens().await?,
+        Refill::DailyLimitReached { held: 0, .. }
+    ));
+    assert_eq!(device.issuer.requests(), 1);
+    // The server's "none left" was kept: no second refusal is asked for today.
+    assert!(matches!(
+        device.stock_tokens().await?,
+        Refill::DailyLimitReached { held: 0, .. }
+    ));
+    assert_eq!(device.issuer.requests(), 1);
+    Ok(())
+}
