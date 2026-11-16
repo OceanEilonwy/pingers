@@ -112,3 +112,44 @@ async fn a_restart_keeps_accounts_and_bearers() -> TestResult {
     assert_eq!(expired.status, StatusCode::UNAUTHORIZED);
     second.stop().await
 }
+
+/// Wrong registration codes are counted against the address they come from; a
+/// `pingers-client-address` header a client sends itself is dropped, so it cannot dodge the
+/// limit. Once over, even the right code is refused with 429 until the window ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wrong_codes_from_one_address_are_limited_whatever_it_claims() -> TestResult {
+    use axum::body::Body;
+    use axum::http::{Method, Request};
+
+    const CODE: &str = "0123456789abcdef0123456789abcdef";
+    let server = server_with(&scratch("code-attempts"), CODE).await?;
+    let attempt = |key: u8, code: &str, claimed: u8| -> Result<Request<Body>, TestError> {
+        let signing = signing(key);
+        let registration = RegisterRequest {
+            signature_key: *signing.public_key().as_bytes(),
+            proof: *sign_registration(&signing, &server_id()?)?.as_bytes(),
+            registration_code: Some(SecretText::new(code.to_owned())),
+        };
+        Ok(Request::builder()
+            .method(Method::POST)
+            .uri("http://server/v1/accounts")
+            .header("pingers-client-address", format!("192.0.2.{claimed}"))
+            .body(Body::from(registration.encode()?))?)
+    };
+    let limit = u8::try_from(pingers_quota::CODE_ATTEMPTS_PER_ADDRESS)?;
+    for index in 0..limit {
+        let mut client = super::connect(server.address, super::LOOPBACK).await?;
+        let refused = super::send(
+            &mut client,
+            attempt(index.wrapping_add(10), "wrong", index)?,
+        )
+        .await?;
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    }
+    let mut client = super::connect(server.address, super::LOOPBACK).await?;
+    let limited = super::send(&mut client, attempt(100, CODE, 200)?).await?;
+    assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+    server.clock.advance(pingers_quota::CODE_ATTEMPT_WINDOW);
+    assert_eq!(register(&server, 100, Some(CODE)).await?, StatusCode::OK);
+    server.stop().await
+}

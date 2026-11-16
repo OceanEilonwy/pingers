@@ -551,7 +551,7 @@ fn server_identity_and_published_fields_are_read() -> TestResult {
     assert_eq!(defaults.map_host, None);
 
     let config = ServerConfig::parse(&format!(
-        "server_operator = \"Example Ltd\"\nregistration_codes = [\"a\", \"b\"]\n\
+        "server_operator = \"Example Ltd\"\nregistration_codes = [\"0123456789abcdef0123456789abcdef\", \"friends-of-the-climbing-crew-2026\"]\n\
          map_host = \"https://maps.example\"\n\
          ohttp_relay_urls = [\"https://relay.example/ohttp\"]\n\
          delivery_db = \"/tmp/g.sqlite\"\nquota_db = \"/tmp/q.sqlite\"\n\
@@ -568,7 +568,10 @@ fn server_identity_and_published_fields_are_read() -> TestResult {
             .iter()
             .map(pingers_proto::SecretText::expose)
             .collect::<Vec<_>>(),
-        ["a", "b"]
+        [
+            "0123456789abcdef0123456789abcdef",
+            "friends-of-the-climbing-crew-2026"
+        ]
     );
     assert_eq!(
         config
@@ -750,5 +753,37 @@ fn a_relay_whose_key_is_learned_is_listed_apart() -> TestResult {
         relay(3, "http://127.0.0.1:9472"),
     ))?;
     assert!(off.learned_push_relays.is_empty() && off.advertised_push_relays.is_empty());
+    Ok(())
+}
+
+/// A registration code needs 128 bits of entropy: 32 hex digits, or 22 characters that use
+/// the rest of `A-Z a-z 0-9 - _`; nothing shorter, longer than 128, or with other characters.
+#[test]
+fn registration_codes_need_sixteen_bytes_of_entropy() -> Result<(), ConfigError> {
+    let with_code = |code: &str| {
+        ServerConfig::parse(&format!(
+            "registration_codes = [\"{code}\"]\n{}",
+            minimal(&key(1, SECRET_A))
+        ))
+    };
+    for strong in [
+        "0123456789abcdef0123456789abcdef".to_owned(),
+        "friends-of-the-crew-2026".to_owned(),
+        "a".repeat(128),
+    ] {
+        with_code(&strong)?;
+    }
+    for weak in [
+        "dev-registration-code".to_owned(),
+        "0123456789abcdef0123456789abcde".to_owned(),
+        "friends".to_owned(),
+        "a".repeat(129),
+        "spaces are not allowed in a code".to_owned(),
+    ] {
+        assert!(
+            matches!(with_code(&weak), Err(ConfigError::WeakRegistrationCode)),
+            "{weak}"
+        );
+    }
     Ok(())
 }

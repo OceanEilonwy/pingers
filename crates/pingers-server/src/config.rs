@@ -137,6 +137,13 @@ pub enum ConfigError {
     /// A key secret is not a valid X25519 private key.
     #[error("configuration: an OHTTP key cannot be loaded")]
     BadKey(#[source] OhttpError),
+    /// A registration code is shorter than 16 bytes of entropy (32 hex digits, or 22 of
+    /// `A-Z a-z 0-9 - _`), longer than 128 characters, or uses other characters. Never names
+    /// the code.
+    #[error(
+        "configuration: each registration code must have at least 128 bits of entropy: 32 hex digits, or 22 of A-Z a-z 0-9 - _ (at most 128 characters)"
+    )]
+    WeakRegistrationCode,
     /// No OHTTP key is configured, so the gateway could open nothing.
     #[error("configuration: at least one [[ohttp.keys]] entry is needed")]
     NoOhttpKey,
@@ -857,8 +864,8 @@ impl ServerConfig {
             registration_codes: file
                 .registration_codes
                 .into_iter()
-                .map(SecretText::new)
-                .collect(),
+                .map(registration_code)
+                .collect::<Result<_, _>>()?,
             signups_per_hour: match file.signups_per_hour {
                 None => DEFAULT_SIGNUPS_PER_HOUR,
                 Some(count) => {
@@ -957,6 +964,32 @@ fn count_or(
         None => Ok(default),
         Some(count) => NonZeroU32::new(count).ok_or(ConfigError::OutOfRange { field }),
     }
+}
+
+/// The fewest bits of entropy a registration code may carry (16 bytes, as the appliance makes).
+const MIN_CODE_BITS: usize = 128;
+
+/// The longest registration code, as setup links carry them.
+const MAX_CODE_CHARACTERS: usize = 128;
+
+/// A configured registration code, if it carries at least [`MIN_CODE_BITS`]: 4 bits a
+/// character when it is all hex digits, 6 when it uses the rest of `A-Z a-z 0-9 - _`.
+fn registration_code(code: String) -> Result<SecretText, ConfigError> {
+    let code = SecretText::new(code);
+    let text = code.expose();
+    let base64url = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_';
+    if text.len() > MAX_CODE_CHARACTERS || !text.bytes().all(base64url) {
+        return Err(ConfigError::WeakRegistrationCode);
+    }
+    let per_character = if text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        4
+    } else {
+        6
+    };
+    if text.len().saturating_mul(per_character) < MIN_CODE_BITS {
+        return Err(ConfigError::WeakRegistrationCode);
+    }
+    Ok(code)
 }
 
 fn positive_seconds(field: &'static str, seconds: u64) -> Result<Duration, ConfigError> {

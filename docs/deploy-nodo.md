@@ -111,7 +111,7 @@ config with the gateway keys and the registration code stays inside the volume)
 | `ohttp_relay_url` | url, required, public (`ohttp-relay-url`) | `https://ohttp.$(pingers-push-relay.domain)/ohttp` | `ohttp_relay_urls` |
 | `map_host` | url, required, public (`map-host`) | `https://maps.$(pingers-push-relay.domain)` | `map_host`. Map downloads through the relay are forwarded to this device's map host on loopback (`map_host_gateway`, from pingers-map-host's `gateway-url`) |
 | `logging` | enum `off`/`counts` | `off` | `logging` |
-| `registration_code` | **secret**, generated (16 bytes, hex); 16 to 128 of `A-Z a-z 0-9 - _` if set by hand | | `registration_codes`: only a device presenting it can make an account (design B.1, section 1.3) |
+| `registration_code` | **secret**, generated (16 bytes, hex); if set by hand at least 128 bits of entropy: 32 to 128 hex digits, or 22 to 128 of `A-Z a-z 0-9 - _` (pingers-server refuses a weaker code) | | `registration_codes`: only a device presenting it can make an account (design B.1, section 1.3) |
 | `ohttp_key_a`, `ohttp_key_b` | **secret**, generated (32 bytes, hex) | | `[[ohttp.keys]] secret` |
 | `ohttp_key_a_id`, `ohttp_key_b_id` | int 1 to 255 | 1, 2 | `[[ohttp.keys]] key_id` |
 | `ohttp_served_key_id` | int 1 to 255 | 1 | `[ohttp] served_key_id` |
@@ -456,7 +456,7 @@ tests, `crates/pingers-e2e`, and the push relay's ntfy script.
    `PINGERS_MAP_HOST=https://10.0.2.2:9446` and `PINGERS_EXTRA_CA=target/dev-ca/ca.pem` (debug
    builds only). The first emulator registers through the setup page's first-phone link:
    `adb -s emulator-5554 shell am start -a android.intent.action.VIEW -d '<link>'` with the
-   link from the page (or build it with `PINGERS_DEV_REGISTRATION_CODE=dev-registration-code`,
+   link from the page (or build it with `PINGERS_DEV_REGISTRATION_CODE=dev-registration-code-0123456789abcdef`,
    the dev server.toml's code); the second joins by invite and needs none.
 5. Two emulators (one foss with UnifiedPush through a local ntfy, one gms with Play services
    when FCM is wanted: `cargo xtask local-stack --fcm-service-account <key.json> --fcm-project

@@ -29,6 +29,7 @@ use tokio::task::JoinSet;
 
 use crate::dispatch::{answer, key_config_reply};
 use crate::gateway::{MAX_ONE_SHOT, direct_response, post_ohttp, read_body};
+use crate::quota_routes::CLIENT_ADDRESS_HEADER;
 use crate::route::Channel;
 use crate::{Listeners, Peer, Shared};
 
@@ -111,9 +112,16 @@ async fn metrics(
     }
 }
 
-/// Every other request: an identified or public route, answered directly.
-async fn direct(State(shared): State<Arc<Shared>>, request: Request) -> Response {
+/// Every other request: an identified or public route, answered directly. The address it came
+/// from (after trusted proxies) goes with it as `pingers-client-address`, for the limits on
+/// failed registration codes; one a client sent itself is dropped.
+async fn direct(
+    State(shared): State<Arc<Shared>>,
+    Extension(Peer(peer)): Extension<Peer>,
+    request: Request,
+) -> Response {
     let (parts, mut body) = request.into_parts();
+    let client = shared.trusted_proxies.client(peer.ip(), &parts.headers);
     let body = match read_body(&shared, &mut body, MAX_ONE_SHOT).await {
         Ok(body) => body,
         Err(error) => {
@@ -131,10 +139,15 @@ async fn direct(State(shared): State<Arc<Shared>>, request: Request) -> Response
         headers: parts
             .headers
             .iter()
+            .filter(|(name, _)| name.as_str() != CLIENT_ADDRESS_HEADER)
             .map(|(name, value)| Header {
                 name: name.as_str().to_owned(),
                 value: value.as_bytes().to_vec(),
             })
+            .chain(client.map(|address| Header {
+                name: CLIENT_ADDRESS_HEADER.to_owned(),
+                value: address.to_string().into_bytes(),
+            }))
             .collect(),
         body,
     };

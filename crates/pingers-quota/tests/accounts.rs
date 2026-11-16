@@ -14,9 +14,13 @@ use pingers_crypto::{
 use pingers_proto::{AccountId, AuthRequest, ProtoError, RegisterRequest, SecretText, ServerId};
 use pingers_quota::{
     AccountInsert, AccountPolicy, AccountStore, Accounts, BEARER_LIFETIME, BEARERS_PER_ACCOUNT,
-    CHALLENGE_GRACE, MemoryQuotaStore, NewAccount, QuotaError, SIGNUP_WINDOW, SignupWindow,
+    CHALLENGE_GRACE, CODE_ATTEMPT_WINDOW, CODE_ATTEMPTS_PER_ADDRESS, CODE_ATTEMPTS_PER_KEY,
+    ClientAddress, MemoryQuotaStore, NewAccount, QuotaError, SIGNUP_WINDOW, SignupWindow,
     SignupsPerHour, StoredBearer,
 };
+
+/// A registration whose address is not known.
+const NOWHERE: ClientAddress = ClientAddress::new(None);
 use pingers_testkit::{ManualClock, test_clock};
 use pingers_time::{Bucket, Clock as _, UnixSeconds};
 use zeroize::Zeroizing;
@@ -251,33 +255,83 @@ fn service<S: AccountStore>(
     Ok((clock, accounts))
 }
 
+/// Wrong or missing codes are limited per address (an IPv6 /64 counts as one) and per key;
+/// once over, even the right code waits out the window; a known key needs no code at all.
+#[test]
+fn failed_codes_are_limited_per_address_and_per_key() -> Result<(), TestError> {
+    let (clock, accounts) = service(MemoryQuotaStore::new(), &["right"])?;
+    let here = ClientAddress::new(Some(std::net::IpAddr::V6(std::net::Ipv6Addr::new(
+        0x2001, 0xdb8, 0, 0, 0, 0, 0, 1,
+    ))));
+    let same_64 = ClientAddress::new(Some(std::net::IpAddr::V6(std::net::Ipv6Addr::new(
+        0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xffff,
+    ))));
+    let elsewhere = ClientAddress::new(Some(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+        192, 0, 2, 7,
+    ))));
+    let limit = u8::try_from(CODE_ATTEMPTS_PER_ADDRESS).unwrap_or(u8::MAX);
+    for index in 0..limit {
+        let wrong = registration(&key(index.wrapping_add(10)), Some("wrong"))?;
+        assert!(matches!(
+            accounts.register(&wrong, here),
+            Err(QuotaError::RegistrationCode)
+        ));
+    }
+    let right = registration(&key(100), Some("right"))?;
+    assert!(matches!(
+        accounts.register(&right, same_64),
+        Err(QuotaError::TooManyCodeAttempts)
+    ));
+    // Another address may still try, with the right code.
+    accounts.register(&right, elsewhere)?;
+    // One key is limited wherever it comes from.
+    for _ in 0..CODE_ATTEMPTS_PER_KEY {
+        let wrong = registration(&key(101), Some("wrong"))?;
+        assert!(matches!(
+            accounts.register(&wrong, NOWHERE),
+            Err(QuotaError::RegistrationCode)
+        ));
+    }
+    assert!(matches!(
+        accounts.register(&registration(&key(101), Some("right"))?, elsewhere),
+        Err(QuotaError::TooManyCodeAttempts)
+    ));
+    // After the window the address and the key may try again.
+    clock.advance(CODE_ATTEMPT_WINDOW);
+    accounts.register(&registration(&key(101), Some("right"))?, here)?;
+    Ok(())
+}
+
 #[test]
 fn registration_codes_gate_new_accounts_when_configured() -> Result<(), TestError> {
     let (_clock, open) = service(MemoryQuotaStore::new(), &[])?;
-    assert!(open.register(&registration(&key(1), None)?).is_ok());
+    assert!(
+        open.register(&registration(&key(1), None)?, NOWHERE)
+            .is_ok()
+    );
     let (_clock, gated) = service(MemoryQuotaStore::new(), &["alpha", "beta"])?;
     assert!(matches!(
-        gated.register(&registration(&key(1), None)?),
+        gated.register(&registration(&key(1), None)?, NOWHERE),
         Err(QuotaError::RegistrationCode)
     ));
     assert!(matches!(
-        gated.register(&registration(&key(1), Some("gamma"))?),
+        gated.register(&registration(&key(1), Some("gamma"))?, NOWHERE),
         Err(QuotaError::RegistrationCode)
     ));
     assert_eq!(
-        gated.register(&registration(&key(1), Some("beta"))?)?,
+        gated.register(&registration(&key(1), Some("beta"))?, NOWHERE)?,
         account_id(&key(1).public_key())
     );
     assert!(
         gated
-            .register(&registration(&key(2), Some("alpha"))?)
+            .register(&registration(&key(2), Some("alpha"))?, NOWHERE)
             .is_ok()
     );
     // A code listed twice still matches.
     let (_clock, doubled) = service(MemoryQuotaStore::new(), &["alpha", "alpha"])?;
     assert!(
         doubled
-            .register(&registration(&key(3), Some("alpha"))?)
+            .register(&registration(&key(3), Some("alpha"))?, NOWHERE)
             .is_ok()
     );
     Ok(())
@@ -288,12 +342,15 @@ fn a_known_key_registers_again_without_a_code() -> Result<(), TestError> {
     // The operator changed the code after this device registered: its proof is enough.
     let store = Arc::new(MemoryQuotaStore::new());
     let (_clock, before) = service(Arc::clone(&store), &["old"])?;
-    let id = before.register(&registration(&key(1), Some("old"))?)?;
+    let id = before.register(&registration(&key(1), Some("old"))?, NOWHERE)?;
     let (_clock, after) = service(store, &["new"])?;
-    assert_eq!(after.register(&registration(&key(1), Some("old"))?)?, id);
-    assert_eq!(after.register(&registration(&key(1), None)?)?, id);
+    assert_eq!(
+        after.register(&registration(&key(1), Some("old"))?, NOWHERE)?,
+        id
+    );
+    assert_eq!(after.register(&registration(&key(1), None)?, NOWHERE)?, id);
     assert!(matches!(
-        after.register(&registration(&key(2), Some("old"))?),
+        after.register(&registration(&key(2), Some("old"))?, NOWHERE),
         Err(QuotaError::RegistrationCode)
     ));
     Ok(())
@@ -305,7 +362,7 @@ fn a_proof_for_another_key_or_server_is_refused() -> Result<(), TestError> {
     let mut forged = registration(&key(1), None)?;
     forged.signature_key = *key(2).public_key().as_bytes();
     assert!(matches!(
-        accounts.register(&forged),
+        accounts.register(&forged, NOWHERE),
         Err(QuotaError::BadSignature)
     ));
     let elsewhere = RegisterRequest {
@@ -315,7 +372,7 @@ fn a_proof_for_another_key_or_server_is_refused() -> Result<(), TestError> {
         registration_code: None,
     };
     assert!(matches!(
-        accounts.register(&elsewhere),
+        accounts.register(&elsewhere, NOWHERE),
         Err(QuotaError::BadSignature)
     ));
     Ok(())
@@ -333,25 +390,33 @@ fn new_accounts_are_limited_per_hour() -> Result<(), TestError> {
             signups_per_hour: signups(2)?,
         },
     );
-    accounts.register(&registration(&key(1), None)?)?;
+    accounts.register(&registration(&key(1), None)?, NOWHERE)?;
     clock.advance(Duration::from_mins(30));
-    accounts.register(&registration(&key(2), None)?)?;
+    accounts.register(&registration(&key(2), None)?, NOWHERE)?;
     assert!(matches!(
-        accounts.register(&registration(&key(3), None)?),
+        accounts.register(&registration(&key(3), None)?, NOWHERE),
         Err(QuotaError::SignupLimit)
     ));
     // Known keys are not new accounts.
-    assert!(accounts.register(&registration(&key(1), None)?).is_ok());
+    assert!(
+        accounts
+            .register(&registration(&key(1), None)?, NOWHERE)
+            .is_ok()
+    );
     // An hour after the first, there is room for one more.
     clock.advance(SIGNUP_WINDOW.saturating_sub(Duration::from_mins(30)));
     assert!(matches!(
-        accounts.register(&registration(&key(3), None)?),
+        accounts.register(&registration(&key(3), None)?, NOWHERE),
         Err(QuotaError::SignupLimit)
     ));
     clock.advance(Duration::from_secs(1));
-    assert!(accounts.register(&registration(&key(3), None)?).is_ok());
+    assert!(
+        accounts
+            .register(&registration(&key(3), None)?, NOWHERE)
+            .is_ok()
+    );
     assert!(matches!(
-        accounts.register(&registration(&key(4), None)?),
+        accounts.register(&registration(&key(4), None)?, NOWHERE),
         Err(QuotaError::SignupLimit)
     ));
     Ok(())
@@ -360,7 +425,7 @@ fn new_accounts_are_limited_per_hour() -> Result<(), TestError> {
 #[test]
 fn bearers_need_a_current_challenge_and_last_an_hour() -> Result<(), TestError> {
     let (clock, accounts) = service(MemoryQuotaStore::new(), &[])?;
-    let id = accounts.register(&registration(&key(1), None)?)?;
+    let id = accounts.register(&registration(&key(1), None)?, NOWHERE)?;
     let start = clock.now();
     let bucket = start.bucket();
     // An unknown account and a stale challenge get nothing.
@@ -390,7 +455,7 @@ fn bearers_need_a_current_challenge_and_last_an_hour() -> Result<(), TestError> 
 #[test]
 fn the_previous_bucket_counts_only_just_after_a_rollover() -> Result<(), TestError> {
     let (clock, accounts) = service(MemoryQuotaStore::new(), &[])?;
-    accounts.register(&registration(&key(1), None)?)?;
+    accounts.register(&registration(&key(1), None)?, NOWHERE)?;
     let signed_before = auth(&key(1), clock.now().bucket())?;
     let next = clock
         .now()
@@ -416,7 +481,7 @@ fn the_previous_bucket_counts_only_just_after_a_rollover() -> Result<(), TestErr
 fn the_sweep_forgets_expired_bearers() -> Result<(), TestError> {
     let store = Arc::new(MemoryQuotaStore::new());
     let (clock, accounts) = service(Arc::clone(&store), &[])?;
-    accounts.register(&registration(&key(1), None)?)?;
+    accounts.register(&registration(&key(1), None)?, NOWHERE)?;
     let start = clock.now();
     let _ = accounts.authenticate(&auth(&key(1), start.bucket())?, &token(1))?;
     clock.advance(BEARER_LIFETIME);
@@ -433,7 +498,7 @@ fn the_sweep_forgets_expired_bearers() -> Result<(), TestError> {
 #[test]
 fn an_account_holds_a_bounded_number_of_bearers() -> Result<(), TestError> {
     let (clock, accounts) = service(MemoryQuotaStore::new(), &[])?;
-    accounts.register(&registration(&key(1), None)?)?;
+    accounts.register(&registration(&key(1), None)?, NOWHERE)?;
     let challenge = auth(&key(1), clock.now().bucket())?;
     let count = u8::try_from(BEARERS_PER_ACCOUNT).map_err(|_| TestError::Missing("count"))?;
     for fill in 0..=count {
@@ -450,8 +515,8 @@ fn an_account_holds_a_bounded_number_of_bearers() -> Result<(), TestError> {
 #[test]
 fn deleting_an_account_ends_its_bearers_only() -> Result<(), TestError> {
     let (clock, accounts) = service(MemoryQuotaStore::new(), &[])?;
-    let mine = accounts.register(&registration(&key(1), None)?)?;
-    accounts.register(&registration(&key(2), None)?)?;
+    let mine = accounts.register(&registration(&key(1), None)?, NOWHERE)?;
+    accounts.register(&registration(&key(2), None)?, NOWHERE)?;
     let bucket = clock.now().bucket();
     let _ = accounts.authenticate(&auth(&key(1), bucket)?, &token(1))?;
     let _ = accounts.authenticate(&auth(&key(2), bucket)?, &token(2))?;
@@ -492,9 +557,9 @@ fn accounts_and_bearers_survive_reopening() -> Result<(), TestError> {
             Arc::new(clock.clone()),
             policy(&["old"])?,
         );
-        let id = accounts.register(&registration(&key(1), Some("old"))?)?;
+        let id = accounts.register(&registration(&key(1), Some("old"))?, NOWHERE)?;
         let _ = accounts.authenticate(&auth(&key(1), clock.now().bucket())?, &token(7))?;
-        accounts.register(&registration(&key(2), Some("old"))?)?;
+        accounts.register(&registration(&key(2), Some("old"))?, NOWHERE)?;
         accounts.delete(&account_id(&key(2).public_key()))?;
         id
     };
@@ -507,7 +572,10 @@ fn accounts_and_bearers_survive_reopening() -> Result<(), TestError> {
         policy(&["new"])?,
     );
     assert_eq!(accounts.account_of(&token(7))?, Some(id));
-    assert_eq!(accounts.register(&registration(&key(1), None)?)?, id);
+    assert_eq!(
+        accounts.register(&registration(&key(1), None)?, NOWHERE)?,
+        id
+    );
     assert!(matches!(
         accounts.authenticate(&auth(&key(2), clock.now().bucket())?, &token(8)),
         Err(QuotaError::BadSignature)
@@ -524,7 +592,7 @@ fn a_deleted_account_leaves_no_bytes_in_the_files() -> Result<(), TestError> {
 
     let path = scratch("accounts-secure-delete");
     let (clock, accounts) = service(SqliteQuotaStore::open(&path)?, &[])?;
-    let id = accounts.register(&registration(&key(1), None)?)?;
+    let id = accounts.register(&registration(&key(1), None)?, NOWHERE)?;
     let _ = accounts.authenticate(&auth(&key(1), clock.now().bucket())?, &token(7))?;
     accounts.delete(&id)?;
     let public_key = *key(1).public_key().as_bytes();

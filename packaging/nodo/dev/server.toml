@@ -13,7 +13,7 @@ logging = "counts"
 counts_interval_s = 60
 # The first emulator gets it from the dev setup page's link (packaging/nodo/dev/setup.toml), or a
 # debug app build presents it with PINGERS_DEV_REGISTRATION_CODE (docs/deploy-nodo.md).
-registration_codes = ["dev-registration-code"]
+registration_codes = ["dev-registration-code-0123456789abcdef"]
 delivery_db = "target/dev-stack/groups.sqlite"
 quota_db = "target/dev-stack/quota.sqlite"
 mailbox_db = "target/dev-stack/mailboxes.sqlite"

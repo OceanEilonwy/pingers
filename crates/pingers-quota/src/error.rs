@@ -36,6 +36,10 @@ pub enum QuotaError {
     /// wrong.
     #[error("registration code missing or wrong")]
     RegistrationCode,
+    /// This address or account key sent too many missing or wrong registration codes lately
+    /// ([`crate::CODE_ATTEMPTS_PER_ADDRESS`], [`crate::CODE_ATTEMPTS_PER_KEY`]). HTTP 429.
+    #[error("too many registration code attempts")]
+    TooManyCodeAttempts,
     /// The server has taken its new accounts for this hour.
     #[error("sign-up limit reached")]
     SignupLimit,

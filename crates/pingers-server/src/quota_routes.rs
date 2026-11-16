@@ -16,7 +16,7 @@ use pingers_proto::{
     PrivacyPassIssueResponse, PrivacyPassKey, PrivacyPassKeys, RegisterRequest, RegisterResponse,
     SecretText, Slashing, TokenAllowance,
 };
-use pingers_quota::{DAILY_TOKEN_LIMIT, QuotaError};
+use pingers_quota::{ClientAddress, DAILY_TOKEN_LIMIT, QuotaError};
 use pingers_time::Clock as _;
 use zeroize::Zeroizing;
 
@@ -34,6 +34,7 @@ fn status_of(error: &QuotaError) -> StatusCode {
             StatusCode::TOO_MANY_REQUESTS
         }
         QuotaError::BadSignature | QuotaError::RegistrationCode => StatusCode::FORBIDDEN,
+        QuotaError::TooManyCodeAttempts => StatusCode::TOO_MANY_REQUESTS,
         QuotaError::Anon(
             pingers_anon::AnonError::NotAFieldElement | pingers_anon::AnonError::BadIssuance,
         ) => StatusCode::UNPROCESSABLE_ENTITY,
@@ -109,13 +110,23 @@ pub(crate) fn params(shared: &Shared, _request: &BinaryRequest) -> Result<Reply,
     ))
 }
 
+/// The header the direct listener sets to the address a request came from (after trusted
+/// proxies), replacing any a client sent. Only direct requests have one: the routes that read
+/// it are identified, so never reached through the gateway.
+pub(crate) const CLIENT_ADDRESS_HEADER: &str = "pingers-client-address";
+
+/// The address the direct listener saw `request` come from, if any.
+fn client_address(request: &BinaryRequest) -> Option<std::net::IpAddr> {
+    header(request, CLIENT_ADDRESS_HEADER).and_then(|text| text.parse().ok())
+}
+
 /// `POST /v1/accounts`.
 pub(crate) fn create_account(shared: &Shared, request: &BinaryRequest) -> Result<Reply, Reply> {
     let registration = decode::<RegisterRequest>(&request.body)?;
     let account_id = shared
         .quota
         .accounts
-        .register(&registration)
+        .register(&registration, ClientAddress::new(client_address(request)))
         .map_err(|error| refused(&error))?;
     Ok(encoded(StatusCode::OK, &RegisterResponse { account_id }))
 }

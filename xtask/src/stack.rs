@@ -1370,7 +1370,7 @@ mod tests {
             assert!(refreshed.contains(kept), "{kept}");
         }
         assert!(!refreshed.contains("1111111111"));
-        assert!(!refreshed.contains("dev-registration-code"));
+        assert!(!refreshed.contains("dev-registration-code-0123456789abcdef"));
         Ok(())
     }
 

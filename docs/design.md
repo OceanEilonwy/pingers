@@ -159,7 +159,7 @@ Database is SQLCipher-encrypted; the key sits in Keychain (`AfterFirstUnlockThis
 - No phone number or email. An **account** is an Ed25519 key generated on device; `account_id = SHA-256(pk)[..16]`.
 - The same key is the MLS `BasicCredential` signature key for that device's leaf in each Party. (Per-Party signature keys would hide cross-Party identity from members; deferred, see H.3.)
 - One device per account in the initial release. Device migration is an encrypted export, not a second leaf.
-- Self-hosted servers can require an operator-issued registration code to stop open signups.
+- Self-hosted servers can require an operator-issued registration code to stop open signups. A code must carry at least 128 bits of entropy (32 hex digits, or 22 of `A-Z a-z 0-9 - _`; the server refuses a weaker one at start), and missing or wrong codes are limited to 10 an hour per client address (an IPv6 /64 counts as one; `POST /v1/accounts` arrives direct) and 5 an hour per account key, then answered 429 even with the right code (decided 2026-11-17, from the pre-launch review).
 - Optional out-of-band verification: 60-digit safety number over both parties' leaf keys, shown in the roster.
 
 ### B.2 Party group: MLS
@@ -1016,7 +1016,7 @@ Welcome messages travel as mailbox posts. Invites reuse mailboxes (below). There
 | Idle or slow connections | closed after `idle_timeout_s` (120 s) with no request in progress, including one that never completes a request head; a live channel is a request in progress; a public connection whose oldest request has taken three request timeouts (a client that stopped reading its answer) is dropped | GOAWAY, drop |
 | Request head | 16 KiB of header fields; 64 concurrent requests per public connection, 4096 per gateway connection | refused |
 | Request body | 64 KiB, complete within `request_timeout_s` (30 s); a chunked live channel's preamble 20 KiB | 413, 408 |
-| New accounts | `signups_per_hour` (60), counted in `quota_db`; plus the registration code, if set | 429 |
+| New accounts | `signups_per_hour` (60), counted in `quota_db`; plus the registration code, if set; failed codes: 10 an hour per address, 5 per key, in memory | 429 |
 | Bearers | 4 live per account | oldest dropped |
 | Membership leaves | 4 per account per 24 root epochs | 429 |
 | Privacy Pass | 300 tokens per account per day | 429 |

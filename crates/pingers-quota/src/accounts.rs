@@ -26,6 +26,7 @@ use pingers_time::{Bucket, Clock, UnixSeconds};
 use subtle::ConstantTimeEq as _;
 
 use crate::QuotaError;
+use crate::attempts::{ClientAddress, CodeAttempts};
 use crate::store::{AccountInsert, AccountStore, NewAccount, SignupWindow, StoredBearer};
 
 /// How long a bearer is valid (design D: one hour).
@@ -74,6 +75,7 @@ pub struct Accounts<S> {
     store: S,
     clock: Arc<dyn Clock>,
     policy: AccountPolicy,
+    attempts: CodeAttempts,
 }
 
 impl<S: AccountStore> Accounts<S> {
@@ -83,6 +85,7 @@ impl<S: AccountStore> Accounts<S> {
             store,
             clock,
             policy,
+            attempts: CodeAttempts::default(),
         }
     }
 
@@ -103,15 +106,22 @@ impl<S: AccountStore> Accounts<S> {
             .into()
     }
 
-    /// `POST /v1/accounts`. Registering a known key again is not an error, and needs no
-    /// code: the proof shows the caller holds the key.
+    /// `POST /v1/accounts`, from `from`. Registering a known key again is not an error, and
+    /// needs no code: the proof shows the caller holds the key. A new account's missing or
+    /// wrong code counts against its address and key ([`crate::CODE_ATTEMPTS_PER_ADDRESS`],
+    /// [`crate::CODE_ATTEMPTS_PER_KEY`] an hour).
     ///
     /// # Errors
     ///
     /// [`QuotaError::BadSignature`] if the proof does not verify for this server;
+    /// [`QuotaError::TooManyCodeAttempts`] once the address or key has used up its failures;
     /// [`QuotaError::RegistrationCode`] for a new account without an accepted code;
     /// [`QuotaError::SignupLimit`] if the hour's new accounts are used up; storage errors.
-    pub fn register(&self, request: &RegisterRequest) -> Result<AccountId, QuotaError> {
+    pub fn register(
+        &self,
+        request: &RegisterRequest,
+        from: ClientAddress,
+    ) -> Result<AccountId, QuotaError> {
         let key = AccountPublicKey::from_bytes(request.signature_key);
         verify_registration(
             &key,
@@ -123,10 +133,14 @@ impl<S: AccountStore> Accounts<S> {
         if self.store.account_key(&id)?.is_some() {
             return Ok(id);
         }
+        let now = self.clock.now();
+        if !self.policy.registration_codes.is_empty() {
+            self.attempts.check(from, &key, now)?;
+        }
         if !self.code_accepted(request.registration_code.as_ref()) {
+            self.attempts.failed(from, &key, now)?;
             return Err(QuotaError::RegistrationCode);
         }
-        let now = self.clock.now();
         let window = SignupWindow {
             since: now.checked_sub(SIGNUP_WINDOW).unwrap_or(UnixSeconds::EPOCH),
             max: self.policy.signups_per_hour.get().get(),

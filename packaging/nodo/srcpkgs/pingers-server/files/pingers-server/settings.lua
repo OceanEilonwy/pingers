@@ -103,9 +103,13 @@ return {
         .. "Reset it to stop new accounts from old invite links.",
       required = true,
       generate = { hex = 16 },
+      -- At least 128 bits of entropy, as pingers-server requires: 32 hex digits, or 22 of the
+      -- 64 letters, digits, - and _.
       validate = function(code)
-        return nodo.matches(code, "^[A-Za-z0-9_-]{16,128}$"),
-          "must be 16 to 128 letters, digits, - or _"
+        local allowed = nodo.matches(code, "^[A-Za-z0-9_-]{22,128}$")
+        local hex_only = nodo.matches(code, "^[0-9A-Fa-f]+$")
+        return allowed and (not hex_only or #code >= 32),
+          "must be 32 to 128 hex digits, or 22 to 128 letters, digits, - or _"
       end,
     },
     {

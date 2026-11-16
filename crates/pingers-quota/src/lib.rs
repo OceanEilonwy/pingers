@@ -24,6 +24,7 @@
 #![forbid(unsafe_code)]
 
 mod accounts;
+mod attempts;
 mod error;
 mod membership;
 mod memory;
@@ -36,6 +37,10 @@ mod store;
 pub use accounts::{
     AccountPolicy, Accounts, BEARER_LIFETIME, BEARERS_PER_ACCOUNT, CHALLENGE_GRACE, SIGNUP_WINDOW,
     SignupsPerHour,
+};
+pub use attempts::{
+    CODE_ATTEMPT_WINDOW, CODE_ATTEMPTS_PER_ADDRESS, CODE_ATTEMPTS_PER_KEY, ClientAddress,
+    MAX_TRACKED,
 };
 pub use error::QuotaError;
 pub use membership::{

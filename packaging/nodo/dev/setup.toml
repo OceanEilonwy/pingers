@@ -13,7 +13,7 @@ ohttp_relay_url = "https://10.0.2.2:9444/ohttp"
 push_relay_url = "https://10.0.2.2:9445"
 map_host = "https://10.0.2.2:9446"
 # packaging/nodo/dev/server.toml's code.
-registration_code = "dev-registration-code"
+registration_code = "dev-registration-code-0123456789abcdef"
 gateway_key_config = "http://127.0.0.1:9471/v1/ohttp/config"
 push_relay = "http://127.0.0.1:9472"
 map_host_local = "http://127.0.0.1:9474"
