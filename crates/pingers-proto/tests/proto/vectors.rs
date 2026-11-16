@@ -17,8 +17,8 @@ use pingers_proto::{
     PushTokenPlaintext, Record, RecordRandomness, RecordTag, RelayId, RelayRef, RelayUrl,
     RevokeCommitment, RlnAuth, RlnScope, ScheduledPushRelayConfig, SealedBeacon,
     SealedLocationFrame, SealedPush, SealedPushBlob, SecretBytes, SecretText, SeenSegment,
-    SegmentHash, SegmentInfo, ServerId, SetupPayload, Subscription, SubscriptionId, TimeToLive, Urgency,
-    WireDecode, WireEncode,
+    SegmentHash, SegmentInfo, ServerId, SetupPayload, Subscription, SubscriptionId, TimeToLive,
+    Urgency, WireDecode, WireEncode,
 };
 use pingers_testkit::{Vector, VectorError, load_vectors};
 use pingers_time::{Bucket, UnixSeconds};

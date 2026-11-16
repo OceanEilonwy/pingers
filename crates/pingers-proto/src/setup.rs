@@ -245,9 +245,13 @@ mod tests {
 
     #[test]
     fn invite_links_and_junk_are_not_setup_links() {
-        assert!(!SetupPayload::is_setup_link("https://pingers.example/j#v1.AAAA"));
+        assert!(!SetupPayload::is_setup_link(
+            "https://pingers.example/j#v1.AAAA"
+        ));
         assert!(!SetupPayload::is_setup_link("pingers://join#v1.AAAA"));
-        assert!(!SetupPayload::is_setup_link("http://pingers.example/j#s1.AAAA"));
+        assert!(!SetupPayload::is_setup_link(
+            "http://pingers.example/j#s1.AAAA"
+        ));
         assert!(SetupPayload::from_link("https://pingers.example/j#s1.!!").is_err());
         assert!(SetupPayload::from_link("pingers://join#s1.").is_err());
     }

@@ -20,8 +20,9 @@ use pingers_proto::{
     Redacted, RegisterRequest, RegisterResponse, RelayId, RelayRef, RelayUrl, RevokeCommitment,
     RlnAuth, RlnScope, RootEpoch, ScheduledPushRelayConfig, SealedAsk, SealedBeacon, SealedGrant,
     SealedLocationFrame, SealedPush, SealedPushBlob, SealedSnapshot, SecretBytes, SecretText,
-    SeenSegment, SegmentHash, SegmentInfo, SequenceNumber, ServerId, SetupPayload, SizeClass, Slashing,
-    SpeedCentimetresPerSecond, Subscription, SubscriptionId, TimeToLive, TokenAllowance, Urgency,
+    SeenSegment, SegmentHash, SegmentInfo, SequenceNumber, ServerId, SetupPayload, SizeClass,
+    Slashing, SpeedCentimetresPerSecond, Subscription, SubscriptionId, TimeToLive, TokenAllowance,
+    Urgency,
 };
 use pingers_time::{Bucket, UnixSeconds};
 use proptest::array::uniform;
@@ -238,16 +239,20 @@ pub(crate) fn setup_payload() -> impl Strategy<Value = SetupPayload> {
         text(40).prop_filter_map("https origin", |host| {
             ServerId::new(format!("https://{host}")).ok()
         }),
-        text(128).prop_filter("1 to 128 bytes", |code| !code.is_empty() && code.len() <= 128),
+        text(128).prop_filter("1 to 128 bytes", |code| {
+            !code.is_empty() && code.len() <= 128
+        }),
         pins(),
         pins(),
     )
-        .prop_map(|(server, code, gateway_pins, push_relay_pins)| SetupPayload {
-            server,
-            registration_code: SecretText::new(code),
-            gateway_pins,
-            push_relay_pins,
-        })
+        .prop_map(
+            |(server, code, gateway_pins, push_relay_pins)| SetupPayload {
+                server,
+                registration_code: SecretText::new(code),
+                gateway_pins,
+                push_relay_pins,
+            },
+        )
 }
 
 pub(crate) fn join_request() -> impl Strategy<Value = JoinRequest> {

@@ -86,6 +86,4 @@ pub use relay::{
     ScheduledPushRelayConfig,
 };
 pub use secret::{SecretBytes, SecretText};
-pub use setup::{
-    MAX_REGISTRATION_CODE_BYTES, MAX_SETUP_PINS, SETUP_FRAGMENT_PREFIX, SetupPayload,
-};
+pub use setup::{MAX_REGISTRATION_CODE_BYTES, MAX_SETUP_PINS, SETUP_FRAGMENT_PREFIX, SetupPayload};
