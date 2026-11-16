@@ -281,6 +281,14 @@ pub(crate) fn front_is_up() -> bool {
         .all(|port| answers(loopback(port)))
 }
 
+/// Whether any port a stack listens on answers: a stack still starting (ntfy first) holds
+/// some before its front is up.
+pub(crate) fn any_port_is_taken() -> bool {
+    [FRONT_SERVER, FRONT_OHTTP, FRONT_PUSH, FRONT_MAPS, NTFY_PORT]
+        .into_iter()
+        .any(|port| answers(loopback(port)))
+}
+
 /// Builds the binaries and writes every key, configuration and the app's variables.
 ///
 /// # Errors

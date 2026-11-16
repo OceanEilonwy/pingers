@@ -463,7 +463,7 @@ fn stack_up(
 /// Another stack directory's stack (another worktree's run) can hold the ports, with keys this
 /// app is not built for: waits for it to stop rather than talk to it.
 fn wait_out_foreign_stack() -> Result<()> {
-    if !stack::front_is_up() {
+    if !stack::any_port_is_taken() {
         return Ok(());
     }
     writeln!(
@@ -472,7 +472,7 @@ fn wait_out_foreign_stack() -> Result<()> {
         FOREIGN_STACK.as_secs() / 60
     )?;
     let deadline = Deadline::after(FOREIGN_STACK);
-    while stack::front_is_up() {
+    while stack::any_port_is_taken() {
         if deadline.passed() {
             bail!(
                 "another stack directory's stack still holds the ports after {} min",
