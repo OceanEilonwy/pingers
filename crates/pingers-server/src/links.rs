@@ -5,15 +5,17 @@
 //!
 //! The invite is in the link's fragment, which browsers never send: the server only ever sees
 //! `GET /j`. The page is static, the same for every invite and cacheable; its script reads the
-//! fragment on the phone and forwards it to `pingers://join#<invite>`. No request is logged
+//! fragment on the phone and forwards it to `pingers://join#<invite>`, or on Android to each
+//! configured app in turn through an intent URL. No request is logged
 //! (the server keeps counts only, by channel and outcome).
 
+use axum::body::Bytes;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse as _, Response};
 
-use crate::config::AppLinks;
+use crate::config::{AndroidPackage, AppLinks};
 
-/// The landing page.
+/// The landing page, with `{{apps}}` where [`LandingPage::render`] lists the apps.
 const LANDING_HTML: &str = include_str!("../assets/landing.html");
 /// Its one script: reads the fragment and points "Open in Pingers" at the app.
 const LANDING_JS: &str = include_str!("../assets/landing.js");
@@ -37,22 +39,59 @@ const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; st
 /// A day: the page is the same for every invite.
 const CACHE_CONTROL: &str = "public, max-age=86400";
 
+/// Where the page lists the apps its script offers, in order.
+const APPS_PLACEHOLDER: &str = "{{apps}}";
+
+/// The official builds (Play, then F-Droid): what the page offers when no `[app_links]` names
+/// the apps.
+const OFFICIAL_PACKAGES: &str = "org.pingers.app org.pingers.app.foss";
+
 /// `GET /j`.
-pub(crate) async fn landing() -> Response {
-    asset(LANDING_HTML, "text/html; charset=utf-8")
+pub(crate) fn landing(page: &LandingPage) -> Response {
+    asset(page.0.clone(), "text/html; charset=utf-8")
+}
+
+/// The landing page, rendered once from the configuration: the same for every invite.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LandingPage(Bytes);
+
+impl LandingPage {
+    /// Lists the configured apps' package ids, or the official builds', for the script's
+    /// intent URLs. Package ids were checked when the configuration was read (letters, digits,
+    /// underscores and dots), so nothing needs escaping.
+    pub(crate) fn render(links: Option<&AppLinks>) -> Self {
+        let apps = links.map_or_else(
+            || OFFICIAL_PACKAGES.to_owned(),
+            |links| {
+                links
+                    .packages
+                    .iter()
+                    .map(AndroidPackage::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            },
+        );
+        Self(Bytes::from(LANDING_HTML.replace(APPS_PLACEHOLDER, &apps)))
+    }
 }
 
 /// `GET /j/landing.js`.
 pub(crate) async fn script() -> Response {
-    asset(LANDING_JS, "text/javascript; charset=utf-8")
+    asset(
+        Bytes::from_static(LANDING_JS.as_bytes()),
+        "text/javascript; charset=utf-8",
+    )
 }
 
 /// `GET /j/landing.css`.
 pub(crate) async fn style() -> Response {
-    asset(LANDING_CSS, "text/css; charset=utf-8")
+    asset(
+        Bytes::from_static(LANDING_CSS.as_bytes()),
+        "text/css; charset=utf-8",
+    )
 }
 
-fn asset(body: &'static str, content_type: &'static str) -> Response {
+fn asset(body: Bytes, content_type: &'static str) -> Response {
     let mut response = body.into_response();
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
@@ -122,5 +161,24 @@ impl AssetLinks {
             .collect::<Vec<_>>()
             .join(",");
         Self(format!("[{statements}]\n"))
+    }
+}
+
+/// What the server answers for invite links, rendered once from the configuration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LinkPages {
+    /// The landing page at `/j`.
+    pub(crate) landing: LandingPage,
+    /// `/.well-known/assetlinks.json`, when App Links are configured.
+    pub(crate) asset_links: Option<AssetLinks>,
+}
+
+impl LinkPages {
+    /// The landing page naming `links`' apps (or the official builds), and their asset links.
+    pub(crate) fn render(links: Option<&AppLinks>) -> Self {
+        Self {
+            landing: LandingPage::render(links),
+            asset_links: links.map(AssetLinks::render),
+        }
     }
 }

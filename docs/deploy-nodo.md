@@ -147,22 +147,6 @@ database holds only each account's public key, when it registered, and a digest 
 (never a usable bearer). The code only gates new accounts, which the server also limits to
 `signups_per_hour` (default 60) whatever the code.
 
-### 1.4 Invite links and App Links
-
-An invite link is `https://<server_id>/j#v1.<invite>`. The invite is in the fragment, which
-browsers never send, so the server only ever sees `GET /j`. It answers with a static landing
-page (strict CSP, its own script and stylesheet only, cacheable) whose script reads the fragment
-on the phone and offers "Open in Pingers" (`pingers://join#<invite>`, or an Android intent that
-falls back to `docs/install.md` when no Pingers build is installed). The server keeps no record
-of the request, as of any other.
-
-With `[app_links]` the server also serves `/.well-known/assetlinks.json`, so Android opens
-`https://<server_id>/j` links straight in an official build (Play `org.pingers.app`, F-Droid
-`org.pingers.app.foss`) without the page. The setting `app_signing_certificate` is the signing
-certificate's SHA-256 fingerprint; its default is the official builds'. App Links verify only
-on port 443. Links of other servers open through Android's "Open with" chooser, or through the
-landing page.
-
 ### 1.2 Keys and rotation
 
 No key is made off the device: every 32-byte private key is a generated secret (any 32 random
@@ -184,6 +168,24 @@ the hashes of both, so the app never meets an unpinned key:
    the next app release with the pins of B and the new A.
 
 On a suspected compromise, do steps 2 and 3 at once.
+
+### 1.4 Invite links and App Links
+
+An invite link is `https://<server_id>/j#v1.<invite>`. The invite is in the fragment, which
+browsers never send, so the server only ever sees `GET /j`. It answers with a static landing
+page (strict CSP, its own script and stylesheet only, cacheable) whose script reads the fragment
+on the phone and offers "Open in Pingers": `pingers://join#<invite>`, or on Android an intent
+URL naming the app, so no other app that claims `pingers://` receives the invite. It tries the
+apps of `[app_links]` in order (without it, the official Play then F-Droid builds), each
+fallback being the page again for the next app, and the last `docs/install.md`. The server
+keeps no record of the request, as of any other.
+
+With `[app_links]` the server also serves `/.well-known/assetlinks.json`, so Android opens
+`https://<server_id>/j` links straight in an official build (Play `org.pingers.app`, F-Droid
+`org.pingers.app.foss`) without the page. The setting `app_signing_certificate` is the signing
+certificate's SHA-256 fingerprint; its default is the official builds'. App Links verify only
+on port 443. Links of other servers open through Android's "Open with" chooser, or through the
+landing page.
 
 ## 2. Exposure, and the router's reverse proxy
 

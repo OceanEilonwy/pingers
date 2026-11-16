@@ -54,6 +54,8 @@ async fn the_landing_page_is_static_strict_and_names_no_invite() -> TestResult {
     assert_eq!(header(&page, "referrer-policy"), "no-referrer");
     let html = String::from_utf8(read_all(page).await?)?;
     assert!(html.contains("Open in Pingers"));
+    // Without [app_links] it offers the official builds, Play first.
+    assert!(html.contains("<main data-apps=\"org.pingers.app org.pingers.app.foss\">"));
     // One script, this server's own; no inline code and no third-party resources.
     assert_eq!(html.matches("<script").count(), 1);
     assert!(html.contains("<script src=\"/j/landing.js\" defer></script>"));
@@ -73,7 +75,10 @@ async fn the_landing_page_is_static_strict_and_names_no_invite() -> TestResult {
     // It reads the fragment on the phone and hands it to the app, nowhere else.
     assert!(script.contains("window.location.hash"));
     assert!(script.contains("\"pingers://join#\""));
-    assert!(script.contains("intent://join#Intent;scheme=pingers;S.invite="));
+    // On Android, an intent URL naming each app in turn, the install page last.
+    assert!(script.contains("intent://join#Intent;scheme=pingers;package="));
+    assert!(script.contains("S.browser_fallback_url="));
+    assert!(script.contains("\"/j?app=\""));
     assert!(!script.contains("fetch(") && !script.contains("XMLHttpRequest"));
 
     let style = send(
@@ -152,8 +157,8 @@ async fn asset_links_name_the_configured_apps_or_do_not_exist() -> TestResult {
 
     let links = AppLinks {
         packages: vec![
-            AndroidPackage::new("org.pingers.app".to_owned())?,
             AndroidPackage::new("org.pingers.app.foss".to_owned())?,
+            AndroidPackage::new("org.pingers.app".to_owned())?,
         ],
         certificates: vec![CertificateFingerprint::new(RELEASE_CERT)?],
     };
@@ -166,6 +171,14 @@ async fn asset_links_name_the_configured_apps_or_do_not_exist() -> TestResult {
     )
     .await?;
     let mut client = connect(server.address, LOOPBACK).await?;
+    // The landing page offers the configured apps, in order (here F-Droid first).
+    let page = send(
+        &mut client,
+        request(Method::GET, "/j", None, Body::empty())?,
+    )
+    .await?;
+    let html = String::from_utf8(read_all(page).await?)?;
+    assert!(html.contains("<main data-apps=\"org.pingers.app.foss org.pingers.app\">"));
     let response = send(
         &mut client,
         request(
@@ -190,8 +203,8 @@ async fn asset_links_name_the_configured_apps_or_do_not_exist() -> TestResult {
         body,
         format!(
             "[{},{}]\n",
-            statement("org.pingers.app"),
-            statement("org.pingers.app.foss")
+            statement("org.pingers.app.foss"),
+            statement("org.pingers.app")
         )
     );
     server.stop().await

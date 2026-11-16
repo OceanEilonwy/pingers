@@ -41,7 +41,7 @@ pub(crate) fn public_router(shared: Arc<Shared>) -> Router {
     Router::new()
         .route("/ohttp", any(not_found))
         .route("/metrics", get(metrics))
-        .route(crate::links::LANDING_PATH, get(crate::links::landing))
+        .route(crate::links::LANDING_PATH, get(landing))
         .route(crate::links::SCRIPT_PATH, get(crate::links::script))
         .route(crate::links::STYLE_PATH, get(crate::links::style))
         .route(crate::links::ASSET_LINKS_PATH, get(asset_links))
@@ -69,9 +69,14 @@ async fn key_config(State(shared): State<Arc<Shared>>) -> Response {
     direct_response(reply)
 }
 
+/// `GET /j`.
+async fn landing(State(shared): State<Arc<Shared>>) -> Response {
+    crate::links::landing(&shared.links.landing)
+}
+
 /// `GET /.well-known/assetlinks.json`.
 async fn asset_links(State(shared): State<Arc<Shared>>) -> Response {
-    crate::links::asset_links(shared.asset_links.as_ref())
+    crate::links::asset_links(shared.links.asset_links.as_ref())
 }
 
 /// `GET /metrics`, for the configured addresses only; to anyone else it does not exist.

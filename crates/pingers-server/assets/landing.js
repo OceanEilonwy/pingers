@@ -15,14 +15,30 @@
   var invite = hash.slice(1);
   var target = "pingers://join#" + invite;
   if (/Android/i.test(navigator.userAgent)) {
-    // An intent URL opens whichever Pingers build is installed (Play or F-Droid), and the
-    // browser goes to the install page when none is. An intent URL cannot carry a fragment, so
+    // An intent URL names the app, so no other app that claims pingers:// gets the invite,
+    // and the browser follows the fallback when that app is not installed. The server lists
+    // its apps (Play, F-Droid) in data-apps: each fallback is this page trying the next one,
+    // and the last falls back to the install page. An intent URL cannot carry a fragment, so
     // the invite rides as an extra.
+    var apps = document.querySelector("main").getAttribute("data-apps").split(" ");
+    var match = /^\?app=([0-9])$/.exec(window.location.search);
+    var index = match ? Number(match[1]) : 0;
+    if (index > 0) {
+      document.getElementById("retry").hidden = false;
+    }
+    var next = index + 1;
+    var fallback =
+      next < apps.length
+        ? window.location.origin + "/j?app=" + next + hash
+        : install.href;
+    var app = apps[Math.min(index, apps.length - 1)];
     target =
-      "intent://join#Intent;scheme=pingers;S.invite=" +
+      "intent://join#Intent;scheme=pingers;package=" +
+      app +
+      ";S.invite=" +
       encodeURIComponent(invite) +
       ";S.browser_fallback_url=" +
-      encodeURIComponent(install.href) +
+      encodeURIComponent(fallback) +
       ";end";
   }
   open.href = target;
