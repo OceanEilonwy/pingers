@@ -151,6 +151,10 @@ pub enum ConfigError {
     /// A credential could not be hashed (it always can with a 32-byte key).
     #[error("cannot hash a server credential")]
     CredentialHash,
+    /// `[fcm]` has no `project_id`, and its `service_account_json` names none either (a key file
+    /// given as `service_account_file` needs `project_id`).
+    #[error("fcm.project_id is missing, and the service account key names no project_id")]
+    NoFcmProject,
     /// `[fcm]` has both or neither of `service_account_file` and `service_account_json`.
     #[error("[fcm]: give exactly one of service_account_file and service_account_json")]
     ServiceAccountSource,

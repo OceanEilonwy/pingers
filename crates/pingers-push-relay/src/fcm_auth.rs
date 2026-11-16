@@ -82,6 +82,8 @@ pub enum TokenError {
 /// A Google service account, from the JSON key file the Firebase console downloads.
 pub struct ServiceAccount {
     client_email: String,
+    /// The key file's `project_id`, if it names one: the Firebase project the key belongs to.
+    project_id: Option<String>,
     /// The `aud` claim: `token_uri` exactly as written in the file.
     audience: String,
     token_uri: Url,
@@ -103,6 +105,7 @@ impl fmt::Debug for ServiceAccount {
 struct FileServiceAccount {
     #[serde(rename = "type")]
     kind: Option<String>,
+    project_id: Option<String>,
     client_email: String,
     private_key: String,
     private_key_id: Option<String>,
@@ -121,6 +124,7 @@ impl ServiceAccount {
             .map_err(|error| ServiceAccountError::Syntax { line: error.line() })?;
         let FileServiceAccount {
             kind,
+            project_id,
             client_email,
             private_key,
             private_key_id,
@@ -139,11 +143,18 @@ impl ServiceAccount {
             .map_err(|_| ServiceAccountError::BadPrivateKey)?;
         Ok(Self {
             client_email,
+            project_id: project_id.filter(|id| !id.is_empty()),
             audience: token_uri,
             token_uri: endpoint,
             key_id: private_key_id.filter(|id| !id.is_empty()),
             key,
         })
+    }
+
+    /// The Firebase project the key file names (its `project_id`), if any.
+    #[must_use]
+    pub fn project_id(&self) -> Option<&str> {
+        self.project_id.as_deref()
     }
 
     /// The signed JWT bearer assertion for `now`: RS256, `iss` the client email, `scope`

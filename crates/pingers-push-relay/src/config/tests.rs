@@ -413,3 +413,46 @@ fn fcm_settings_are_checked() {
         Some(ConfigError::BadFcmEndpoint)
     );
 }
+
+#[test]
+fn an_inline_service_account_names_the_project_when_project_id_is_left_out()
+-> Result<(), Box<dyn std::error::Error>> {
+    let json = crate::fcm_auth::tests::account_json("https://oauth2.googleapis.com/token")?;
+    let without = minimal().replace(
+        "[unifiedpush]",
+        &format!("[fcm]\nservice_account_json = '{json}'"),
+    );
+    let fcm = RelayConfig::parse(&without)?
+        .fcm
+        .ok_or(ConfigError::NoPlatform)?;
+    assert_eq!(fcm.project_id, "pingers-test");
+    // A project_id given in the file wins over the key file's own.
+    let given = RelayConfig::parse(&with_fcm(&format!("service_account_json = '{json}'")))?
+        .fcm
+        .ok_or(ConfigError::NoPlatform)?;
+    assert_eq!(given.project_id, "p");
+    Ok(())
+}
+
+#[test]
+fn a_project_must_come_from_somewhere() -> Result<(), Box<dyn std::error::Error>> {
+    // A key file read at start is not opened while loading, so it needs project_id.
+    let file = minimal().replace("[unifiedpush]", "[fcm]\nservice_account_file = \"/t\"");
+    assert!(matches!(
+        RelayConfig::parse(&file),
+        Err(ConfigError::NoFcmProject)
+    ));
+    // An inline key file without its own project_id needs one too.
+    let json = crate::fcm_auth::tests::account_json("https://oauth2.googleapis.com/token")?
+        .replace("\"project_id\":\"pingers-test\",", "");
+    assert!(!json.contains("project_id"));
+    let unnamed = minimal().replace(
+        "[unifiedpush]",
+        &format!("[fcm]\nservice_account_json = '{json}'"),
+    );
+    assert!(matches!(
+        RelayConfig::parse(&unnamed),
+        Err(ConfigError::NoFcmProject)
+    ));
+    Ok(())
+}

@@ -38,7 +38,8 @@
 //! allow_insecure_local_endpoints = false   # true only for tests against a local ntfy
 //!
 //! [fcm]                            # optional: FCM HTTP v1
-//! project_id = "my-project"        # the Firebase project id
+//! project_id = "my-project"        # the Firebase project id; optional with service_account_json,
+//!                                  # whose own project_id is used when it is left out
 //! service_account_file = "/etc/pingers-push-relay/fcm-service-account.json"
 //! # or, instead of the file, the key file's JSON itself (one line is fine):
 //! # service_account_json = '{"type": "service_account", ...}'
@@ -285,7 +286,7 @@ struct FileUnifiedPush {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileFcm {
-    project_id: String,
+    project_id: Option<String>,
     service_account_file: Option<PathBuf>,
     service_account_json: Option<Zeroizing<String>>,
     #[serde(default = "default_fcm_endpoint")]
@@ -442,22 +443,28 @@ fn fcm_config(fcm: FileFcm) -> Result<FcmConfig, ConfigError> {
     if !matches!(endpoint.scheme(), "https" | "http") {
         return Err(ConfigError::BadFcmEndpoint);
     }
-    if !crate::delivery::is_valid_fcm_project_id(&fcm.project_id) {
+    let (service_account, named) = match (fcm.service_account_file, fcm.service_account_json) {
+        (Some(path), None) => (ServiceAccountSource::File(path), None),
+        (None, Some(json)) => {
+            // Checked now, so a bad paste stops the relay before it serves anything.
+            let account = ServiceAccount::from_json(&json).map_err(ConfigError::ServiceAccount)?;
+            let named = account.project_id().map(str::to_owned);
+            (
+                ServiceAccountSource::Inline(ServiceAccountJson(json)),
+                named,
+            )
+        }
+        (Some(_), Some(_)) | (None, None) => return Err(ConfigError::ServiceAccountSource),
+    };
+    // Given, it wins; left out, an inline key file names its own project.
+    let project_id = fcm.project_id.or(named).ok_or(ConfigError::NoFcmProject)?;
+    if !crate::delivery::is_valid_fcm_project_id(&project_id) {
         return Err(ConfigError::OutOfRange {
             field: "fcm.project_id",
         });
     }
-    let service_account = match (fcm.service_account_file, fcm.service_account_json) {
-        (Some(path), None) => ServiceAccountSource::File(path),
-        (None, Some(json)) => {
-            // Checked now, so a bad paste stops the relay before it serves anything.
-            ServiceAccount::from_json(&json).map_err(ConfigError::ServiceAccount)?;
-            ServiceAccountSource::Inline(ServiceAccountJson(json))
-        }
-        (Some(_), Some(_)) | (None, None) => return Err(ConfigError::ServiceAccountSource),
-    };
     Ok(FcmConfig {
-        project_id: fcm.project_id,
+        project_id,
         endpoint,
         service_account,
     })
