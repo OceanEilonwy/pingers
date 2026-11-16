@@ -26,6 +26,7 @@ use crate::ids::{
 use crate::maps::{
     ListenerAdapter, MapCatalog, MapDownloadListener, MapDownloadRequest, MapManifest, MapSettings,
 };
+use crate::notifications::Notifier;
 use crate::snapshot::Snapshot;
 use crate::views::{AnswerDraft, PartyColour, RelayCheck, TimeOfDay, Visibility, ZoneTimes};
 
@@ -284,8 +285,8 @@ impl TryFrom<InstanceConfig> for pingers_client::Instance {
 #[derive(uniffi::Object)]
 pub struct Core {
     client: Client,
-    /// The app's events, also told what each wake changed (`notifications.rs`).
-    events: Arc<dyn Events>,
+    /// Tells the app what each wake, and each live Meetup event, changed (`notifications.rs`).
+    notifier: Arc<Notifier>,
 }
 
 impl Core {
@@ -310,17 +311,19 @@ impl Core {
         events: Arc<dyn Events>,
         build: impl FnOnce(pingers_store::Database) -> Result<ports::Crates, ClientError>,
     ) -> Result<Arc<Self>, CoreError> {
+        let notifier = Notifier::new(events.clone());
         let client = Client::open_with(
             ClientConfig {
                 database: PathBuf::from(db_path),
                 instance: None,
             },
             Arc::new(PlatformAdapter(platform)),
-            Arc::new(EventsAdapter(Arc::clone(&events))),
+            Arc::new(EventsAdapter::new(events, Arc::clone(&notifier))),
             build,
         )
         .await?;
-        Ok(Arc::new(Self { client, events }))
+        notifier.follow(&client);
+        Ok(Arc::new(Self { client, notifier }))
     }
 }
 
@@ -331,13 +334,8 @@ impl Core {
         &self,
         wake: impl core::future::Future<Output = Result<(), ClientError>>,
     ) -> Result<(), CoreError> {
-        let before = self.client.snapshot();
         let result = wake.await;
-        let after = self.client.snapshot();
-        crate::notifications::tell(
-            self.events.as_ref(),
-            &pingers_screens::notifications::changes(&before, &after),
-        );
+        self.notifier.wake_ended(&self.client.snapshot());
         Ok(result?)
     }
 }
@@ -365,16 +363,18 @@ impl Core {
         platform: Arc<dyn Platform>,
         events: Arc<dyn Events>,
     ) -> Result<Arc<Self>, CoreError> {
+        let notifier = Notifier::new(events.clone());
         let client = Client::open(
             ClientConfig {
                 database: PathBuf::from(db_path),
                 instance: Some(instance.try_into()?),
             },
             Arc::new(PlatformAdapter(platform)),
-            Arc::new(EventsAdapter(Arc::clone(&events))),
+            Arc::new(EventsAdapter::new(events, Arc::clone(&notifier))),
         )
         .await?;
-        Ok(Arc::new(Self { client, events }))
+        notifier.follow(&client);
+        Ok(Arc::new(Self { client, notifier }))
     }
 
     /// The latest published state, for the screens.
@@ -1063,7 +1063,10 @@ mod tests {
     #[test]
     fn join_events_reach_the_app() {
         let events = Arc::new(JoinEvents::default());
-        let adapter = crate::callbacks::EventsAdapter(events.clone());
+        let adapter = crate::callbacks::EventsAdapter::new(
+            events.clone(),
+            crate::notifications::Notifier::new(events.clone()),
+        );
         let party = pingers_proto::PartyId::from_bytes([1; 16]);
         pingers_client::Events::join_requested(&adapter, party);
         pingers_client::Events::let_in(&adapter, party);
@@ -1284,6 +1287,58 @@ mod tests {
         fakes.set_meetups(MeetupsSection::default());
         core.on_wake().await?;
         assert_eq!(app.told().last().map(String::as_str), Some("meetup ended"));
+        Ok(())
+    }
+
+    /// A live Meetup's message arrives on its channel, with no push (the server sees the
+    /// channel): the phone notifies it itself, and the next wake does not notify it again.
+    #[tokio::test]
+    async fn a_live_meetup_message_is_notified_once() -> Result<(), CoreError> {
+        use pingers_client::ports::{ClientEvent, MeetupsSection, PartiesSection};
+        let fakes = FakeCrates::new().map_err(|_| CoreError::invalid("fakes"))?;
+        let app = Arc::new(App::default());
+        app.secure_store_put("pingers.database-key".into(), vec![7; 32])
+            .map_err(|_| CoreError::invalid("store"))?;
+        let crates = fakes.crates();
+        let core = Core::open_with(
+            db_path("live-notify"),
+            app.clone(),
+            app.clone(),
+            move |_| Ok(crates),
+        )
+        .await?;
+        let fixture =
+            pingers_screens::fixtures::snapshot().map_err(|_| CoreError::invalid("fixture"))?;
+        fakes.set_parties(PartiesSection {
+            parties: fixture.parties.clone(),
+            ..PartiesSection::default()
+        });
+        core.on_wake().await?;
+        let meetup = fixture
+            .meetups
+            .first()
+            .map(|shown| shown.id)
+            .ok_or_else(|| CoreError::invalid("fixture meetup"))?;
+        fakes.set_meetups(MeetupsSection {
+            meetups: fixture.meetups.clone(),
+            ..MeetupsSection::default()
+        });
+        fakes.raise(ClientEvent::MeetupMessage(meetup));
+        let chats = |told: &[String]| {
+            told.iter()
+                .filter(|line| line.starts_with("ChatMessage"))
+                .count()
+        };
+        let mut ticks = tokio::time::interval(core::time::Duration::from_millis(10));
+        let waited = tokio::time::timeout(core::time::Duration::from_secs(10), async {
+            while chats(&app.told()) < 2 {
+                ticks.tick().await;
+            }
+        })
+        .await;
+        assert!(waited.is_ok());
+        core.on_wake().await?;
+        assert_eq!(chats(&app.told()), 2);
         Ok(())
     }
 
