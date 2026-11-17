@@ -108,8 +108,12 @@ impl Device {
 
     /// Overwrites the store's file, as a failing disk would: every later session fails.
     pub(crate) fn break_store(&self) -> Result<(), TestError> {
-        std::fs::write(self.directory.path.join("store.db"), [0_u8; 4096])?;
-        Ok(())
+        Ok(break_store_at(&self.store_file())?)
+    }
+
+    /// The store's file, for breaking it from inside a step.
+    pub(crate) fn store_file(&self) -> PathBuf {
+        self.directory.path.join("store.db")
     }
 
     /// The store's view of the Meetup: whether anything of it is left.
@@ -486,4 +490,9 @@ pub(crate) fn common_board() -> Vec<pingers_proto::SeenSegment> {
         start: Bucket::containing(START),
         hash: pingers_proto::SegmentHash::from_bytes([0x5e; 32]),
     }]
+}
+
+/// Overwrites the store file at `path`, as a failing disk would.
+pub(crate) fn break_store_at(path: &std::path::Path) -> Result<(), std::io::Error> {
+    std::fs::write(path, [0_u8; 4096])
 }

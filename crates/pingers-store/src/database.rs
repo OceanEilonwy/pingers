@@ -83,6 +83,9 @@ impl Database {
 /// lock (field order matters).
 pub struct Session {
     connection: Mutex<Connection>,
+    /// The first store error behind a [`pingers_mls::StorageError`] this session returned, kept
+    /// because the trait's error kinds carry no source; see [`Session::take_mls_failure`].
+    pub(crate) mls_failure: Mutex<Option<StoreError>>,
     _lock: ProcessLock,
 }
 
@@ -129,6 +132,7 @@ impl Session {
         connection.busy_timeout(Duration::from_secs(5))?;
         Ok(Self {
             connection: Mutex::new(connection),
+            mls_failure: Mutex::new(None),
             _lock: lock,
         })
     }

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! `mls_kv`: the pingers-mls storage trait.
 
+use std::sync::PoisonError;
+
 use pingers_mls::{MlsStorage, StorageError};
 use rusqlite::OptionalExtension as _;
 use rusqlite::types::ValueRef;
@@ -29,6 +31,34 @@ impl Session {
             Ok(keys.collect::<Result<_, _>>()?)
         })
     }
+
+    /// The store error behind the first [`StorageError`] this session's [`MlsStorage`] returned
+    /// since the last call, if any.
+    ///
+    /// The trait's error kinds carry no source, so an MLS operation that reaches a broken
+    /// database fails with `MlsError::Storage`, while a repository call on the same database
+    /// fails with the [`StoreError`] itself. A caller that stops on a storage failure takes the
+    /// original here, so it reports the same cause whichever path reached the database first.
+    pub fn take_mls_failure(&self) -> Option<StoreError> {
+        self.mls_failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
+
+    /// Keeps `error` if it is the first since [`Session::take_mls_failure`], and returns its
+    /// trait kind.
+    fn mls_failed(&self, error: StoreError) -> StorageError {
+        let kind = storage_error(&error);
+        let mut first = self
+            .mls_failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if first.is_none() {
+            *first = Some(error);
+        }
+        kind
+    }
 }
 
 /// OpenMLS state as opaque bytes (design C.2 `mls_*`). pingers-mls chooses the key layout.
@@ -55,7 +85,7 @@ impl MlsStorage for Session {
                 .optional()?
                 .transpose()
         })
-        .map_err(|error| storage_error(&error))
+        .map_err(|error| self.mls_failed(error))
     }
 
     fn write(&self, key: &[u8], value: &[u8]) -> Result<(), StorageError> {
@@ -66,7 +96,7 @@ impl MlsStorage for Session {
             )?;
             Ok(())
         })
-        .map_err(|error| storage_error(&error))
+        .map_err(|error| self.mls_failed(error))
     }
 
     fn delete(&self, key: &[u8]) -> Result<(), StorageError> {
@@ -74,7 +104,7 @@ impl MlsStorage for Session {
             connection.execute("DELETE FROM mls_kv WHERE key = ?1", [key])?;
             Ok(())
         })
-        .map_err(|error| storage_error(&error))
+        .map_err(|error| self.mls_failed(error))
     }
 
     fn delete_prefix(&self, prefix: &[u8]) -> Result<(), StorageError> {
@@ -82,7 +112,7 @@ impl MlsStorage for Session {
             connection.execute(DELETE_PREFIX, [prefix])?;
             Ok(())
         })
-        .map_err(|error| storage_error(&error))
+        .map_err(|error| self.mls_failed(error))
     }
 }
 
@@ -202,6 +232,34 @@ mod tests {
         });
         assert!(result.is_err());
         assert!(fixture.session.read(b"epoch")?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn the_first_failure_behind_a_trait_error_is_kept_until_taken() -> Result<(), TestError> {
+        let fixture = Fixture::new()?;
+        let storage: &dyn MlsStorage = &fixture.session;
+        storage.write(b"group/1", b"state")?;
+        assert!(fixture.session.take_mls_failure().is_none());
+        let sql = |statement: &'static str| {
+            fixture
+                .session
+                .with(|connection| Ok(connection.execute_batch(statement)?))
+        };
+        let message = |failure: Option<StoreError>| match failure {
+            Some(StoreError::Database(rusqlite::Error::SqliteFailure(_, Some(message)))) => message,
+            _ => String::new(),
+        };
+        // Reads fail on a missing table, then writes on a constraint.
+        sql("DROP TABLE mls_kv")?;
+        assert_eq!(storage.read(b"group/1"), Err(StorageError::Failed));
+        sql("CREATE TABLE mls_kv (key BLOB PRIMARY KEY, value BLOB CHECK (0))")?;
+        assert_eq!(storage.write(b"group/1", b"x"), Err(StorageError::Failed));
+        // The first failure is the one kept, and taking it clears it.
+        assert!(message(fixture.session.take_mls_failure()).contains("no such table"));
+        assert!(fixture.session.take_mls_failure().is_none());
+        assert_eq!(storage.write(b"group/1", b"x"), Err(StorageError::Failed));
+        assert!(message(fixture.session.take_mls_failure()).contains("CHECK constraint"));
         Ok(())
     }
 

@@ -10,7 +10,7 @@ use pingers_crypto::{GrantKeyPair, GrantSecretKey, LogAuthKeyPair};
 use pingers_geo::Fix;
 use pingers_meetup::{CadenceMode, EndReason, MeetupAction, MeetupEvent, MeetupInput};
 use pingers_mls::{
-    CipherSuitePolicy, KeyPackagePurpose, MeetupCreation, MeetupPskBinding, MeetupPskId,
+    CipherSuitePolicy, KeyPackagePurpose, MeetupCreation, MeetupPskBinding, MeetupPskId, MlsError,
 };
 use pingers_presence::{MeetupKey, SpotRef};
 use pingers_proto::{
@@ -726,7 +726,11 @@ fn spawn(runtime: &Runtime, core: Core, launch: Launch) -> Joined {
 }
 
 /// Opens a store session and runs `work` in one transaction on the blocking pool.
-async fn run_blocking<T: Send + 'static>(
+///
+/// A store failure is [`SessionError::Store`] whichever path reached the store first: one
+/// that MLS hit (`MlsError::Storage`, which carries no source) becomes the store error behind
+/// it, so a broken database stops a Meetup with the same error as when a repository hit it.
+pub(crate) async fn run_blocking<T: Send + 'static>(
     database: &Arc<Database>,
     work: impl FnOnce(Local<'_>) -> Result<T, SessionError> + Send + 'static,
 ) -> Result<T, SessionError> {
@@ -734,12 +738,22 @@ async fn run_blocking<T: Send + 'static>(
     tokio::task::spawn_blocking(move || {
         let session = database.session()?;
         let identity = session.identity().load()?.ok_or(SessionError::NotFound)?;
-        session.transaction(|session| {
-            work(Local {
-                session,
-                signer: &identity.signing_key,
+        session
+            .transaction(|session| {
+                work(Local {
+                    session,
+                    signer: &identity.signing_key,
+                })
             })
-        })
+            .map_err(|error| {
+                if let SessionError::Mls(MlsError::Storage(_)) = error
+                    && let Some(store) = session.take_mls_failure()
+                {
+                    SessionError::Store(store)
+                } else {
+                    error
+                }
+            })
     })
     .await
     .map_err(|_| SessionError::Internal)?

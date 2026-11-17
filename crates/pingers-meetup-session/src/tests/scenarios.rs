@@ -478,16 +478,42 @@ async fn a_store_that_fails_stops_the_meetup() -> TestResult {
     let [alice, _bob] = world.meetup_of_two().await?;
     world.device(0)?.break_store()?;
     // Whatever reaches the store next (Bob's frames, or this action) fails on it, and the
-    // task stops: its state can no longer be trusted. The action fails either way.
+    // task stops: its state can no longer be trusted. The action fails either way, and the
+    // task says why: the store, whether a repository or MLS reached it first.
     let acted = alice.handle.act(chat("Lost")?).await;
-    assert!(matches!(
-        acted,
-        Err(SessionError::Store(_) | SessionError::Ended)
-    ));
+    assert!(
+        matches!(acted, Err(SessionError::Store(_) | SessionError::Ended)),
+        "acted {acted:?}"
+    );
     let finished = tokio::time::timeout(super::PATIENCE, alice.handle.finished())
         .await
         .map_err(|_elapsed| TestError::Timeout("the Meetup to stop"))?;
-    assert!(matches!(finished, Err(SessionError::Store(_))));
+    assert!(
+        matches!(finished, Err(SessionError::Store(_))),
+        "acted {acted:?} finished {finished:?}"
+    );
+    Ok(())
+}
+
+/// The store breaks inside a step, after the session opened and the identity was read and
+/// before MLS reads the group: on a loaded machine a frame from Bob lands Alice's task there.
+/// MLS's storage error carries no source; the step still fails with the store's own error.
+#[tokio::test]
+async fn a_store_that_fails_under_mls_is_a_store_error() -> TestResult {
+    let world = World::new(2)?;
+    let [_alice, _bob] = world.meetup_of_two().await?;
+    let device = world.device(0)?;
+    let store = device.store_file();
+    let stepped = crate::live::run_blocking(device.database(), move |local| {
+        super::break_store_at(&store).map_err(|_io| SessionError::Internal)?;
+        local.mls().meetup_group(&GROUP)?;
+        Ok(())
+    })
+    .await;
+    assert!(
+        matches!(stepped, Err(SessionError::Store(_))),
+        "stepped {stepped:?}"
+    );
     Ok(())
 }
 

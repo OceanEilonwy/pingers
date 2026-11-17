@@ -51,7 +51,9 @@
 //! - **`MlsStorage` is implemented on [`Session`]**, so MLS writes join the session's
 //!   transaction. The trait's error kinds have no source, so database errors become
 //!   `StorageError::Failed` (busy or locked: `StorageError::Unavailable`) and undecodable
-//!   values `StorageError::Corrupt`.
+//!   values `StorageError::Corrupt`. The session keeps the first such [`StoreError`] for
+//!   [`Session::take_mls_failure`], so a caller reports a broken database as a store failure
+//!   whether MLS or a repository reached it first.
 //! - **[`Meetups::end`] deletes the group's MLS rows too**, under pingers-mls's
 //!   `group_storage_prefix`, so no caller can end a Meetup and leave its epoch secrets behind
 //!   (style guide §8, design B.5). Calling `delete_group` as well is harmless.
