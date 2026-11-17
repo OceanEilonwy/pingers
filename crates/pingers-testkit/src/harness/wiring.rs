@@ -38,6 +38,15 @@ use crate::rng::{random_array, seeded_rng};
 
 /// How long a request body may take to arrive, on the harness clock.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a server connection may stay idle, on the harness clock: longer than any jump a
+/// test makes (about eleven years). Deployed, the relay drops a connection it has not used for
+/// 90 seconds (its pool's idle timeout, in real time) before the server's 120 seconds are up,
+/// so the server never closes a connection the relay is about to send on. Here the server's
+/// idle timer runs on the harness clock and the relay's pool on real time: with the deployed
+/// timeout, a test that moves the clock past it would have the server close the relay's
+/// connection just as the relay reuses it for the next request, and a request the GOAWAY
+/// refuses comes back from the relay as 502.
+pub(super) const IDLE_TIMEOUT: Duration = Duration::from_hours(100_000);
 /// The bearer credential pingers-server will present to the push relay.
 pub(super) const PUSH_CREDENTIAL: &str = "pingers-testkit-harness-push-credential";
 
@@ -386,6 +395,7 @@ pub(super) fn start(config: &HarnessConfig, capture: Capture) -> Result<Started,
     let server_config = ServerConfig {
         server_operator: config.operator.clone().unwrap_or_else(|| server_id.clone()),
         request_timeout: REQUEST_TIMEOUT,
+        idle_timeout: IDLE_TIMEOUT,
         metrics: AddressList::new(vec![config.bind]),
         ohttp_relay_urls: vec![relay_url],
         advertised_push_relays: vec![advertised(&push_url, &push_public)],

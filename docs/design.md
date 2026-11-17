@@ -1014,7 +1014,7 @@ Welcome messages travel as mailbox posts. Invites reuse mailboxes (below). There
 | What | Limit | Answer |
 |---|---|---|
 | Connections | 4096 on the public listener, 256 on the gateway (`max_connections`, `[ohttp] max_connections`); one more is closed on arrival | close |
-| Idle or slow connections | closed after `idle_timeout_s` (120 s) with no request in progress, including one that never completes a request head; a live channel is a request in progress; a public connection whose oldest request has taken three request timeouts (a client that stopped reading its answer) is dropped | GOAWAY, drop |
+| Idle or slow connections | closed after `idle_timeout_s` (120 s) with no request in progress, including one that never completes a request head; a live channel is a request in progress; a public connection whose oldest request has taken three request timeouts (a client that stopped reading its answer) is dropped. The timeout must stay above the 90 s a relay keeps an idle connection (pingers-ohttp-relay's pool), so the relay drops an idle connection before the server closes it: a GOAWAY that crosses a request the relay has just sent refuses it, and the relay answers that request 502 | GOAWAY, drop |
 | Request head | 16 KiB of header fields; 64 concurrent requests per public connection, 4096 per gateway connection | refused |
 | Request body | 64 KiB, complete within `request_timeout_s` (30 s); a chunked live channel's preamble 20 KiB | 413, 408 |
 | New accounts | `signups_per_hour` (60), counted in `quota_db`; plus the registration code, if set; failed codes: 10 an hour per address, 5 per key, in memory | 429 |

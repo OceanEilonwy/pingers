@@ -161,6 +161,49 @@ mod running {
         Ok(())
     }
 
+    /// The relay keeps its connection to the gateway while a test moves the harness clock
+    /// days ahead: the server does not close it as idle, so the relay's next request on it is
+    /// answered rather than refused by a GOAWAY (which the relay would answer 502).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_clock_jump_leaves_the_relays_gateway_connection_open() -> TestResult {
+        let config = HarnessConfig::default();
+        let clock = config.clock.clone();
+        let harness = InProcessHarness::start(&config)?;
+        let endpoints = harness.endpoints().clone();
+        // A connection to the gateway listener, as the relay holds one.
+        let stream = tokio::net::TcpStream::connect(endpoints.gateway).await?;
+        let (mut sender, connection) =
+            hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(stream))
+                .await?;
+        let mut connection = tokio::spawn(connection);
+        let ask = |sender: &mut SendRequest<Body>| {
+            let request = get("/v1/ohttp/config");
+            let sent = request.map(|request| sender.send_request(request));
+            async move { Ok::<_, Box<dyn std::error::Error + Send + Sync>>(sent?.await?.status()) }
+        };
+        assert_eq!(
+            tokio::time::timeout(STEP, ask(&mut sender)).await??,
+            StatusCode::OK
+        );
+
+        // Two days: far past the deployed 120-second idle timeout.
+        clock.advance(Duration::from_hours(48));
+        // A server that closed idle connections on this clock would send its GOAWAY now, and
+        // the connection, with no request on it, would end within moments.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(500), &mut connection)
+                .await
+                .is_err(),
+            "the server closed the gateway connection"
+        );
+        assert_eq!(
+            tokio::time::timeout(STEP, ask(&mut sender)).await??,
+            StatusCode::OK
+        );
+        harness.shutdown();
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_server_origin_is_https_and_checks_registration_codes() -> TestResult {
         use pingers_crypto::{AccountSigningKey, sign_registration};

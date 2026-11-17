@@ -25,7 +25,8 @@
 //! counts_interval_s = 3600
 //! request_timeout_s = 30           # how long a client may take to send a request body
 //! idle_timeout_s = 120             # how long a connection may stay open with no request in
-//!                                  # progress (both listeners)
+//!                                  # progress (both listeners); keep it over 90, the time a
+//!                                  # relay keeps an idle connection
 //! max_connections = 4096           # public connections held at once; more are closed
 //! mailbox_db = "/var/lib/pingers/mailboxes.sqlite"   # optional: without it, in memory
 //! mailbox_posts_per_bucket = 60
@@ -427,7 +428,10 @@ pub struct ServerConfig {
     /// of a live channel, direct requests). Live channel bodies are not limited.
     pub request_timeout: Duration,
     /// How long a connection may stay open with no request in progress, on either listener:
-    /// an idle connection, or one that never finishes sending a request head, is closed.
+    /// an idle connection, or one that never finishes sending a request head, is closed. Kept
+    /// above the 90 seconds a relay keeps an idle connection, so the relay drops it first: a
+    /// GOAWAY that crosses a request the relay has just sent refuses it, and the relay
+    /// answers that request 502.
     pub idle_timeout: Duration,
     /// How many connections the public listener holds at once; more are closed on arrival.
     pub max_connections: NonZeroU32,
