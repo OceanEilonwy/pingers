@@ -44,6 +44,7 @@ impl HttpPushRelay {
     ) -> Result<Self, reqwest::Error> {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            .pool_idle_timeout(RELAY_POOL_IDLE)
             .tls_certs_merge(roots)
             .build()?;
         Ok(Self {
@@ -147,6 +148,11 @@ impl RelayConfigKind {
         }
     }
 }
+
+/// How long a connection to a push relay is kept for reuse: under the relay's own idle timeout
+/// (30 s by default), so the server drops an idle connection before the relay closes it. A
+/// close that crosses a push the server has just sent on the connection would fail the push.
+const RELAY_POOL_IDLE: Duration = Duration::from_secs(20);
 
 /// The most a push relay's config may hold: 41 bytes of key, a few platforms, an operator.
 pub(crate) const MAX_RELAY_CONFIG_BYTES: usize = 4096;

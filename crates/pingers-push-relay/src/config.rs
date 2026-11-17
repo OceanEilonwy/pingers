@@ -10,7 +10,8 @@
 //! token_pushes_per_minute = 30
 //! max_ttl_s = 2592000
 //! max_connections = 256            # connections held at once; one more is closed at once
-//! idle_timeout_s = 30              # a connection with no request for this long is closed
+//! idle_timeout_s = 30              # a connection with no request for this long is closed;
+//!                                  # keep it over 20, the time a server keeps one idle
 //! hash_key = "<64 hex>"            # keys the credential hashes and the token rate limits
 //!
 //! [[keys]]
