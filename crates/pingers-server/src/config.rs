@@ -25,7 +25,7 @@
 //! counts_interval_s = 3600
 //! request_timeout_s = 30           # how long a client may take to send a request body
 //! idle_timeout_s = 120             # how long a connection may stay open with no request in
-//!                                  # progress (both listeners); keep it over 90, the time a
+//!                                  # progress (both listeners); must be over 90, the time a
 //!                                  # relay keeps an idle connection
 //! max_connections = 4096           # public connections held at once; more are closed
 //! mailbox_db = "/var/lib/pingers/mailboxes.sqlite"   # optional: without it, in memory
@@ -213,6 +213,18 @@ pub enum ConfigError {
     OutOfRange {
         /// The field.
         field: &'static str,
+    },
+    /// `idle_timeout_s` is not over the 90 seconds an OHTTP relay keeps an idle connection
+    /// ([`pingers_proto::OHTTP_RELAY_POOL_IDLE`]): the server would close gateway connections
+    /// the relay is about to send on, and the relay would answer those requests 502.
+    #[error(
+        "configuration: {field} must be over {minimum_s} seconds, the time an OHTTP relay keeps an idle connection"
+    )]
+    IdleTimeoutTooShort {
+        /// The field.
+        field: &'static str,
+        /// The value it must exceed, in seconds.
+        minimum_s: u64,
     },
 }
 
@@ -428,8 +440,9 @@ pub struct ServerConfig {
     /// of a live channel, direct requests). Live channel bodies are not limited.
     pub request_timeout: Duration,
     /// How long a connection may stay open with no request in progress, on either listener:
-    /// an idle connection, or one that never finishes sending a request head, is closed. Kept
-    /// above the 90 seconds a relay keeps an idle connection, so the relay drops it first: a
+    /// an idle connection, or one that never finishes sending a request head, is closed. Over
+    /// the 90 seconds a relay keeps an idle connection, so the relay drops it first (a file
+    /// with less is refused; code that builds a config, as the test harness does, may set any): a
     /// GOAWAY that crosses a request the relay has just sent refuses it, and the relay
     /// answers that request 502.
     pub idle_timeout: Duration,
@@ -831,6 +844,9 @@ const fn default_idle_timeout() -> u64 {
     120
 }
 
+// The default passes its own check.
+const _: () = assert!(default_idle_timeout() > pingers_proto::OHTTP_RELAY_POOL_IDLE.as_secs());
+
 impl ServerConfig {
     /// Parses and checks a configuration file's text.
     ///
@@ -896,7 +912,7 @@ impl ServerConfig {
             quota_store: file.quota_db.map_or(Database::Memory, Database::File),
             logging,
             request_timeout: positive_seconds("request_timeout_s", file.request_timeout_s)?,
-            idle_timeout: positive_seconds("idle_timeout_s", file.idle_timeout_s)?,
+            idle_timeout: idle_timeout("idle_timeout_s", file.idle_timeout_s)?,
             max_connections: count_or(
                 "max_connections",
                 file.max_connections,
@@ -1002,6 +1018,20 @@ fn positive_seconds(field: &'static str, seconds: u64) -> Result<Duration, Confi
         0 => Err(ConfigError::OutOfRange { field }),
         seconds => Ok(Duration::from_secs(seconds)),
     }
+}
+
+/// An idle timeout over [`pingers_proto::OHTTP_RELAY_POOL_IDLE`], so an OHTTP relay drops an
+/// idle connection before the server closes it.
+fn idle_timeout(field: &'static str, seconds: u64) -> Result<Duration, ConfigError> {
+    let minimum = pingers_proto::OHTTP_RELAY_POOL_IDLE;
+    let timeout = Duration::from_secs(seconds);
+    if timeout <= minimum {
+        return Err(ConfigError::IdleTimeoutTooShort {
+            field,
+            minimum_s: minimum.as_secs(),
+        });
+    }
+    Ok(timeout)
 }
 
 fn gateway_key(mut key: FileKey) -> Result<GatewayKey, ConfigError> {

@@ -11,7 +11,7 @@
 //! max_ttl_s = 2592000
 //! max_connections = 256            # connections held at once; one more is closed at once
 //! idle_timeout_s = 30              # a connection with no request for this long is closed;
-//!                                  # keep it over 20, the time a server keeps one idle
+//!                                  # must be over 20, the time a server keeps one idle
 //! hash_key = "<64 hex>"            # keys the credential hashes and the token rate limits
 //!
 //! [[keys]]
@@ -241,6 +241,8 @@ const fn default_max_connections() -> u32 {
 const fn default_idle_timeout() -> u64 {
     crate::connections::DEFAULT_IDLE_TIMEOUT_S
 }
+// The default passes its own check.
+const _: () = assert!(default_idle_timeout() > pingers_proto::SERVER_PUSH_POOL_IDLE.as_secs());
 fn default_fcm_endpoint() -> String {
     "https://fcm.googleapis.com/".to_owned()
 }
@@ -345,7 +347,7 @@ impl RelayConfig {
                 }
                 count => usize::try_from(count).unwrap_or(usize::MAX),
             },
-            idle_timeout: positive_seconds("idle_timeout_s", file.idle_timeout_s)?,
+            idle_timeout: idle_timeout("idle_timeout_s", file.idle_timeout_s)?,
             // Reading a 4 KiB body and one wait for the push service, with room to spare.
             request_timeout: upstream_timeout.saturating_add(Duration::from_secs(10)),
         };
@@ -402,6 +404,20 @@ fn positive_seconds(field: &'static str, seconds: u64) -> Result<Duration, Confi
         0 => Err(ConfigError::OutOfRange { field }),
         seconds => Ok(Duration::from_secs(seconds)),
     }
+}
+
+/// An idle timeout over [`pingers_proto::SERVER_PUSH_POOL_IDLE`], so a server drops an idle
+/// connection before the relay closes it.
+fn idle_timeout(field: &'static str, seconds: u64) -> Result<Duration, ConfigError> {
+    let minimum = pingers_proto::SERVER_PUSH_POOL_IDLE;
+    let timeout = Duration::from_secs(seconds);
+    if timeout <= minimum {
+        return Err(ConfigError::IdleTimeoutTooShort {
+            field,
+            minimum_s: minimum.as_secs(),
+        });
+    }
+    Ok(timeout)
 }
 
 fn rate(field: &'static str, per_minute: u32) -> Result<RateLimit, ConfigError> {

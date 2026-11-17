@@ -161,6 +161,20 @@ impl CborBody for PushRelayConfig {
 /// successor's activation plus this, and re-seal to the successor within it.
 pub const PUSH_RELAY_KEY_OVERLAP: core::time::Duration = core::time::Duration::from_hours(30 * 24);
 
+/// How long an OHTTP relay keeps an idle connection to a gateway before dropping it: 90 seconds,
+/// the pool idle timeout of pingers-ohttp-relay (hyper-util's default, which it keeps). An
+/// assumption about the relay, not a setting of it. A gateway must keep idle connections
+/// longer, so the relay drops one first: a GOAWAY that crosses a request the relay has just
+/// sent refuses it, and the relay answers that request 502. pingers-server refuses an
+/// `idle_timeout_s` at or below it.
+pub const OHTTP_RELAY_POOL_IDLE: core::time::Duration = core::time::Duration::from_secs(90);
+
+/// How long pingers-server keeps an idle connection to a push relay for reuse. A push relay
+/// must keep idle connections longer, so the server drops one first: a close that crosses a
+/// push the server has just sent would fail it. pingers-push-relay refuses an
+/// `idle_timeout_s` at or below it.
+pub const SERVER_PUSH_POOL_IDLE: core::time::Duration = core::time::Duration::from_secs(20);
+
 /// `GET /v1/config/next` (design B.4.9, C.1a): the key the relay publishes next, and from when.
 /// Devices check it against their pins before it activates and switch to it at
 /// `activates_at`; the key it replaces keeps opening blobs for [`PUSH_RELAY_KEY_OVERLAP`] after

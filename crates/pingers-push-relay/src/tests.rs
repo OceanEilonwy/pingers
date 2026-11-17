@@ -405,14 +405,35 @@ fn connection_limits_come_from_the_file_with_defaults() -> TestResult {
     assert_eq!(defaults.connections.idle_timeout, Duration::from_secs(30));
     let text = config_text("127.0.0.1:0", 0).replace(
         "hash_key =",
-        "max_connections = 10\nidle_timeout_s = 5\nhash_key =",
+        "max_connections = 10\nidle_timeout_s = 21\nhash_key =",
     );
     let set = RelayConfig::parse(&text)?;
     assert_eq!(set.connections.max_connections, 10);
-    assert_eq!(set.connections.idle_timeout, Duration::from_secs(5));
+    assert_eq!(set.connections.idle_timeout, Duration::from_secs(21));
     assert!(
         RelayConfig::parse(&text.replace("max_connections = 10", "max_connections = 0")).is_err()
     );
-    assert!(RelayConfig::parse(&text.replace("idle_timeout_s = 5", "idle_timeout_s = 0")).is_err());
+    // Zero, and anything up to the 20 s a server keeps an idle connection to the relay: the
+    // relay would close connections the server is about to send a push on.
+    for short in ["idle_timeout_s = 0", "idle_timeout_s = 20"] {
+        let refused = RelayConfig::parse(&text.replace("idle_timeout_s = 21", short)).err();
+        assert!(
+            matches!(
+                refused,
+                Some(ConfigError::IdleTimeoutTooShort {
+                    field: "idle_timeout_s",
+                    minimum_s: 20
+                })
+            ),
+            "{short}: {refused:?}"
+        );
+        assert_eq!(
+            refused.map(|error| error.to_string()).as_deref(),
+            Some(
+                "idle_timeout_s must be over 20 seconds, the time a server keeps an idle \
+                 connection to the relay"
+            )
+        );
+    }
     Ok(())
 }

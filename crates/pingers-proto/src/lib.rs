@@ -82,8 +82,8 @@ pub use push::{
 };
 pub use redacted::Redacted;
 pub use relay::{
-    PUSH_RELAY_KEY_OVERLAP, PushRelayConfig, PushRelayKeyConfig, PushRelayKeyId, PushRequest,
-    ScheduledPushRelayConfig,
+    OHTTP_RELAY_POOL_IDLE, PUSH_RELAY_KEY_OVERLAP, PushRelayConfig, PushRelayKeyConfig,
+    PushRelayKeyId, PushRequest, SERVER_PUSH_POOL_IDLE, ScheduledPushRelayConfig,
 };
 pub use secret::{SecretBytes, SecretText};
 pub use setup::{MAX_REGISTRATION_CODE_BYTES, MAX_SETUP_PINS, SETUP_FRAGMENT_PREFIX, SetupPayload};

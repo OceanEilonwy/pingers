@@ -371,7 +371,7 @@ fn wiring_fields_are_read_with_defaults() -> TestResult {
 
     let config = ServerConfig::parse(&format!(
         "mailbox_db = \"/tmp/m.sqlite\"\nmailbox_posts_per_bucket = 5\nsignups_per_hour = 7\npush_timeout_s = 3\n\
-         expire_interval_s = 9\nidle_timeout_s = 11\nmax_connections = 12\n{}{}",
+         expire_interval_s = 9\nidle_timeout_s = 91\nmax_connections = 12\n{}{}",
         minimal(&key(1, SECRET_A)).replace("[ohttp]\n", "[ohttp]\nmax_connections = 13\n"),
         relay(7, "https://push.example")
     ))?;
@@ -381,7 +381,7 @@ fn wiring_fields_are_read_with_defaults() -> TestResult {
     );
     assert_eq!(config.mailbox_posts_per_bucket.get(), 5);
     assert_eq!(config.signups_per_hour.get().get(), 7);
-    assert_eq!(config.idle_timeout, Duration::from_secs(11));
+    assert_eq!(config.idle_timeout, Duration::from_secs(91));
     assert_eq!(config.max_connections.get(), 12);
     assert_eq!(config.gateway_max_connections.get(), 13);
     assert_eq!(config.push_timeout, Duration::from_secs(3));
@@ -398,7 +398,7 @@ fn wiring_fields_are_read_with_defaults() -> TestResult {
 #[test]
 fn bad_wiring_fields_are_refused() {
     let with_key = minimal(&key(1, SECRET_A));
-    let cases: [(String, Expected); 9] = [
+    let cases: [(String, Expected); 10] = [
         (
             format!(
                 "{with_key}{}{}",
@@ -437,11 +437,23 @@ fn bad_wiring_fields_are_refused() {
                 }
             )
         }),
+        // Zero, and anything up to the 90 s an OHTTP relay keeps an idle connection: the
+        // server would close gateway connections the relay is about to send on.
         (format!("idle_timeout_s = 0\n{with_key}"), |error| {
             matches!(
                 error,
-                ConfigError::OutOfRange {
-                    field: "idle_timeout_s"
+                ConfigError::IdleTimeoutTooShort {
+                    field: "idle_timeout_s",
+                    minimum_s: 90
+                }
+            )
+        }),
+        (format!("idle_timeout_s = 90\n{with_key}"), |error| {
+            matches!(
+                error,
+                ConfigError::IdleTimeoutTooShort {
+                    field: "idle_timeout_s",
+                    minimum_s: 90
                 }
             )
         }),
@@ -480,6 +492,26 @@ fn bad_wiring_fields_are_refused() {
             "{text}\n{refused:?}"
         );
     }
+}
+
+#[test]
+fn the_idle_timeout_must_outlast_the_relays_idle_connections() -> Result<(), ConfigError> {
+    let with_key = minimal(&key(1, SECRET_A));
+    let floor = pingers_proto::OHTTP_RELAY_POOL_IDLE.as_secs();
+    let refused = ServerConfig::parse(&format!("idle_timeout_s = {floor}\n{with_key}"))
+        .err()
+        .map(|error| error.to_string());
+    assert_eq!(
+        refused.as_deref(),
+        Some(
+            "configuration: idle_timeout_s must be over 90 seconds, the time an OHTTP relay \
+             keeps an idle connection"
+        )
+    );
+    let next = floor.saturating_add(1);
+    let accepted = ServerConfig::parse(&format!("idle_timeout_s = {next}\n{with_key}"))?;
+    assert_eq!(accepted.idle_timeout, Duration::from_secs(next));
+    Ok(())
 }
 
 #[test]

@@ -86,6 +86,18 @@ pub enum ConfigError {
         /// The field.
         field: &'static str,
     },
+    /// `idle_timeout_s` is not over the 20 seconds pingers-server keeps an idle connection to
+    /// a push relay ([`pingers_proto::SERVER_PUSH_POOL_IDLE`]): the relay would close
+    /// connections the server is about to send a push on.
+    #[error(
+        "{field} must be over {minimum_s} seconds, the time a server keeps an idle connection to the relay"
+    )]
+    IdleTimeoutTooShort {
+        /// The field.
+        field: &'static str,
+        /// The value it must exceed, in seconds.
+        minimum_s: u64,
+    },
     /// A hex field has the wrong length or non-hex characters.
     #[error("{field} must be {bytes} bytes of hex")]
     BadHex {
