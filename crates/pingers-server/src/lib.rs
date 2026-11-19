@@ -310,6 +310,27 @@ pub async fn serve(
     serve_with(config, outside, listeners, shutdown).await
 }
 
+/// A builder for the server's own HTTP clients (the push relay's and the map host gateway's)
+/// that trusts Mozilla's roots, bundled in the binary, and `extra`, and never the system's
+/// store.
+///
+/// reqwest's default verifier (rustls-platform-verifier) reads the system's store when a
+/// client is built and refuses to build one when it finds no certificate. On monokulo-nodo the
+/// server's sandbox has no outbound internet and so no `/etc/ssl`; its clients reach the push
+/// relay and the map host over plain HTTP on loopback, and failing to build them stopped the
+/// server from starting at all. Where a relay or map host is reached over `https://`, it is a
+/// public name (Mozilla's roots) or the operator's own CA (`push_relay_ca`, here as `extra`).
+pub(crate) fn http_client_builder(
+    extra: Vec<reqwest::Certificate>,
+) -> Result<reqwest::ClientBuilder, reqwest::Error> {
+    let mut roots = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+        .iter()
+        .map(|der| reqwest::Certificate::from_der(der))
+        .collect::<Result<Vec<_>, _>>()?;
+    roots.extend(extra);
+    Ok(reqwest::Client::builder().tls_certs_only(roots))
+}
+
 /// The push relay client's extra trust roots.
 fn push_relay_roots(
     source: Option<&CertificateSource>,

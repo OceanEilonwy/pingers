@@ -20,7 +20,8 @@
 //! quota_db = "/var/lib/pingers/quota.sqlite"           # optional: accounts, bearer digests,
 //!                                  # the membership tree, issuer keys (without it, in memory)
 //! push_relay_ca = "/etc/pingers/push-relay-ca.pem"     # optional: extra trust roots for
-//!                                  # the push relays' TLS certificates (still https only)
+//!                                  # the push relays' TLS certificates (still https only),
+//!                                  # besides Mozilla's (bundled; never the system's store)
 //! logging = "off"                  # or "counts": request totals every counts_interval_s
 //! counts_interval_s = 3600
 //! request_timeout_s = 30           # how long a client may take to send a request body
@@ -428,7 +429,8 @@ pub struct ServerConfig {
     /// Where map downloads through the relay are forwarded: `map_host_gateway`, or `map_host`
     /// itself (design B.12). `None` without a map host.
     pub map_host_gateway: Option<MapHostGateway>,
-    /// Extra trust roots for the push relays' TLS certificates, besides the system's.
+    /// Extra trust roots for the push relays' (and the map host gateway's) TLS certificates,
+    /// besides Mozilla's, which are bundled: the system's store is never read.
     pub push_relay_ca: Option<CertificateSource>,
     /// Where group logs, subscriptions and snapshots are kept.
     pub delivery_store: Database,

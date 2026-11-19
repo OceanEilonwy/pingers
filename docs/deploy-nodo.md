@@ -96,6 +96,13 @@ four, so the bundle installs push relay, map host, server, relay, then `pingers`
 domain is a setting of the push relay, the root of the references, so the server and the setup
 page derive their addresses from it without a cycle.
 
+TLS roots: every service's HTTP client trusts Mozilla's roots, bundled in the binary
+(`webpki-root-certs`; pingers-server adds `push_relay_ca` if set), and never reads the
+system's store. nodo binds `/etc/ssl` only into apps with `outbound = "internet"`, and only if
+the host has it; a client that wanted the system's store could not even be built without it
+(reqwest refuses one when the store is empty), which kept pingers-server, whose sandbox has
+none, from starting. New roots and removals arrive with each package build.
+
 ### 1.1 Settings and secrets
 
 "Sealed" means a nodo secret setting: encrypted under the device key, rendered only into memory

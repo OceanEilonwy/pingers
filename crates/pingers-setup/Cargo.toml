@@ -29,6 +29,8 @@ tokio = { workspace = true, features = ["net", "signal"] }
 tokio-rustls = { workspace = true }
 toml = { workspace = true }
 webpki-roots = { workspace = true }
+# The same roots as certificates, for the HTTP client (reqwest takes no trust anchors).
+webpki-root-certs = { workspace = true }
 zeroize = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]

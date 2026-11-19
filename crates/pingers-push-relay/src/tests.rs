@@ -224,6 +224,54 @@ async fn the_http_client_does_not_follow_redirects() -> TestResult {
     Ok(())
 }
 
+/// Set in the child process the next test starts, which runs the test's body.
+const NO_SYSTEM_ROOTS: &str = "PINGERS_PUSH_RELAY_TEST_NO_SYSTEM_ROOTS";
+
+/// Every client the relay builds is built where the system has no CA certificates, as in a
+/// sandbox without `/etc/ssl`. The system's store is read from `SSL_CERT_FILE` and
+/// `SSL_CERT_DIR` alone when either is set (rustls-native-certs), so the child gets an empty
+/// file and an empty directory: a child process, because the environment is the whole
+/// process's and other tests run alongside.
+#[tokio::test]
+async fn the_clients_build_without_a_system_ca_store() -> TestResult {
+    if std::env::var_os(NO_SYSTEM_ROOTS).is_some() {
+        http_client()?;
+        public_http_client()?;
+        let mut config = RelayConfig::parse(&config_text("127.0.0.1:0", 0))?;
+        dispatcher(&config, Arc::new(clock()))?;
+        config.unifiedpush = Some(EndpointPolicy::AllowInsecureLocal);
+        dispatcher(&config, Arc::new(clock()))?;
+        return Ok(());
+    }
+    let empty = std::env::temp_dir().join(format!(
+        "pingers-push-relay-no-roots-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&empty)?;
+    let file = empty.join("none.pem");
+    std::fs::write(&file, "")?;
+    let output = std::process::Command::new(std::env::current_exe()?)
+        .args([
+            "tests::the_clients_build_without_a_system_ca_store",
+            "--exact",
+            "--nocapture",
+        ])
+        .env(NO_SYSTEM_ROOTS, "1")
+        .env("SSL_CERT_FILE", &file)
+        .env("SSL_CERT_DIR", &empty)
+        .output()?;
+    std::fs::remove_dir_all(&empty)?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "a client did not build without a system CA store:\n{stdout}\n{stderr}"
+    );
+    // The child ran this very test, not nothing.
+    assert!(stdout.contains("1 passed"), "{stdout}");
+    Ok(())
+}
+
 /// A capturing sender, as an in-process harness would inject through `serve_with`.
 struct Capture(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
 

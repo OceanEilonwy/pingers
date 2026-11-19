@@ -1193,6 +1193,7 @@ mod live;
 mod maps;
 mod pushes;
 mod restart;
+mod roots;
 mod wallet;
 mod wired;
 

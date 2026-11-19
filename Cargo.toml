@@ -119,6 +119,10 @@ rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs
 tokio-rustls = { version = "0.26.6", default-features = false }
 # Mozilla's root certificates for pingers-transport's HTTPS (CDLA-Permissive-2.0).
 webpki-roots = "1.0.12"
+# The same roots as whole certificates, for the services' reqwest clients (tls_certs_only), so
+# building one never reads the system's store, which nodo's sandboxes may not have. Already in
+# the tree via reqwest's rustls-platform-verifier; same licence.
+webpki-root-certs = "1.0.12"
 # SQLCipher needs a crypto library; the vendored OpenSSL keeps the Android build self-contained.
 rusqlite = { version = "0.42.0", features = ["bundled-sqlcipher-vendored-openssl"] }
 axum = { version = "0.8.9", features = ["http2"] }

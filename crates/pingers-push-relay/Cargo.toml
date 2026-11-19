@@ -27,6 +27,8 @@ hex = { workspace = true }
 rand_chacha = { workspace = true }
 rand_core = { workspace = true }
 reqwest = { workspace = true }
+# Mozilla's roots for the push services' TLS, bundled, so the client never needs the system's.
+webpki-root-certs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 subtle = { workspace = true }

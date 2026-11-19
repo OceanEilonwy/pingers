@@ -60,10 +60,27 @@ use crate::service::{Relay, RelayParts};
 ///
 /// [`RelayError::HttpClient`] if the TLS backend cannot be set up.
 pub fn http_client() -> Result<reqwest::Client, RelayError> {
-    reqwest::Client::builder()
+    client_builder()?
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(RelayError::HttpClient)
+}
+
+/// A builder that trusts Mozilla's roots, bundled in the binary, and never the system's store.
+///
+/// reqwest's default verifier (rustls-platform-verifier) reads the system's store when a
+/// client is built and refuses to build one when it finds no certificate, so the relay would
+/// not start in a sandbox without `/etc/ssl`. On monokulo-nodo the relay's sandbox binds the
+/// host's `/etc/ssl` only if it is there (`--ro-bind-try`). FCM, Google's token endpoint and
+/// UnifiedPush servers all have certificates from public CAs, which is what Mozilla's program
+/// covers; the bundled set is the same on every host and is updated with each release.
+fn client_builder() -> Result<reqwest::ClientBuilder, RelayError> {
+    let roots = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+        .iter()
+        .map(|der| reqwest::Certificate::from_der(der))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(RelayError::HttpClient)?;
+    Ok(reqwest::Client::builder().tls_certs_only(roots))
 }
 
 /// The production HTTP client: no redirects, and names resolve only to public addresses
@@ -74,7 +91,7 @@ pub fn http_client() -> Result<reqwest::Client, RelayError> {
 ///
 /// [`RelayError::HttpClient`] if the TLS backend cannot be set up.
 pub fn public_http_client() -> Result<reqwest::Client, RelayError> {
-    reqwest::Client::builder()
+    client_builder()?
         .redirect(reqwest::redirect::Policy::none())
         .dns_resolver(address::PublicOnlyResolver::new(address::SystemLookup))
         .build()
