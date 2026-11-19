@@ -74,12 +74,22 @@ with one that does not match or is not listed fails. After changing `gradle/libs
 a plugin or the Gradle wrapper, regenerate it and review what changed before committing:
 
 ```sh
-./gradlew --write-verification-metadata sha256 help assembleGmsDebug assembleFossDebug \
-    lintGmsDebug lintFossDebug testGmsDebugUnitTest testFossDebugUnitTest
+GRADLE_USER_HOME=$(mktemp -d) ./gradlew --no-configuration-cache \
+    --write-verification-metadata sha256 help assembleGmsDebug assembleFossDebug \
+    lintGmsDebug lintFossDebug testGmsDebugUnitTest testFossDebugUnitTest \
+    assembleFossRelease bundleFossRelease assembleGmsRelease bundleGmsRelease
 ```
 
+Run it with an empty Gradle home, as above. Gradle reuses POM and `.module` files it has
+already parsed without re-reading them, so it neither checks nor records them: a warm cache
+hides missing entries until a fresh fetch, like the release job's, fails on them. The release
+tasks need a signing key; a throwaway PKCS12 one (`keytool -genkeypair -storetype PKCS12`) in
+`PINGERS_KEYSTORE_*` is enough here. Gradle drops the file's XML comments when it rewrites it,
+so put them back before committing.
+
 The release job restores no caches (`.github/workflows/release.yml`), so what it signs is
-built from artifacts fetched fresh and checked here.
+built from artifacts fetched fresh and checked here. CI's `android-dependencies` job resolves
+the release build's dependencies the same way on every pull request.
 
 ## Structure
 
