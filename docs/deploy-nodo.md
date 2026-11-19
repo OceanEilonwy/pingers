@@ -402,14 +402,15 @@ gh release create feed --repo OceanEilonwy/pingers --target main --latest=false 
 ```
 
 `NODO_REV` in `feed.yml` names the monokulo-nodo commit the feed is built with; it must have N1
-and N2, which monokulo-nodo merged in #12, and bundles and owner pages (branch
-`bundles-and-owner-pages`, 226610d, whose PR is not merged yet): an older install review refuses
-the `pingers` app, and the workflow stops with "update NODO_REV". `NODO_REV` and the
-`nodo-manifest` and `nodo-settings` pins in `Cargo.toml` (the packaging test) all name 226610d,
-the branch head. Until that branch is on GitHub, the feed workflow cannot check it out and
-`cargo` cannot fetch the pins, so `cargo xtask ci` on GitHub fails. A merge commit keeps
-226610d reachable; after a squash merge all three move to the squashed commit. (Before bundles
-all were 4ad5661, the merge of #12.)
+and N2 (monokulo-nodo #12) and bundles and owner pages, or an older install review refuses the
+`pingers` app and the workflow stops with "update NODO_REV". It must also pin void-packages
+(`versions.env`) to the recipes Void's mirror serves: monokulo-nodo's builder stops at its drift
+check otherwise, as it did when Void rebuilt perl, which this build needs for rusqlite's OpenSSL
+("perl: mirror 5.42.3_2, recipe 5.42.3_1"). It names 5225c98 (monokulo-nodo #52); move it to a
+newer monokulo-nodo commit when the builder reports drift. The `nodo-manifest` and
+`nodo-settings` pins in `Cargo.toml` (the packaging test's parsers) stay at 226610d, the head of
+`bundles-and-owner-pages`, since neither crate has changed since. A merge commit keeps a pinned
+commit reachable; after a squash merge it moves to the squashed commit.
 
 **Building locally** (Docker, a monokulo-nodo checkout with N1, N2, bundles and owner pages, at `$NODO`):
 
