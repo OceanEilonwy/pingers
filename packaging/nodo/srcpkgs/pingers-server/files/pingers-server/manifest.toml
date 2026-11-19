@@ -38,8 +38,9 @@ upstream = "127.0.0.1:9470"
 # The server speaks HTTP/2 only (prior knowledge). Needs nodo change N1.
 upstream_protocol = "h2c"
 suggested_subdomain = "pingers"
-# Belt and braces: the gateway is not on this listener at all, and /metrics is loopback-only.
-admin_paths = ["/ohttp", "/metrics"]
+# No admin_paths: nodo's proxy hides no path any more (it ignores the key), and the server
+# guards its own. The gateway is not on this listener at all (/ohttp is 404 here), and
+# /metrics answers only callers connecting directly: through the proxy it is 404.
 # The origin is the server's identity (server_id: RLN external nullifiers, account
 # registrations), so it has one address.
 multi_address = false

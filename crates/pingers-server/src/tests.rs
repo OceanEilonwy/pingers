@@ -1220,32 +1220,54 @@ fn the_counts_report_runs_only_when_logging_asks_for_it() {
     );
 }
 
-/// Behind a reverse proxy on an allowed address, `/metrics` goes by the client the proxy names:
-/// an outside client reaching it through the proxy does not get the counts, an allowed one
-/// does.
+/// `/metrics` is for direct callers only. Through a reverse proxy on an allowed address (what
+/// nodo's Caddy is, now that it hides no path) it does not exist, whoever the proxy names and
+/// even when the proxy is trusted; the same address connecting directly gets the counts.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn metrics_behind_a_trusted_proxy_go_by_the_client_it_names() -> TestResult {
-    let server = start(
-        Setup {
-            metrics: vec![LOOPBACK],
-            trusted_proxies: vec![LOOPBACK],
-            ..Setup::default()
-        },
-        Echo,
-    )
-    .await?;
-    let ask = |client: &str| -> Result<Request<Body>, TestError> {
-        Ok(Request::builder()
-            .method(Method::GET)
-            .uri("http://server/metrics")
-            .header("x-forwarded-for", client)
-            .body(Body::empty())?)
-    };
-    let mut proxy = connect(server.address, LOOPBACK).await?;
-    let outside = send(&mut proxy, ask("192.0.2.1")?).await?;
-    assert_eq!(outside.status(), StatusCode::NOT_FOUND);
-    let mut proxy = connect(server.address, LOOPBACK).await?;
-    let allowed = send(&mut proxy, ask("127.0.0.1")?).await?;
-    assert_eq!(allowed.status(), StatusCode::OK);
-    server.stop().await
+async fn metrics_through_a_reverse_proxy_do_not_exist() -> TestResult {
+    for trusted_proxies in [Vec::new(), vec![LOOPBACK]] {
+        let server = start(
+            Setup {
+                metrics: vec![LOOPBACK],
+                trusted_proxies: trusted_proxies.clone(),
+                ..Setup::default()
+            },
+            Echo,
+        )
+        .await?;
+        let ask = |header: &str, value: &str| -> Result<Request<Body>, TestError> {
+            Ok(Request::builder()
+                .method(Method::GET)
+                .uri("http://server/metrics")
+                .header(header, value)
+                .body(Body::empty())?)
+        };
+        // Caddy's headers naming an outside client, or naming loopback itself (a client on the
+        // machine, or an onion visitor, through the proxy), and other proxies' marks.
+        for (header, value) in [
+            ("x-forwarded-for", "192.0.2.1"),
+            ("x-forwarded-for", "127.0.0.1"),
+            ("x-forwarded-host", "pingers.example.org"),
+            ("x-forwarded-proto", "https"),
+            ("forwarded", "for=127.0.0.1"),
+            ("via", "2.0 caddy"),
+        ] {
+            let mut proxy = connect(server.address, LOOPBACK).await?;
+            let proxied = send(&mut proxy, ask(header, value)?).await?;
+            assert_eq!(
+                proxied.status(),
+                StatusCode::NOT_FOUND,
+                "{header}: {value}, trusted proxies {trusted_proxies:?}"
+            );
+        }
+        let mut operator = connect(server.address, LOOPBACK).await?;
+        let direct = send(
+            &mut operator,
+            request(Method::GET, "/metrics", None, Body::empty())?,
+        )
+        .await?;
+        assert_eq!(direct.status(), StatusCode::OK);
+        server.stop().await?;
+    }
+    Ok(())
 }

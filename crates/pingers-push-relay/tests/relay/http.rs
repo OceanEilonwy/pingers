@@ -11,6 +11,7 @@ use pingers_proto::{
     WireDecode as _, WireEncode as _,
 };
 use pingers_push_relay::delivery::{Dispatcher, DispatcherSettings, EndpointPolicy};
+use pingers_push_relay::http::PushSenders;
 use pingers_testkit::ManualClock;
 use pingers_time::UnixSeconds;
 
@@ -42,6 +43,13 @@ fn request(blob: &SealedPushBlob, bind: [u8; 32]) -> Vec<u8> {
 }
 
 async fn relay_with(opener: FakeOpener) -> Result<RunningRelay, Box<dyn std::error::Error>> {
+    relay_for(opener, PushSenders::Anywhere).await
+}
+
+async fn relay_for(
+    opener: FakeOpener,
+    senders: PushSenders,
+) -> Result<RunningRelay, Box<dyn std::error::Error>> {
     let clock = ManualClock::new(UnixSeconds::new(NOW));
     let dispatcher = Dispatcher::new(
         pingers_push_relay::http_client()?,
@@ -52,7 +60,7 @@ async fn relay_with(opener: FakeOpener) -> Result<RunningRelay, Box<dyn std::err
             fcm: None,
         },
     );
-    RunningRelay::start(opener, dispatcher, clock).await
+    RunningRelay::start_for(opener, dispatcher, clock, senders).await
 }
 
 async fn post(
@@ -104,6 +112,82 @@ async fn without_a_credential_the_answer_is_401_with_a_bearer_challenge() -> Tes
     )
     .await?;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    Ok(())
+}
+
+/// `push_direct_only`, as on the appliance: a push the web proxy forwarded (Caddy's headers,
+/// or another proxy's) gets 404 whatever its credential or method, and sends nothing, as the
+/// proxy's own rule used to answer; the server on loopback, sending none of them, is served.
+/// Devices still read the key config through the proxy.
+#[tokio::test]
+async fn a_direct_only_relay_refuses_forwarded_pushes_with_404() -> TestResult {
+    let distributor = Distributor::start(StatusCode::CREATED).await?;
+    let mut opener = FakeOpener::default();
+    let blob = opener.seal(BIND, 1, plaintext(&distributor.endpoint("upTopic")));
+    let relay = relay_for(opener, PushSenders::DirectOnly).await?;
+    let client = reqwest::Client::new();
+    let caddy = [
+        ("x-forwarded-for", "198.51.100.7"),
+        ("x-forwarded-proto", "https"),
+        ("x-forwarded-host", "push.example.org"),
+    ];
+    let mut forwarded = vec![caddy.to_vec()];
+    for other in [
+        ("x-forwarded-for", "127.0.0.1"),
+        ("forwarded", "for=198.51.100.7;proto=https"),
+        ("via", "1.1 router"),
+    ] {
+        forwarded.push(vec![other]);
+    }
+    for headers in &forwarded {
+        for credential in [Some(CREDENTIAL), None] {
+            let mut builder = client
+                .post(relay.url("/v1/push"))
+                .body(request(&blob, BIND));
+            for (name, value) in headers {
+                builder = builder.header(*name, *value);
+            }
+            if let Some(credential) = credential {
+                builder = builder.bearer_auth(credential);
+            }
+            let response = builder.send().await?;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{headers:?}");
+        }
+        let mut get = client.get(relay.url("/v1/push"));
+        for (name, value) in headers {
+            get = get.header(*name, *value);
+        }
+        assert_eq!(get.send().await?.status(), StatusCode::NOT_FOUND);
+    }
+    assert!(distributor.received().is_empty());
+    let mut config = client.get(relay.url("/v1/config"));
+    for (name, value) in caddy {
+        config = config.header(name, value);
+    }
+    assert_eq!(config.send().await?.status(), StatusCode::OK);
+    // pingers-server on loopback: no proxy headers.
+    let response = post(&relay, Some(CREDENTIAL), request(&blob, BIND)).await?;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(distributor.received().len(), 1);
+    Ok(())
+}
+
+/// By default a relay takes pushes through a reverse proxy: servers on other hosts reach a
+/// standalone relay through the TLS front in front of it.
+#[tokio::test]
+async fn by_default_pushes_through_a_proxy_are_served() -> TestResult {
+    let distributor = Distributor::start(StatusCode::CREATED).await?;
+    let mut opener = FakeOpener::default();
+    let blob = opener.seal(BIND, 1, plaintext(&distributor.endpoint("upTopic")));
+    let relay = relay_with(opener).await?;
+    let response = reqwest::Client::new()
+        .post(relay.url("/v1/push"))
+        .header("x-forwarded-for", "198.51.100.7")
+        .bearer_auth(CREDENTIAL)
+        .body(request(&blob, BIND))
+        .send()
+        .await?;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
     Ok(())
 }
 

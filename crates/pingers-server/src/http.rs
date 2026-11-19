@@ -100,16 +100,16 @@ async fn asset_links(State(shared): State<Arc<Shared>>) -> Response {
     crate::links::asset_links(shared.links.asset_links.as_ref())
 }
 
-/// `GET /metrics`, for the configured addresses only; to anyone else it does not exist. The
-/// address checked is the client's as the trusted proxies report it: behind a reverse proxy on
-/// loopback every request would otherwise come from an allowed address.
+/// `GET /metrics`, for the configured addresses connecting directly; to anyone else it does
+/// not exist. A request a reverse proxy forwarded gets `404` whoever it names: behind a proxy
+/// on loopback every request would otherwise come from an allowed address, and no proxy is
+/// relied on to hide the path (monokulo-nodo's no longer hides any). Scrape the listener itself.
 async fn metrics(
     State(shared): State<Arc<Shared>>,
     Extension(Peer(peer)): Extension<Peer>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    let client = shared.trusted_proxies.client(peer.ip(), &headers);
-    if client.is_some_and(|client| shared.metrics_access.contains(client)) {
+    if !crate::forwarded::through_proxy(&headers) && shared.metrics_access.contains(peer.ip()) {
         shared.metrics.render().into_response()
     } else {
         StatusCode::NOT_FOUND.into_response()
