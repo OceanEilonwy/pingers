@@ -99,7 +99,11 @@ async fn fakes() -> Result<Fakes, Box<dyn std::error::Error>> {
         Router::new()
             .route(
                 "/catalog.json",
-                get(|| std::future::ready(r#"{"format":1,"regions":[{"id":"a"},{"id":"b"}]}"#)),
+                get(|| {
+                    std::future::ready(
+                        r#"{"format":1,"regions":[{"id":"a"},{"id":"b","status":"on_demand"}]}"#,
+                    )
+                }),
             )
             .route(
                 "/ohttp-keys",
@@ -134,7 +138,13 @@ async fn the_facts_come_from_the_services_on_loopback() -> TestResult {
     let relay = facts.push_relay.map_err(|why| why.clone())?;
     assert_eq!(relay.pins, push);
     assert!(relay.fcm);
-    assert_eq!(facts.map_regions, Ok(2));
+    assert_eq!(
+        facts.map_regions,
+        Ok(checks::MapCatalog {
+            regions: 2,
+            on_demand: 1
+        })
+    );
     // Nothing under .invalid resolves: every public check says it could not be tried, none
     // claims a pass or a failure it did not see.
     assert_eq!(facts.public.len(), 10);

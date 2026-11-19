@@ -23,7 +23,9 @@
 //!
 //! `listen`, `directory`, `max_disk` and `hosted` are required. `hosted` may also be one
 //! string of prefixes separated by spaces (`hosted = "oceania europe/germany"`), for template
-//! systems whose settings have no list type; an empty list or string hosts nothing. The
+//! systems whose settings have no list type; an empty list or string hosts nothing. For the
+//! same reason `max_zoom` may be one string of `prefix=zoom` pairs separated by spaces
+//! (`max_zoom = "europe/germany=13 oceania=14"`); an empty string overrides nothing. The
 //! directory and the region list are read when the host starts ([`crate::serve`]), not when
 //! the file is parsed.
 //!
@@ -125,7 +127,7 @@ struct FileConfig {
     max_disk: String,
     hosted: FileHosted,
     #[serde(default)]
-    max_zoom: std::collections::BTreeMap<String, u8>,
+    max_zoom: FileMaxZoom,
     #[serde(default = "default_logging")]
     logging: FileLogging,
     #[serde(default = "default_counts_interval")]
@@ -147,6 +149,42 @@ impl FileHosted {
         match self {
             Self::List(list) => list.iter().map(String::as_str).collect(),
             Self::Spaced(text) => text.split_whitespace().collect(),
+        }
+    }
+}
+
+/// `max_zoom`: a TOML table, or one string of space-separated `prefix=zoom` pairs.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum FileMaxZoom {
+    Table(std::collections::BTreeMap<String, u8>),
+    Spaced(String),
+}
+
+impl Default for FileMaxZoom {
+    fn default() -> Self {
+        Self::Table(std::collections::BTreeMap::new())
+    }
+}
+
+impl FileMaxZoom {
+    /// The `(prefix, zoom)` pairs, in file order for a string; `None` for a pair that is not
+    /// `prefix=zoom` with a whole-number zoom.
+    fn pairs(&self) -> Option<Vec<(&str, u8)>> {
+        match self {
+            Self::Table(table) => Some(
+                table
+                    .iter()
+                    .map(|(prefix, zoom)| (prefix.as_str(), *zoom))
+                    .collect(),
+            ),
+            Self::Spaced(text) => text
+                .split_whitespace()
+                .map(|pair| {
+                    let (prefix, zoom) = pair.split_once('=')?;
+                    Some((prefix, zoom.parse().ok()?))
+                })
+                .collect(),
         }
     }
 }
@@ -207,12 +245,14 @@ impl MapHostConfig {
             .collect::<Result<Vec<_>, _>>()?;
         let max_zoom = file
             .max_zoom
-            .iter()
+            .pairs()
+            .ok_or(ConfigError::OutOfRange { field: "max_zoom" })?
+            .into_iter()
             .map(|(prefix, zoom)| {
-                if *zoom > MAX_ZOOM_LIMIT {
+                if zoom > MAX_ZOOM_LIMIT {
                     return Err(ConfigError::OutOfRange { field: "max_zoom" });
                 }
-                Ok((region(prefix)?, *zoom))
+                Ok((region(prefix)?, zoom))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let cache = file
@@ -425,6 +465,65 @@ mod tests {
             hosted_ids("hosted = 3"),
             Err(ConfigError::Syntax { .. })
         ));
+    }
+
+    fn max_zooms(text: &str) -> Result<Vec<(String, u8)>, ConfigError> {
+        let config = parse(&format!("{MINIMAL}{text}\n"))?;
+        Ok(config
+            .allow
+            .max_zoom
+            .iter()
+            .map(|(id, zoom)| (id.as_str().to_owned(), *zoom))
+            .collect())
+    }
+
+    #[test]
+    fn max_zoom_may_be_one_string_of_pairs() {
+        let both = Ok(vec![
+            ("europe/germany".to_owned(), 13),
+            ("oceania".to_owned(), 14),
+        ]);
+        assert_eq!(
+            max_zooms("max_zoom = \"europe/germany=13 oceania=14\""),
+            both
+        );
+        assert_eq!(
+            max_zooms("max_zoom = \" europe/germany=13\toceania=14 \""),
+            both
+        );
+        assert_eq!(
+            max_zooms("[max_zoom]\n\"europe/germany\" = 13\n\"oceania\" = 14"),
+            both
+        );
+        assert_eq!(max_zooms("max_zoom = \"\""), Ok(Vec::new()));
+        assert_eq!(max_zooms(""), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn a_bad_pair_in_a_max_zoom_string_is_refused() {
+        for bad in [
+            "oceania",
+            "oceania=",
+            "oceania=x",
+            "oceania=13=1",
+            "=13",
+            "oceania=-1",
+        ] {
+            assert!(
+                max_zooms(&format!("max_zoom = \"{bad}\"")).is_err(),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            max_zooms("max_zoom = \"oceania=16\""),
+            Err(ConfigError::OutOfRange { field: "max_zoom" })
+        );
+        assert_eq!(
+            max_zooms("max_zoom = \"Oceania=13\""),
+            Err(ConfigError::BadRegionId {
+                id: "Oceania".to_owned()
+            })
+        );
     }
 
     #[test]

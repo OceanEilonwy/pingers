@@ -10,6 +10,10 @@
 # and source checksum placeholders and writes the result to target/nodo/srcpkgs/, next to the source
 # tarball it describes. Build from there, never from packaging/nodo/srcpkgs/ directly.
 #
+# pingers-map-host also ships pmtiles (protomaps/go-pmtiles, BSD-3-Clause), which it runs to cut
+# map packs on demand: the upstream release binary for the target, pinned by version and SHA-256
+# like the Rust toolchain below (docs/deploy-nodo.md, "Map packs").
+#
 # The source is `git archive` of one commit plus `cargo vendor` output and a .cargo/config.toml
 # that points cargo at it, so the build needs no network and no access to the repository.
 # nodo-dist puts the tarball where xbps-src looks before fetching
@@ -46,14 +50,34 @@ case "$XBPS_MACHINE" in
 	*) broken="no pinned toolchain for build machine $XBPS_MACHINE" ;;
 esac
 
+# pmtiles runs on the device, so it follows the target, not the build machine. The checksums are
+# the release's own asset digests (the SHA-256 GitHub publishes for each uploaded file).
+_pmtiles=1.31.2
+case "${XBPS_TARGET_MACHINE:-$XBPS_MACHINE}" in
+	x86_64)
+		_pmtiles_arch=x86_64
+		_pmtiles_sum=3ed7dbf4ec2e6dfe5e25b6f70d1ffc932729f93c86db353bf514dd71010a312f
+		;;
+	aarch64)
+		_pmtiles_arch=arm64
+		_pmtiles_sum=f8bd47e7ea866863489cad588fbaf2f31f42e5821f7a03f009b3769f05801cb1
+		;;
+	*) broken="no pinned pmtiles for target ${XBPS_TARGET_MACHINE:-$XBPS_MACHINE}" ;;
+esac
+_pmtiles_tarball="go-pmtiles_${_pmtiles}_Linux_${_pmtiles_arch}.tar.gz"
+
 distfiles="https://github.com/OceanEilonwy/pingers/releases/download/feed/pingers-${_commit}.tar.gz
  ${_dist}/rustc-${_rust}-${_host}.tar.xz
  ${_dist}/cargo-${_rust}-${_host}.tar.xz
- ${_dist}/rust-std-${_rust}-${_host}.tar.xz"
+ ${_dist}/rust-std-${_rust}-${_host}.tar.xz
+ https://github.com/protomaps/go-pmtiles/releases/download/v${_pmtiles}/${_pmtiles_tarball}"
 checksum="@SOURCE_SHA256@
  ${_rustc_sum}
  ${_cargo_sum}
- ${_std_sum}"
+ ${_std_sum}
+ ${_pmtiles_sum}"
+# Its archive has no top directory; post_extract unpacks it into pmtiles/.
+skip_extraction="${_pmtiles_tarball}"
 
 # A cross build also needs the target's standard library.
 if [ "$CROSS_BUILD" ] && [ "$XBPS_TARGET_MACHINE" = aarch64 ]; then
@@ -67,6 +91,9 @@ fi
 build_wrksrc="pingers-${_commit}"
 post_extract() {
 	local d
+	mkdir -p "${wrksrc}/pmtiles"
+	tar -xzf "${XBPS_SRCDISTDIR}/${pkgname}-${version}/${_pmtiles_tarball}" \
+		-C "${wrksrc}/pmtiles" pmtiles LICENSE
 	mkdir -p "${wrksrc}/toolchain"
 	for d in "${wrksrc}"/rustc-${_rust}-* "${wrksrc}"/cargo-${_rust}-* "${wrksrc}"/rust-std-${_rust}-*; do
 		[ -d "$d" ] || continue
@@ -133,6 +160,16 @@ do_install() {
 	_install_app pingers-ohttp-relay
 	_install_app pingers-map-host
 	_install_app pingers
+	# Cache mode (map-host.toml.in): pmtiles and its licence, and the region list with its
+	# polygons, all inside the app's own directory.
+	local app="opt/nodo/apps/pingers-map-host" f
+	install -m 755 "${wrksrc}/pmtiles/pmtiles" "${DESTDIR}/${app}/libexec/pmtiles"
+	install -m 644 "${wrksrc}/pmtiles/LICENSE" "${DESTDIR}/${app}/LICENSE.pmtiles"
+	vmkdir "${app}/regions/polygons" 755
+	install -m 644 crates/pingers-tiles/regions/regions.toml "${DESTDIR}/${app}/regions/regions.toml"
+	for f in crates/pingers-tiles/regions/polygons/*.geojson; do
+		install -m 644 "$f" "${DESTDIR}/${app}/regions/polygons/${f##*/}"
+	done
 }
 
 pingers-push-relay_package() {
@@ -153,7 +190,10 @@ pingers-ohttp-relay_package() {
 
 pingers-map-host_package() {
 	short_desc="Pingers map pack host for monokulo-nodo"
-	license="AGPL-3.0-only"
+	license="AGPL-3.0-only, BSD-3-Clause"
+	# pmtiles is already stripped: left alone, it is byte for byte the release's binary. A
+	# subpackage reads nostrip_files from its own function, not from the top of the template.
+	nostrip_files="/opt/nodo/apps/pingers-map-host/libexec/pmtiles"
 	pkg_install() {
 		vmove opt/nodo/apps/pingers-map-host
 	}

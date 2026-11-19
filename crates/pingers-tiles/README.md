@@ -41,6 +41,10 @@ polygon = "regions/au-nsw.geojson"
 max_zoom = 15
 ```
 
+The repository ships one list, `regions/regions.toml` beside this README: Australia's states
+and territories and New Zealand, with rough polygons in `regions/polygons/`. The monokulo-nodo
+map host package installs it and cuts from it on demand.
+
 ### Sub-regions
 
 Ids are paths so that large countries can be split. A country pack at zoom 15 can run to

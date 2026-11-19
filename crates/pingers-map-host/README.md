@@ -82,7 +82,10 @@ retry_after_seconds = 30
 `listen`, `directory`, `max_disk` and `hosted` are required. Each `hosted` entry is a prefix
 that matches whole segments: `"oceania"` hosts `oceania` and everything under `oceania/`, but
 not `oceanian`. `max_zoom` overrides the region list's zoom when cache mode cuts a region.
-`pingers-tiles plan` reads it too.
+`pingers-tiles plan` reads it too (the table form). For template systems whose settings have no list or table
+type, `hosted` may also be one string of prefixes separated by spaces (`hosted = "oceania
+europe/germany"`) and `max_zoom` one string of `prefix=zoom` pairs (`max_zoom =
+"europe/germany=13"`, or `""` for none); the monokulo-nodo package renders both that way.
 
 Run it:
 
@@ -97,7 +100,9 @@ It stops cleanly on Ctrl-C or SIGTERM.
 - **Pre-extracted** (default): serve the directory that `pingers-tiles` wrote. At start-up, if
   the directory holds more than `max_disk`, the host prints a one-line warning and serves
   anyway.
-- **Cache**: when a client asks for a file of an allow-listed region that is not on disk, the
+- **Cache** (what the monokulo-nodo package runs, with the region list in
+  `crates/pingers-tiles/regions/` and a bundled `pmtiles`; docs/deploy-nodo.md, section 4):
+  when a client asks for a file of an allow-listed region that is not on disk, the
   host starts a cut with `pmtiles extract` from `upstream`. It then builds the index and
   manifest with pingers-map-packs, the same code `pingers-tiles` uses. Until the cut is done,
   the client gets `503` with `Retry-After: <retry_after_seconds>` and

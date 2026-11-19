@@ -54,6 +54,16 @@ settings.lua          the settings nodo-tui shows
 LICENSE               AGPL-3.0
 ```
 
+pingers-map-host also has what cache mode needs (section 4), inside its own directory, since
+nodo refuses package files anywhere else:
+
+```
+libexec/pmtiles                 go-pmtiles 1.31.2, the upstream release binary for the target
+LICENSE.pmtiles                 its licence (BSD-3-Clause)
+regions/regions.toml            the region list (crates/pingers-tiles/regions/)
+regions/polygons/*.geojson      its polygons
+```
+
 nodo's exec arguments may not name `/etc/apps/<id>/`, where the rendered config lives, so each
 app has a launcher. It removes the `NODO_*` variables nodo also passes (they include the sealed
 secrets) and keeps the binary's name, so nodo's generated `pkill -x <id>` stops whichever is
@@ -79,6 +89,7 @@ phone ──TLS 1.3, X25519MLKEM768──▶ [router :443] ──▶ nodo Caddy 
 pingers-server ──loopback──▶ 127.0.0.1:9472 /v1/push
 pingers-server ──loopback──▶ 127.0.0.1:9474 /ohttp, /ohttp-keys   (map downloads through the relay, still sealed)
 pingers-push-relay ──TLS──▶ FCM, Google OAuth, UnifiedPush servers
+pingers-map-host (pmtiles) ──TLS──▶ build.protomaps.com   (byte ranges of the upstream build, to cut a region)
 ```
 
 Firewall, from the manifests and the references between settings: pingers-server has no
@@ -89,7 +100,10 @@ only the web upstreams, so it cannot reach 9471 or 9479. pingers (the setup page
 (the gateway's two key configs, by referencing `gateway-key-config-url`), 9472 (the push
 relay's published and next keys, `server-url`) and 9474 (the map catalog, `gateway-url`), and
 has `outbound = "internet"` for its checks of the four public names from the appliance; it
-holds no private key. pingers-push-relay is the only service with `outbound = "internet"`.
+holds no private key. Of the four services, pingers-push-relay and pingers-map-host have
+`outbound = "internet"`: the push relay for FCM, Google's token endpoint and UnifiedPush
+servers, the map host for its upstream build, which the bundled pmtiles reads to cut a region
+the first time a phone asks for it (cache mode, section 4).
 nodo refuses dependency cycles, and the references run one way: `pingers-ohttp-relay →
 pingers-server → pingers-push-relay`, `pingers-server → pingers-map-host`, and `pingers` → all
 four, so the bundle installs push relay, map host, server, relay, then `pingers`. The owner's
@@ -101,7 +115,13 @@ TLS roots: every service's HTTP client trusts Mozilla's roots, bundled in the bi
 system's store. nodo binds `/etc/ssl` only into apps with `outbound = "internet"`, and only if
 the host has it; a client that wanted the system's store could not even be built without it
 (reqwest refuses one when the store is empty), which kept pingers-server, whose sandbox has
-none, from starting. New roots and removals arrive with each package build.
+none, from starting. New roots and removals arrive with each package build. The one exception
+is pmtiles, a Go program the map host runs: it verifies build.protomaps.com against the
+system's store, which nodo binds into the map host's sandbox (`--ro-bind-try /etc/ssl`) because
+it has `outbound = "internet"`. Every nodo board installs `ca-certificates` (nodo-ddns depends on
+it), so the store is there; without it every cut fails (`failed_cuts` in the counts log, with
+`logging = "counts"`) and phones keep being told the region is being prepared, while regions
+already cut are still served.
 
 ### 1.1 Settings and secrets
 
@@ -152,10 +172,21 @@ in memory)
 **pingers-ohttp-relay** (`relay.toml.in`; no storage, no secrets): `response_timeout_seconds`
 (int 5 to 300, default 30). The gateway addresses come from pingers-server.
 
-**pingers-map-host** (`map-host.toml.in`; unencrypted data on the data drive): `max_disk`
-(default `40GB`), `hosted` (default `oceania/australia`, space-separated),
-`logging`, and `gateway_url` (default `http://127.0.0.1:9474`, published to pingers-server as
-`gateway-url`: where it forwards map downloads made through the relay; leave it).
+**pingers-map-host** (`map-host.toml.in`; unencrypted data on the data drive; cache mode, with
+the bundled region list and pmtiles, section 4)
+
+| Setting | Type | Default | Fills |
+|---|---|---|---|
+| `max_disk` | string, a number and a unit | `40GB` | `max_disk`: after each cut the host evicts the least recently downloaded regions until the rest fit |
+| `hosted` | string, region id prefixes separated by spaces | `oceania/australia` | `hosted`: the regions it serves and cuts |
+| `upstream` | url, `http(s)://….pmtiles` | `https://build.protomaps.com/20260811.pmtiles` | `[cache] upstream`: the Protomaps build regions are cut from (section 4 says how to move it) |
+| `max_zoom` | string, `prefix=zoom` pairs separated by spaces, zoom 0 to 15; empty | empty | `max_zoom`: zoom caps; empty cuts every region at the region list's zoom (15) |
+| `max_concurrent_extracts` | int 1 to 4 | 1 | `[cache] max_concurrent_extracts`: cuts at once; the rest wait |
+| `logging` | enum `off`/`counts` | `off` | `logging` |
+| `gateway_url` | url, public endpoint (`gateway-url`) | `http://127.0.0.1:9474` | nothing here: where pingers-server forwards map downloads made through the relay; leave it |
+
+The template fixes the rest: `[cache] regions = "/opt/nodo/apps/pingers-map-host/regions/regions.toml"`
+and `pmtiles = "/opt/nodo/apps/pingers-map-host/libexec/pmtiles"`.
 
 **pingers** (`setup.toml.in`; no storage; its one secret keeps the rendered config in memory):
 `registration_code` (**secret**, defaults to `$(pingers-server.registration_code)`, read
@@ -430,24 +461,71 @@ gives the same tarball and SHA-256.
 
 ## 4. Map packs
 
-Regions: Australia (`oceania/australia`), with a 40 GB budget on the data drive, which it shares
-with the Monero blockchain. Turn on **UseDataDrive** for pingers-map-host **before** installing
-it. Split the country into states (`crates/pingers-tiles/README.md`, "Sub-regions"): smaller packs
-say less about the user. The region list is operator data and stays outside the repository.
+The packaged map host runs in **cache mode** (`crates/pingers-map-host/README.md`, "Modes"):
+nothing is uploaded. The first time a phone asks for a region it carries, the host cuts it from
+the upstream Protomaps build with the bundled `pmtiles extract` (through a `.partial` file in
+its data directory), writes its place index and manifest with pingers-map-packs, the same code
+`pingers-tiles` uses, and serves it. Meanwhile the phone is told to retry (`503`, `Retry-After:
+30`); a cut takes from seconds for the ACT to a few minutes for a large state. Regions not
+cut yet are in the catalog as `"status":"on_demand"`, so the app lists them from the start. After each cut the host evicts the
+least recently downloaded regions until the rest fit `max_disk`, and keeps last-served times
+and each region's upstream and cut time in `cache-state.json`. This needs `outbound =
+"internet"`, which the owner approves with the install.
 
-```sh
-pingers-tiles plan regions.toml --build https://build.protomaps.com/<YYYYMMDD>.pmtiles \
-    --host-config map-host.local.toml --pmtiles ./pmtiles      # refuses if over max_disk
-pingers-tiles cut  regions.toml --build https://build.protomaps.com/<YYYYMMDD>.pmtiles \
-    --out ./packs --host-config map-host.local.toml --pmtiles ./pmtiles
-rsync -a --partial --chown=_pingers-map-host:_pingers-map-host ./packs/ \
-    root@<appliance>:<data drive>/pingers-map-host/
-```
+**Regions.** The package ships the region list `crates/pingers-tiles/regions/regions.toml`:
+Australia's eight states and territories and New Zealand, each a rough polygon a little past its
+borders (smaller packs say less about the user than one country pack). `hosted` (default
+`oceania/australia`) picks which of them the host serves and cuts; a region outside the list is
+never cut. At zoom 15 from the 20260811 build all of Australia is about 2.3 GB (New South Wales
+588 MB, Queensland 537 MB, Victoria 399 MB, the ACT 24 MB; the list has each size), well inside
+the 40 GB budget on the data drive, which it shares with the Monero blockchain. Turn on
+**UseDataDrive** for pingers-map-host **before** installing it. To cut smaller packs, set
+`max_zoom` (`oceania/australia=14`: each zoom less is about four times smaller). To add regions,
+add them to the list in the repository, with a polygon each, and build a new package.
 
-`map-host.local.toml` mirrors the device's `max_disk` and `hosted`. Packs are immutable and
-their manifests change last, so uploading while the host runs is safe; no restart is needed.
-Do not add `--delete`: the directory also holds the host's OHTTP key (`.ohttp-key`), and a new
-key makes every phone that downloaded through the relay ask whether to trust it.
+**Upstream.** `upstream` defaults to `https://build.protomaps.com/20260811.pmtiles` (basemap
+4.15.1). build.protomaps.com keeps every daily build for a week and, for good, the latest build
+of each basemap patch version; 20260811 is the last 4.15.1 build, so it stays published, while
+a daily build pinned today would be deleted within a week and every later cut would fail. To
+move it, pick a build from the list at <https://build-metadata.protomaps.dev/builds.json> (also
+<https://maps.protomaps.com/builds/>), preferably the last build of a superseded version (its
+entry stays in the list after the week), check it answers (`curl -I
+https://build.protomaps.com/<YYYYMMDD>.pmtiles` gives `200` and a size of about 140 GB), and
+set it in Apps, pingers-map-host, Settings, Upstream build. Regions already cut keep their old
+data, with its build date in their manifests, until they are evicted and cut again; to cut them
+all afresh, remove their files from the data directory (not `.ohttp-key`). The upstream sees the
+appliance's address and which regions it cuts and when, never a phone's address or which phone
+asked. Change the default in `settings.lua` when a newer version's last build is archived.
+
+**pmtiles** is the go-pmtiles 1.31.2 release binary for the target (`go-pmtiles_1.31.2_Linux_x86_64.tar.gz`
+and `_Linux_arm64.tar.gz`, statically linked), a distfile of the recipe pinned by URL and SHA-256
+like the Rust toolchain, so the build stays offline once the distfiles are fetched and xbps-src
+refuses any other file. The checksums are the release's published asset digests:
+
+| Target | SHA-256 |
+|---|---|
+| x86_64 | `3ed7dbf4ec2e6dfe5e25b6f70d1ffc932729f93c86db353bf514dd71010a312f` |
+| aarch64 | `f8bd47e7ea866863489cad588fbaf2f31f42e5821f7a03f009b3769f05801cb1` |
+
+Release binaries rather than a source build: building it would add a pinned Go toolchain and
+nearly 200 vendored Go modules (mostly its cloud storage SDKs) to the recipe, for the same program. To
+update it, take the new release's asset digests (`gh release view v<version> --repo
+protomaps/go-pmtiles --json assets`, or the release page), download both archives, check them
+with `sha256sum`, and change `_pmtiles` and both sums in the recipe. go-pmtiles is BSD-3-Clause;
+its licence is installed as `LICENSE.pmtiles` and the subpackage's licence field names both.
+
+**Sandbox.** nodo binds the app directory read-only and the data directory writable into the
+map host's sandbox, with a tmpfs `/tmp`; `/etc/resolv.conf` and `/etc/ssl` come with `outbound =
+"internet"`. So the host runs `pmtiles` from `/opt/nodo/apps/pingers-map-host/libexec/`, pmtiles
+writes the pack straight to the `.partial` file in the data directory (an extract uses no
+temporary files), and resolves and verifies build.protomaps.com with the host's resolver and
+CA store.
+
+**Pre-cut packs** still work: a region of the list whose pack, index and manifest are already
+in the data directory is served as cut. Cut them with `pingers-tiles` (`crates/pingers-tiles/README.md`)
+and copy them in with `rsync -a --partial --chown=_pingers-map-host:_pingers-map-host ./packs/
+root@<appliance>:<data drive>/pingers-map-host/`; never `--delete`, which would take the host's
+OHTTP key (`.ohttp-key`) with it.
 
 ## 5. Local testing
 
@@ -505,8 +583,10 @@ with bundles and owner pages): build x86_64 packages, sign a test feed with a th
 VM as a directory feed, `AddFeed`, then install `pingers` (the bundle installs the four services,
 asking for a test domain and a throwaway service account key). Open Apps, pingers, Setup and
 check the page. Check the firewall (`_pingers-server` reaches nothing but 9472 and 9474;
-`_pingers-ohttp-relay` reaches only 9471; `_pingers` reaches 9471, 9472 and 9474 on loopback), reboot (services wait for the unlock), and restore a backup
-to a fresh VM and check the gateway key hash is unchanged.
+`_pingers-ohttp-relay` reaches only 9471; `_pingers` reaches 9471, 9472 and 9474 on loopback;
+`_pingers-map-host` reaches the internet), ask for a region to see a real cut (`curl` its
+manifest through `maps.…` until the `503` turns into `200`), reboot (services wait for the
+unlock), and restore a backup to a fresh VM and check the gateway key hash is unchanged.
 
 **Tier 3**: the aarch64 packages under emulation (`DEV_BOARD=qemu-virt`), then the device.
 
@@ -526,7 +606,8 @@ with this appliance's values filled in and each step marked done where the appli
    the fingerprint is `9d:c4:00:6e:53:d8:99:c4:f9:5d:9c:96:b0:e9:1a:07`.
 2. **Install `pingers`.** It shows the five apps it installs with their permissions, the two
    grants (pingers-server reads the push relay's credential; pingers reads the server's
-   registration code), and keeps the map packs on the data drive when there is one. It asks for:
+   registration code), and keeps the map packs on the data drive when there is one. The map
+   host's permissions include internet access, to cut map regions from the Protomaps build. It asks for:
    - **Your domain**, such as `example.org`. The sites become `pingers.example.org`,
      `ohttp.example.org`, `push.example.org` and `maps.example.org`, and both operators say
      `example.org` (the app shows a same-operator warning, which is correct here). Each can be
@@ -578,11 +659,10 @@ with this appliance's values filled in and each step marked done where the appli
 5. **Firebase wake-ups.** Pasted at install. To replace the key: Apps, pingers-push-relay,
    Settings, Firebase service account; then delete the old key in the Google Cloud console.
    *Done when* the push relay serves FCM.
-6. **Upload the map packs** (section 4): cut them with `pingers-tiles` from the newest daily
-   build, then `rsync -a --partial --chown=_pingers-map-host:_pingers-map-host ./packs/
-   root@<appliance>:<the map host's data directory>/`; the page shows the command with the
-   appliance's address and the directory filled in. Never `--delete`. *Done when* the map host
-   serves at least one region.
+6. **Check the map regions** (section 4): nothing to upload; the map host cuts each region the
+   first time a phone asks for it. Its regions, upstream build, zoom caps and budget are in
+   Apps, pingers-map-host, Settings. *Done when* the map host's catalog lists at least one
+   region, cut or not.
 7. **Copy the hosts and pins into GitHub.** At github.com/OceanEilonwy/pingers: Settings,
    Secrets and variables, Actions, Variables, New repository variable, for each:
 

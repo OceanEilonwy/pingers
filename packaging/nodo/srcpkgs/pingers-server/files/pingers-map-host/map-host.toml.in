@@ -1,9 +1,21 @@
 # pingers-map-host's configuration, rendered by nodo from pingers-map-host's settings: change
 # them in nodo-tui, not here. The format is crates/pingers-map-host/src/config.rs.
 listen = "127.0.0.1:9474"
-# The data directory itself (on the data drive with UseDataDrive), so it exists before the
-# first upload. Upload packs into it with rsync.
+# The data directory itself (on the data drive with UseDataDrive): the cut packs, their
+# cache-state.json and the gateway key.
 directory = "/var/lib/apps/pingers-map-host"
 max_disk = "$(pingers-map-host.max_disk)"
 hosted = "$(pingers-map-host.hosted)"
+# Space-separated prefix=zoom pairs; empty cuts every region at the region list's zoom.
+max_zoom = "$(pingers-map-host.max_zoom)"
 logging = "$(pingers-map-host.logging)"
+
+# Cache mode: an allow-listed region of the region list is cut from the upstream build the first
+# time a phone asks for it, then kept until max_disk needs the room. The region list (with its
+# polygons) and pmtiles are installed with the package; nodo binds the app directory read-only
+# into the sandbox, so the host can run pmtiles from it.
+[cache]
+regions = "/opt/nodo/apps/pingers-map-host/regions/regions.toml"
+upstream = "$(pingers-map-host.upstream)"
+pmtiles = "/opt/nodo/apps/pingers-map-host/libexec/pmtiles"
+max_concurrent_extracts = "$(pingers-map-host.max_concurrent_extracts)"

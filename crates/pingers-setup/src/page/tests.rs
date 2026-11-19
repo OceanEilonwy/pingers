@@ -8,7 +8,7 @@
 use pingers_proto::{KeyConfigHash, SetupPayload};
 
 use super::*;
-use crate::checks::PushRelayFacts;
+use crate::checks::{MapCatalog, PushRelayFacts};
 use crate::config::Config;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -31,7 +31,10 @@ fn running() -> Facts {
             pins: pins(3),
             fcm: true,
         }),
-        map_regions: Ok(2),
+        map_regions: Ok(MapCatalog {
+            regions: 2,
+            on_demand: 1,
+        }),
         map_host_pins: Ok(vec![KeyConfigHash::from_bytes([5; 32])]),
         public: Vec::new(),
     }
@@ -78,7 +81,7 @@ fn the_checklist_runs_from_the_domain_to_the_backup() -> TestResult {
             "Forward port 443 to this appliance",
             "Check the services answer",
             "Firebase wake-ups",
-            "Upload the map packs",
+            "Check the map regions",
             "Copy the hosts and pins into GitHub",
             "Make a release",
             "Set up your first phone",
@@ -193,7 +196,7 @@ fn with_the_services_down_the_page_says_why_and_shows_no_link() -> TestResult {
         "PINGERS_GATEWAY_KEY_PINS",
         "PINGERS_PUSH_RELAY_KEY_PINS",
         "PINGERS_MAP_HOST_KEY_PINS",
-        "The map host serves map packs",
+        "The map host offers map regions",
         "pingers-server's gateway answers on the appliance",
     ] {
         assert!(failed.contains(&label), "{label}");

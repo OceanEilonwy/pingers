@@ -8,7 +8,7 @@
 use pingers_proto::{KeyConfigHash, SetupPayload};
 use serde::Serialize;
 
-use crate::checks::{Check, Facts, State};
+use crate::checks::{Check, Facts, MapCatalog, State};
 use crate::config::Config;
 
 /// The page as nodo reads it.
@@ -360,36 +360,43 @@ fn firebase_step(facts: &Facts) -> Step {
     )
 }
 
+/// The map host cuts regions itself (cache mode), so there is nothing to upload: the step only
+/// says which regions it offers. A listed region that is not cut yet is fine; the first phone
+/// that asks for it waits while it is cut.
 fn maps_step(facts: &Facts) -> Step {
+    const LABEL: &str = "The map host offers map regions";
     let state = match facts.map_regions {
-        Ok(0) => check_of(
-            "The map host serves map packs",
+        Ok(MapCatalog { regions: 0, .. }) => check_of(
+            LABEL,
             State::Waiting,
-            "No packs uploaded yet.",
+            "No regions: set Hosted regions (Apps, pingers-map-host, Settings) to regions of \
+             its region list, such as oceania/australia.",
         ),
-        Ok(count) => check_of(
-            "The map host serves map packs",
+        Ok(MapCatalog {
+            regions,
+            on_demand: 0,
+        }) => check_of(LABEL, State::Ok, format!("{regions} regions, all ready.")),
+        Ok(MapCatalog { regions, on_demand }) => check_of(
+            LABEL,
             State::Ok,
-            format!("{count} regions."),
+            format!(
+                "{regions} regions: {} ready, {on_demand} cut on their first download.",
+                regions.saturating_sub(on_demand)
+            ),
         ),
-        Err(ref why) => check_of("The map host serves map packs", State::Failed, why.clone()),
+        Err(ref why) => check_of(LABEL, State::Failed, why.clone()),
     };
     step(
-        "Upload the map packs",
+        "Check the map regions",
         StepState::Auto,
         vec![
             text(
-                "On your computer, cut the packs with pingers-tiles from the newest daily \
-                 build at build.protomaps.com, for the regions in your regions.toml, within the \
-                 map host's disk budget (crates/pingers-tiles/README.md has the commands). Then \
-                 upload them to the appliance. Packs are public map data; uploading while the \
-                 host runs is safe. Do not add --delete: the directory also holds the host's own \
-                 key.",
-            ),
-            value(
-                "Upload command",
-                "rsync -a --partial --chown=_pingers-map-host:_pingers-map-host ./packs/ \
-                 root@{device_address}:{data_dir:pingers-map-host}/",
+                "The map host cuts each region of its region list that Hosted regions allows \
+                 from the Protomaps build named in Upstream build, the first time a phone asks \
+                 for it, and keeps it until the disk budget needs the room. That first download \
+                 waits a few minutes while the region is cut; later ones start at once. To \
+                 change the regions, the build, zoom caps or the budget: Apps, \
+                 pingers-map-host, Settings.",
             ),
             state,
         ],
