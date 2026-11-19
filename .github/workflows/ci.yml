@@ -8,6 +8,10 @@
 #            Firebase's google-services.json, from the GOOGLE_SERVICES_JSON secret; without it
 #            (a fork's pull request, or a repository that has not set it) gms is skipped and
 #            says so. The file is written to the runner's temp directory, never the checkout.
+#   android-dependencies
+#            the release build's dependencies, resolved from an empty Gradle home and checked
+#            against android/gradle/verification-metadata.xml, as the uncached release job
+#            fetches them.
 name: ci
 
 on:
@@ -164,3 +168,30 @@ jobs:
             android/app/build/test-results
           retention-days: 7
           if-no-files-found: ignore
+
+  # The android job's Gradle cache hides a missing verification-metadata.xml entry: Gradle
+  # reuses POM and .module files it has already parsed without checking them again, so only a
+  # fresh fetch, like the release job's, fails on one. That cost a failed v0.1.0 release. This
+  # resolves the release build's plugins and every app configuration from an empty Gradle home,
+  # without compiling: no Rust, no NDK, no secrets.
+  android-dependencies:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # Configuring the build resolves the plugin classpath ('classpath'); :app:dependencies
+      # resolves every app configuration, the release ones included, and so fetches and checks
+      # each POM and .module they need. The jars are checked on every build, cached or not.
+      - name: Resolve the release dependencies from an empty Gradle home
+        working-directory: android
+        env:
+          GRADLE_USER_HOME: ${{ runner.temp }}/gradle-home
+        run: ./gradlew --no-configuration-cache --no-daemon :app:dependencies > /dev/null
