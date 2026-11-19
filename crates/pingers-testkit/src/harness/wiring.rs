@@ -558,7 +558,12 @@ fn spawn(
                     relay_https_done,
                 );
                 let push = async move {
-                    let router = pingers_push_relay::http::router(Arc::new(push.relay));
+                    // As on the appliance: the server connects directly, so its pushes carry no
+                    // proxy's headers and are served even to a relay that refuses forwarded ones.
+                    let router = pingers_push_relay::http::router(
+                        Arc::new(push.relay),
+                        pingers_push_relay::http::PushSenders::DirectOnly,
+                    );
                     super::tls::serve(push_listener, push.tls, router, push_done).await;
                 };
                 // A server that fails to start has already failed the test that used it.

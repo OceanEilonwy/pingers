@@ -12,6 +12,11 @@
 //! max_connections = 256            # connections held at once; one more is closed at once
 //! idle_timeout_s = 30              # a connection with no request for this long is closed;
 //!                                  # must be over 20, the time a server keeps one idle
+//! push_direct_only = false         # true: POST /v1/push only from callers connecting
+//!                                  # directly; one a reverse proxy forwarded (it carries
+//!                                  # X-Forwarded-For, Forwarded, Via, ...) gets 404. For a
+//!                                  # relay only servers on its own machine push to, behind a
+//!                                  # proxy that serves devices GET /v1/config (an appliance)
 //! hash_key = "<64 hex>"            # keys the credential hashes and the token rate limits
 //!
 //! [[keys]]
@@ -211,6 +216,8 @@ pub struct RelayConfig {
     pub fcm: Option<FcmConfig>,
     /// Connections held at once, and how long one may stay idle.
     pub connections: crate::connections::ConnectionLimits,
+    /// Who `POST /v1/push` is served to: `push_direct_only`.
+    pub push_senders: crate::http::PushSenders,
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -273,6 +280,8 @@ struct FileConfig {
     max_connections: u32,
     #[serde(default = "default_idle_timeout")]
     idle_timeout_s: u64,
+    #[serde(default)]
+    push_direct_only: bool,
 }
 
 #[derive(Deserialize)]
@@ -387,6 +396,11 @@ impl RelayConfig {
             }),
             fcm,
             connections,
+            push_senders: if file.push_direct_only {
+                crate::http::PushSenders::DirectOnly
+            } else {
+                crate::http::PushSenders::Anywhere
+            },
         })
     }
 }

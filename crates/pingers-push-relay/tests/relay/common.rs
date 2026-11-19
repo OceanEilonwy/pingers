@@ -12,6 +12,7 @@ use pingers_crypto::{KeyedHashKey, KeyedHashPurpose, PushBind, PushRelayPrivateK
 use pingers_proto::{PushRelayKeyId, PushTokenPlaintext, SealedPushBlob, TimeToLive};
 use pingers_push_relay::credentials::{ServerEntry, ServerRegistry};
 use pingers_push_relay::delivery::PushSender;
+use pingers_push_relay::http::PushSenders;
 use pingers_push_relay::keys::{KeyLifetime, KeyRing, RelayKey};
 use pingers_push_relay::opener::{OpenError, TokenOpener};
 use pingers_push_relay::rate::RateLimit;
@@ -116,6 +117,16 @@ impl RunningRelay {
         sender: S,
         clock: C,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::start_for(opener, sender, clock, PushSenders::Anywhere).await
+    }
+
+    /// As [`RunningRelay::start`], serving `POST /v1/push` to `senders`.
+    pub(crate) async fn start_for<O: TokenOpener, S: PushSender, C: Clock + 'static>(
+        opener: O,
+        sender: S,
+        clock: C,
+        senders: PushSenders,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let relay = Arc::new(Relay::new(RelayParts {
             opener,
             sender,
@@ -129,7 +140,7 @@ impl RunningRelay {
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
-        let router = pingers_push_relay::http::router(relay);
+        let router = pingers_push_relay::http::router(relay, senders);
         let task = tokio::spawn(async move {
             drop(axum::serve(listener, router).await);
         });

@@ -7,6 +7,9 @@ hash_key = "$(pingers-push-relay.hash_key)"
 upstream_timeout_ms = 10000
 token_pushes_per_minute = 30
 max_ttl_s = 2592000
+# Only this device's pingers-server pushes, over loopback: POST /v1/push through the web proxy
+# (it adds X-Forwarded-For) answers 404, as if there were no such path.
+push_direct_only = true
 
 [[keys]]
 key_id = "$(pingers-push-relay.key_a_id)"

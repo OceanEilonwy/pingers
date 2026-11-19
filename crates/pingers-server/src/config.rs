@@ -56,8 +56,10 @@
 //! secret = "<64 hex>"
 //!
 //! [metrics]
-//! allow = ["127.0.0.1"]            # who may GET /metrics (the client, after trusted proxies);
-//!                                  # without it there is no such route
+//! allow = ["127.0.0.1"]            # who may GET /metrics, connecting directly: a request a
+//!                                  # reverse proxy forwarded (X-Forwarded-For, Forwarded, Via,
+//!                                  # ...) gets 404 whoever it names; without it there is no
+//!                                  # such route
 //!
 //! [[push_relays]]                  # the relays mailbox wakes are forwarded to
 //! relay_id = 1                     # what devices name in RelayRef::Listed
@@ -461,7 +463,8 @@ pub struct ServerConfig {
     pub relays: RelayAllowList,
     /// The proxies whose `X-Forwarded-For` is believed on the gateway listener.
     pub trusted_proxies: TrustedProxies,
-    /// Who may `GET /metrics`; empty means the route does not exist.
+    /// Who may `GET /metrics`, connecting directly (never through a reverse proxy); empty
+    /// means the route does not exist.
     pub metrics: AddressList,
     /// Where mailboxes are kept.
     pub mailbox_store: Database,

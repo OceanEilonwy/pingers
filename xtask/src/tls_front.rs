@@ -14,7 +14,9 @@
 //! request and response bodies are streamed frame by frame in both directions without
 //! buffering, as Caddy's `flush_interval: -1` does, so a Meetup's chunked OHTTP live channel
 //! works through it. Like Caddy it adds `X-Forwarded-For`, `X-Forwarded-Proto` and
-//! `X-Forwarded-Host`; the gateway ignores them (no `trusted_proxies`).
+//! `X-Forwarded-Host`, replacing any the client sent; the gateway ignores them (no
+//! `trusted_proxies`), and they are how pingers-server and the push relay tell a request from
+//! outside, refusing it `/metrics` and `POST /v1/push` (the dev file, like nodo, hides no path).
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -453,44 +455,59 @@ mod tests {
         Ok(())
     }
 
+    /// Like nodo's Caddy, the dev front hides no path: the services refuse their private ones
+    /// to anything the front forwards.
     #[test]
-    fn the_gateway_and_metrics_are_hidden_behind_the_public_server() -> Result<()> {
+    fn every_path_is_forwarded_as_nodo_does() -> Result<()> {
         let front = dev_front()?;
         let server = site(&front, "server")?;
-        for hidden in ["/ohttp", "/ohttp/x", "/metrics"] {
+        for path in ["/ohttp", "/metrics", "/v1/params"] {
             assert_eq!(
-                server.route(hidden),
+                server.route(path),
+                Some(&Action::Proxy(Upstream {
+                    address: SocketAddr::from(([127, 0, 0, 1], 9470)),
+                    protocol: Protocol::H2c,
+                })),
+                "{path}"
+            );
+        }
+        let push = site(&front, "push")?;
+        for path in ["/v1/push", "/v1/config"] {
+            assert_eq!(
+                push.route(path),
+                Some(&Action::Proxy(Upstream {
+                    address: SocketAddr::from(([127, 0, 0, 1], 9472)),
+                    protocol: Protocol::Http1,
+                })),
+                "{path}"
+            );
+        }
+        Ok(())
+    }
+
+    /// A `static_response` route and path matchers, still understood for a file that has them.
+    #[test]
+    fn a_static_response_route_matches_exact_paths_and_prefixes() -> Result<()> {
+        let route = route(&serde_json::json!({
+            "match": [{ "path": ["/hidden", "/hidden/*"] }],
+            "handle": [{ "handler": "static_response", "status_code": "404" }],
+            "terminal": true
+        }))?;
+        assert_eq!(route.action, Action::Status(StatusCode::NOT_FOUND));
+        let site = Site {
+            name: "test".to_owned(),
+            listen: SocketAddr::from(([127, 0, 0, 1], 1)),
+            routes: vec![route],
+        };
+        for hidden in ["/hidden", "/hidden/x"] {
+            assert_eq!(
+                site.route(hidden),
                 Some(&Action::Status(StatusCode::NOT_FOUND)),
                 "{hidden}"
             );
         }
-        assert_eq!(
-            server.route("/v1/params"),
-            Some(&Action::Proxy(Upstream {
-                address: SocketAddr::from(([127, 0, 0, 1], 9470)),
-                protocol: Protocol::H2c,
-            }))
-        );
-        // "/ohttpx" is not "/ohttp" nor under "/ohttp/".
-        assert!(matches!(server.route("/ohttpx"), Some(Action::Proxy(_))));
-        Ok(())
-    }
-
-    #[test]
-    fn the_push_relay_hides_push_and_speaks_http1() -> Result<()> {
-        let front = dev_front()?;
-        let push = site(&front, "push")?;
-        assert_eq!(
-            push.route("/v1/push"),
-            Some(&Action::Status(StatusCode::NOT_FOUND))
-        );
-        assert!(matches!(
-            push.route("/v1/config"),
-            Some(Action::Proxy(Upstream {
-                protocol: Protocol::Http1,
-                ..
-            }))
-        ));
+        // "/hiddenx" is not "/hidden" nor under "/hidden/".
+        assert_eq!(site.route("/hiddenx"), None);
         Ok(())
     }
 
@@ -505,10 +522,6 @@ mod tests {
         assert_eq!(front.sites.len(), 6);
         let server = site(&front, "second-server")?;
         assert_eq!(server.listen, SocketAddr::from(([127, 0, 0, 1], 9447)));
-        assert_eq!(
-            server.route("/ohttp"),
-            Some(&Action::Status(StatusCode::NOT_FOUND))
-        );
         assert_eq!(
             server.route("/v1/params"),
             Some(&Action::Proxy(Upstream {
