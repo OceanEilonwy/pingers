@@ -3949,6 +3949,7 @@ dependencies = [
  "tokio",
  "toml 1.2.1+spec-1.1.0",
  "url",
+ "webpki-root-certs",
  "zeroize",
 ]
 
@@ -4008,6 +4009,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "toml 1.2.1+spec-1.1.0",
+ "webpki-root-certs",
  "zeroize",
 ]
 
@@ -4032,6 +4034,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "toml 1.2.1+spec-1.1.0",
+ "webpki-root-certs",
  "webpki-roots",
  "zeroize",
 ]

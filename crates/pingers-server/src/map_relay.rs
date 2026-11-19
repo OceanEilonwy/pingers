@@ -59,16 +59,16 @@ pub(crate) struct Unreachable;
 
 impl MapRelay {
     /// A client for `gateway` that never follows redirects (a redirect would send the request
-    /// somewhere the operator did not choose). `roots` are trusted besides the system's.
+    /// somewhere the operator did not choose). `roots` are trusted besides Mozilla's, never
+    /// the system's ([`crate::http_client_builder`]).
     pub(crate) fn new(
         gateway: MapHostGateway,
         timer: Arc<dyn Timer>,
         timeout: Duration,
         roots: Vec<reqwest::Certificate>,
     ) -> Result<Self, reqwest::Error> {
-        let client = reqwest::Client::builder()
+        let client = crate::http_client_builder(roots)?
             .redirect(reqwest::redirect::Policy::none())
-            .tls_certs_merge(roots)
             .build()?;
         Ok(Self {
             client,

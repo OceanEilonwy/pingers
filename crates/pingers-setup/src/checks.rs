@@ -107,7 +107,7 @@ pub struct Facts {
 
 /// The clients the checks use.
 pub struct Clients {
-    /// HTTP/1.1, and HTTPS with the system's roots.
+    /// HTTP/1.1, and HTTPS with Mozilla's roots.
     plain: Client,
     /// HTTP/2 with prior knowledge, for the gateway's listener.
     h2c: Client,
@@ -132,19 +132,28 @@ impl Clients {
     ///
     /// As [`Clients::new`], or a certificate is not DER.
     pub fn trusting(extra: &[Vec<u8>]) -> Result<Self, String> {
-        let certificates = extra
+        // Mozilla's roots, bundled, as for the post-quantum check, and never the system's
+        // store: reqwest's default verifier reads it when a client is built and refuses to
+        // build one when it finds no certificate, and the sandbox binds the host's /etc/ssl
+        // only if it is there. The public names have ACME certificates from public CAs.
+        let certificates = webpki_root_certs::TLS_SERVER_ROOT_CERTS
             .iter()
+            .map(AsRef::<[u8]>::as_ref)
+            .chain(extra.iter().map(Vec::as_slice))
             .map(|der| reqwest::Certificate::from_der(der).map_err(|error| error.to_string()))
             .collect::<Result<Vec<_>, _>>()?;
         let plain = Client::builder()
             .timeout(TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
-            .tls_certs_merge(certificates)
+            .tls_certs_only(certificates)
             .build()
             .map_err(|error| error.to_string())?;
+        // Plain HTTP to the gateway on loopback only, but reqwest sets up TLS for every
+        // client: with no roots at all, building it reads nothing.
         let h2c = Client::builder()
             .timeout(TIMEOUT)
             .http2_prior_knowledge()
+            .tls_certs_only([])
             .build()
             .map_err(|error| error.to_string())?;
         Ok(Self {

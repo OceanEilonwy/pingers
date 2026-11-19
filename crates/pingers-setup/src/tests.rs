@@ -494,3 +494,43 @@ async fn an_address_that_is_no_url_fails_rather_than_being_untried() -> TestResu
     }
     Ok(())
 }
+
+/// Set in the child process the next test starts, which runs the test's body.
+const NO_SYSTEM_ROOTS: &str = "PINGERS_SETUP_TEST_NO_SYSTEM_ROOTS";
+
+/// The clients are built where the system has no CA certificates, as in a sandbox without
+/// `/etc/ssl`. The system's store is read from `SSL_CERT_FILE` and `SSL_CERT_DIR` alone when
+/// either is set (rustls-native-certs), so the child gets an empty file and an empty
+/// directory: a child process, because the environment is the whole process's and other tests
+/// run alongside.
+#[test]
+fn the_clients_build_without_a_system_ca_store() -> TestResult {
+    if std::env::var_os(NO_SYSTEM_ROOTS).is_some() {
+        Clients::new()?;
+        return Ok(());
+    }
+    let empty = std::env::temp_dir().join(format!("pingers-setup-no-roots-{}", std::process::id()));
+    std::fs::create_dir_all(&empty)?;
+    let file = empty.join("none.pem");
+    std::fs::write(&file, "")?;
+    let output = std::process::Command::new(std::env::current_exe()?)
+        .args([
+            "tests::the_clients_build_without_a_system_ca_store",
+            "--exact",
+            "--nocapture",
+        ])
+        .env(NO_SYSTEM_ROOTS, "1")
+        .env("SSL_CERT_FILE", &file)
+        .env("SSL_CERT_DIR", &empty)
+        .output()?;
+    std::fs::remove_dir_all(&empty)?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "a client did not build without a system CA store:\n{stdout}\n{stderr}"
+    );
+    // The child ran this very test, not nothing.
+    assert!(stdout.contains("1 passed"), "{stdout}");
+    Ok(())
+}
