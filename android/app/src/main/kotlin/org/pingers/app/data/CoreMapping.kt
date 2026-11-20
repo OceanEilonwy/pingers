@@ -95,9 +95,24 @@ internal fun Double.metres(): Int = Math.round(this).toInt()
 /** Where the 390-wide scenes put the thing they centre on. */
 private val SceneCentre = MapPoint(195f, 256f)
 
-/** A frame centred on [centre], or on 0,0 when nothing has a position yet. */
+/**
+ * Where a frame with nothing of its own to centre on starts: CoreRepository sets it to
+ * [org.pingers.app.maps.startingPoint] (where the phone last was, else the downloaded map).
+ */
+internal object FrameStart {
+    @Volatile var centre: () -> Coordinate? = { null }
+}
+
+/**
+ * A frame centred on [centre]; when nothing has a position yet, an unplaced frame at
+ * [FrameStart] (0,0 only when the phone knows nowhere and has no map).
+ */
 internal fun frameAt(centre: Coordinate?, at: MapPoint = SceneCentre, metresPerUnit: Float = 2f) =
-    MapFrame(centre ?: Coordinate(0.0, 0.0), at, metresPerUnit)
+    if (centre != null) {
+        MapFrame(centre, at, metresPerUnit)
+    } else {
+        MapFrame(FrameStart.centre() ?: Coordinate(0.0, 0.0), at, metresPerUnit, placed = false)
+    }
 
 /** The Party card's frame: the Spots' middle at the card's centre, zoomed out to fit them. */
 internal fun cardFrame(spots: List<Fence>): MapFrame {

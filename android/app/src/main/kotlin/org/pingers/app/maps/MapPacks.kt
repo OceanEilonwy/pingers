@@ -122,3 +122,11 @@ data class FailedHost(val host: MapHost, val problem: HostProblem) {
 /** The installed packs covering [at], the most detailed (smallest) first. */
 fun covering(installed: List<Manifest>, at: Coordinate): List<Manifest> =
     installed.filter { at in it.bbox }.sortedBy { it.bbox.size }
+
+/**
+ * Where a map with nothing of its own to centre on (no fix, Spot or meet point yet) starts:
+ * where the phone last was, else the most detailed installed pack, so a map that has been
+ * downloaded is the map shown. Null with neither. Worked out on this phone only.
+ */
+fun startingPoint(lastKnown: Coordinate?, installed: List<Manifest>): Coordinate? =
+    lastKnown ?: installed.minByOrNull { it.bbox.size }?.bbox?.centre

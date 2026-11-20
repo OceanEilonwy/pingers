@@ -12,10 +12,14 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.pingers.app.BuildConfig
 import org.pingers.app.R
+import org.pingers.app.maps.Maps
+import org.pingers.app.maps.startingPoint
+import org.pingers.app.platform.lastKnownCoordinate
 import org.pingers.app.platform.forLog
 import org.pingers.app.platform.PhoneLog
 import uniffi.pingers.AreaEditor
@@ -163,7 +167,7 @@ class CoreRepository(
     private var editingSpot: SpotId? = null
     private var spotDraft = uniffi.pingers.SpotDraft("", uniffi.pingers.ShapeKind.CIRCLE, 150.0, null)
     private var area = AreaEditor()
-    private var drawFrame = frameAt(null, MapPoint(195f, 300f))
+    private var drawFrame = frameAt(null, DRAW_AT)
 
     private var meetPointMode = MeetPointMode.Pin
     private var meetPointLabel = ""
@@ -250,12 +254,23 @@ class CoreRepository(
     override val partyCode: StateFlow<PartyCodeView?> = _partyCode.asStateFlow()
 
     init {
+        // Maps with nothing to centre on start where the phone last was, else on a downloaded
+        // map: never on 0,0, which no pack covers.
+        FrameStart.centre = { startingPoint(lastKnownCoordinate(context), Maps.get(context).installed.value) }
         scope.launch {
             // The process's one core, which receivers and workers share (CoreHost).
             CoreHost.listen(sink)
             core = CoreHost.core()
             openError = CoreHost.openError
             refresh()
+        }
+        scope.launch {
+            // A map downloaded or removed moves the maps that had nowhere of their own to be.
+            Maps.get(context).installed.drop(1).collect {
+                if (!drawFrame.placed) drawFrame = frameAt(null, DRAW_AT)
+                if (!meetPointFrame.placed && meetPointPin == meetPointFrame.origin) meetPointPin = null
+                publish()
+            }
         }
     }
 
@@ -553,7 +568,7 @@ class CoreRepository(
         val id = meetupId() ?: return
         val pin = meetPointPin ?: (meetup.meetPoint?.at ?: meetup.me ?: meetup.mapFrame.origin).also {
             meetPointPin = it
-            meetPointFrame = frameAt(it)
+            meetPointFrame = frameAt(it).copy(placed = meetup.meetPoint?.at != null || meetup.me != null || meetup.mapFrame.placed)
         }
         val draft = uniffi.pingers.MeetPointDraft(meetPointMode.toFfi(), meetPointLabel, pin.toFfi())
         read("meet point") { it.meetPoint(id.toFfi(), draft).toUi(pin, meetPointFrame) }?.let { _meetPoint.value = it }
@@ -905,7 +920,7 @@ class CoreRepository(
             is Fence.Polygon -> Coordinate(fence.vertices.map { it.latitude }.average(), fence.vertices.map { it.longitude }.average())
             null -> _party.value.spots.firstOrNull()?.fence?.let { (it as? Fence.Circle)?.center } ?: _meetup.value.me
         }
-        drawFrame = frameAt(centre, MapPoint(195f, 300f))
+        drawFrame = frameAt(centre, DRAW_AT)
         publishSpotEditor()
     }
 
@@ -921,7 +936,7 @@ class CoreRepository(
 
     override fun moveSpot(to: Coordinate) {
         // A circle is saved at the frame's origin; a drawn area keeps its own coordinates.
-        drawFrame = frameAt(to, MapPoint(195f, 300f))
+        drawFrame = frameAt(to, DRAW_AT)
         publishSpotEditor()
     }
 
@@ -1088,5 +1103,7 @@ class CoreRepository(
         const val TAG = "CoreRepository"
         /** How long typing pauses before another server is looked up. */
         const val LOOK_UP_PAUSE_MS = 800L
+        /** Where the Spot editor's scene puts the Spot. */
+        val DRAW_AT = MapPoint(195f, 300f)
     }
 }

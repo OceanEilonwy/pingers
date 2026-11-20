@@ -45,6 +45,14 @@ the Spot, dragging the meet point map moves the pin).
 When no installed pack covers the frame's centre, the canvas's stylised placeholder is drawn,
 with a **Download map for this area** prompt that opens the region picker.
 
+A frame centres on the screen's own things (the latest fix, the Spots, the meet point). With
+none of those (no fix since the app started, a new Party's first Spot) it is unplaced and
+starts where the phone last was (the platform's last known location, read on the phone, no new
+fix), else on the most detailed installed pack (`startingPoint`); only with neither is it 0,0.
+Downloading or removing a pack moves unplaced frames. (In v0.1.1 and earlier an unplaced frame was
+always 0,0, which no pack covers, so the prompt stayed after a download and a Spot saved from
+it landed on 0,0.)
+
 | Screen | Map |
 | --- | --- |
 | Party | real map behind the Spot circles and areas |
