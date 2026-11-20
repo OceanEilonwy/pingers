@@ -485,6 +485,10 @@ fun PartyScreen(state: PartyState, repo: PingersRepository, nav: Navigator) {
         top = {
             TopBar(state.name, { nav.back() }, stringResource(R.string.cd_back)) {
                 IconAction(PIcons.PersonAdd, stringResource(R.string.cd_invite_people), { nav.go(Route.Invite) }, Modifier.testTag(E2eTags.PARTY_INVITE))
+                IconAction(PIcons.Settings, stringResource(R.string.cd_party_settings), {
+                    repo.openPartySettings(state.id)
+                    nav.go(Route.PartySettings)
+                })
             }
         },
         bodyPadding = PaddingValues(0.dp),
@@ -558,11 +562,6 @@ fun PartyScreen(state: PartyState, repo: PingersRepository, nav: Navigator) {
                 }
             }
         }
-        Text(
-            stringResource(R.string.party_meetups_note),
-            style = body(13.sp, color = Pc.Muted, lineHeight = 1.45f),
-            modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 14.dp),
-        )
         // The server and its privacy, in the core's words; opens Party settings.
         ServerCard(
             state.settingsRow,

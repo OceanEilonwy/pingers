@@ -69,24 +69,45 @@ pub fn spot_editor(
     draft: &SpotDraft,
 ) -> Result<SpotEditor, ScreenError> {
     let party = snapshot.party(party)?;
-    let maximum = maximum_spot_radius();
-    let radius = draft.radius.max(MINIMUM_SPOT_RADIUS);
-    // `>` and `>=` agree here (equal values give the same radius): a known equivalent mutant.
-    let radius = if radius > maximum { maximum } else { radius };
-    let shape_ready = match draft.shape {
-        ShapeKind::Circle => true,
-        ShapeKind::Area => draft.area.is_some(),
-    };
+    let shape = ShapeFields::of(draft);
     Ok(SpotEditor {
         party_name: party.name.clone(),
         name: draft.name.clone(),
         shape: draft.shape,
-        radius,
+        radius: shape.radius,
         min_radius: MINIMUM_SPOT_RADIUS,
-        max_radius: maximum,
-        area: draft.area.as_ref().map(Polygon::area),
-        can_save: shape_ready && draft.name.name().is_some(),
+        max_radius: maximum_spot_radius(),
+        area: shape.area,
+        can_save: shape.ready && draft.name.name().is_some(),
     })
+}
+
+/// The shape half of an editor, shared by the Spot editor and the zone editor.
+pub(crate) struct ShapeFields {
+    /// The radius, within the slider's range.
+    pub(crate) radius: Meters,
+    /// The drawn area's size, once drawn.
+    pub(crate) area: Option<SquareMeters>,
+    /// Whether the chosen shape can be saved: a circle always, an area once drawn.
+    pub(crate) ready: bool,
+}
+
+impl ShapeFields {
+    /// The shape fields for what `draft` has so far.
+    pub(crate) fn of(draft: &SpotDraft) -> Self {
+        let maximum = maximum_spot_radius();
+        let radius = draft.radius.max(MINIMUM_SPOT_RADIUS);
+        // `>` and `>=` agree here (equal values give the same radius): a known equivalent mutant.
+        let radius = if radius > maximum { maximum } else { radius };
+        Self {
+            radius,
+            area: draft.area.as_ref().map(Polygon::area),
+            ready: match draft.shape {
+                ShapeKind::Circle => true,
+                ShapeKind::Area => draft.area.is_some(),
+            },
+        }
+    }
 }
 
 #[cfg(test)]

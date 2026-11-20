@@ -273,6 +273,21 @@ internal fun uniffi.pingers.SpotEditorView.toUi() = SpotEditorState(
     canSave = canSave,
 )
 
+internal fun uniffi.pingers.ZoneEditorView.toUi() = SpotEditorState(
+    partyName = "",
+    name = name,
+    shape = when (shape) {
+        uniffi.pingers.ShapeKind.CIRCLE -> ShapeKind.Circle
+        uniffi.pingers.ShapeKind.AREA -> ShapeKind.Area
+    },
+    radiusM = radiusM.metres(),
+    minRadiusM = minRadiusM.metres(),
+    maxRadiusM = maxRadiusM.metres(),
+    areaHectares = areaSquareM?.let { (it / 10_000).toFloat() },
+    canSave = canSave,
+    forZone = true,
+)
+
 internal fun uniffi.pingers.ShapeProblem.toUi() = when (this) {
     uniffi.pingers.ShapeProblem.CROSSING -> ShapeProblem.Crossing
     uniffi.pingers.ShapeProblem.NO_AREA -> ShapeProblem.NoArea

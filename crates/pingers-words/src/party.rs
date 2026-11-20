@@ -387,9 +387,7 @@ pub struct PartyText {
     pub spots: Vec<SpotRowText>,
     /// "Add spot".
     pub add_spot: String,
-    /// "You only see meetups you were part of. …"
-    pub meetups_note: String,
-    /// "pingers.flat7.org · Full privacy".
+    /// "pingers.flat7.org": the server alone; the row's shield icon shows the privacy level.
     pub server_row: String,
     /// "Party settings: server, invites, leave".
     pub server_subtitle: String,
@@ -415,14 +413,7 @@ pub fn party(language: Language, view: &PartyView) -> PartyText {
             })
             .collect(),
         add_spot: "Add spot".into(),
-        meetups_note: "You only see meetups you were part of. Members who weren't there won't \
-                       know one happened."
-            .into(),
-        server_row: format!(
-            "{} · {}",
-            view.server.as_str(),
-            privacy_level(language, view.privacy)
-        ),
+        server_row: view.server.as_str().to_owned(),
         server_subtitle: "Party settings: server, invites, leave".into(),
         invite: crate::invite::TITLE.into(),
     }
@@ -619,7 +610,7 @@ mod tests {
                 ("Ana's place", "100 m circle", None),
             ]
         );
-        assert_eq!(text.server_row, "pingers.flat7.org · Full privacy");
+        assert_eq!(text.server_row, "pingers.flat7.org");
         assert_eq!(
             text.server_subtitle,
             "Party settings: server, invites, leave"
@@ -630,7 +621,6 @@ mod tests {
             ("Spots", "Add spot")
         );
         assert_eq!(text.spots_private, "Spots visible only to members");
-        assert!(text.meetups_note.starts_with("You only see meetups"));
         Ok(())
     }
 

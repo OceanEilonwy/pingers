@@ -183,6 +183,10 @@ interface PingersRepository {
     /** Moves the Spot (and the editor's map) to [to]: a dragged map or a place found by search. */
     fun moveSpot(to: Coordinate)
     fun saveSpot()
+    /** "Add exclusion zone": the Spot editor opens empty, to make a zone instead of a Spot. */
+    fun newZone()
+    /** Saves the zone [newZone] started, then [onSaved]. */
+    fun saveZone(onSaved: () -> Unit)
 
     // Draw area, the point-by-point polygon editor
     fun drawTapMap(at: Coordinate)

@@ -86,7 +86,7 @@ class FakeRepository(
             server = server,
             privacy = PrivacyLevel.Full,
             meetup = m1,
-            settingsRow = "$server · Full privacy",
+            settingsRow = server,
             settingsDetail = FakeSection4.SETTINGS_DETAIL,
         ),
         uf to PartyState(
@@ -101,7 +101,7 @@ class FakeRepository(
             server = server,
             privacy = PrivacyLevel.Full,
             meetup = null,
-            settingsRow = "$server · Full privacy",
+            settingsRow = server,
             settingsDetail = FakeSection4.SETTINGS_DETAIL,
         ),
         fiveASide to PartyState(
@@ -113,7 +113,7 @@ class FakeRepository(
             server = server,
             privacy = PrivacyLevel.Full,
             meetup = null,
-            settingsRow = "$server · Full privacy",
+            settingsRow = server,
             settingsDetail = FakeSection4.SETTINGS_DETAIL,
         ),
     )
@@ -552,6 +552,22 @@ class FakeRepository(
     override fun setSpotRadius(radiusM: Int) = _spotEditor.update { it.copy(radiusM = radiusM.coerceIn(it.minRadiusM, it.maxRadiusM)) }
 
     override fun saveSpot() = Unit
+
+    override fun newZone() {
+        editSpot(null)
+        _spotEditor.update { it.copy(forZone = true) }
+    }
+
+    override fun saveZone(onSaved: () -> Unit) {
+        val draft = _spotEditor.value
+        _exclusionZones.update { s ->
+            val id = ZoneId((s.zones.maxOfOrNull { it.id.row } ?: 0) + 1)
+            val shape = if (draft.shape == ShapeKind.Circle) ZoneShape.Circle(draft.radiusM) else ZoneShape.Area(emptyList())
+            s.copy(zones = s.zones + ZoneRow(id, draft.name, shape, null, draft.centre))
+        }
+        _spotEditor.update { it.copy(forZone = false) }
+        onSaved()
+    }
 
     private fun publishDraw() {
         _drawArea.value = editor.state(_spotEditor.value.name.ifBlank { res.getString(R.string.spot_unnamed) }, drawFrame)

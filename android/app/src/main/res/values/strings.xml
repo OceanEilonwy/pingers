@@ -34,6 +34,8 @@
 
     <!-- Content descriptions -->
     <string name="cd_back">Back</string>
+    <string name="cd_sheet_collapse">Fold the panel away</string>
+    <string name="cd_sheet_expand">Show the panel</string>
     <string name="cd_back_to">Back to %1$s</string>
     <string name="cd_back_new_party">Back to New party</string>
     <string name="cd_back_spot_editor">Back to Spot editor</string>
@@ -42,6 +44,7 @@
     <string name="cd_close_compass">Close compass</string>
     <string name="cd_settings">Settings</string>
     <string name="cd_invite_people">Invite people</string>
+    <string name="cd_party_settings">Party settings</string>
     <string name="cd_invite_qr">Invite QR code</string>
     <string name="cd_cancel_invite">Cancel this invite</string>
     <string name="cd_navigate_to">Navigate to %1$s</string>
@@ -98,7 +101,6 @@
     <string name="party_spots">Spots</string>
     <string name="party_add_spot">Add spot</string>
     <string name="party_in_meetup">You\'re in a meetup</string>
-    <string name="party_meetups_note">You only see meetups you were part of. Members who weren\'t there won\'t know one happened.</string>
 
     <!-- Spot editor, Draw area -->
     <string name="spot_search">Search a place</string>
@@ -147,7 +149,10 @@
     <string name="zones_add">Add exclusion zone</string>
     <string name="zones_hide_trail">Hide trail near zones</string>
     <string name="zones_hide_trail_help">Stay hidden for 5 min after leaving, so nobody can trace you back</string>
-    <string name="zones_edit_soon">Editing zones arrives with the real map.</string>
+    <string name="zone_unnamed">New zone</string>
+    <string name="zone_name">Zone name</string>
+    <string name="zone_on_phone">Stays on this phone. Nothing about this zone is sent to any server or Party.</string>
+    <string name="zone_save">Save zone</string>
 
     <!-- Sharing + Focus -->
     <string name="privacy_title">Privacy</string>
@@ -236,10 +241,6 @@
     <string name="meetup_chat">Chat · %1$d</string>
     <string name="meetup_meet_point">Meet point</string>
     <string name="meetup_compass">Compass</string>
-    <plurals name="meetup_only_here">
-        <item quantity="one">Only the %1$d person here can see this meetup.</item>
-        <item quantity="other">Only the %1$d people here can see this meetup.</item>
-    </plurals>
     <string name="meetup_shared_with">Your exact spot: shared with %1$s.</string>
     <string name="meetup_shared_nobody">Your exact spot: private.</string>
     <string name="meetup_manage">Manage</string>
@@ -308,7 +309,7 @@
     <string name="maps_failed_network">Couldn\'t download. Check your connection and try again.</string>
     <string name="maps_failed_checksum">The download didn\'t match its checksum, so it was deleted.</string>
     <string name="maps_failed_not_through_relay">This map host can\'t be reached through the privacy relay: your server passes map downloads only to its own map host.</string>
-    <string name="maps_failed_no_relay_route">Downloads through the privacy relay go through your Pingers server, and this app has none set up yet. Turn the setting off in Advanced to download directly.</string>
+    <string name="maps_failed_no_relay_route">Downloads through the privacy relay go through your Pingers server, and this app has none set up yet. Turn “Download maps through privacy relay” off on this screen to download directly.</string>
     <string name="maps_failed_key_changed">The map host\'s key isn\'t one this app trusts, so maps don\'t download through the privacy relay.</string>
     <string name="maps_failed_preparing">The map host is still preparing this area. Try again later.</string>
     <string name="maps_failed_storage">Couldn\'t save the map on this phone.</string>
@@ -324,6 +325,8 @@
     <string name="maps_host_hint">Leave empty to use your server\'s or the app\'s</string>
     <string name="maps_regions_link">Downloaded maps</string>
     <string name="maps_search_none">No places found in your downloaded maps</string>
+    <string name="maps_search_empty_title">Type to search</string>
+    <string name="maps_search_empty_detail">Find places, streets and cities in your downloaded maps. Searching stays on this phone.</string>
     <string name="maps_search_no_maps">Download a map to search places</string>
     <string name="place_country">Country</string>
     <string name="place_region">Region</string>
@@ -334,6 +337,9 @@
     <string name="cd_map_search_result">Go to %1$s</string>
     <string name="cd_clear_search">Clear search</string>
     <string name="cd_my_location">Go to my location</string>
+    <string name="cd_map_follow_heading">Turn the map with your phone</string>
+    <string name="cd_map_north_up">Point the map north</string>
+    <string name="map_no_compass">This phone has no compass</string>
     <string name="map_location_not_found">Couldn\'t find where you are. Check that location is on.</string>
     <string name="map_location_denied">Pingers needs location permission to find where you are.</string>
 </resources>

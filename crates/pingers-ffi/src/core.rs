@@ -519,6 +519,25 @@ impl Core {
             .await?)
     }
 
+    /// Adds an exclusion zone ("Add exclusion zone"), applying always and for every Party until
+    /// its times are changed. Returns the new zone.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Invalid`] for an empty name, an impossible shape or a phone with every zone
+    /// id taken; [`CoreError::Storage`].
+    pub async fn add_zone(&self, name: String, fence: Fence) -> Result<ZoneId, CoreError> {
+        let (zones, id) = screens::zones::with_new(
+            &self.client.snapshot(),
+            pingers_client::snapshot::Name::new(&name)?,
+            (&fence).try_into()?,
+        )?;
+        self.client
+            .change_setting(ports::SettingChange::Zones(zones))
+            .await?;
+        Ok(id.into())
+    }
+
     /// Deletes an exclusion zone ("Delete zone").
     ///
     /// # Errors

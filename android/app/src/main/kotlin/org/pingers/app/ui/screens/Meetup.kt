@@ -6,7 +6,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -42,7 +41,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,7 +56,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.pluralStringResource
@@ -113,13 +110,11 @@ import org.pingers.app.ui.components.PIcons
 import org.pingers.app.ui.components.PillButton
 import org.pingers.app.ui.components.Segmented
 import org.pingers.app.ui.components.TwoLines
-import org.pingers.app.ui.map.MapBox
-import org.pingers.app.ui.map.MapChrome
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.statusBars
 import org.pingers.app.ui.map.MapCanvas
+import org.pingers.app.ui.map.InteractiveMap
+import org.pingers.app.ui.map.rememberMapState
 import org.pingers.app.ui.map.Scenes
+import org.pingers.app.ui.map.fullScreenChrome
 import org.pingers.app.ui.theme.Inter
 import org.pingers.app.ui.theme.Pc
 import org.pingers.app.ui.theme.body
@@ -217,48 +212,56 @@ fun MeetupScreen(state: MeetupState, repo: PingersRepository, nav: Navigator) {
     // Show where the phone is now, not only where the last wake left it.
     androidx.compose.runtime.LaunchedEffect(Unit) { repo.findMe() }
     val w = words()
+    val view = rememberMapState()
+    var searching by remember { mutableStateOf(false) }
+    var sheet by remember { mutableStateOf(0.dp) }
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
-        val frame = state.mapFrame
-        val me = state.me?.let(frame::toMap)
-        val meetAt = state.meetPoint?.at?.let(frame::toMap)
-        MapBox(Scenes.Meetup, frame = frame, chrome = MapChrome(
-            attribution = Alignment.TopEnd,
-            attributionPadding = PaddingValues(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 68.dp, end = 12.dp),
-            promptAt = 0.3f,
-        ), overlay = {
+        InteractiveMap(Scenes.Meetup, state.mapFrame, view = view, sheetHeight = sheet, onFindMe = repo::findMe, overlay = { f ->
+            val me = state.me?.let(f::toMap)
+            val meetAt = state.meetPoint?.at?.let(f::toMap)
             if (me != null && meetAt != null) {
                 drawLine(
                     Pc.Ink, Offset(me.x, me.y), Offset(meetAt.x, meetAt.y), strokeWidth = 2f,
                     pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 5f)),
                 )
             }
-        }) { unit ->
-            meetAt?.let { at -> MeetPin(Modifier.offset(unit * at.x - 18.dp, unit * at.y - 34.dp)) }
+        }) { unit, f ->
+            val me = state.me?.let(f::toMap)
+            state.meetPoint?.at?.let(f::toMap)?.let { at -> MeetPin(Modifier.offset(unit * at.x - 18.dp, unit * at.y - 34.dp)) }
             state.members.forEach { m ->
                 val loc = m.location
                 if (loc is PeerLocation.Shared) {
-                    val at = frame.toMap(loc.at)
+                    val at = f.toMap(loc.at)
                     MapAvatar(m.person, 40.dp, Modifier.offset(unit * at.x - 20.dp, unit * at.y - 20.dp))
                 }
             }
             me?.let { at -> MeDot(Modifier.offset(unit * at.x - 21.dp, unit * at.y - 21.dp)) }
         }
-        Row(
+        Column(
             Modifier.statusBarsPadding().padding(start = 16.dp, end = 16.dp, top = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            MapButton(PIcons.Back, stringResource(R.string.cd_back), { nav.back() })
+            // The same top bar as the Spot editor: close, then "Search a place".
             Row(
-                Modifier.height(44.dp).shadow(2.dp, RoundedCornerShape(22.dp)).clip(RoundedCornerShape(22.dp)).background(Pc.Card).padding(horizontal = 16.dp),
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                MapButton(PIcons.Back, stringResource(R.string.cd_back), { nav.back() })
+                PlaceSearchButton({ searching = true }, Modifier.weight(1f))
+            }
+            // Who is here, under it; clear of the map buttons on the right.
+            Row(
+                Modifier.padding(end = 60.dp).height(36.dp).shadow(2.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp))
+                    .background(Pc.Card).padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Box(Modifier.size(8.dp).clip(CircleShape).background(Pc.Orange))
-                Text(stringResource(R.string.meetup_here, state.spotName, state.hereCount), style = body(15.sp, 600))
+                Text(stringResource(R.string.meetup_here, state.spotName, state.hereCount), style = body(14.sp, 600), maxLines = 1)
             }
         }
-        BottomSheet(spacing = 14) {
+        BottomSheet(spacing = 14, collapsible = false, onHeight = { sheet = it }) {
             state.meetPoint?.let { mp ->
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Pc.OrangeTintSoft).padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
@@ -295,6 +298,7 @@ fun MeetupScreen(state: MeetupState, repo: PingersRepository, nav: Navigator) {
             }
             Footnote(state, nav)
         }
+        if (searching) PlaceSearchScreen(onPick = { view.centre = it.at }, onClose = { searching = false })
     }
 }
 
@@ -365,7 +369,7 @@ private fun Footnote(state: MeetupState, nav: Navigator) {
     val manage = stringResource(R.string.meetup_manage)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
         Text(
-            pluralStringResource(R.plurals.meetup_only_here, state.hereCount, state.hereCount) + " " + shared,
+            shared,
             style = body(12.sp, color = Pc.Muted, lineHeight = 1.45f),
             textAlign = TextAlign.Center,
             modifier = Modifier.weight(1f, fill = false),
@@ -542,35 +546,23 @@ private val PinAt = MapPoint(195f, 256f)
 fun MeetPointScreen(state: MeetPointState, repo: PingersRepository, nav: Navigator) {
     SecureScreen()
     val density = LocalDensity.current
+    var sheet by remember { mutableStateOf(0.dp) }
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val unit = maxWidth / Scenes.MeetPoint.width
             val unitPx = with(density) { unit.toPx() }
-            val frame = state.mapFrame
-            val centre = frame.toMap(state.point ?: state.pin)
-            val pan = MapPoint(PinAt.x - centre.x, PinAt.y - centre.y)
+            // The pin's coordinate sits at PinAt; dragging moves the map, and so the meet point, under it.
+            val frame = state.mapFrame.copy(origin = state.point ?: state.pin, originAt = PinAt)
             val hint = stringResource(R.string.mp_drag)
-            val current by rememberUpdatedState(state)
-            MapBox(
+            InteractiveMap(
                 Scenes.MeetPoint,
-                Modifier.semantics { contentDescription = hint }.pointerInput(Unit) {
-                    detectDragGestures { change, amount ->
-                        change.consume()
-                        val f = current.mapFrame
-                        val pin = f.toMap(current.pin)
-                        repo.moveMeetPoint(f.toCoordinate(MapPoint(pin.x - amount.x / unitPx, pin.y - amount.y / unitPx)))
-                    }
-                },
-                pan = pan,
-                frame = frame,
-                chrome = MapChrome(
-                    attribution = Alignment.TopEnd,
-                    attributionPadding = PaddingValues(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 68.dp, end = 12.dp),
-                    promptAt = 0.25f,
-                ),
-            ) { u ->
+                frame,
+                Modifier.semantics { contentDescription = hint },
+                chrome = fullScreenChrome(promptAt = 0.25f, sheetHeight = sheet),
+                moveTo = repo::moveMeetPoint,
+            ) { u, f ->
                 state.members.forEach { (p, c) ->
-                    val at = frame.toMap(c)
+                    val at = f.toMap(c)
                     MapAvatar(p, 34.dp, Modifier.offset(u * at.x - 17.dp, u * at.y - 17.dp))
                 }
             }
@@ -583,7 +575,7 @@ fun MeetPointScreen(state: MeetPointState, repo: PingersRepository, nav: Navigat
         Box(Modifier.statusBarsPadding().padding(start = 16.dp, top = 12.dp)) {
             MapButton(PIcons.Close, stringResource(R.string.cd_close), { nav.back() })
         }
-        BottomSheet(spacing = 14) {
+        BottomSheet(spacing = 14, onHeight = { sheet = it }) {
             Text(stringResource(R.string.mp_title), style = heading(22.sp), modifier = Modifier.semantics { heading() })
             Segmented(
                 listOf(stringResource(R.string.mp_pin), stringResource(R.string.mp_at_me), stringResource(R.string.mp_midpoint)),

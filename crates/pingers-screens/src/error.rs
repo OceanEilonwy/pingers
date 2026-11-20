@@ -51,6 +51,9 @@ pub enum ScreenError {
     /// The snapshot has no exclusion zone with this id.
     #[error("no such exclusion zone")]
     UnknownZone,
+    /// Every exclusion zone id is taken, so no new zone fits.
+    #[error("too many exclusion zones")]
+    TooManyZones,
     /// A UTC offset outside ±18 hours.
     #[error("UTC offset out of range")]
     InvalidUtcOffset,

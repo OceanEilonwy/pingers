@@ -789,8 +789,7 @@ pub struct PartyView {
     pub privacy: PrivacyLevel,
     /// Its live Meetup, if any.
     pub meetup: Option<MeetupId>,
-    /// The settings row at the bottom (canvas `PartyDetail`): "pingers.flat7.org · Full
-    /// privacy".
+    /// The settings row at the bottom (canvas `PartyDetail`): the server, "pingers.flat7.org".
     pub settings_row: String,
     /// "Party settings: server, invites, leave".
     pub settings_detail: String,
@@ -1203,6 +1202,39 @@ impl From<screens::spot::SpotEditor> for SpotEditorView {
     fn from(view: screens::spot::SpotEditor) -> Self {
         Self {
             party_name: view.party_name.as_str().to_owned(),
+            name: view.name.as_str().to_owned(),
+            shape: view.shape.into(),
+            radius_m: view.radius.get(),
+            min_radius_m: view.min_radius.get(),
+            max_radius_m: view.max_radius.get(),
+            area_square_m: view.area.map(pingers_geo::SquareMeters::get),
+            can_save: view.can_save,
+        }
+    }
+}
+
+/// The editor for a new exclusion zone: the Spot editor's fields, for no Party.
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
+pub struct ZoneEditorView {
+    /// The name as typed.
+    pub name: String,
+    /// The shape kind.
+    pub shape: ShapeKind,
+    /// The radius in metres, clamped.
+    pub radius_m: f64,
+    /// The smallest radius (100 m).
+    pub min_radius_m: f64,
+    /// The largest radius.
+    pub max_radius_m: f64,
+    /// The drawn area in square metres.
+    pub area_square_m: Option<f64>,
+    /// Whether Save is enabled.
+    pub can_save: bool,
+}
+
+impl From<screens::zones::ZoneEditor> for ZoneEditorView {
+    fn from(view: screens::zones::ZoneEditor) -> Self {
+        Self {
             name: view.name.as_str().to_owned(),
             shape: view.shape.into(),
             radius_m: view.radius.get(),

@@ -197,6 +197,10 @@ data class MapChrome(
  *
  * With a [frame], the real map is drawn when an installed pack covers the frame's centre;
  * otherwise the placeholder, and a "Download map for this area" prompt.
+ *
+ * With [fillHeight] the map takes all the height it is given, not only its scene's: a
+ * full-screen map then has tiles all the way down, under its sheet, instead of ending at the
+ * scene's bottom edge. Units stay the width's, and the camera centres on the taller view.
  */
 @Composable
 fun MapBox(
@@ -205,14 +209,17 @@ fun MapBox(
     pan: MapPoint = MapPoint(0f, 0f),
     frame: MapFrame? = null,
     chrome: MapChrome = MapChrome(),
+    fillHeight: Boolean = false,
     overlay: DrawScope.() -> Unit = {},
     content: @Composable BoxScope.(unit: Dp) -> Unit = {},
 ) {
     val maps = LocalMaps.current
     val installed = maps?.installed?.collectAsState()?.value.orEmpty()
-    BoxWithConstraints(modifier.fillMaxWidth().aspectRatio(scene.width / scene.height)) {
+    val size = if (fillHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth().aspectRatio(scene.width / scene.height)
+    BoxWithConstraints(modifier.then(size)) {
         val unit = maxWidth / scene.width
-        val camera = frame?.let { cameraFor(it, scene.width, scene.height, unit.value, pan) }
+        val heightUnits = if (fillHeight) maxHeight / unit else scene.height
+        val camera = frame?.let { cameraFor(it, scene.width, heightUnits, unit.value, pan) }
         val pack = camera?.let { covering(installed, it.target).firstOrNull() }
         if (maps != null && pack != null && camera != null) {
             PackMap(maps.packUrl(pack), camera, Modifier.fillMaxSize())
@@ -233,7 +240,7 @@ fun MapBox(
             Text(
                 stringResource(R.string.map_download_prompt),
                 style = body(13.sp, 600, Pc.Blue),
-                modifier = Modifier.align(Alignment.TopCenter).offset(y = maxHeight * chrome.promptAt)
+                modifier = Modifier.align(Alignment.TopCenter).offset(y = unit * scene.height * chrome.promptAt)
                     .shadow(2.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(Pc.Card)
                     .clickable(role = Role.Button) { open(camera?.target) }
                     .heightIn(min = 36.dp).padding(horizontal = 14.dp, vertical = 9.dp),

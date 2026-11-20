@@ -1,25 +1,23 @@
 package org.pingers.app.ui.screens
 
-import android.widget.Toast
-import android.Manifest
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import kotlin.math.abs
 import org.pingers.app.platform.hasLocationPermission
-import org.pingers.app.platform.lastKnownCoordinate
-import org.pingers.app.platform.requestCurrentCoordinate
 import org.pingers.app.ui.components.IconAction
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -58,6 +56,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
@@ -108,18 +107,16 @@ import org.pingers.app.ui.components.SheetHandle
 import org.pingers.app.ui.components.SwitchRow
 import org.pingers.app.ui.components.TopBar
 import org.pingers.app.ui.components.TwoLines
-import org.pingers.app.data.Coordinate
 import org.pingers.app.data.MapFrame
 import org.pingers.app.maps.Place
 import org.pingers.app.ui.map.LocalMaps
 import org.pingers.app.ui.map.MapBox
-import org.pingers.app.ui.map.MapChrome
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalFocusManager
+import org.pingers.app.ui.map.InteractiveMap
 import org.pingers.app.ui.map.Scenes
+import org.pingers.app.ui.map.rememberGoToMyLocation
+import org.pingers.app.ui.map.rememberMapState
 import org.pingers.app.ui.map.hatched
 import org.pingers.app.ui.map.spotCircle
 import org.pingers.app.ui.theme.Pc
@@ -128,25 +125,68 @@ import org.pingers.app.ui.theme.heading
 import org.pingers.app.words
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
-/** The white sheet over a full-screen map. */
+/**
+ * The white sheet over a full-screen map. Tapping the handle, or dragging it down, folds the sheet
+ * away to just the handle so the map is free; tapping or dragging up brings it back. A sheet
+ * that is not [collapsible] has no handle and always shows its content.
+ */
 @Composable
-fun BoxScope.BottomSheet(height: Dp? = null, spacing: Int = 16, content: @Composable ColumnScope.() -> Unit) {
+fun BoxScope.BottomSheet(
+    height: Dp? = null,
+    spacing: Int = 16,
+    collapsible: Boolean = true,
+    onHeight: (Dp) -> Unit = {},
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val density = LocalDensity.current
+    var collapsed by rememberSaveable { mutableStateOf(false) }
+    var dragged by remember { mutableFloatStateOf(0f) }
+    val threshold = with(LocalDensity.current) { SHEET_DRAG.toPx() }
+    val label = stringResource(if (collapsed) R.string.cd_sheet_expand else R.string.cd_sheet_collapse)
     Column(
         Modifier
             .align(Alignment.BottomCenter)
             .fillMaxWidth()
-            .then(if (height != null) Modifier.heightIn(min = height) else Modifier)
+            .onSizeChanged { onHeight(with(density) { it.height.toDp() }) }
+            .then(if (height != null && !collapsed) Modifier.heightIn(min = height) else Modifier)
             .shadow(12.dp, RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
             .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
             .background(Pc.Card)
             .navigationBarsPadding()
-            .padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(spacing.dp),
+            .padding(start = 20.dp, end = 20.dp, bottom = 16.dp),
     ) {
-        SheetHandle(Modifier.align(Alignment.CenterHorizontally))
-        content()
+        if (!collapsible) {
+            Column(
+                Modifier.fillMaxWidth().padding(top = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(spacing.dp),
+                content = content,
+            )
+            return@Column
+        }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .draggable(
+                    rememberDraggableState { dragged += it },
+                    Orientation.Vertical,
+                    onDragStarted = { dragged = 0f },
+                    onDragStopped = {
+                        if (dragged > threshold) collapsed = true else if (dragged < -threshold) collapsed = false
+                    },
+                )
+                .clickable(role = Role.Button, onClickLabel = label, interactionSource = null, indication = null) { collapsed = !collapsed }
+                .semantics { contentDescription = label }
+                .padding(top = 10.dp, bottom = spacing.dp),
+            contentAlignment = Alignment.TopCenter,
+        ) { SheetHandle() }
+        AnimatedVisibility(!collapsed, enter = expandVertically(), exit = shrinkVertically()) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(spacing.dp), content = content)
+        }
     }
 }
+
+// How far the handle must be dragged to fold or unfold the sheet.
+private val SHEET_DRAG = 24.dp
 
 /** A dark map label ("300 m", "Home"). */
 @Composable
@@ -164,56 +204,36 @@ fun MapLabel(text: String, modifier: Modifier = Modifier, radius: Dp = 8.dp) {
 private const val METRES_PER_UNIT = 300f / 118f
 private val SpotCentre = MapPoint(190f, 235f)
 
-/** Below the buttons over a full-screen map, clear of the status bar and the bottom sheet. */
-@Composable
-private fun fullScreenChrome() = MapChrome(
-    attribution = Alignment.TopEnd,
-    attributionPadding = PaddingValues(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 68.dp, end = 12.dp),
-    promptAt = 0.3f,
-)
-
 @Composable
 fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navigator) {
     val drawn by repo.drawArea.collectAsStateWithLifecycle()
     // Pinching scales the map about the Spot's centre: a zoom of 2 shows twice the metres per unit.
-    var zoom by remember { mutableFloatStateOf(1f) }
-    val metresPerUnit = METRES_PER_UNIT * zoom
+    val view = rememberMapState()
+    var sheet by remember { mutableStateOf(0.dp) }
+    val metresPerUnit = METRES_PER_UNIT * view.zoom
     val radius = state.radiusM / metresPerUnit
     val density = LocalDensity.current
     val current by rememberUpdatedState(state.radiusM)
     val currentMetresPerUnit by rememberUpdatedState(metresPerUnit)
     // The circle sits at SpotCentre; the frame puts the Spot's centre there, so the map moves under it.
-    val frame = MapFrame(state.centre, SpotCentre, metresPerUnit)
-    val currentFrame by rememberUpdatedState(frame)
+    val frame = MapFrame(state.centre, SpotCentre, METRES_PER_UNIT)
     var searching by remember { mutableStateOf(false) }
     val locate = rememberGoToMyLocation(state.centre, repo::moveSpot)
     val context = LocalContext.current
     // A new Spot starts where the phone is now; asking for permission waits for the button.
     LaunchedEffect(Unit) { if (state.name.isEmpty() && hasLocationPermission(context)) locate() }
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
-        MapBox(Scenes.SpotEditor, frame = frame, chrome = fullScreenChrome(), overlay = {
+        // Dragging the map moves the Spot's centre: the map slides, the circle stays put.
+        InteractiveMap(Scenes.SpotEditor, frame, view = view, sheetHeight = sheet, moveTo = repo::moveSpot, overlay = { f ->
             if (state.shape == ShapeKind.Circle) {
                 spotCircle(SpotCentre, radius, dashed = false, strokeWidth = 2.5f, alpha = 0.14f)
                 drawCircle(Pc.Blue, 6f, Offset(SpotCentre.x, SpotCentre.y))
             } else if (drawn.closed) {
-                val path = polygon(drawn.points.map(frame::toMap), close = true)
+                val path = polygon(drawn.points.map(f::toMap), close = true)
                 drawPath(path, Pc.Blue.copy(alpha = 0.16f))
                 drawPath(path, Pc.Blue, style = Stroke(2.5f, join = StrokeJoin.Round))
             }
-        }) { unit ->
-            // Dragging the map moves the Spot's centre: the map slides, the circle stays put.
-            // Pinching zooms the map in or out around the circle.
-            Box(
-                Modifier.fillMaxSize().pointerInput(unit) {
-                    val unitPx = with(density) { unit.toPx() }
-                    detectTransformGestures { _, pan, gestureZoom, _ ->
-                        if (gestureZoom != 1f) zoom = (zoom / gestureZoom).coerceIn(MIN_ZOOM, MAX_ZOOM)
-                        if (pan != Offset.Zero) {
-                            repo.moveSpot(currentFrame.toCoordinate(MapPoint(SpotCentre.x - pan.x / unitPx, SpotCentre.y - pan.y / unitPx)))
-                        }
-                    }
-                },
-            )
+        }) { unit, _ ->
             if (state.shape == ShapeKind.Circle) {
                 val handleLabel = stringResource(R.string.cd_radius_handle, state.radiusM)
                 Box(
@@ -246,10 +266,9 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
         ) {
             MapButton(PIcons.Close, stringResource(R.string.cd_close), { nav.back() })
             PlaceSearchButton({ searching = true }, Modifier.weight(1f))
-            MapButton(PIcons.Locate, stringResource(R.string.cd_my_location), locate)
         }
-        BottomSheet {
-            LabeledField(stringResource(R.string.spot_name), state.name, repo::setSpotName, height = 52.dp)
+        BottomSheet(onHeight = { sheet = it }) {
+            LabeledField(stringResource(if (state.forZone) R.string.zone_name else R.string.spot_name), state.name, repo::setSpotName, height = 52.dp)
             Segmented(
                 listOf(stringResource(R.string.spot_circle), stringResource(R.string.spot_draw_area)),
                 if (state.shape == ShapeKind.Circle) 0 else 1,
@@ -283,63 +302,21 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
                     ) { Text(stringResource(R.string.spot_edit_area), style = body(15.sp, 600, Pc.Blue)) }
                 }
             }
-            LockNote(stringResource(R.string.spot_encrypted, state.partyName))
-            PillButton(stringResource(R.string.spot_save), { repo.saveSpot(); nav.go(Route.Party) }, Modifier.testTag(E2eTags.SPOT_SAVE), enabled = state.canSave)
+            if (state.forZone) {
+                LockNote(stringResource(R.string.zone_on_phone))
+                PillButton(stringResource(R.string.zone_save), { repo.saveZone { nav.go(Route.ExclusionZones) } }, enabled = state.canSave)
+            } else {
+                LockNote(stringResource(R.string.spot_encrypted, state.partyName))
+                PillButton(stringResource(R.string.spot_save), { repo.saveSpot(); nav.go(Route.Party) }, Modifier.testTag(E2eTags.SPOT_SAVE), enabled = state.canSave)
+            }
         }
         if (searching) PlaceSearchScreen(onPick = { repo.moveSpot(it.at) }, onClose = { searching = false })
     }
 }
 
-// How far the Spot editor's map zooms from its starting scale: 8 times closer, 64 times further out.
-private const val MIN_ZOOM = 1f / 8
-private const val MAX_ZOOM = 64f
-
-/**
- * "Go to my location": moves the map to where the phone last was at once, then to a fresh fix
- * when one comes, unless the map was moved meanwhile. Asks for location permission first if
- * the app has none. The location stays on the phone.
- */
-@Composable
-private fun rememberGoToMyLocation(centre: Coordinate, moveTo: (Coordinate) -> Unit): () -> Unit {
-    val context = LocalContext.current
-    val currentCentre by rememberUpdatedState(centre)
-    val currentMoveTo by rememberUpdatedState(moveTo)
-    val notFound = stringResource(R.string.map_location_not_found)
-    val denied = stringResource(R.string.map_location_denied)
-    val pending = remember { mutableStateOf<(() -> Unit)?>(null) }
-    DisposableEffect(Unit) { onDispose { pending.value?.invoke() } }
-    val go = {
-        pending.value?.invoke()
-        val last = lastKnownCoordinate(context)
-        last?.let(currentMoveTo)
-        pending.value = requestCurrentCoordinate(context) { fresh ->
-            pending.value = null
-            val untouched = last == null || currentCentre.near(last)
-            when {
-                fresh != null && untouched -> currentMoveTo(fresh)
-                fresh == null && last == null -> Toast.makeText(context, notFound, Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
-        if (granted.values.any { it }) go() else Toast.makeText(context, denied, Toast.LENGTH_SHORT).show()
-    }
-    return {
-        if (hasLocationPermission(context)) {
-            go()
-        } else {
-            permission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
-        }
-    }
-}
-
-/** Within about a metre: the map has not been moved since it went to this coordinate. */
-private fun Coordinate.near(other: Coordinate): Boolean =
-    abs(latitude - other.latitude) < 1e-5 && abs(longitude - other.longitude) < 1e-5
-
 /** The "Search a place" pill over the map; tapping it opens [PlaceSearchScreen]. */
 @Composable
-private fun PlaceSearchButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+internal fun PlaceSearchButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     val label = stringResource(R.string.spot_search)
     Row(
         modifier
@@ -360,10 +337,10 @@ private fun PlaceSearchButton(onClick: () -> Unit, modifier: Modifier = Modifier
 
 /**
  * "Search a place", full screen: matches place names in the downloaded packs' indexes, on
- * this phone. Picking one moves the Spot there and closes the search; Back closes it too.
+ * this phone. Picking one moves the map there and closes the search; Back closes it too.
  */
 @Composable
-private fun PlaceSearchScreen(onPick: (Place) -> Unit, onClose: () -> Unit) {
+internal fun PlaceSearchScreen(onPick: (Place) -> Unit, onClose: () -> Unit) {
     val maps = LocalMaps.current
     val focus = LocalFocusManager.current
     val focusRequester = remember { FocusRequester() }
@@ -409,6 +386,27 @@ private fun PlaceSearchScreen(onPick: (Place) -> Unit, onClose: () -> Unit) {
                 installed.isEmpty() -> R.string.maps_search_no_maps
                 query.isNotBlank() && results.isEmpty() -> R.string.maps_search_none
                 else -> null
+            }
+            if (notice == null && query.isBlank()) {
+                // Nothing typed yet: say what the box is for, instead of a blank page.
+                item {
+                    Column(
+                        Modifier.fillMaxWidth().padding(top = 72.dp, start = 24.dp, end = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Box(Modifier.size(64.dp).clip(CircleShape).background(Pc.Chip), contentAlignment = Alignment.Center) {
+                            Icon(PIcons.Search, null, tint = Pc.Muted, modifier = Modifier.size(28.dp))
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(stringResource(R.string.maps_search_empty_title), style = body(16.sp, 600), textAlign = TextAlign.Center)
+                        Text(
+                            stringResource(R.string.maps_search_empty_detail),
+                            style = body(14.sp, color = Pc.Muted, lineHeight = 1.4f),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
             }
             if (notice != null) {
                 item {
@@ -471,14 +469,15 @@ fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator
     val density = LocalDensity.current
     val w = words()
     val frame = state.mapFrame
-    val points = state.points.map(frame::toMap)
-    val current by rememberUpdatedState(state)
+    var sheet by remember { mutableStateOf(0.dp) }
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
-        MapBox(
+        InteractiveMap(
             Scenes.DrawArea,
-            frame = frame,
-            chrome = fullScreenChrome(),
-            overlay = {
+            frame,
+            sheetHeight = sheet,
+            onTap = repo::drawTapMap,
+            overlay = { f ->
+                val points = state.points.map(f::toMap)
                 if (points.isNotEmpty()) {
                     val path = polygon(points, state.closed)
                     if (state.closed) {
@@ -489,15 +488,10 @@ fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator
                     }
                 }
             },
-        ) { unit ->
+        ) { unit, f ->
             val unitPx = with(density) { unit.toPx() }
-            Box(
-                Modifier.fillMaxSize().pointerInput(Unit) {
-                    detectTapGestures { o -> repo.drawTapMap(current.mapFrame.toCoordinate(MapPoint(o.x / unitPx, o.y / unitPx))) }
-                },
-            )
             state.midpoints.forEachIndexed { i, c ->
-                val m = frame.toMap(c)
+                val m = f.toMap(c)
                 val label = stringResource(R.string.cd_add_point_between, i + 1, (i + 1) % state.points.size + 1)
                 Box(
                     Modifier
@@ -514,8 +508,8 @@ fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator
                     ) { Text("+", style = body(14.sp, 600, Pc.Blue)) }
                 }
             }
-            points.forEachIndexed { i, p ->
-                Vertex(i, p, state, unit, unitPx, repo)
+            state.points.map(f::toMap).forEachIndexed { i, p ->
+                Vertex(i, p, state, f, unit, unitPx, repo)
             }
         }
         Row(
@@ -529,7 +523,7 @@ fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator
                 contentAlignment = Alignment.Center,
             ) { Text(stringResource(R.string.draw_title, state.spotName), style = body(14.sp, 600)) }
         }
-        BottomSheet(spacing = 14) {
+        BottomSheet(spacing = 14, onHeight = { sheet = it }) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
                 Text(
                     pluralStringResource(R.plurals.draw_points, state.points.size, state.points.size),
@@ -570,11 +564,12 @@ fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator
 }
 
 @Composable
-private fun Vertex(i: Int, p: MapPoint, state: DrawAreaState, unit: Dp, unitPx: Float, repo: PingersRepository) {
+private fun Vertex(i: Int, p: MapPoint, state: DrawAreaState, frame: MapFrame, unit: Dp, unitPx: Float, repo: PingersRepository) {
     val first = i == 0 && state.closable
     val selected = state.selected == i
     val size = if (first) 30 else 24
     val point by rememberUpdatedState(p)
+    val currentFrame by rememberUpdatedState(frame)
     val label = if (first) stringResource(R.string.cd_point_close) else stringResource(R.string.cd_point, i + 1)
     Box(
         Modifier
@@ -587,7 +582,7 @@ private fun Vertex(i: Int, p: MapPoint, state: DrawAreaState, unit: Dp, unitPx: 
             .pointerInput(i) {
                 detectDragGestures(onDragEnd = repo::drawDragEnd, onDragCancel = repo::drawDragEnd) { change, amount ->
                     change.consume()
-                    repo.drawDragPoint(i, state.mapFrame.toCoordinate(MapPoint(point.x + amount.x / unitPx, point.y + amount.y / unitPx)))
+                    repo.drawDragPoint(i, currentFrame.toCoordinate(MapPoint(point.x + amount.x / unitPx, point.y + amount.y / unitPx)))
                 }
             }
             .clickable(role = Role.Button, interactionSource = null, indication = null) { repo.drawTapPoint(i) },
@@ -638,9 +633,6 @@ private fun SmallButton(
 
 @Composable
 fun ExclusionZonesScreen(state: ExclusionZonesState, repo: PingersRepository, nav: Navigator) {
-    val context = LocalContext.current
-    val soon = stringResource(R.string.zones_edit_soon)
-    val notYet = { Toast.makeText(context, soon, Toast.LENGTH_SHORT).show() }
     Page(
         top = { TopBar(stringResource(R.string.zones_title), { nav.back() }, stringResource(R.string.cd_back)) },
         spacing = 0,
@@ -686,7 +678,7 @@ fun ExclusionZonesScreen(state: ExclusionZonesState, repo: PingersRepository, na
                 }
                 RowDivider()
             }
-            ListRow(notYet, padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
+            ListRow({ repo.newZone(); nav.go(Route.SpotEditor) }, padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
                 Icon(PIcons.Plus, null, tint = Pc.Blue, modifier = Modifier.size(18.dp))
                 Text(stringResource(R.string.zones_add), style = body(16.sp, 600, Pc.Blue))
             }

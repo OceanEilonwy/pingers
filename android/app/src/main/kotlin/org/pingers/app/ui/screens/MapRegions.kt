@@ -69,6 +69,11 @@ fun MapRegionsScreen(maps: Maps, around: Coordinate?, nav: Navigator) {
     val words = uniffi.pingers.downloadedMapsWords(host.name, host.source.toFfi(), settings.throughRelay)
     Page(top = { TopBar(words.title, { nav.back() }, words.back) }, spacing = 0) {
         Text(words.intro, style = body(14.sp, color = Pc.Muted, lineHeight = 1.45f), modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 6.dp))
+        // The same switch as in Advanced, here too: this is where people look for map settings.
+        val relay = mapsWords(host, settings.throughRelay)
+        Card(Modifier.padding(top = 8.dp, bottom = 4.dp)) {
+            org.pingers.app.ui.components.SwitchRow(relay.relaySetting, relay.relayDetail, settings.throughRelay, maps::setThroughRelay, titleSize = 15)
+        }
         val offers = (catalog as? CatalogState.Loaded)?.offers.orEmpty()
         val offered = offers.map { it.id }.toSet()
         val here = around?.let { c -> offers.filter { o -> o.bbox()?.let { c in it } == true } }.orEmpty().map { it.id }.toSet()
