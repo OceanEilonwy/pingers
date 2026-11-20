@@ -496,6 +496,7 @@ class FakeRepository(
 
     override fun withdrawJoin() = Unit
     override fun checkJoins() = Unit
+    override fun ensureInvite() = Unit
 
     override fun openJoinedParty() = openParty(cc)
 

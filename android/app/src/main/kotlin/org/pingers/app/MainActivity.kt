@@ -354,6 +354,8 @@ private fun Screen(route: Route, repo: PingersRepository, nav: Navigator, varian
         Route.Advanced -> AdvancedScreen(repo.advanced.collectAsStateWithLifecycle().value, repo, nav)
         Route.Invite -> {
             CheckJoinsWhileShown(repo)
+            // An existing Party has no link until one is made; creation only made the first.
+            LaunchedEffect(Unit) { repo.ensureInvite() }
             InviteScreen(repo.invite.collectAsStateWithLifecycle().value, repo, nav)
         }
         Route.JoinRequest -> JoinRequestScreen(repo.joinRequest.collectAsStateWithLifecycle().value, repo, nav)

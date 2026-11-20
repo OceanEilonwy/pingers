@@ -891,6 +891,21 @@ class CoreRepository(
 
     override fun checkJoins() = call("check joins") { it.checkJoins() }
 
+    private var makingInvite = false
+
+    override fun ensureInvite() {
+        val party = settingsParty() ?: return
+        if (makingInvite || _invite.value.link != null) return
+        makingInvite = true
+        call("make invite") { core ->
+            try {
+                core.createInvite(party.toFfi())
+            } finally {
+                makingInvite = false
+            }
+        }
+    }
+
     override fun openJoinedParty() {
         val party = _letIn.value?.party ?: return
         currentParty = party

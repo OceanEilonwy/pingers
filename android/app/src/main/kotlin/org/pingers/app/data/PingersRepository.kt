@@ -156,6 +156,8 @@ interface PingersRepository {
      * with no wake-up push (pushes off, or no token yet) nothing else would tell the app.
      */
     fun checkJoins()
+    /** Invite people: makes the link if the Party has no live one yet, so the screen never waits on nothing. */
+    fun ensureInvite()
     /** You're in's "Open <party>": dismisses You're in and opens the Party. */
     fun openJoinedParty()
     /** You're in's "Leave Party": leaves the Party just joined and dismisses You're in. */
