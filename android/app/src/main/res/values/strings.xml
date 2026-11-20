@@ -339,6 +339,9 @@
     <string name="cd_map_search_result">Go to %1$s</string>
     <string name="cd_clear_search">Clear search</string>
     <string name="cd_my_location">Go to my location</string>
+    <string name="cd_map_follow_heading">Turn the map with your phone</string>
+    <string name="cd_map_north_up">Point the map north</string>
+    <string name="map_no_compass">This phone has no compass</string>
     <string name="map_location_not_found">Couldn\'t find where you are. Check that location is on.</string>
     <string name="map_location_denied">Pingers needs location permission to find where you are.</string>
 </resources>

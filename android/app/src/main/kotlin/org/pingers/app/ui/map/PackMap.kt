@@ -43,8 +43,8 @@ val LocalMaps = staticCompositionLocalOf<Maps?> { null }
 /** Opens the region picker for the area around a coordinate ("Download map for this area"). */
 val LocalOpenMapRegions = staticCompositionLocalOf<(Coordinate?) -> Unit> { {} }
 
-/** Where MapLibre looks and how close. */
-data class Camera(val target: Coordinate, val zoom: Double)
+/** Where MapLibre looks, how close, and which compass direction is up. */
+data class Camera(val target: Coordinate, val zoom: Double, val bearing: Double = 0.0)
 
 /**
  * The camera that puts [frame]'s units on screen at [unitDp] dp each, with the scene's centre
@@ -57,7 +57,7 @@ fun cameraFor(frame: MapFrame, sceneWidth: Float, sceneHeight: Float, unitDp: Fl
     val target = frame.toCoordinate(MapPoint(sceneWidth / 2 - pan.x, sceneHeight / 2 - pan.y))
     val metresPerDp = frame.metresPerUnit / unitDp
     val zoom = ln(EQUATOR_M * cos(target.latitude * PI / 180) / (512 * metresPerDp)) / ln(2.0)
-    return Camera(target, zoom)
+    return Camera(target, zoom, frame.bearing.toDouble())
 }
 
 /** The equator's length as MapFrame measures it (111,320 m a degree). */
@@ -132,7 +132,7 @@ private class MapHolder {
         }
         map.moveCamera(
             CameraUpdateFactory.newCameraPosition(
-                CameraPosition.Builder().target(LatLng(camera.target.latitude, camera.target.longitude)).zoom(camera.zoom).build(),
+                CameraPosition.Builder().target(LatLng(camera.target.latitude, camera.target.longitude)).zoom(camera.zoom).bearing(camera.bearing).build(),
             ),
         )
     }

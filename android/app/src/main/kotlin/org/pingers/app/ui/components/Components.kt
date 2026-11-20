@@ -177,8 +177,8 @@ fun IconAction(
 
 /** A white floating icon button over a map. */
 @Composable
-fun MapButton(icon: ImageVector, label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    IconAction(icon, label, onClick, modifier.shadow(2.dp, CircleShape), background = Pc.Card, iconSize = 20.dp)
+fun MapButton(icon: ImageVector, label: String, onClick: () -> Unit, modifier: Modifier = Modifier, tint: Color = Pc.Ink) {
+    IconAction(icon, label, onClick, modifier.shadow(2.dp, CircleShape), tint = tint, background = Pc.Card, iconSize = 20.dp)
 }
 
 /** The white rounded card the canvas lists sit in. */

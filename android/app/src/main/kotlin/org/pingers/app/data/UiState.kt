@@ -2,6 +2,7 @@ package org.pingers.app.data
 
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.sin
 import uniffi.pingers.AdvancedText
 import uniffi.pingers.JoinAs
 import uniffi.pingers.NewPartyText
@@ -68,20 +69,40 @@ data class MapPoint(val x: Float, val y: Float)
  * Places coordinates on the placeholder map: [origin] sits at [originAt], and one map unit is
  * [metresPerUnit] metres (the canvas's scale is 2). Equirectangular, which is exact enough at
  * the scale of a park. A frame that is not [placed] had nothing of its own to centre on (no
- * fix, Spot or meet point yet): its origin is only where the map starts.
+ * fix, Spot or meet point yet): its origin is only where the map starts. [bearing] turns the
+ * map about [originAt]: the compass direction, in degrees clockwise from north, that points up.
  */
-data class MapFrame(val origin: Coordinate, val originAt: MapPoint, val metresPerUnit: Float = 2f, val placed: Boolean = true) {
+data class MapFrame(
+    val origin: Coordinate,
+    val originAt: MapPoint,
+    val metresPerUnit: Float = 2f,
+    val placed: Boolean = true,
+    val bearing: Float = 0f,
+) {
     private val metresPerDegreeLon get() = METRES_PER_DEGREE * cos(origin.latitude * PI / 180)
+    private val turnSin get() = sin(bearing * PI / 180)
+    private val turnCos get() = cos(bearing * PI / 180)
 
-    fun toMap(c: Coordinate): MapPoint = MapPoint(
-        originAt.x + ((c.longitude - origin.longitude) * metresPerDegreeLon / metresPerUnit).toFloat(),
-        originAt.y - ((c.latitude - origin.latitude) * METRES_PER_DEGREE / metresPerUnit).toFloat(),
-    )
+    fun toMap(c: Coordinate): MapPoint {
+        // East and south of the origin in units, as if north were up, then turned by the bearing.
+        val east = (c.longitude - origin.longitude) * metresPerDegreeLon / metresPerUnit
+        val south = -(c.latitude - origin.latitude) * METRES_PER_DEGREE / metresPerUnit
+        return MapPoint(
+            originAt.x + (east * turnCos + south * turnSin).toFloat(),
+            originAt.y + (-east * turnSin + south * turnCos).toFloat(),
+        )
+    }
 
-    fun toCoordinate(p: MapPoint): Coordinate = Coordinate(
-        origin.latitude - (p.y - originAt.y) * metresPerUnit / METRES_PER_DEGREE,
-        origin.longitude + (p.x - originAt.x) * metresPerUnit / metresPerDegreeLon,
-    )
+    fun toCoordinate(p: MapPoint): Coordinate {
+        val x = (p.x - originAt.x).toDouble()
+        val y = (p.y - originAt.y).toDouble()
+        val east = x * turnCos - y * turnSin
+        val south = x * turnSin + y * turnCos
+        return Coordinate(
+            origin.latitude - south * metresPerUnit / METRES_PER_DEGREE,
+            origin.longitude + east * metresPerUnit / metresPerDegreeLon,
+        )
+    }
 
     /** A length in metres, in map units. */
     fun units(metres: Double): Float = (metres / metresPerUnit).toFloat()

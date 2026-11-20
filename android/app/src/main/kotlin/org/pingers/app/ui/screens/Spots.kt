@@ -1,6 +1,5 @@
 package org.pingers.app.ui.screens
 
-import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -8,25 +7,17 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.runtime.saveable.rememberSaveable
-import android.Manifest
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import kotlin.math.abs
 import org.pingers.app.platform.hasLocationPermission
-import org.pingers.app.platform.lastKnownCoordinate
-import org.pingers.app.platform.requestCurrentCoordinate
 import org.pingers.app.ui.components.IconAction
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -115,18 +106,16 @@ import org.pingers.app.ui.components.SheetHandle
 import org.pingers.app.ui.components.SwitchRow
 import org.pingers.app.ui.components.TopBar
 import org.pingers.app.ui.components.TwoLines
-import org.pingers.app.data.Coordinate
 import org.pingers.app.data.MapFrame
 import org.pingers.app.maps.Place
 import org.pingers.app.ui.map.LocalMaps
 import org.pingers.app.ui.map.MapBox
-import org.pingers.app.ui.map.MapChrome
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalFocusManager
+import org.pingers.app.ui.map.InteractiveMap
 import org.pingers.app.ui.map.Scenes
+import org.pingers.app.ui.map.rememberGoToMyLocation
+import org.pingers.app.ui.map.rememberMapState
 import org.pingers.app.ui.map.hatched
 import org.pingers.app.ui.map.spotCircle
 import org.pingers.app.ui.theme.Pc
@@ -197,56 +186,35 @@ fun MapLabel(text: String, modifier: Modifier = Modifier, radius: Dp = 8.dp) {
 private const val METRES_PER_UNIT = 300f / 118f
 private val SpotCentre = MapPoint(190f, 235f)
 
-/** Below the buttons over a full-screen map, clear of the status bar and the bottom sheet. */
-@Composable
-private fun fullScreenChrome() = MapChrome(
-    attribution = Alignment.TopEnd,
-    attributionPadding = PaddingValues(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 68.dp, end = 12.dp),
-    promptAt = 0.3f,
-)
-
 @Composable
 fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navigator) {
     val drawn by repo.drawArea.collectAsStateWithLifecycle()
     // Pinching scales the map about the Spot's centre: a zoom of 2 shows twice the metres per unit.
-    var zoom by remember { mutableFloatStateOf(1f) }
-    val metresPerUnit = METRES_PER_UNIT * zoom
+    val view = rememberMapState()
+    val metresPerUnit = METRES_PER_UNIT * view.zoom
     val radius = state.radiusM / metresPerUnit
     val density = LocalDensity.current
     val current by rememberUpdatedState(state.radiusM)
     val currentMetresPerUnit by rememberUpdatedState(metresPerUnit)
     // The circle sits at SpotCentre; the frame puts the Spot's centre there, so the map moves under it.
-    val frame = MapFrame(state.centre, SpotCentre, metresPerUnit)
-    val currentFrame by rememberUpdatedState(frame)
+    val frame = MapFrame(state.centre, SpotCentre, METRES_PER_UNIT)
     var searching by remember { mutableStateOf(false) }
     val locate = rememberGoToMyLocation(state.centre, repo::moveSpot)
     val context = LocalContext.current
     // A new Spot starts where the phone is now; asking for permission waits for the button.
     LaunchedEffect(Unit) { if (state.name.isEmpty() && hasLocationPermission(context)) locate() }
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
-        MapBox(Scenes.SpotEditor, frame = frame, chrome = fullScreenChrome(), overlay = {
+        // Dragging the map moves the Spot's centre: the map slides, the circle stays put.
+        InteractiveMap(Scenes.SpotEditor, frame, view = view, moveTo = repo::moveSpot, overlay = { f ->
             if (state.shape == ShapeKind.Circle) {
                 spotCircle(SpotCentre, radius, dashed = false, strokeWidth = 2.5f, alpha = 0.14f)
                 drawCircle(Pc.Blue, 6f, Offset(SpotCentre.x, SpotCentre.y))
             } else if (drawn.closed) {
-                val path = polygon(drawn.points.map(frame::toMap), close = true)
+                val path = polygon(drawn.points.map(f::toMap), close = true)
                 drawPath(path, Pc.Blue.copy(alpha = 0.16f))
                 drawPath(path, Pc.Blue, style = Stroke(2.5f, join = StrokeJoin.Round))
             }
-        }) { unit ->
-            // Dragging the map moves the Spot's centre: the map slides, the circle stays put.
-            // Pinching zooms the map in or out around the circle.
-            Box(
-                Modifier.fillMaxSize().pointerInput(unit) {
-                    val unitPx = with(density) { unit.toPx() }
-                    detectTransformGestures { _, pan, gestureZoom, _ ->
-                        if (gestureZoom != 1f) zoom = (zoom / gestureZoom).coerceIn(MIN_ZOOM, MAX_ZOOM)
-                        if (pan != Offset.Zero) {
-                            repo.moveSpot(currentFrame.toCoordinate(MapPoint(SpotCentre.x - pan.x / unitPx, SpotCentre.y - pan.y / unitPx)))
-                        }
-                    }
-                },
-            )
+        }) { unit, _ ->
             if (state.shape == ShapeKind.Circle) {
                 val handleLabel = stringResource(R.string.cd_radius_handle, state.radiusM)
                 Box(
@@ -279,7 +247,6 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
         ) {
             MapButton(PIcons.Close, stringResource(R.string.cd_close), { nav.back() })
             PlaceSearchButton({ searching = true }, Modifier.weight(1f))
-            MapButton(PIcons.Locate, stringResource(R.string.cd_my_location), locate)
         }
         BottomSheet {
             LabeledField(stringResource(if (state.forZone) R.string.zone_name else R.string.spot_name), state.name, repo::setSpotName, height = 52.dp)
@@ -327,53 +294,6 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
         if (searching) PlaceSearchScreen(onPick = { repo.moveSpot(it.at) }, onClose = { searching = false })
     }
 }
-
-// How far the Spot editor's map zooms from its starting scale: 8 times closer, 64 times further out.
-private const val MIN_ZOOM = 1f / 8
-private const val MAX_ZOOM = 64f
-
-/**
- * "Go to my location": moves the map to where the phone last was at once, then to a fresh fix
- * when one comes, unless the map was moved meanwhile. Asks for location permission first if
- * the app has none. The location stays on the phone.
- */
-@Composable
-private fun rememberGoToMyLocation(centre: Coordinate, moveTo: (Coordinate) -> Unit): () -> Unit {
-    val context = LocalContext.current
-    val currentCentre by rememberUpdatedState(centre)
-    val currentMoveTo by rememberUpdatedState(moveTo)
-    val notFound = stringResource(R.string.map_location_not_found)
-    val denied = stringResource(R.string.map_location_denied)
-    val pending = remember { mutableStateOf<(() -> Unit)?>(null) }
-    DisposableEffect(Unit) { onDispose { pending.value?.invoke() } }
-    val go = {
-        pending.value?.invoke()
-        val last = lastKnownCoordinate(context)
-        last?.let(currentMoveTo)
-        pending.value = requestCurrentCoordinate(context) { fresh ->
-            pending.value = null
-            val untouched = last == null || currentCentre.near(last)
-            when {
-                fresh != null && untouched -> currentMoveTo(fresh)
-                fresh == null && last == null -> Toast.makeText(context, notFound, Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
-        if (granted.values.any { it }) go() else Toast.makeText(context, denied, Toast.LENGTH_SHORT).show()
-    }
-    return {
-        if (hasLocationPermission(context)) {
-            go()
-        } else {
-            permission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
-        }
-    }
-}
-
-/** Within about a metre: the map has not been moved since it went to this coordinate. */
-private fun Coordinate.near(other: Coordinate): Boolean =
-    abs(latitude - other.latitude) < 1e-5 && abs(longitude - other.longitude) < 1e-5
 
 /** The "Search a place" pill over the map; tapping it opens [PlaceSearchScreen]. */
 @Composable
@@ -509,14 +429,13 @@ fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator
     val density = LocalDensity.current
     val w = words()
     val frame = state.mapFrame
-    val points = state.points.map(frame::toMap)
-    val current by rememberUpdatedState(state)
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
-        MapBox(
+        InteractiveMap(
             Scenes.DrawArea,
-            frame = frame,
-            chrome = fullScreenChrome(),
-            overlay = {
+            frame,
+            onTap = repo::drawTapMap,
+            overlay = { f ->
+                val points = state.points.map(f::toMap)
                 if (points.isNotEmpty()) {
                     val path = polygon(points, state.closed)
                     if (state.closed) {
@@ -527,15 +446,10 @@ fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator
                     }
                 }
             },
-        ) { unit ->
+        ) { unit, f ->
             val unitPx = with(density) { unit.toPx() }
-            Box(
-                Modifier.fillMaxSize().pointerInput(Unit) {
-                    detectTapGestures { o -> repo.drawTapMap(current.mapFrame.toCoordinate(MapPoint(o.x / unitPx, o.y / unitPx))) }
-                },
-            )
             state.midpoints.forEachIndexed { i, c ->
-                val m = frame.toMap(c)
+                val m = f.toMap(c)
                 val label = stringResource(R.string.cd_add_point_between, i + 1, (i + 1) % state.points.size + 1)
                 Box(
                     Modifier
@@ -552,8 +466,8 @@ fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator
                     ) { Text("+", style = body(14.sp, 600, Pc.Blue)) }
                 }
             }
-            points.forEachIndexed { i, p ->
-                Vertex(i, p, state, unit, unitPx, repo)
+            state.points.map(f::toMap).forEachIndexed { i, p ->
+                Vertex(i, p, state, f, unit, unitPx, repo)
             }
         }
         Row(
@@ -608,11 +522,12 @@ fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator
 }
 
 @Composable
-private fun Vertex(i: Int, p: MapPoint, state: DrawAreaState, unit: Dp, unitPx: Float, repo: PingersRepository) {
+private fun Vertex(i: Int, p: MapPoint, state: DrawAreaState, frame: MapFrame, unit: Dp, unitPx: Float, repo: PingersRepository) {
     val first = i == 0 && state.closable
     val selected = state.selected == i
     val size = if (first) 30 else 24
     val point by rememberUpdatedState(p)
+    val currentFrame by rememberUpdatedState(frame)
     val label = if (first) stringResource(R.string.cd_point_close) else stringResource(R.string.cd_point, i + 1)
     Box(
         Modifier
@@ -625,7 +540,7 @@ private fun Vertex(i: Int, p: MapPoint, state: DrawAreaState, unit: Dp, unitPx: 
             .pointerInput(i) {
                 detectDragGestures(onDragEnd = repo::drawDragEnd, onDragCancel = repo::drawDragEnd) { change, amount ->
                     change.consume()
-                    repo.drawDragPoint(i, state.mapFrame.toCoordinate(MapPoint(point.x + amount.x / unitPx, point.y + amount.y / unitPx)))
+                    repo.drawDragPoint(i, currentFrame.toCoordinate(MapPoint(point.x + amount.x / unitPx, point.y + amount.y / unitPx)))
                 }
             }
             .clickable(role = Role.Button, interactionSource = null, indication = null) { repo.drawTapPoint(i) },

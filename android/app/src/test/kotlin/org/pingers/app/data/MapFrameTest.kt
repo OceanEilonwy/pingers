@@ -87,4 +87,25 @@ class MapFrameTest {
         assertNull(drawn(frame, listOf(westernAustralia)))
         assertTrue(frameAt(perth).placed)
     }
+
+    /** A turned map (two-finger rotate, "Orient") turns overlays, taps and the camera together. */
+    @Test
+    fun aTurnedFrameTurnsAboutItsOrigin() {
+        val north = MapFrame(perth, MapPoint(100f, 100f), metresPerUnit = 2f)
+        val east = north.copy(bearing = 90f)
+        // 200 m east of the origin: to the right when north is up, straight up when east is up.
+        val there = north.toCoordinate(MapPoint(200f, 100f))
+        val up = east.toMap(there)
+        assertEquals(100f, up.x, 0.01f)
+        assertEquals(0f, up.y, 0.01f)
+        // A tap goes back to the same place, whichever way the map faces.
+        for (bearing in listOf(0f, 37f, 90f, 200f, 359f)) {
+            val f = north.copy(bearing = bearing)
+            val back = f.toCoordinate(f.toMap(there))
+            assertEquals(there.latitude, back.latitude, 1e-9)
+            assertEquals(there.longitude, back.longitude, 1e-9)
+        }
+        assertEquals(perth, east.toCoordinate(MapPoint(100f, 100f)))
+        assertEquals(90.0, cameraFor(east, 200f, 200f, unitDp = 1f).bearing, 0.0)
+    }
 }
