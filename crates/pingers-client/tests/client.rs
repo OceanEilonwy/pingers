@@ -358,12 +358,18 @@ async fn spot_and_allow_list_commands_reach_parties() -> Result<(), TestError> {
             Meters::from_whole(150),
         )?),
     };
-    let reads = rig.fakes.section_reads();
     assert_eq!(
         client.save_spot(PARTY, spot.clone()).await?,
         FakeCrates::SPOT
     );
-    rig.expect_last(&CrateCall::SaveSpot(PARTY, spot), reads);
+    // A Spot made where the device stands has no enter event: a wake follows the save at
+    // once, so the entry check does not wait for the next scheduled one.
+    let calls = rig.fakes.calls();
+    assert_eq!(calls.last(), Some(&CrateCall::Wake(WakeInput::Scheduled)));
+    assert_eq!(
+        calls.iter().rev().nth(1),
+        Some(&CrateCall::SaveSpot(PARTY, spot))
+    );
 
     let id = SpotId::from_bytes([4; 16]);
     let reads = rig.fakes.section_reads();
