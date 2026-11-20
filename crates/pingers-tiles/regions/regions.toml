@@ -1,0 +1,75 @@
+# The region list Pingers ships: Australia's states and territories, and New Zealand. The
+# format is crates/pingers-tiles/README.md, "The region list". pingers-tiles cuts from it, and
+# the monokulo-nodo map host package installs it beside its config and cuts these regions on
+# demand (cache mode), as far as its `hosted` setting allows.
+#
+# The polygons are deliberately rough: straight lines a little past each border (along the
+# Murray between New South Wales and Victoria), so a place on a border is in both packs, and
+# open sea, which costs almost nothing. `pmtiles extract` only uses them to pick tiles.
+#
+# Sizes at zoom 15 from the 20260811 Protomaps build (`pmtiles extract --dry-run`): Western
+# Australia 356 MB, Northern Territory 100 MB, South Australia 211 MB, Queensland 537 MB, New
+# South Wales 588 MB, ACT 24 MB, Victoria 399 MB, Tasmania 113 MB (Australia 2.3 GB); New
+# Zealand 631 MB.
+
+[[region]]
+id = "oceania/australia/australian-capital-territory"
+name = "Australian Capital Territory"
+group = "Australia"
+polygon = "polygons/au-australian-capital-territory.geojson"
+max_zoom = 15
+
+[[region]]
+id = "oceania/australia/new-south-wales"
+name = "New South Wales"
+group = "Australia"
+polygon = "polygons/au-new-south-wales.geojson"
+max_zoom = 15
+
+[[region]]
+id = "oceania/australia/northern-territory"
+name = "Northern Territory"
+group = "Australia"
+polygon = "polygons/au-northern-territory.geojson"
+max_zoom = 15
+
+[[region]]
+id = "oceania/australia/queensland"
+name = "Queensland"
+group = "Australia"
+polygon = "polygons/au-queensland.geojson"
+max_zoom = 15
+
+[[region]]
+id = "oceania/australia/south-australia"
+name = "South Australia"
+group = "Australia"
+polygon = "polygons/au-south-australia.geojson"
+max_zoom = 15
+
+[[region]]
+id = "oceania/australia/tasmania"
+name = "Tasmania"
+group = "Australia"
+polygon = "polygons/au-tasmania.geojson"
+max_zoom = 15
+
+[[region]]
+id = "oceania/australia/victoria"
+name = "Victoria"
+group = "Australia"
+polygon = "polygons/au-victoria.geojson"
+max_zoom = 15
+
+[[region]]
+id = "oceania/australia/western-australia"
+name = "Western Australia"
+group = "Australia"
+polygon = "polygons/au-western-australia.geojson"
+max_zoom = 15
+
+[[region]]
+id = "oceania/new-zealand"
+name = "New Zealand"
+polygon = "polygons/nz-new-zealand.geojson"
+max_zoom = 15

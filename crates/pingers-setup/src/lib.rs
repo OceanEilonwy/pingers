@@ -7,7 +7,7 @@
 //! the owner, behind the device passphrase, and shows it in nodo-tui (the app's Setup row).
 //! The page is the ordered checklist of everything the owner still does by hand, with this
 //! appliance's values filled in: the domain and DNS, the four sites, the router, the services'
-//! own checks, Firebase, the map packs, the GitHub variables (both pin lines), the release, the
+//! own checks, Firebase, the map regions, the GitHub variables (both pin lines), the release, the
 //! first phone's QR code, and the backup. See [`page`] for the steps and [`checks`] for what
 //! is checked and how.
 //!

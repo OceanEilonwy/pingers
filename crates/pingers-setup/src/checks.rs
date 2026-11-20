@@ -91,6 +91,16 @@ pub struct PushRelayFacts {
     pub fcm: bool,
 }
 
+/// What the map host's catalog lists.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MapCatalog {
+    /// Every region listed, ready or not.
+    pub regions: usize,
+    /// Of those, the ones not cut yet (`"status":"on_demand"`, cache mode): the host cuts each
+    /// the first time a phone asks for it.
+    pub on_demand: usize,
+}
+
 /// Everything the page is built from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Facts {
@@ -98,8 +108,8 @@ pub struct Facts {
     pub gateway_pins: Result<Vec<KeyConfigHash>, String>,
     /// The push relay; or why it could not be read.
     pub push_relay: Result<PushRelayFacts, String>,
-    /// How many regions the map host serves; or why it could not be read.
-    pub map_regions: Result<usize, String>,
+    /// The regions the map host's catalog lists; or why it could not be read.
+    pub map_regions: Result<MapCatalog, String>,
     /// The map host gateway's key pin (`PINGERS_MAP_HOST_KEY_PINS`); or why it could not be
     /// read.
     pub map_host_pins: Result<Vec<KeyConfigHash>, String>,
@@ -318,19 +328,27 @@ async fn push_relay(clients: &Clients, origin: &str) -> Result<PushRelayFacts, S
     })
 }
 
-/// How many regions the map host's catalog lists.
-async fn map_regions(clients: &Clients, url: &str) -> Result<usize, String> {
+/// How many regions the map host's catalog lists, and how many of them are not cut yet.
+async fn map_regions(clients: &Clients, url: &str) -> Result<MapCatalog, String> {
     let body = get(&clients.plain, url)
         .await
         .map_err(|why| format!("pingers-map-host is {why}"))?
         .ok_or("pingers-map-host has no catalog")?;
     let catalog: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|_| "pingers-map-host sent a bad catalog".to_owned())?;
-    catalog
+    let regions = catalog
         .get("regions")
         .and_then(serde_json::Value::as_array)
-        .map(Vec::len)
-        .ok_or_else(|| "pingers-map-host sent a bad catalog".to_owned())
+        .ok_or_else(|| "pingers-map-host sent a bad catalog".to_owned())?;
+    Ok(MapCatalog {
+        regions: regions.len(),
+        on_demand: regions
+            .iter()
+            .filter(|region| {
+                region.get("status").and_then(serde_json::Value::as_str) == Some("on_demand")
+            })
+            .count(),
+    })
 }
 
 /// The sentence for a public check that could not be tried from here.

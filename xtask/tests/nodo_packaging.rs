@@ -151,12 +151,13 @@ fn the_http2_only_services_ask_caddy_for_h2c() -> TestResult {
 }
 
 #[test]
-fn only_the_push_relay_and_the_setup_page_reach_the_internet() -> TestResult {
+fn only_the_push_relay_the_map_host_and_the_setup_page_reach_the_internet() -> TestResult {
     for (id, _) in APPS {
         let manifest = parse_manifest(&manifest_text(id)?)?;
         let internet = manifest.network.outbound == nodo_manifest::Outbound::Internet;
-        // The setup page checks the public names from the appliance.
-        let expected = id == "pingers-push-relay" || id == "pingers";
+        // The map host cuts packs from the upstream build (cache mode); the setup page checks
+        // the public names from the appliance.
+        let expected = matches!(id, "pingers-push-relay" | "pingers-map-host" | "pingers");
         assert_eq!(internet, expected, "{id}");
     }
     Ok(())
@@ -340,11 +341,13 @@ fn templates_render_on_a_device_and_match_the_dev_configs() -> TestResult {
         let mut dev = shape_of(&read(
             &packaging().join("dev").join(format!("{name}.toml")),
         )?)?;
-        // The dev stack reports counts every minute and has no FCM service account.
+        // The dev stack reports counts every minute, has no FCM service account, and serves a
+        // pre-cut test pack rather than cutting from the upstream build.
         dev.remove("counts_interval_s: integer");
         let rendered: BTreeSet<String> = rendered
             .into_iter()
             .filter(|leaf| !(id == "pingers-push-relay" && leaf.starts_with("fcm.")))
+            .filter(|leaf| !(id == "pingers-map-host" && leaf.starts_with("cache.")))
             .collect();
         assert_eq!(rendered, dev, "{id}: template and dev config differ");
     }
@@ -483,6 +486,10 @@ fn validators_accept_the_examples_and_refuse_near_misses() -> TestResult {
         ("hosted", "oceania/australia,europe"),
         ("hosted", "oceania//australia"),
         ("max_disk", "40 GB"),
+        ("max_zoom", "oceania/australia"),
+        ("max_zoom", "oceania/australia=16"),
+        ("max_zoom", "oceania/australia=14,europe=12"),
+        ("max_zoom", "Oceania=14"),
     ] {
         assert!(
             maps.validate_value(setting, &Value::String(bad.to_owned()))
@@ -490,6 +497,126 @@ fn validators_accept_the_examples_and_refuse_near_misses() -> TestResult {
             "{setting} {bad}"
         );
     }
+    for good in [
+        "",
+        "oceania/australia=14",
+        "oceania=0 oceania/australia/victoria=15",
+    ] {
+        assert!(
+            maps.validate_value("max_zoom", &Value::String(good.to_owned()))
+                .is_ok(),
+            "max_zoom {good}"
+        );
+    }
+    for bad in [
+        "https://build.protomaps.com/20260811",
+        "https://build.protomaps.com/20260811.pmtiles?x=1",
+        "ftp://build.protomaps.com/20260811.pmtiles",
+    ] {
+        assert!(
+            maps.validate_value("upstream", &Value::Url(bad.to_owned()))
+                .is_err(),
+            "upstream {bad}"
+        );
+    }
+    for (extracts, ok) in [(0, false), (1, true), (4, true), (5, false)] {
+        assert_eq!(
+            maps.validate_value("max_concurrent_extracts", &Value::Int(extracts))
+                .is_ok(),
+            ok,
+            "max_concurrent_extracts {extracts}"
+        );
+    }
+    Ok(())
+}
+
+/// Where the recipe installs pingers-map-host's app directory, and what it puts there for cache
+/// mode.
+const MAP_HOST_APP: &str = "/opt/nodo/apps/pingers-map-host";
+
+/// The rendered map host config turns on cache mode with the pmtiles and region list the recipe
+/// installs, and the map host's own parser reads it so.
+#[test]
+fn the_map_host_cuts_on_demand_with_its_bundled_pmtiles_and_region_list() -> TestResult {
+    let installed = installed()?;
+    let rendered = render(&installed, "pingers-map-host", "map-host")?.text;
+    let config = pingers_map_host::config::MapHostConfig::parse(
+        &rendered,
+        Path::new("/etc/apps/pingers-map-host"),
+    )?;
+    let cache = config
+        .cache
+        .ok_or("the rendered config is not in cache mode")?;
+    assert_eq!(
+        cache.pmtiles,
+        Path::new(MAP_HOST_APP).join("libexec").join("pmtiles")
+    );
+    assert_eq!(
+        cache.regions,
+        Path::new(MAP_HOST_APP).join("regions").join("regions.toml")
+    );
+    assert_eq!(
+        cache.upstream,
+        "https://build.protomaps.com/20260811.pmtiles"
+    );
+    assert_eq!(cache.max_concurrent_extracts.get(), 1);
+    assert!(config.allow.max_zoom.is_empty(), "no zoom caps by default");
+    // The data directory, which nodo binds writable: cuts write their .partial files there.
+    assert_eq!(
+        config.directory,
+        Path::new("/var/lib/apps/pingers-map-host")
+    );
+
+    // The recipe installs exactly those paths, for both architectures.
+    let template = read(&packaging().join("srcpkgs/pingers-server/template"))?;
+    for line in [
+        "install -m 755 \"${wrksrc}/pmtiles/pmtiles\" \"${DESTDIR}/${app}/libexec/pmtiles\"",
+        "install -m 644 \"${wrksrc}/pmtiles/LICENSE\" \"${DESTDIR}/${app}/LICENSE.pmtiles\"",
+        "install -m 644 crates/pingers-tiles/regions/regions.toml \"${DESTDIR}/${app}/regions/regions.toml\"",
+        "local app=\"opt/nodo/apps/pingers-map-host\" f",
+        // Installed as released, so its SHA-256 can be checked against upstream on a device.
+        "nostrip_files=\"/opt/nodo/apps/pingers-map-host/libexec/pmtiles\"",
+        "x86_64)\n\t\t_pmtiles_arch=x86_64\n\t\t_pmtiles_sum=",
+        "aarch64)\n\t\t_pmtiles_arch=arm64\n\t\t_pmtiles_sum=",
+    ] {
+        assert!(template.contains(line), "the recipe lacks {line}");
+    }
+
+    // The region list the recipe ships, read by the host's own parser from where the recipe
+    // takes it, has a polygon for every region and regions under the default `hosted`.
+    let list_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("crates")
+        .join("pingers-tiles")
+        .join("regions");
+    let regions = pingers_map_host::region::parse_region_list(
+        &read(&list_dir.join("regions.toml"))?,
+        &list_dir,
+    )?;
+    for region in &regions {
+        let polygon: serde_json::Value = serde_json::from_str(&read(&region.polygon)?)?;
+        let kind = polygon.get("type").and_then(serde_json::Value::as_str);
+        assert!(
+            matches!(kind, Some("Polygon" | "MultiPolygon")),
+            "{}: {kind:?}",
+            region.id.as_str()
+        );
+        assert!(
+            region.polygon.starts_with(list_dir.join("polygons")),
+            "{}: the recipe installs only polygons/",
+            region.id.as_str()
+        );
+    }
+    let hosted = regions
+        .iter()
+        .filter(|region| config.allow.allows(&region.id))
+        .count();
+    assert_eq!(hosted, 8, "Australia's states and territories");
+    // pingers-tiles reads the same list.
+    pingers_map_packs::regions::RegionList::parse(
+        &read(&list_dir.join("regions.toml"))?,
+        &list_dir,
+    )?;
     Ok(())
 }
 
@@ -805,7 +932,10 @@ fn the_setup_page_passes_nodos_own_owner_page_check() -> TestResult {
             pins: pins(3),
             fcm: true,
         }),
-        map_regions: Ok(1),
+        map_regions: Ok(pingers_setup::checks::MapCatalog {
+            regions: 8,
+            on_demand: 8,
+        }),
         map_host_pins: Ok(pins(5)),
         public: failing.clone(),
     };

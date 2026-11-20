@@ -6575,6 +6575,7 @@ dependencies = [
  "nodo-settings",
  "pingers-crypto",
  "pingers-map-host",
+ "pingers-map-packs",
  "pingers-ohttp",
  "pingers-proto",
  "pingers-push-relay",

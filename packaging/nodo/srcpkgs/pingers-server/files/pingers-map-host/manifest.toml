@@ -1,4 +1,4 @@
-# pingers-map-host on monokulo-nodo: serves pre-cut map packs.
+# pingers-map-host on monokulo-nodo: cuts map packs on demand (cache mode) and serves them.
 # docs/deploy-nodo.md explains every choice here.
 api_version = 1
 id = "pingers-map-host"
@@ -14,10 +14,16 @@ template = "map-host.toml.in"
 name = "map-host.toml"
 
 # Unencrypted on purpose: map packs are public OpenStreetMap data, too large to back up, and can
-# be cut again. Turn on UseDataDrive before installing, so they go to the data drive. No
-# outbound access: packs are uploaded (rsync over the owner's SSH), not fetched. The OHTTP
+# be cut again. Turn on UseDataDrive before installing, so they go to the data drive. The OHTTP
 # gateway key (.ohttp-key in the data directory) is made on first start; it is not a secret
 # worth sealing: losing it only makes phones ask once whether to trust the new key.
+
+[network]
+# Cache mode: the first time a phone asks for a region of the bundled region list that the host
+# carries, it cuts it with the bundled pmtiles from the upstream Protomaps build (the upstream
+# setting, build.protomaps.com by default), which reads byte ranges over HTTPS. The upstream
+# sees this device's address and which regions it cuts, never a phone's.
+outbound = "internet"
 
 # Declared so pingers-server can reference gateway-url and be granted this loopback port: it
 # forwards map downloads made through the privacy relay to the host's own OHTTP gateway.
