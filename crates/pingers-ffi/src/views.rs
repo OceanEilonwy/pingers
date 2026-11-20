@@ -789,8 +789,7 @@ pub struct PartyView {
     pub privacy: PrivacyLevel,
     /// Its live Meetup, if any.
     pub meetup: Option<MeetupId>,
-    /// The settings row at the bottom (canvas `PartyDetail`): "pingers.flat7.org · Full
-    /// privacy".
+    /// The settings row at the bottom (canvas `PartyDetail`): the server, "pingers.flat7.org".
     pub settings_row: String,
     /// "Party settings: server, invites, leave".
     pub settings_detail: String,

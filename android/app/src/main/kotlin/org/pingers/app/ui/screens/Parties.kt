@@ -562,11 +562,6 @@ fun PartyScreen(state: PartyState, repo: PingersRepository, nav: Navigator) {
                 }
             }
         }
-        Text(
-            stringResource(R.string.party_meetups_note),
-            style = body(13.sp, color = Pc.Muted, lineHeight = 1.45f),
-            modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 14.dp),
-        )
         // The server and its privacy, in the core's words; opens Party settings.
         ServerCard(
             state.settingsRow,

@@ -483,7 +483,7 @@ fun IconBadge(icon: ImageVector, tint: Color, background: Color, size: Dp = 40.d
     }
 }
 
-/** "pingers.flat7.org · Full privacy": opens the server's privacy details. */
+/** The server ("pingers.flat7.org"), its privacy as the shield icon: opens the server's privacy details. */
 @Composable
 fun ServerCard(
     title: String,

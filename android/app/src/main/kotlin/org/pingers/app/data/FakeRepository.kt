@@ -86,7 +86,7 @@ class FakeRepository(
             server = server,
             privacy = PrivacyLevel.Full,
             meetup = m1,
-            settingsRow = "$server · Full privacy",
+            settingsRow = server,
             settingsDetail = FakeSection4.SETTINGS_DETAIL,
         ),
         uf to PartyState(
@@ -101,7 +101,7 @@ class FakeRepository(
             server = server,
             privacy = PrivacyLevel.Full,
             meetup = null,
-            settingsRow = "$server · Full privacy",
+            settingsRow = server,
             settingsDetail = FakeSection4.SETTINGS_DETAIL,
         ),
         fiveASide to PartyState(
@@ -113,7 +113,7 @@ class FakeRepository(
             server = server,
             privacy = PrivacyLevel.Full,
             meetup = null,
-            settingsRow = "$server · Full privacy",
+            settingsRow = server,
             settingsDetail = FakeSection4.SETTINGS_DETAIL,
         ),
     )

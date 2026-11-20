@@ -101,7 +101,6 @@
     <string name="party_spots">Spots</string>
     <string name="party_add_spot">Add spot</string>
     <string name="party_in_meetup">You\'re in a meetup</string>
-    <string name="party_meetups_note">You only see meetups you were part of. Members who weren\'t there won\'t know one happened.</string>
 
     <!-- Spot editor, Draw area -->
     <string name="spot_search">Search a place</string>
