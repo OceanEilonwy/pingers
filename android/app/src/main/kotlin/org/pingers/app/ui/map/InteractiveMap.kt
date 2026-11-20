@@ -140,8 +140,8 @@ fun InteractiveMap(
     val goTo: (Coordinate) -> Unit = { c -> currentMoveTo?.invoke(c) ?: run { view.centre = c } }
     val locate = rememberGoToMyLocation(moved.origin, goTo)
     FollowHeading(view)
-    Box(modifier) {
-        MapBox(scene, frame = moved, chrome = chrome, overlay = { overlay(moved) }) { unit ->
+    Box(modifier.fillMaxSize()) {
+        MapBox(scene, frame = moved, chrome = chrome, fillHeight = true, overlay = { overlay(moved) }) { unit ->
             val unitPx = with(density) { unit.toPx() }
             Box(
                 Modifier
