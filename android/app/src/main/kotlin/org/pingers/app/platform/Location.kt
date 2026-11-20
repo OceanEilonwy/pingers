@@ -1,10 +1,13 @@
 package org.pingers.app.platform
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
+import android.location.LocationManager
 import androidx.core.content.ContextCompat
+import org.pingers.app.data.Coordinate
 
 internal fun Location.toFix() = Fix(latitude, longitude, accuracy, time)
 
@@ -12,6 +15,25 @@ internal fun Location.toFix() = Fix(latitude, longitude, accuracy, time)
 internal fun hasLocationPermission(context: Context): Boolean =
     ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+/**
+ * Where the phone last was, as the platform's providers remember it: no new fix is taken and
+ * nothing is sent. Null without permission or a remembered location.
+ */
+@SuppressLint("MissingPermission") // Checked first.
+internal fun lastKnownCoordinate(context: Context): Coordinate? {
+    if (!hasLocationPermission(context)) return null
+    val manager = context.getSystemService(LocationManager::class.java) ?: return null
+    return try {
+        manager.getProviders(true).mapNotNull { manager.getLastKnownLocation(it) }
+            .maxByOrNull { it.elapsedRealtimeNanos }
+            ?.let { Coordinate(it.latitude, it.longitude) }
+    } catch (_: SecurityException) {
+        null
+    } catch (_: IllegalArgumentException) {
+        null
+    }
+}
 
 /**
  * Where fixes come from: Fused Location in the `gms` flavour, the platform LocationManager in

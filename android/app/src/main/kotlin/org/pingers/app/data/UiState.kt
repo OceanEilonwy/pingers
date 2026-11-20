@@ -67,9 +67,10 @@ data class MapPoint(val x: Float, val y: Float)
 /**
  * Places coordinates on the placeholder map: [origin] sits at [originAt], and one map unit is
  * [metresPerUnit] metres (the canvas's scale is 2). Equirectangular, which is exact enough at
- * the scale of a park.
+ * the scale of a park. A frame that is not [placed] had nothing of its own to centre on (no
+ * fix, Spot or meet point yet): its origin is only where the map starts.
  */
-data class MapFrame(val origin: Coordinate, val originAt: MapPoint, val metresPerUnit: Float = 2f) {
+data class MapFrame(val origin: Coordinate, val originAt: MapPoint, val metresPerUnit: Float = 2f, val placed: Boolean = true) {
     private val metresPerDegreeLon get() = METRES_PER_DEGREE * cos(origin.latitude * PI / 180)
 
     fun toMap(c: Coordinate): MapPoint = MapPoint(
