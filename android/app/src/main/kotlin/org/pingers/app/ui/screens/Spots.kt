@@ -187,6 +187,9 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
     val currentFrame by rememberUpdatedState(frame)
     var searching by remember { mutableStateOf(false) }
     val locate = rememberGoToMyLocation(state.centre, repo::moveSpot)
+    val context = LocalContext.current
+    // A new Spot starts where the phone is now; asking for permission waits for the button.
+    LaunchedEffect(Unit) { if (state.name.isEmpty() && hasLocationPermission(context)) locate() }
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
         MapBox(Scenes.SpotEditor, frame = frame, chrome = fullScreenChrome(), overlay = {
             if (state.shape == ShapeKind.Circle) {

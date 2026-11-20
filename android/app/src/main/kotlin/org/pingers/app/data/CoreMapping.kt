@@ -99,6 +99,9 @@ private val SceneCentre = MapPoint(195f, 256f)
  * Where a frame with nothing of its own to centre on starts: CoreRepository sets it to
  * [org.pingers.app.maps.startingPoint] (where the phone last was, else the downloaded map).
  */
+/** Where the Meetup canvas puts me: low and left of centre. */
+internal val MeetupMeAt = MapPoint(149f, 291f)
+
 internal object FrameStart {
     @Volatile var centre: () -> Coordinate? = { null }
 }
@@ -358,8 +361,7 @@ internal fun uniffi.pingers.MeetupView.toUi(): MeetupState {
         me = me?.toUi(),
         chatCount = chatCount.toInt(),
         sharedWith = sharedWith,
-        // The canvas puts me low and left of centre.
-        mapFrame = frameAt(centre, MapPoint(149f, 291f)),
+        mapFrame = frameAt(centre, MeetupMeAt),
     )
 }
 

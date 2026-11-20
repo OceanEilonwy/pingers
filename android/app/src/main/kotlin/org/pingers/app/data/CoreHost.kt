@@ -87,6 +87,26 @@ object CoreHost {
 
     fun listen(events: Events) = listeners.add(events)
 
+    /**
+     * Told after one of the phone's own fixes has gone into the core. The core's events say
+     * nothing when only the phone's position changed, so screens that show it (Meetup's "you",
+     * exclusion zones) re-read the snapshot on this.
+     */
+    private val ownFixListeners = CopyOnWriteArraySet<(org.pingers.app.data.Coordinate) -> Unit>()
+
+    fun onOwnFix(listener: (org.pingers.app.data.Coordinate) -> Unit) = ownFixListeners.add(listener)
+
+    /** Where the phone's last own fix in this process put it, kept in memory only. */
+    @Volatile
+    var lastOwnFix: org.pingers.app.data.Coordinate? = null
+        private set
+
+    private fun ownFix(fix: Fix) {
+        val at = org.pingers.app.data.Coordinate(fix.latitude, fix.longitude)
+        lastOwnFix = at
+        ownFixListeners.forEach { it(at) }
+    }
+
     fun unlisten(events: Events) = listeners.remove(events)
 
     /** The core, opening it if need be; null if it does not open (then [openError] says why). */
@@ -195,6 +215,7 @@ object CoreHost {
                 return
             }
             blocking("onFix") { it.onLocation(fix.toCore()) }
+            ownFix(fix)
         }
 
         override fun onGeofence(regionIds: List<String>, transition: GeofenceTransition, location: Fix?) {
@@ -208,6 +229,7 @@ object CoreHost {
                 location?.let { core.onLocation(it.toCore()) }
                 regionIds.forEach { core.onOsGeofence(it, event) }
             }
+            location?.let(::ownFix)
         }
 
         override fun onPush(platform: PushPlatform, payload: ByteArray, priority: FcmPriority?) {

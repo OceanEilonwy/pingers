@@ -167,6 +167,12 @@ interface PingersRepository {
     fun letIn()
     fun turnAway()
 
+    /**
+     * A map that shows the phone opened: asks the platform for one fix, which goes to the core
+     * like any other and moves maps with nowhere of their own to be. Read on the phone only.
+     */
+    fun findMe() = Unit
+
     // Spots
     fun editSpot(spotId: SpotId?)
     fun setSpotName(name: String)
