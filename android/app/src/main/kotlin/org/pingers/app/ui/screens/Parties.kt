@@ -485,6 +485,10 @@ fun PartyScreen(state: PartyState, repo: PingersRepository, nav: Navigator) {
         top = {
             TopBar(state.name, { nav.back() }, stringResource(R.string.cd_back)) {
                 IconAction(PIcons.PersonAdd, stringResource(R.string.cd_invite_people), { nav.go(Route.Invite) }, Modifier.testTag(E2eTags.PARTY_INVITE))
+                IconAction(PIcons.Settings, stringResource(R.string.cd_party_settings), {
+                    repo.openPartySettings(state.id)
+                    nav.go(Route.PartySettings)
+                })
             }
         },
         bodyPadding = PaddingValues(0.dp),

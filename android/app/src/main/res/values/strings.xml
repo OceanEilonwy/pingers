@@ -44,6 +44,7 @@
     <string name="cd_close_compass">Close compass</string>
     <string name="cd_settings">Settings</string>
     <string name="cd_invite_people">Invite people</string>
+    <string name="cd_party_settings">Party settings</string>
     <string name="cd_invite_qr">Invite QR code</string>
     <string name="cd_cancel_invite">Cancel this invite</string>
     <string name="cd_navigate_to">Navigate to %1$s</string>
@@ -313,7 +314,7 @@
     <string name="maps_failed_network">Couldn\'t download. Check your connection and try again.</string>
     <string name="maps_failed_checksum">The download didn\'t match its checksum, so it was deleted.</string>
     <string name="maps_failed_not_through_relay">This map host can\'t be reached through the privacy relay: your server passes map downloads only to its own map host.</string>
-    <string name="maps_failed_no_relay_route">Downloads through the privacy relay go through your Pingers server, and this app has none set up yet. Turn the setting off in Advanced to download directly.</string>
+    <string name="maps_failed_no_relay_route">Downloads through the privacy relay go through your Pingers server, and this app has none set up yet. Turn “Download maps through privacy relay” off on this screen to download directly.</string>
     <string name="maps_failed_key_changed">The map host\'s key isn\'t one this app trusts, so maps don\'t download through the privacy relay.</string>
     <string name="maps_failed_preparing">The map host is still preparing this area. Try again later.</string>
     <string name="maps_failed_storage">Couldn\'t save the map on this phone.</string>
