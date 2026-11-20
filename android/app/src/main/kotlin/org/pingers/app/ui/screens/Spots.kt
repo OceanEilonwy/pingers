@@ -127,12 +127,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * The white sheet over a full-screen map. Tapping the handle, or dragging it down, folds the sheet
- * away to just the handle so the map is free; tapping or dragging up brings it back.
+ * away to just the handle so the map is free; tapping or dragging up brings it back. A sheet
+ * that is not [collapsible] has no handle and always shows its content.
  */
 @Composable
 fun BoxScope.BottomSheet(
     height: Dp? = null,
     spacing: Int = 16,
+    collapsible: Boolean = true,
     onHeight: (Dp) -> Unit = {},
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -153,6 +155,14 @@ fun BoxScope.BottomSheet(
             .navigationBarsPadding()
             .padding(start = 20.dp, end = 20.dp, bottom = 16.dp),
     ) {
+        if (!collapsible) {
+            Column(
+                Modifier.fillMaxWidth().padding(top = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(spacing.dp),
+                content = content,
+            )
+            return@Column
+        }
         Box(
             Modifier
                 .fillMaxWidth()

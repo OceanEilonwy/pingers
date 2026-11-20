@@ -261,7 +261,7 @@ fun MeetupScreen(state: MeetupState, repo: PingersRepository, nav: Navigator) {
                 Text(stringResource(R.string.meetup_here, state.spotName, state.hereCount), style = body(14.sp, 600), maxLines = 1)
             }
         }
-        BottomSheet(spacing = 14, onHeight = { sheet = it }) {
+        BottomSheet(spacing = 14, collapsible = false, onHeight = { sheet = it }) {
             state.meetPoint?.let { mp ->
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Pc.OrangeTintSoft).padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
@@ -369,7 +369,7 @@ private fun Footnote(state: MeetupState, nav: Navigator) {
     val manage = stringResource(R.string.meetup_manage)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
         Text(
-            pluralStringResource(R.plurals.meetup_only_here, state.hereCount, state.hereCount) + " " + shared,
+            shared,
             style = body(12.sp, color = Pc.Muted, lineHeight = 1.45f),
             textAlign = TextAlign.Center,
             modifier = Modifier.weight(1f, fill = false),
