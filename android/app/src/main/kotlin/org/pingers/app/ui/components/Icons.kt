@@ -57,6 +57,8 @@ object PIcons {
     val Moon = icon("moon", 2f, "M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z")
     val Search = icon("search", 2.2f, circle(11f, 11f, 7f), "M20 20l-4-4")
     val Flag = icon("flag", 2.2f, "M5 21V4M5 4h11l-2 4 2 4H5")
+    /** "Go to my location": a crosshair around a dot. */
+    val Locate = icon("locate", 2.2f, circle(12f, 12f, 7f), circle(12f, 12f, 2.5f), "M12 2v3M12 19v3M2 12h3M19 12h3")
     val Compass = icon("compass", 2.2f, circle(12f, 12f, 9f), "M15.5 8.5l-2 5-5 2 2-5z")
     val Eye = icon("eye", 2.2f, "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z", circle(12f, 12f, 3f))
     val Chat = icon("chat", 2f, "M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z")

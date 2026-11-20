@@ -36,6 +36,38 @@ internal fun lastKnownCoordinate(context: Context): Coordinate? {
 }
 
 /**
+ * Asks the platform once for where the phone is now, for "Go to my location" on a map, and
+ * answers [answer] on the main thread with the coordinate, or null without permission, without
+ * a provider, or on Android 10 (no one-shot request there; the caller has the last known one).
+ * The fix is used on the phone only: nothing is sent. Returns what cancels the request.
+ */
+@SuppressLint("MissingPermission") // Checked first.
+internal fun requestCurrentCoordinate(context: Context, answer: (Coordinate?) -> Unit): () -> Unit {
+    val none = {}
+    if (!hasLocationPermission(context) || android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) {
+        answer(null)
+        return none
+    }
+    val manager = context.getSystemService(LocationManager::class.java) ?: run { answer(null); return none }
+    val enabled = try { manager.getProviders(true) } catch (_: SecurityException) { emptyList() }
+    val provider = listOf("fused", LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER).firstOrNull { it in enabled }
+        ?: run { answer(null); return none }
+    val signal = android.os.CancellationSignal()
+    return try {
+        manager.getCurrentLocation(provider, signal, ContextCompat.getMainExecutor(context)) { location ->
+            answer(location?.let { Coordinate(it.latitude, it.longitude) })
+        }
+        signal::cancel
+    } catch (_: SecurityException) {
+        answer(null)
+        none
+    } catch (_: IllegalArgumentException) {
+        answer(null)
+        none
+    }
+}
+
+/**
  * Where fixes come from: Fused Location in the `gms` flavour, the platform LocationManager in
  * `foss`. Every result goes to [CoreSink.onFix].
  */

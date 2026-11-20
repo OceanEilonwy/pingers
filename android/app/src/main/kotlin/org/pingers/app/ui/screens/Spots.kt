@@ -1,6 +1,26 @@
 package org.pingers.app.ui.screens
 
 import android.widget.Toast
+import android.Manifest
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import kotlin.math.abs
+import org.pingers.app.platform.hasLocationPermission
+import org.pingers.app.platform.lastKnownCoordinate
+import org.pingers.app.platform.requestCurrentCoordinate
+import org.pingers.app.ui.components.IconAction
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -155,12 +175,18 @@ private fun fullScreenChrome() = MapChrome(
 @Composable
 fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navigator) {
     val drawn by repo.drawArea.collectAsStateWithLifecycle()
-    val radius = state.radiusM / METRES_PER_UNIT
+    // Pinching scales the map about the Spot's centre: a zoom of 2 shows twice the metres per unit.
+    var zoom by remember { mutableFloatStateOf(1f) }
+    val metresPerUnit = METRES_PER_UNIT * zoom
+    val radius = state.radiusM / metresPerUnit
     val density = LocalDensity.current
     val current by rememberUpdatedState(state.radiusM)
+    val currentMetresPerUnit by rememberUpdatedState(metresPerUnit)
     // The circle sits at SpotCentre; the frame puts the Spot's centre there, so the map moves under it.
-    val frame = MapFrame(state.centre, SpotCentre, METRES_PER_UNIT)
+    val frame = MapFrame(state.centre, SpotCentre, metresPerUnit)
     val currentFrame by rememberUpdatedState(frame)
+    var searching by remember { mutableStateOf(false) }
+    val locate = rememberGoToMyLocation(state.centre, repo::moveSpot)
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
         MapBox(Scenes.SpotEditor, frame = frame, chrome = fullScreenChrome(), overlay = {
             if (state.shape == ShapeKind.Circle) {
@@ -173,12 +199,15 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
             }
         }) { unit ->
             // Dragging the map moves the Spot's centre: the map slides, the circle stays put.
+            // Pinching zooms the map in or out around the circle.
             Box(
-                Modifier.fillMaxSize().pointerInput(Unit) {
+                Modifier.fillMaxSize().pointerInput(unit) {
                     val unitPx = with(density) { unit.toPx() }
-                    detectDragGestures { change, amount ->
-                        change.consume()
-                        repo.moveSpot(currentFrame.toCoordinate(MapPoint(SpotCentre.x - amount.x / unitPx, SpotCentre.y - amount.y / unitPx)))
+                    detectTransformGestures { _, pan, gestureZoom, _ ->
+                        if (gestureZoom != 1f) zoom = (zoom / gestureZoom).coerceIn(MIN_ZOOM, MAX_ZOOM)
+                        if (pan != Offset.Zero) {
+                            repo.moveSpot(currentFrame.toCoordinate(MapPoint(SpotCentre.x - pan.x / unitPx, SpotCentre.y - pan.y / unitPx)))
+                        }
                     }
                 },
             )
@@ -193,7 +222,7 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
                             val unitPx = with(density) { unit.toPx() }
                             detectDragGestures { change, amount ->
                                 change.consume()
-                                val next = (current + amount.x / unitPx * METRES_PER_UNIT).toInt()
+                                val next = (current + amount.x / unitPx * currentMetresPerUnit).toInt()
                                 repo.setSpotRadius(next.coerceIn(state.minRadiusM, state.maxRadiusM))
                             }
                         },
@@ -213,8 +242,8 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             MapButton(PIcons.Close, stringResource(R.string.cd_close), { nav.back() })
-            Spacer(Modifier.weight(1f))
-            PlaceSearch { repo.moveSpot(it.at) }
+            PlaceSearchButton({ searching = true }, Modifier.weight(1f))
+            MapButton(PIcons.Locate, stringResource(R.string.cd_my_location), locate)
         }
         BottomSheet {
             LabeledField(stringResource(R.string.spot_name), state.name, repo::setSpotName, height = 52.dp)
@@ -254,66 +283,165 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
             LockNote(stringResource(R.string.spot_encrypted, state.partyName))
             PillButton(stringResource(R.string.spot_save), { repo.saveSpot(); nav.go(Route.Party) }, Modifier.testTag(E2eTags.SPOT_SAVE), enabled = state.canSave)
         }
+        if (searching) PlaceSearchScreen(onPick = { repo.moveSpot(it.at) }, onClose = { searching = false })
+    }
+}
+
+// How far the Spot editor's map zooms from its starting scale: 8 times closer, 64 times further out.
+private const val MIN_ZOOM = 1f / 8
+private const val MAX_ZOOM = 64f
+
+/**
+ * "Go to my location": moves the map to where the phone last was at once, then to a fresh fix
+ * when one comes, unless the map was moved meanwhile. Asks for location permission first if
+ * the app has none. The location stays on the phone.
+ */
+@Composable
+private fun rememberGoToMyLocation(centre: Coordinate, moveTo: (Coordinate) -> Unit): () -> Unit {
+    val context = LocalContext.current
+    val currentCentre by rememberUpdatedState(centre)
+    val currentMoveTo by rememberUpdatedState(moveTo)
+    val notFound = stringResource(R.string.map_location_not_found)
+    val denied = stringResource(R.string.map_location_denied)
+    val pending = remember { mutableStateOf<(() -> Unit)?>(null) }
+    DisposableEffect(Unit) { onDispose { pending.value?.invoke() } }
+    val go = {
+        pending.value?.invoke()
+        val last = lastKnownCoordinate(context)
+        last?.let(currentMoveTo)
+        pending.value = requestCurrentCoordinate(context) { fresh ->
+            pending.value = null
+            val untouched = last == null || currentCentre.near(last)
+            when {
+                fresh != null && untouched -> currentMoveTo(fresh)
+                fresh == null && last == null -> Toast.makeText(context, notFound, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted.values.any { it }) go() else Toast.makeText(context, denied, Toast.LENGTH_SHORT).show()
+    }
+    return {
+        if (hasLocationPermission(context)) {
+            go()
+        } else {
+            permission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+        }
+    }
+}
+
+/** Within about a metre: the map has not been moved since it went to this coordinate. */
+private fun Coordinate.near(other: Coordinate): Boolean =
+    abs(latitude - other.latitude) < 1e-5 && abs(longitude - other.longitude) < 1e-5
+
+/** The "Search a place" pill over the map; tapping it opens [PlaceSearchScreen]. */
+@Composable
+private fun PlaceSearchButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val label = stringResource(R.string.spot_search)
+    Row(
+        modifier
+            .height(48.dp)
+            .shadow(2.dp, RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(24.dp))
+            .background(Pc.Card)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics(mergeDescendants = true) { contentDescription = label }
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(PIcons.Search, null, tint = Pc.Muted, modifier = Modifier.size(18.dp))
+        Text(label, style = body(15.sp, color = Pc.Muted), maxLines = 1)
     }
 }
 
 /**
- * "Search a place": matches place names in the downloaded packs' indexes, on this phone.
- * Picking one moves the Spot there.
+ * "Search a place", full screen: matches place names in the downloaded packs' indexes, on
+ * this phone. Picking one moves the Spot there and closes the search; Back closes it too.
  */
 @Composable
-private fun PlaceSearch(onPick: (Place) -> Unit) {
+private fun PlaceSearchScreen(onPick: (Place) -> Unit, onClose: () -> Unit) {
     val maps = LocalMaps.current
     val focus = LocalFocusManager.current
+    val focusRequester = remember { FocusRequester() }
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<Place>>(emptyList()) }
     val installed = maps?.installed?.collectAsStateWithLifecycle()?.value.orEmpty()
     LaunchedEffect(query, installed) { results = if (maps == null || query.isBlank()) emptyList() else maps.search(query) }
-    Column(Modifier.width(250.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        PField(
-            query, { query = it }, stringResource(R.string.spot_search),
-            background = Pc.Card, border = Color.Transparent, height = 48.dp, fontSize = 15,
-            placeholder = stringResource(R.string.spot_search),
-            shape = RoundedCornerShape(24.dp),
-            leading = { Icon(PIcons.Search, null, tint = Pc.Muted, modifier = Modifier.size(18.dp)) },
-            modifier = Modifier.fillMaxWidth().shadow(2.dp, RoundedCornerShape(24.dp)),
-        )
-        if (query.isNotBlank()) {
-            Column(Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(16.dp)).clip(RoundedCornerShape(16.dp)).background(Pc.Card)) {
-                if (results.isEmpty()) {
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    BackHandler(onBack = onClose)
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Pc.Paper)
+            // Touches stay here, off the map underneath.
+            .pointerInput(Unit) { detectTapGestures { focus.clearFocus() } }
+            .statusBarsPadding()
+            .imePadding(),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            MapButton(PIcons.Back, stringResource(R.string.cd_back), onClose)
+            PField(
+                query, { query = it }, stringResource(R.string.spot_search),
+                background = Pc.Card, border = Color.Transparent, height = 48.dp, fontSize = 15,
+                placeholder = stringResource(R.string.spot_search),
+                shape = RoundedCornerShape(24.dp),
+                leading = { Icon(PIcons.Search, null, tint = Pc.Muted, modifier = Modifier.size(18.dp)) },
+                trailing = if (query.isEmpty()) null else {
+                    { IconAction(PIcons.Close, stringResource(R.string.cd_clear_search), { query = "" }, iconSize = 16.dp) }
+                },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Search),
+                modifier = Modifier.weight(1f).shadow(2.dp, RoundedCornerShape(24.dp)).focusRequester(focusRequester),
+            )
+        }
+        LazyColumn(
+            Modifier.fillMaxWidth().weight(1f),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+        ) {
+            val notice = when {
+                installed.isEmpty() -> R.string.maps_search_no_maps
+                query.isNotBlank() && results.isEmpty() -> R.string.maps_search_none
+                else -> null
+            }
+            if (notice != null) {
+                item {
                     Text(
-                        stringResource(if (installed.isEmpty()) R.string.maps_search_no_maps else R.string.maps_search_none),
-                        style = body(13.sp, color = Pc.Muted, lineHeight = 1.4f),
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                        stringResource(notice),
+                        style = body(14.sp, color = Pc.Muted, lineHeight = 1.4f),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 12.dp),
                     )
                 }
-                results.take(6).forEachIndexed { i, place ->
-                    if (i > 0) RowDivider()
-                    val label = stringResource(R.string.cd_map_search_result, place.name)
-                    TwoLines(
-                        place.name,
-                        stringResource(
-                            when (place.kind) {
-                                org.pingers.app.maps.PlaceKind.Country -> R.string.place_country
-                                org.pingers.app.maps.PlaceKind.Region -> R.string.place_region
-                                org.pingers.app.maps.PlaceKind.City -> R.string.place_city
-                                org.pingers.app.maps.PlaceKind.Suburb -> R.string.place_suburb
-                                org.pingers.app.maps.PlaceKind.Street -> R.string.place_street
-                                org.pingers.app.maps.PlaceKind.Poi -> R.string.place_poi
-                            },
-                        ),
-                        Modifier.fillMaxWidth()
-                            .clickable(role = Role.Button) {
-                                onPick(place)
-                                query = ""
-                                focus.clearFocus()
-                            }
-                            .semantics(mergeDescendants = true) { contentDescription = label }
-                            .heightIn(min = 44.dp).padding(horizontal = 14.dp, vertical = 9.dp),
-                        titleStyle = body(14.sp, 500),
-                        subtitleStyle = body(12.sp, color = Pc.Muted),
-                    )
-                }
+            }
+            itemsIndexed(results) { i, place ->
+                if (i > 0) RowDivider()
+                val label = stringResource(R.string.cd_map_search_result, place.name)
+                TwoLines(
+                    place.name,
+                    stringResource(
+                        when (place.kind) {
+                            org.pingers.app.maps.PlaceKind.Country -> R.string.place_country
+                            org.pingers.app.maps.PlaceKind.Region -> R.string.place_region
+                            org.pingers.app.maps.PlaceKind.City -> R.string.place_city
+                            org.pingers.app.maps.PlaceKind.Suburb -> R.string.place_suburb
+                            org.pingers.app.maps.PlaceKind.Street -> R.string.place_street
+                            org.pingers.app.maps.PlaceKind.Poi -> R.string.place_poi
+                        },
+                    ),
+                    Modifier.fillMaxWidth()
+                        .clickable(role = Role.Button) {
+                            focus.clearFocus()
+                            onPick(place)
+                            onClose()
+                        }
+                        .semantics(mergeDescendants = true) { contentDescription = label }
+                        .heightIn(min = 56.dp).padding(horizontal = 8.dp, vertical = 10.dp),
+                    titleStyle = body(16.sp, 500),
+                    subtitleStyle = body(13.sp, color = Pc.Muted),
+                )
             }
         }
     }
