@@ -5,7 +5,7 @@ use pingers_proto::{LeafIndex, MailboxId, PartyId, SpotId};
 
 use super::Client;
 use crate::ClientError;
-use crate::ports::{JoinDecision, PartyDraft, SpotDraft};
+use crate::ports::{JoinDecision, PartyDraft, SpotDraft, WakeInput};
 use crate::snapshot::{InviteLink, InviteUrl, Name, SafetyCode};
 
 impl Client {
@@ -169,8 +169,15 @@ impl Client {
     ///
     /// [`ClientError::Parties`].
     pub async fn save_spot(&self, party: PartyId, spot: SpotDraft) -> Result<SpotId, ClientError> {
-        self.published(self.crates.parties.save_spot(party, spot).await)
-            .await
+        let id = self
+            .published(self.crates.parties.save_spot(party, spot).await)
+            .await?;
+        // A Spot made where the device already stands has no OS enter event, so it would wait
+        // for the next scheduled wake (up to 45 minutes). Take a fix now: the wake then asks
+        // for the confirming one 30 seconds later. The Spot is saved either way, and a failed
+        // wake is retried by the ordinary schedule, so its error is not the save's.
+        self.wake(WakeInput::Scheduled).await.ok();
+        Ok(id)
     }
 
     /// Deletes a Spot.

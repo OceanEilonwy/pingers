@@ -70,7 +70,7 @@ impl Client {
         self.wake(WakeInput::Foreground(foreground)).await
     }
 
-    async fn wake(&self, input: WakeInput) -> Result<(), ClientError> {
+    pub(super) async fn wake(&self, input: WakeInput) -> Result<(), ClientError> {
         let outcome = self.crates.wake.run(input).await?;
         self.apply(outcome);
         self.publish_snapshot().await.map(drop)
