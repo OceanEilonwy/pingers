@@ -214,6 +214,8 @@ private fun MapAvatar(person: Person, size: Dp, modifier: Modifier = Modifier) {
 @Composable
 fun MeetupScreen(state: MeetupState, repo: PingersRepository, nav: Navigator) {
     SecureScreen()
+    // Show where the phone is now, not only where the last wake left it.
+    androidx.compose.runtime.LaunchedEffect(Unit) { repo.findMe() }
     val w = words()
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
         val frame = state.mapFrame

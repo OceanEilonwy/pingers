@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.res.Resources
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -20,6 +21,8 @@ import org.pingers.app.R
 import org.pingers.app.maps.Maps
 import org.pingers.app.maps.startingPoint
 import org.pingers.app.platform.lastKnownCoordinate
+import org.pingers.app.platform.AndroidPlatform
+import org.pingers.app.platform.FixQuality
 import org.pingers.app.platform.forLog
 import org.pingers.app.platform.PhoneLog
 import uniffi.pingers.AreaEditor
@@ -164,6 +167,13 @@ class CoreRepository(
     private var lookedUp: uniffi.pingers.ServerLook? = null
     private var lookUp: Job? = null
 
+    init {
+        // Maps with nothing to centre on start where the phone is (its last own fix, else the
+        // platform's last known location), else on a downloaded map: never on 0,0, which no
+        // pack covers. Set before the frames below are built: initialisers run in order.
+        FrameStart.centre = { startingPoint(whereIAm(), Maps.get(context).installed.value) }
+    }
+
     private var editingSpot: SpotId? = null
     private var spotDraft = uniffi.pingers.SpotDraft("", uniffi.pingers.ShapeKind.CIRCLE, 150.0, null)
     private var area = AreaEditor()
@@ -254,9 +264,8 @@ class CoreRepository(
     override val partyCode: StateFlow<PartyCodeView?> = _partyCode.asStateFlow()
 
     init {
-        // Maps with nothing to centre on start where the phone last was, else on a downloaded
-        // map: never on 0,0, which no pack covers.
-        FrameStart.centre = { startingPoint(lastKnownCoordinate(context), Maps.get(context).installed.value) }
+        // The core says nothing when only the phone's own position changed: re-read it then.
+        CoreHost.onOwnFix { scope.launch { reframeUnplaced(); refresh() } }
         scope.launch {
             // The process's one core, which receivers and workers share (CoreHost).
             CoreHost.listen(sink)
@@ -267,8 +276,7 @@ class CoreRepository(
         scope.launch {
             // A map downloaded or removed moves the maps that had nowhere of their own to be.
             Maps.get(context).installed.drop(1).collect {
-                if (!drawFrame.placed) drawFrame = frameAt(null, DRAW_AT)
-                if (!meetPointFrame.placed && meetPointPin == meetPointFrame.origin) meetPointPin = null
+                reframeUnplaced()
                 publish()
             }
         }
@@ -291,6 +299,30 @@ class CoreRepository(
             snapshot = next
         }
         publish()
+    }
+
+    /** Where the phone is as far as this process knows, read on the phone: nothing is sent. */
+    private fun whereIAm(): Coordinate? = CoreHost.lastOwnFix ?: lastKnownCoordinate(context)
+
+    /**
+     * Moves the maps that had nowhere of their own to be to where they start now (the phone's
+     * position, else a downloaded map), after a fix or a pack download. With no Meetup on, the
+     * Meetup map shows the phone itself, which the core only reports inside a Meetup.
+     */
+    private fun reframeUnplaced() {
+        if (!drawFrame.placed) drawFrame = frameAt(null, DRAW_AT)
+        if (!meetPointFrame.placed && meetPointPin == meetPointFrame.origin) meetPointPin = null
+        if (meetupId() == null) {
+            val me = whereIAm()
+            _meetup.value = _meetup.value.copy(me = me, mapFrame = frameAt(me, MeetupMeAt))
+        }
+        if (!_exclusionZones.value.mapFrame.placed) _exclusionZones.value = _exclusionZones.value.copy(mapFrame = frameAt(null))
+    }
+
+    override fun findMe() {
+        reframeUnplaced()
+        // The answer comes back through CoreHost's sink, like any fix the core asks for.
+        scope.launch(Dispatchers.IO) { AndroidPlatform.get(context).fixes.request(FixQuality.BALANCED, FIND_ME_TIMEOUT_MILLIS) }
     }
 
     /** One screen's read; a party or meetup that has gone keeps the last state. */
@@ -918,7 +950,7 @@ class CoreRepository(
         val centre = when (fence) {
             is Fence.Circle -> fence.center
             is Fence.Polygon -> Coordinate(fence.vertices.map { it.latitude }.average(), fence.vertices.map { it.longitude }.average())
-            null -> _party.value.spots.firstOrNull()?.fence?.let { (it as? Fence.Circle)?.center } ?: _meetup.value.me
+            null -> _meetup.value.me ?: whereIAm() ?: _party.value.spots.firstOrNull()?.fence?.let { (it as? Fence.Circle)?.center }
         }
         drawFrame = frameAt(centre, DRAW_AT)
         publishSpotEditor()
@@ -1105,5 +1137,7 @@ class CoreRepository(
         const val LOOK_UP_PAUSE_MS = 800L
         /** Where the Spot editor's scene puts the Spot. */
         val DRAW_AT = MapPoint(195f, 300f)
+        /** How long "find me" waits for a fix when a map screen opens. */
+        const val FIND_ME_TIMEOUT_MILLIS = 15_000L
     }
 }
