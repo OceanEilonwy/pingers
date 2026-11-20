@@ -34,6 +34,8 @@
 
     <!-- Content descriptions -->
     <string name="cd_back">Back</string>
+    <string name="cd_sheet_collapse">Fold the panel away</string>
+    <string name="cd_sheet_expand">Show the panel</string>
     <string name="cd_back_to">Back to %1$s</string>
     <string name="cd_back_new_party">Back to New party</string>
     <string name="cd_back_spot_editor">Back to Spot editor</string>

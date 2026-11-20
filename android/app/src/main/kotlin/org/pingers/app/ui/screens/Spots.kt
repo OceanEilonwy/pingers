@@ -1,6 +1,13 @@
 package org.pingers.app.ui.screens
 
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.runtime.saveable.rememberSaveable
 import android.Manifest
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -128,25 +135,51 @@ import org.pingers.app.ui.theme.heading
 import org.pingers.app.words
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
-/** The white sheet over a full-screen map. */
+/**
+ * The white sheet over a full-screen map. Tapping the handle, or dragging it down, folds the sheet
+ * away to just the handle so the map is free; tapping or dragging up brings it back.
+ */
 @Composable
 fun BoxScope.BottomSheet(height: Dp? = null, spacing: Int = 16, content: @Composable ColumnScope.() -> Unit) {
+    var collapsed by rememberSaveable { mutableStateOf(false) }
+    var dragged by remember { mutableFloatStateOf(0f) }
+    val threshold = with(LocalDensity.current) { SHEET_DRAG.toPx() }
+    val label = stringResource(if (collapsed) R.string.cd_sheet_expand else R.string.cd_sheet_collapse)
     Column(
         Modifier
             .align(Alignment.BottomCenter)
             .fillMaxWidth()
-            .then(if (height != null) Modifier.heightIn(min = height) else Modifier)
+            .then(if (height != null && !collapsed) Modifier.heightIn(min = height) else Modifier)
             .shadow(12.dp, RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
             .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
             .background(Pc.Card)
             .navigationBarsPadding()
-            .padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(spacing.dp),
+            .padding(start = 20.dp, end = 20.dp, bottom = 16.dp),
     ) {
-        SheetHandle(Modifier.align(Alignment.CenterHorizontally))
-        content()
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .draggable(
+                    rememberDraggableState { dragged += it },
+                    Orientation.Vertical,
+                    onDragStarted = { dragged = 0f },
+                    onDragStopped = {
+                        if (dragged > threshold) collapsed = true else if (dragged < -threshold) collapsed = false
+                    },
+                )
+                .clickable(role = Role.Button, onClickLabel = label, interactionSource = null, indication = null) { collapsed = !collapsed }
+                .semantics { contentDescription = label }
+                .padding(top = 10.dp, bottom = spacing.dp),
+            contentAlignment = Alignment.TopCenter,
+        ) { SheetHandle() }
+        AnimatedVisibility(!collapsed, enter = expandVertically(), exit = shrinkVertically()) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(spacing.dp), content = content)
+        }
     }
 }
+
+// How far the handle must be dragged to fold or unfold the sheet.
+private val SHEET_DRAG = 24.dp
 
 /** A dark map label ("300 m", "Home"). */
 @Composable
