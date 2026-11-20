@@ -112,6 +112,7 @@ import org.pingers.app.ui.components.Segmented
 import org.pingers.app.ui.components.TwoLines
 import org.pingers.app.ui.map.MapCanvas
 import org.pingers.app.ui.map.InteractiveMap
+import org.pingers.app.ui.map.rememberMapState
 import org.pingers.app.ui.map.Scenes
 import org.pingers.app.ui.map.fullScreenChrome
 import org.pingers.app.ui.theme.Inter
@@ -211,8 +212,10 @@ fun MeetupScreen(state: MeetupState, repo: PingersRepository, nav: Navigator) {
     // Show where the phone is now, not only where the last wake left it.
     androidx.compose.runtime.LaunchedEffect(Unit) { repo.findMe() }
     val w = words()
+    val view = rememberMapState()
+    var searching by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
-        InteractiveMap(Scenes.Meetup, state.mapFrame, onFindMe = repo::findMe, overlay = { f ->
+        InteractiveMap(Scenes.Meetup, state.mapFrame, view = view, onFindMe = repo::findMe, overlay = { f ->
             val me = state.me?.let(f::toMap)
             val meetAt = state.meetPoint?.at?.let(f::toMap)
             if (me != null && meetAt != null) {
@@ -233,19 +236,28 @@ fun MeetupScreen(state: MeetupState, repo: PingersRepository, nav: Navigator) {
             }
             me?.let { at -> MeDot(Modifier.offset(unit * at.x - 21.dp, unit * at.y - 21.dp)) }
         }
-        Row(
+        Column(
             Modifier.statusBarsPadding().padding(start = 16.dp, end = 16.dp, top = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            MapButton(PIcons.Back, stringResource(R.string.cd_back), { nav.back() })
+            // The same top bar as the Spot editor: close, then "Search a place".
             Row(
-                Modifier.height(44.dp).shadow(2.dp, RoundedCornerShape(22.dp)).clip(RoundedCornerShape(22.dp)).background(Pc.Card).padding(horizontal = 16.dp),
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                MapButton(PIcons.Back, stringResource(R.string.cd_back), { nav.back() })
+                PlaceSearchButton({ searching = true }, Modifier.weight(1f))
+            }
+            // Who is here, under it; clear of the map buttons on the right.
+            Row(
+                Modifier.padding(end = 60.dp).height(36.dp).shadow(2.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp))
+                    .background(Pc.Card).padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Box(Modifier.size(8.dp).clip(CircleShape).background(Pc.Orange))
-                Text(stringResource(R.string.meetup_here, state.spotName, state.hereCount), style = body(15.sp, 600))
+                Text(stringResource(R.string.meetup_here, state.spotName, state.hereCount), style = body(14.sp, 600), maxLines = 1)
             }
         }
         BottomSheet(spacing = 14) {
@@ -285,6 +297,7 @@ fun MeetupScreen(state: MeetupState, repo: PingersRepository, nav: Navigator) {
             }
             Footnote(state, nav)
         }
+        if (searching) PlaceSearchScreen(onPick = { view.centre = it.at }, onClose = { searching = false })
     }
 }
 

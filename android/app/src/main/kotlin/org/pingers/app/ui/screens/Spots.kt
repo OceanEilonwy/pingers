@@ -297,7 +297,7 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
 
 /** The "Search a place" pill over the map; tapping it opens [PlaceSearchScreen]. */
 @Composable
-private fun PlaceSearchButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+internal fun PlaceSearchButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     val label = stringResource(R.string.spot_search)
     Row(
         modifier
@@ -318,10 +318,10 @@ private fun PlaceSearchButton(onClick: () -> Unit, modifier: Modifier = Modifier
 
 /**
  * "Search a place", full screen: matches place names in the downloaded packs' indexes, on
- * this phone. Picking one moves the Spot there and closes the search; Back closes it too.
+ * this phone. Picking one moves the map there and closes the search; Back closes it too.
  */
 @Composable
-private fun PlaceSearchScreen(onPick: (Place) -> Unit, onClose: () -> Unit) {
+internal fun PlaceSearchScreen(onPick: (Place) -> Unit, onClose: () -> Unit) {
     val maps = LocalMaps.current
     val focus = LocalFocusManager.current
     val focusRequester = remember { FocusRequester() }
@@ -367,6 +367,27 @@ private fun PlaceSearchScreen(onPick: (Place) -> Unit, onClose: () -> Unit) {
                 installed.isEmpty() -> R.string.maps_search_no_maps
                 query.isNotBlank() && results.isEmpty() -> R.string.maps_search_none
                 else -> null
+            }
+            if (notice == null && query.isBlank()) {
+                // Nothing typed yet: say what the box is for, instead of a blank page.
+                item {
+                    Column(
+                        Modifier.fillMaxWidth().padding(top = 72.dp, start = 24.dp, end = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Box(Modifier.size(64.dp).clip(CircleShape).background(Pc.Chip), contentAlignment = Alignment.Center) {
+                            Icon(PIcons.Search, null, tint = Pc.Muted, modifier = Modifier.size(28.dp))
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(stringResource(R.string.maps_search_empty_title), style = body(16.sp, 600), textAlign = TextAlign.Center)
+                        Text(
+                            stringResource(R.string.maps_search_empty_detail),
+                            style = body(14.sp, color = Pc.Muted, lineHeight = 1.4f),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
             }
             if (notice != null) {
                 item {

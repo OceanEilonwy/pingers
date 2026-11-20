@@ -330,6 +330,8 @@
     <string name="maps_host_hint">Leave empty to use your server\'s or the app\'s</string>
     <string name="maps_regions_link">Downloaded maps</string>
     <string name="maps_search_none">No places found in your downloaded maps</string>
+    <string name="maps_search_empty_title">Type to search</string>
+    <string name="maps_search_empty_detail">Find places, streets and cities in your downloaded maps. Searching stays on this phone.</string>
     <string name="maps_search_no_maps">Download a map to search places</string>
     <string name="place_country">Country</string>
     <string name="place_region">Region</string>
