@@ -9,8 +9,10 @@
 //!   offers only X25519MLKEM768, so it succeeds only with post-quantum key exchange, verified
 //!   against Mozilla's roots; HTTP/2 offered by the server and the relay) and what each answers
 //!   (`/v1/params`, the relay's key config, the push relay's config, the map catalog, and `404`
-//!   for the paths that must never be public). Many routers do not loop connections from the
-//!   inside back to the public address; then these say they could not be tried from here.
+//!   for the paths that must never be public: the gateway, `/metrics` and `POST /v1/push`,
+//!   which the services themselves refuse to anything the web proxy forwards, since nodo's
+//!   proxy hides no path). Many routers do not loop connections from the inside back to the
+//!   public address; then these say they could not be tried from here.
 //!
 //! Every request has a short timeout and they all run at once, so a page is ready in seconds
 //! whatever is down.
@@ -371,7 +373,8 @@ async fn public_checks(config: &Config, clients: &Clients) -> Vec<Check> {
         ),
         status_check(
             clients,
-            Probe::post(format!("{}/ohttp", server.origin), StatusCode::NOT_FOUND),
+            Probe::post(format!("{}/ohttp", server.origin), StatusCode::NOT_FOUND)
+                .because(GATEWAY_EXPOSED),
             "The gateway is not reachable directly",
         ),
         status_check(
@@ -381,15 +384,38 @@ async fn public_checks(config: &Config, clients: &Clients) -> Vec<Check> {
         ),
         status_check(
             clients,
-            Probe::post(format!("{}/v1/push", push.origin), StatusCode::NOT_FOUND),
+            Probe::post(format!("{}/v1/push", push.origin), StatusCode::NOT_FOUND)
+                .because(PUSH_EXPOSED),
             "Pushes are not accepted from outside",
         ),
     );
-    let (tls, answers) = tokio::join!(tls, answers);
+    let metrics = status_check(
+        clients,
+        Probe::get(format!("{}/metrics", server.origin), StatusCode::NOT_FOUND)
+            .because(METRICS_EXPOSED),
+        "The server's metrics are not public",
+    );
+    let (tls, answers, metrics) = tokio::join!(tls, answers, metrics);
     let mut checks: Vec<Check> = tls.into_iter().collect();
     checks.extend(answers);
+    checks.push(metrics);
     checks
 }
+
+/// Why `POST /ohttp` through the server's public name must be `404`.
+const GATEWAY_EXPOSED: &str = "The OHTTP gateway must be reachable by pingers-ohttp-relay \
+     only, on its own loopback listener; the server's public listener has no /ohttp. Check \
+     that nothing in front of the appliance forwards this name to the gateway's port.";
+
+/// Why `POST /v1/push` through the push relay's public name must be `404`.
+const PUSH_EXPOSED: &str = "Only this appliance's pingers-server pushes, on loopback, so \
+     pingers-push-relay should refuse pushes that come through the web proxy as if there were \
+     no such path (push_direct_only, set by the package); a 401 means it takes them and only \
+     the server's credential keeps others out. Update the pingers packages.";
+
+/// Why `GET /metrics` through the server's public name must be `404`.
+const METRICS_EXPOSED: &str = "pingers-server should answer /metrics only to callers on the \
+     appliance connecting directly, never through the web proxy. Update the pingers packages.";
 
 /// Four futures at once, in order.
 async fn futures_join4<T>(
@@ -486,11 +512,13 @@ async fn with_pin_checks(
     checks
 }
 
-/// A request to make through a public name, and the status it must get.
+/// A request to make through a public name, the status it must get, and what any other
+/// answer means.
 struct Probe {
     post: bool,
     url: String,
     expected: StatusCode,
+    why: Option<&'static str>,
 }
 
 impl Probe {
@@ -499,6 +527,7 @@ impl Probe {
             post: false,
             url,
             expected,
+            why: None,
         }
     }
 
@@ -507,6 +536,15 @@ impl Probe {
             post: true,
             url,
             expected,
+            why: None,
+        }
+    }
+
+    /// Explains a failure with `why`, after what was answered.
+    fn because(self, why: &'static str) -> Self {
+        Self {
+            why: Some(why),
+            ..self
         }
     }
 }
@@ -517,6 +555,7 @@ async fn status_check(clients: &Clients, probe: Probe, label: &str) -> Check {
         post,
         url,
         expected,
+        why,
     } = probe;
     let request = if post {
         clients.plain.post(&url)
@@ -525,11 +564,14 @@ async fn status_check(clients: &Clients, probe: Probe, label: &str) -> Check {
     };
     match request.send().await {
         Ok(response) if response.status() == expected => Check::new(label, State::Ok, ""),
-        Ok(response) => Check::new(
-            label,
-            State::Failed,
-            format!("{url} answered {}, not {expected}", response.status()),
-        ),
+        Ok(response) => {
+            let answered = format!("{url} answered {}, not {expected}", response.status());
+            let detail = match why {
+                Some(why) => format!("{answered}. {why}"),
+                None => answered,
+            };
+            Check::new(label, State::Failed, detail)
+        }
         Err(error) if error.is_connect() || error.is_timeout() => {
             Check::new(label, State::Unknown, NO_LOOPBACK)
         }

@@ -112,6 +112,27 @@ fn every_manifest_passes_the_feeds_install_review() -> TestResult {
     Ok(())
 }
 
+/// nodo's proxy hides no path any more (it ignores `admin_paths`), so the services guard their
+/// own private paths: no manifest relies on the key, and the push relay refuses pushes that
+/// come through the proxy (pingers-server's `/metrics` always does).
+#[test]
+fn the_services_guard_their_own_private_paths() -> TestResult {
+    for (id, _) in APPS {
+        let relies = manifest_text(id)?
+            .lines()
+            .any(|line| line.trim_start().starts_with("admin_paths"));
+        assert!(!relies, "{id} still lists admin_paths, which nodo ignores");
+    }
+    let template = read(&app_dir("pingers-push-relay").join("push-relay.toml.in"))?;
+    assert!(
+        template
+            .lines()
+            .any(|line| line == "push_direct_only = true"),
+        "the push relay would take pushes through the proxy"
+    );
+    Ok(())
+}
+
 #[test]
 fn the_http2_only_services_ask_caddy_for_h2c() -> TestResult {
     for id in SERVICES {

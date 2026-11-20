@@ -53,6 +53,8 @@ fn a_minimal_file_gets_private_defaults() -> Result<(), ConfigError> {
     assert_eq!(config.unifiedpush, Some(EndpointPolicy::PublicHttpsOnly));
     assert!(config.fcm.is_none());
     assert_eq!(config.operator, "Test Relay Ltd");
+    // Servers on other hosts may push through the TLS front in front of a relay.
+    assert_eq!(config.push_senders, crate::http::PushSenders::Anywhere);
     let key = config
         .keys
         .published(UnixSeconds::new(1000))
@@ -66,6 +68,15 @@ fn a_minimal_file_gets_private_defaults() -> Result<(), ConfigError> {
             .authenticate(b"0123456789abcdef0123456789abcdef")
             .is_ok_and(|server| server.is_some())
     );
+    Ok(())
+}
+
+#[test]
+fn push_direct_only_refuses_forwarded_pushes() -> Result<(), ConfigError> {
+    let config = RelayConfig::parse(&with("push_direct_only = true"))?;
+    assert_eq!(config.push_senders, crate::http::PushSenders::DirectOnly);
+    let config = RelayConfig::parse(&with("push_direct_only = false"))?;
+    assert_eq!(config.push_senders, crate::http::PushSenders::Anywhere);
     Ok(())
 }
 

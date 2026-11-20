@@ -17,8 +17,8 @@
 //!   channel is `421 Misdirected Request`. Public routes (parameters, key configs) either way.
 //! - **Key config** at `GET /v1/ohttp/config` on both listeners (`application/ohttp-keys`,
 //!   the served config: `[ohttp] served_key_id`).
-//! - **Metrics** at `GET /metrics` for configured addresses: totals per channel and outcome,
-//!   no identifiers. **Logging** is off by default; when on, it writes those totals only.
+//! - **Metrics** at `GET /metrics` for configured addresses connecting directly (a request a
+//!   reverse proxy forwarded gets `404`): totals per channel and outcome, no identifiers. **Logging** is off by default; when on, it writes those totals only.
 //!
 //! - **Board and mailboxes** are wired to pingers-board-store and pingers-mailbox (bodies and
 //!   textual encodings in `wire.rs`); mailbox wakes are forwarded to the configured push relays

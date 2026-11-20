@@ -1609,11 +1609,15 @@ mod tests {
                 .collect();
             assert_eq!(dials, vec![dial], "{site}");
         }
-        // B's server hides its gateway and metrics like A's.
-        assert_eq!(
-            with_b.pointer("/apps/http/servers/second-server/routes/0"),
-            plain.pointer("/apps/http/servers/server/routes/0")
-        );
+        // B's server site has A's routes, its upstream aside: like A's (and nodo's), it hides
+        // no path, and the server refuses /metrics to what the front forwards.
+        let routes = |site: &str| {
+            with_b
+                .pointer(&format!("/apps/http/servers/{site}/routes"))
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+        };
+        assert_eq!(routes("second-server"), routes("server"));
         Ok(())
     }
 

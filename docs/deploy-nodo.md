@@ -82,15 +82,37 @@ All listeners are on loopback:
 
 ```
 phone ──TLS 1.3, X25519MLKEM768──▶ [router :443] ──▶ nodo Caddy (ACME certificates)
-            pingers.…  → 127.0.0.1:9470  h2c   pingers-server API
+            pingers.…  → 127.0.0.1:9470  h2c   pingers-server API (/ohttp, /metrics: 404 through Caddy)
             ohttp.…    → 127.0.0.1:9473  h2c   pingers-ohttp-relay ──h2c──▶ 127.0.0.1:9471 gateway
-            push.…     → 127.0.0.1:9472  h1    pingers-push-relay (GET /v1/config; /v1/push hidden)
+            push.…     → 127.0.0.1:9472  h1    pingers-push-relay (GET /v1/config; /v1/push: 404 through Caddy)
             maps.…     → 127.0.0.1:9474  h1    pingers-map-host
 pingers-server ──loopback──▶ 127.0.0.1:9472 /v1/push
 pingers-server ──loopback──▶ 127.0.0.1:9474 /ohttp, /ohttp-keys   (map downloads through the relay, still sealed)
 pingers-push-relay ──TLS──▶ FCM, Google OAuth, UnifiedPush servers
 pingers-map-host (pmtiles) ──TLS──▶ build.protomaps.com   (byte ranges of the upstream build, to cut a region)
 ```
+
+**Private paths: the services refuse them through the proxy themselves.** nodo's Caddy hides
+no path (monokulo-nodo dropped `admin_paths`, and ignores the key), so nothing in the manifests
+asks it to; the paths that must not be public answer `404` to anything Caddy forwards, as the
+old proxy rule did, and are served only to processes on the appliance that connect directly:
+
+- `POST /v1/push` on pingers-push-relay (`push_direct_only = true` in `push-relay.toml.in`):
+  only this appliance's pingers-server pushes, over loopback. Devices still read
+  `GET /v1/config` through Caddy.
+- `GET /metrics` on pingers-server, which also answers only the addresses in `[metrics] allow`.
+- `/ohttp` on pingers-server's public listener is `404` to everyone: the gateway is not there at
+  all but on its own listener, 9471, which only pingers-ohttp-relay reaches (and Caddy cannot).
+
+A request came through a reverse proxy when it carries `X-Forwarded-For`, `X-Forwarded-Host`,
+`X-Forwarded-Proto`, `Forwarded` or `Via`. Caddy's `reverse_proxy` sets the first three on every
+request it forwards, replacing any the client sent (nodo's Caddy configures no
+`trusted_proxies` and no header changes for its upstreams), so a client cannot get a request
+through without them by sending fewer; adding one only refuses itself. The services listen on
+loopback only, so a request without any of them is from a process on the appliance that
+connected directly: pingers-server's pushes, or a metrics scraper. The dev stack's Caddy and
+`cargo xtask tls-front` add the same headers. A push relay run elsewhere, which servers on other
+hosts push to through its TLS front, keeps the default `push_direct_only = false`.
 
 Firewall, from the manifests and the references between settings: pingers-server has no
 outbound access at all and reaches only 9472, by referencing the push relay's `server-url`, and
@@ -207,7 +229,8 @@ can tell, done or not: nodo fills in each site's DNS record, DNS check, certific
 reachability, the services' health, the domain provider and the newest backup; pingers adds
 its own checks through the public names (a TLS handshake that offers only X25519MLKEM768
 against Mozilla's roots, HTTP/2 for the server and the relay, the expected answers, `404` for
-`POST /ohttp` and `POST /v1/push`, and that the relay and the push relay hand out this
+`POST /ohttp`, `GET /metrics` and `POST /v1/push`, which the services refuse through the proxy
+themselves, with what to do when one answers otherwise, and that the relay and the push relay hand out this
 appliance's keys). Values have a Copy button (the terminal's clipboard, OSC 52) and stay
 visible as plain text. The page shows the registration code; only the owner, with the device
 passphrase, opens it.
@@ -546,7 +569,9 @@ tests, `crates/pingers-e2e`, and the push relay's ntfy script.
    this stack (its public checks have nothing to reach and say so).
 3. `caddy run --config packaging/nodo/dev/caddy.json` puts Caddy in front exactly as nodo-web
    does (N1): h2c and `flush_interval: -1` for the server (9443) and relay (9444), HTTP/1.1
-   for the push relay (9445) and map host (9446), `/ohttp`, `/metrics` and `/v1/push` hidden.
+   for the push relay (9445) and map host (9446). Like nodo's, it hides no path: the services
+   refuse `/metrics` and `POST /v1/push` to what it forwards (section 1), and the server's
+   public listener has no `/ohttp`.
 4. Build debug APKs with `PINGERS_SERVER_HOST=https://10.0.2.2:9443`,
    `PINGERS_OHTTP_RELAY=https://10.0.2.2:9444/ohttp`, `PINGERS_PUSH_RELAY=https://10.0.2.2:9445`,
    `PINGERS_MAP_HOST=https://10.0.2.2:9446` and `PINGERS_EXTRA_CA=target/dev-ca/ca.pem` (debug
@@ -653,8 +678,9 @@ with this appliance's values filled in and each step marked done where the appli
    tried; then check from a phone on mobile data (section 2.1's commands).
 4. **Check the services answer.** *Done when* the five services are running and healthy, the
    gateway and the push relay answer on the appliance, `https://pingers.example.org/v1/params`
-   and `https://maps.example.org/catalog.json` answer 200, `POST https://pingers.example.org/ohttp`
-   and `POST https://push.example.org/v1/push` answer 404, and the relay and the push relay hand
+   and `https://maps.example.org/catalog.json` answer 200, `POST https://pingers.example.org/ohttp`,
+   `GET https://pingers.example.org/metrics` and `POST https://push.example.org/v1/push` answer
+   404, and the relay and the push relay hand
    out this appliance's keys. These replace the hand-run curl checks.
 5. **Firebase wake-ups.** Pasted at install. To replace the key: Apps, pingers-push-relay,
    Settings, Firebase service account; then delete the old key in the Google Cloud console.

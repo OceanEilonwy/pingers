@@ -248,7 +248,13 @@ pub async fn serve_with<S: PushSender, C: Clock + 'static>(
             }))
         }
     };
-    connections::serve(listener, http::router(relay), config.connections, shutdown).await;
+    connections::serve(
+        listener,
+        http::router(relay, config.push_senders),
+        config.connections,
+        shutdown,
+    )
+    .await;
     if let Some(reporter) = reporter {
         reporter.abort();
     }

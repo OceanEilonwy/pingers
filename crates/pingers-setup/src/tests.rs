@@ -147,7 +147,7 @@ async fn the_facts_come_from_the_services_on_loopback() -> TestResult {
     );
     // Nothing under .invalid resolves: every public check says it could not be tried, none
     // claims a pass or a failure it did not see.
-    assert_eq!(facts.public.len(), 10);
+    assert_eq!(facts.public.len(), 11);
     assert!(
         facts
             .public
@@ -323,7 +323,7 @@ async fn a_healthy_appliance_passes_every_public_check() -> TestResult {
     .await?;
     let config = at_localhost(&fake_text().await?, address.port())?;
     let facts = checks::gather(&config, &Clients::trusting(&[der])?).await;
-    assert_eq!(facts.public.len(), 10);
+    assert_eq!(facts.public.len(), 11);
     for check in &facts.public {
         assert_eq!(check.state, checks::State::Ok, "{check:?}");
     }
@@ -349,8 +349,8 @@ async fn classical_tls_missing_http2_and_other_keys_fail() -> TestResult {
     let config = at_localhost(&fake_text().await?, address.port())?;
     let facts = checks::gather(&config, &Clients::trusting(std::slice::from_ref(&der))?).await;
     let states: Vec<checks::State> = facts.public.iter().map(|check| check.state).collect();
-    // The four TLS checks fail (no post-quantum key exchange); the answers pass; the two key
-    // checks fail.
+    // The four TLS checks fail (no post-quantum key exchange); the five answers pass; the two
+    // key checks fail.
     assert_eq!(
         states,
         [
@@ -358,6 +358,7 @@ async fn classical_tls_missing_http2_and_other_keys_fail() -> TestResult {
             checks::State::Failed,
             checks::State::Failed,
             checks::State::Failed,
+            checks::State::Ok,
             checks::State::Ok,
             checks::State::Ok,
             checks::State::Ok,
@@ -487,6 +488,54 @@ async fn a_public_path_that_answers_when_it_must_not_fails() -> TestResult {
             .as_deref()
             .is_some_and(|detail| detail.contains("200"))
     );
+    Ok(())
+}
+
+/// The push relay taking pushes through the web proxy, only its credential keeping others out
+/// (what the live appliance answered once nodo's proxy stopped hiding the path), and the
+/// server's metrics answering through it, fail and say why. Refused with 404 they pass, as in
+/// [`a_healthy_appliance_passes_every_public_check`].
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pushes_or_metrics_reachable_through_the_proxy_fail_and_say_why() -> TestResult {
+    let (gateway, push) = served_keys()?;
+    let routes = public_routes(gateway, push)
+        .route(
+            "/v1/push",
+            axum::routing::post(|| std::future::ready(axum::http::StatusCode::UNAUTHORIZED)),
+        )
+        .route(
+            "/metrics",
+            get(|| std::future::ready("pingers_requests_total 1")),
+        );
+    let (address, der) = tls_fake(routes, &[rustls::NamedGroup::X25519MLKEM768], true).await?;
+    let config = at_localhost(&fake_text().await?, address.port())?;
+    let facts = checks::gather(&config, &Clients::trusting(&[der])?).await;
+    let push = facts.public.get(7).ok_or("no check")?;
+    assert_eq!(push.label, "Pushes are not accepted from outside");
+    assert_eq!(push.state, checks::State::Failed);
+    let detail = push.detail.as_deref().unwrap_or_default();
+    assert!(
+        detail.contains("/v1/push answered 401 Unauthorized, not 404 Not Found."),
+        "{detail}"
+    );
+    assert!(
+        detail.contains("refuse pushes that come through the web proxy"),
+        "{detail}"
+    );
+    let metrics = facts.public.get(8).ok_or("no check")?;
+    assert_eq!(metrics.label, "The server's metrics are not public");
+    assert_eq!(metrics.state, checks::State::Failed);
+    let detail = metrics.detail.as_deref().unwrap_or_default();
+    assert!(
+        detail.contains("/metrics answered 200 OK, not 404 Not Found."),
+        "{detail}"
+    );
+    // The others still pass.
+    for (index, check) in facts.public.iter().enumerate() {
+        if index != 7 && index != 8 {
+            assert_eq!(check.state, checks::State::Ok, "{check:?}");
+        }
+    }
     Ok(())
 }
 

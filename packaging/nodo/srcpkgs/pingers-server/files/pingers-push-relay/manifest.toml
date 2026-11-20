@@ -31,7 +31,8 @@ scope = "local"
 name = "push"
 upstream = "127.0.0.1:9472"
 suggested_subdomain = "push"
-# Only this device's server pushes, over loopback, so POST /v1/push is never public. Devices
-# still fetch GET /v1/config here.
-admin_paths = ["/v1/push"]
+# Devices fetch GET /v1/config here. Only this device's server pushes, over loopback, so
+# POST /v1/push is never public: no admin_paths (nodo's proxy hides no path any more and
+# ignores the key); the relay guards it itself, answering 404 to any request the proxy
+# forwarded (push_direct_only in push-relay.toml.in).
 multi_address = true

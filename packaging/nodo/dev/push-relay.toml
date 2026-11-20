@@ -11,6 +11,8 @@ hash_key = "4444444444444444444444444444444444444444444444444444444444444444"
 upstream_timeout_ms = 10000
 token_pushes_per_minute = 30
 max_ttl_s = 2592000
+# As on the appliance: POST /v1/push through the TLS front answers 404; servers push on loopback.
+push_direct_only = true
 
 [[keys]]
 key_id = 1
