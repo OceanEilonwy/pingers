@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Exclusion zones: where this device never shares, stored only on it.
 
-use pingers_geo::{Coordinate, Fence, Meters};
+use pingers_geo::{Coordinate, Fence, MINIMUM_SPOT_RADIUS, Meters, SquareMeters};
 
 use crate::ScreenError;
 use crate::clock::LocalTime;
-use crate::common::Name;
+use crate::common::{DraftText, Name};
 use crate::snapshot::{
-    ClientSnapshot, Days, ExclusionZone, HideTrail, ZoneId, ZoneParties, ZoneTimes, daily_window,
+    ClientSnapshot, Days, ExclusionZone, HideTrail, ZoneId, ZoneParties, ZoneSchedule, ZoneTimes,
+    daily_window,
 };
+use crate::spot::{ShapeFields, ShapeKind, SpotDraft, maximum_spot_radius};
 
 /// A zone's shape as its row describes it.
 #[derive(Clone, Debug, PartialEq)]
@@ -211,13 +213,75 @@ pub fn without(snapshot: &ClientSnapshot, zone: ZoneId) -> Result<Vec<ExclusionZ
         .collect())
 }
 
+/// The editor for a new exclusion zone ("Add exclusion zone"): the Spot editor's name and shape,
+/// for no Party, since a zone never leaves this device.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ZoneEditor {
+    /// The name typed; empty shows the "New zone" placeholder.
+    pub name: DraftText,
+    /// Which shape is chosen.
+    pub shape: ShapeKind,
+    /// The radius, within the slider's range.
+    pub radius: Meters,
+    /// The slider's lower end.
+    pub min_radius: Meters,
+    /// The slider's upper end.
+    pub max_radius: Meters,
+    /// The drawn area's size, once drawn.
+    pub area: Option<SquareMeters>,
+    /// Whether "Save zone" is enabled: a name, and an area if Area is chosen.
+    pub can_save: bool,
+}
+
+/// The zone editor, for what has been typed and drawn so far.
+#[must_use]
+pub fn zone_editor(draft: &SpotDraft) -> ZoneEditor {
+    let shape = ShapeFields::of(draft);
+    ZoneEditor {
+        name: draft.name.clone(),
+        shape: draft.shape,
+        radius: shape.radius,
+        min_radius: MINIMUM_SPOT_RADIUS,
+        max_radius: maximum_spot_radius(),
+        area: shape.area,
+        can_save: shape.ready && draft.name.name().is_some(),
+    }
+}
+
+/// Every exclusion zone and a new one, `name` shaped as `fence`, applying always and for every
+/// Party until its times are changed: the whole list, as pingers-client stores it, and the new
+/// zone's id, one past the largest in use.
+///
+/// # Errors
+///
+/// [`ScreenError::TooManyZones`] once every id is taken.
+pub fn with_new(
+    snapshot: &ClientSnapshot,
+    name: Name,
+    fence: Fence,
+) -> Result<(Vec<ExclusionZone>, ZoneId), ScreenError> {
+    let id = match snapshot.zones.iter().map(|zone| zone.id.get()).max() {
+        None => 1,
+        Some(largest) => largest.checked_add(1).ok_or(ScreenError::TooManyZones)?,
+    };
+    let id = ZoneId::new(id);
+    let mut zones = snapshot.zones.clone();
+    zones.push(ExclusionZone {
+        id,
+        name,
+        fence,
+        schedule: ZoneSchedule::ALWAYS,
+    });
+    Ok((zones, id))
+}
+
 #[cfg(test)]
 mod tests {
     #![expect(clippy::panic_in_result_fn, reason = "assertions are how tests fail")]
 
     use super::*;
     use crate::fixtures::{self, FixtureError};
-    use crate::snapshot::ZoneSchedule;
+    use pingers_geo::{Circle, Polygon};
 
     #[test]
     fn zones_read_like_the_canvas() -> Result<(), FixtureError> {
@@ -371,6 +435,63 @@ mod tests {
             without(&snapshot, ZoneId::new(9)),
             Err(ScreenError::UnknownZone)
         );
+        Ok(())
+    }
+    #[test]
+    fn a_new_zone_joins_the_list_after_the_others() -> Result<(), Box<dyn std::error::Error>> {
+        let snapshot = fixtures::snapshot()?;
+        let centre = Coordinate::new(51.5, -0.12)?;
+        let fence = Fence::Circle(Circle::new(centre, Meters::from_whole(200))?);
+        let (zones, id) = with_new(&snapshot, Name::new("Gym")?, fence.clone())?;
+        assert_eq!(id, ZoneId::new(3));
+        let names: Vec<_> = zones.iter().map(|zone| zone.name.as_str()).collect();
+        assert_eq!(names, ["Home", "Work", "Gym"]);
+        let gym = zones.last().ok_or(FixtureError::Missing)?;
+        assert_eq!(
+            (gym.id, &gym.fence, &gym.schedule),
+            (id, &fence, &ZoneSchedule::ALWAYS)
+        );
+        let mut empty = snapshot.clone();
+        empty.zones.clear();
+        assert_eq!(
+            with_new(&empty, Name::new("Gym")?, fence.clone())?.1,
+            ZoneId::new(1)
+        );
+        let mut full = snapshot;
+        if let Some(last) = full.zones.last_mut() {
+            last.id = ZoneId::new(u32::MAX);
+        }
+        assert_eq!(
+            with_new(&full, Name::new("Gym")?, fence).map(|(_, id)| id),
+            Err(ScreenError::TooManyZones)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_zone_editor_wants_a_name_and_a_finished_shape() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut draft = SpotDraft {
+            name: DraftText::new("Gym".into()),
+            shape: ShapeKind::Circle,
+            radius: Meters::from_whole(5000),
+            area: None,
+        };
+        let view = zone_editor(&draft);
+        assert!(view.can_save);
+        assert_eq!(view.radius, maximum_spot_radius());
+        assert_eq!(view.min_radius, MINIMUM_SPOT_RADIUS);
+        draft.shape = ShapeKind::Area;
+        assert!(!zone_editor(&draft).can_save);
+        draft.area = Some(Polygon::new(vec![
+            Coordinate::new(51.5, -0.12)?,
+            Coordinate::new(51.501, -0.12)?,
+            Coordinate::new(51.501, -0.119)?,
+        ])?);
+        let view = zone_editor(&draft);
+        assert!(view.can_save && view.area.is_some());
+        draft.name = DraftText::default();
+        assert!(!zone_editor(&draft).can_save);
         Ok(())
     }
 }

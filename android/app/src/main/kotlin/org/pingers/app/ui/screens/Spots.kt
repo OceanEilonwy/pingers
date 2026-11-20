@@ -282,7 +282,7 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
             MapButton(PIcons.Locate, stringResource(R.string.cd_my_location), locate)
         }
         BottomSheet {
-            LabeledField(stringResource(R.string.spot_name), state.name, repo::setSpotName, height = 52.dp)
+            LabeledField(stringResource(if (state.forZone) R.string.zone_name else R.string.spot_name), state.name, repo::setSpotName, height = 52.dp)
             Segmented(
                 listOf(stringResource(R.string.spot_circle), stringResource(R.string.spot_draw_area)),
                 if (state.shape == ShapeKind.Circle) 0 else 1,
@@ -316,8 +316,13 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
                     ) { Text(stringResource(R.string.spot_edit_area), style = body(15.sp, 600, Pc.Blue)) }
                 }
             }
-            LockNote(stringResource(R.string.spot_encrypted, state.partyName))
-            PillButton(stringResource(R.string.spot_save), { repo.saveSpot(); nav.go(Route.Party) }, Modifier.testTag(E2eTags.SPOT_SAVE), enabled = state.canSave)
+            if (state.forZone) {
+                LockNote(stringResource(R.string.zone_on_phone))
+                PillButton(stringResource(R.string.zone_save), { repo.saveZone { nav.go(Route.ExclusionZones) } }, enabled = state.canSave)
+            } else {
+                LockNote(stringResource(R.string.spot_encrypted, state.partyName))
+                PillButton(stringResource(R.string.spot_save), { repo.saveSpot(); nav.go(Route.Party) }, Modifier.testTag(E2eTags.SPOT_SAVE), enabled = state.canSave)
+            }
         }
         if (searching) PlaceSearchScreen(onPick = { repo.moveSpot(it.at) }, onClose = { searching = false })
     }
@@ -671,9 +676,6 @@ private fun SmallButton(
 
 @Composable
 fun ExclusionZonesScreen(state: ExclusionZonesState, repo: PingersRepository, nav: Navigator) {
-    val context = LocalContext.current
-    val soon = stringResource(R.string.zones_edit_soon)
-    val notYet = { Toast.makeText(context, soon, Toast.LENGTH_SHORT).show() }
     Page(
         top = { TopBar(stringResource(R.string.zones_title), { nav.back() }, stringResource(R.string.cd_back)) },
         spacing = 0,
@@ -719,7 +721,7 @@ fun ExclusionZonesScreen(state: ExclusionZonesState, repo: PingersRepository, na
                 }
                 RowDivider()
             }
-            ListRow(notYet, padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
+            ListRow({ repo.newZone(); nav.go(Route.SpotEditor) }, padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
                 Icon(PIcons.Plus, null, tint = Pc.Blue, modifier = Modifier.size(18.dp))
                 Text(stringResource(R.string.zones_add), style = body(16.sp, 600, Pc.Blue))
             }

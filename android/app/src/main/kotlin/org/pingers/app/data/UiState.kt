@@ -310,6 +310,8 @@ data class SpotEditorState(
     val canSave: Boolean,
     /** Where a circle Spot is centred, and where the editor's map looks. */
     val centre: Coordinate = Coordinate(0.0, 0.0),
+    /** Making an exclusion zone, which stays on this phone, rather than a Party's Spot. */
+    val forZone: Boolean = false,
 )
 
 /** What is wrong with a drawn area. */

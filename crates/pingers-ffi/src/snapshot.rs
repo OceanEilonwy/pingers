@@ -19,7 +19,7 @@ use crate::views::{
     CompassView, DrawAreaView, ExclusionZonesView, HomeView, InviteView, JoinRequestView,
     LetInView, LocationRequestView, MeetPointDraft, MeetPointView, MeetupEndedView, MeetupView,
     NewPartyView, OpenInviteView, PartyDraft, PartyView, PendingJoinView, PrivacyView,
-    ServerSeesView, SpotDraft, SpotEditorView, YourNameView,
+    ServerSeesView, SpotDraft, SpotEditorView, YourNameView, ZoneEditorView,
 };
 
 /// The device's clock, for screens that print times or count down.
@@ -170,6 +170,15 @@ impl Snapshot {
         draft: &SpotDraft,
     ) -> Result<SpotEditorView, CoreError> {
         Ok(screens::spot::spot_editor(&self.0, party.try_into()?, &draft.try_into()?)?.into())
+    }
+
+    /// The editor for a new exclusion zone, for what has been typed and drawn.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Invalid`] for a negative radius or an impossible drawn area.
+    pub fn zone_editor(&self, draft: &SpotDraft) -> Result<ZoneEditorView, CoreError> {
+        Ok(screens::zones::zone_editor(&draft.try_into()?).into())
     }
 
     /// Exclusion zones.

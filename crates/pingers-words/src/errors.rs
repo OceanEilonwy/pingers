@@ -38,6 +38,7 @@ pub fn screen_error(language: Language, error: &ScreenError) -> String {
         ScreenError::EmptyWindow => "The start and end times must differ.",
         ScreenError::InvalidTime => "Pick a time between 00:00 and 23:59.",
         ScreenError::UnknownZone => "This zone is no longer on this phone.",
+        ScreenError::TooManyZones => "This phone has too many zones. Delete one first.",
         ScreenError::InvalidUtcOffset => "Your phone's time zone looks wrong.",
         ScreenError::ShapeOpen => "Close the shape to continue",
         ScreenError::Shape(_) => "This area can't be used. Drag a point to fix it.",
@@ -135,6 +136,7 @@ mod tests {
             ScreenError::EmptyWindow,
             ScreenError::InvalidTime,
             ScreenError::UnknownZone,
+            ScreenError::TooManyZones,
             ScreenError::InvalidUtcOffset,
         ]
         .map(say);

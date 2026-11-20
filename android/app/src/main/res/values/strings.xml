@@ -149,7 +149,10 @@
     <string name="zones_add">Add exclusion zone</string>
     <string name="zones_hide_trail">Hide trail near zones</string>
     <string name="zones_hide_trail_help">Stay hidden for 5 min after leaving, so nobody can trace you back</string>
-    <string name="zones_edit_soon">Editing zones arrives with the real map.</string>
+    <string name="zone_unnamed">New zone</string>
+    <string name="zone_name">Zone name</string>
+    <string name="zone_on_phone">Stays on this phone. Nothing about this zone is sent to any server or Party.</string>
+    <string name="zone_save">Save zone</string>
 
     <!-- Sharing + Focus -->
     <string name="privacy_title">Privacy</string>

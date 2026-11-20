@@ -175,6 +175,8 @@ class CoreRepository(
     }
 
     private var editingSpot: SpotId? = null
+    /** The Spot editor is making an exclusion zone ("Add exclusion zone"), not a Spot. */
+    private var editingZone = false
     private var spotDraft = uniffi.pingers.SpotDraft("", uniffi.pingers.ShapeKind.CIRCLE, 150.0, null)
     private var area = AreaEditor()
     private var drawFrame = frameAt(null, DRAW_AT)
@@ -568,13 +570,18 @@ class CoreRepository(
     }
 
     private fun publishSpotEditor() {
+        if (editingZone) {
+            read("zone editor") { it.zoneEditor(spotDraft).toUi() }?.let { _spotEditor.value = it.copy(centre = drawFrame.origin) }
+            _drawArea.value = drawState()
+            return
+        }
         val party = currentParty ?: return
         read("spot editor") { it.spotEditor(party.toFfi(), spotDraft).toUi() }?.let { _spotEditor.value = it.copy(centre = drawFrame.origin) }
         _drawArea.value = drawState()
     }
 
     private fun drawState(): DrawAreaState {
-        val name = spotDraft.name.ifBlank { res.getString(R.string.spot_unnamed) }
+        val name = spotDraft.name.ifBlank { res.getString(if (editingZone) R.string.zone_unnamed else R.string.spot_unnamed) }
         return area.view(name).toUi(drawFrame)
     }
 
@@ -930,6 +937,7 @@ class CoreRepository(
     // ------------------------------------------------------------ Spots
 
     override fun editSpot(spotId: SpotId?) {
+        editingZone = false
         editingSpot = spotId
         val row = _party.value.spots.firstOrNull { it.id == spotId }
         val fence = row?.fence
@@ -979,14 +987,34 @@ class CoreRepository(
 
     override fun saveSpot() {
         val party = currentParty ?: return
-        val spot = editingSpot
+        val save = uniffi.pingers.SpotToSave(editingSpot?.toFfi(), spotDraft.name, draftFence())
+        call("save spot") { it.saveSpot(party.toFfi(), save) }
+    }
+
+    /** A circle stays where the editor's map is centred; an area is what was drawn. */
+    private fun draftFence(): uniffi.pingers.Fence {
         val draft = spotDraft
-        // A circle stays where the editor's map is centred; an area is what was drawn.
-        val fence = draft.area?.takeIf { draft.shape == uniffi.pingers.ShapeKind.AREA }
+        return draft.area?.takeIf { draft.shape == uniffi.pingers.ShapeKind.AREA }
             ?.let { uniffi.pingers.Fence.Polygon(it) }
             ?: uniffi.pingers.Fence.Circle(drawFrame.origin.toFfi(), draft.radiusM)
-        val save = uniffi.pingers.SpotToSave(spot?.toFfi(), draft.name, fence)
-        call("save spot") { it.saveSpot(party.toFfi(), save) }
+    }
+
+    override fun newZone() {
+        editSpot(null)
+        editingZone = true
+        publishSpotEditor()
+    }
+
+    override fun saveZone(onSaved: () -> Unit) {
+        if (!editingZone) return
+        val name = spotDraft.name
+        val fence = draftFence()
+        call("add zone") { core ->
+            core.addZone(name, fence)
+            editingZone = false
+            refresh()
+            onSaved()
+        }
     }
 
     private fun draw(change: (AreaEditor) -> Unit) {
