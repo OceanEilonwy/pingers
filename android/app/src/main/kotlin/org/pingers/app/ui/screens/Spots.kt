@@ -56,6 +56,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
@@ -129,7 +130,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  * away to just the handle so the map is free; tapping or dragging up brings it back.
  */
 @Composable
-fun BoxScope.BottomSheet(height: Dp? = null, spacing: Int = 16, content: @Composable ColumnScope.() -> Unit) {
+fun BoxScope.BottomSheet(
+    height: Dp? = null,
+    spacing: Int = 16,
+    onHeight: (Dp) -> Unit = {},
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val density = LocalDensity.current
     var collapsed by rememberSaveable { mutableStateOf(false) }
     var dragged by remember { mutableFloatStateOf(0f) }
     val threshold = with(LocalDensity.current) { SHEET_DRAG.toPx() }
@@ -138,6 +145,7 @@ fun BoxScope.BottomSheet(height: Dp? = null, spacing: Int = 16, content: @Compos
         Modifier
             .align(Alignment.BottomCenter)
             .fillMaxWidth()
+            .onSizeChanged { onHeight(with(density) { it.height.toDp() }) }
             .then(if (height != null && !collapsed) Modifier.heightIn(min = height) else Modifier)
             .shadow(12.dp, RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
             .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
@@ -191,6 +199,7 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
     val drawn by repo.drawArea.collectAsStateWithLifecycle()
     // Pinching scales the map about the Spot's centre: a zoom of 2 shows twice the metres per unit.
     val view = rememberMapState()
+    var sheet by remember { mutableStateOf(0.dp) }
     val metresPerUnit = METRES_PER_UNIT * view.zoom
     val radius = state.radiusM / metresPerUnit
     val density = LocalDensity.current
@@ -205,7 +214,7 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
     LaunchedEffect(Unit) { if (state.name.isEmpty() && hasLocationPermission(context)) locate() }
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
         // Dragging the map moves the Spot's centre: the map slides, the circle stays put.
-        InteractiveMap(Scenes.SpotEditor, frame, view = view, moveTo = repo::moveSpot, overlay = { f ->
+        InteractiveMap(Scenes.SpotEditor, frame, view = view, sheetHeight = sheet, moveTo = repo::moveSpot, overlay = { f ->
             if (state.shape == ShapeKind.Circle) {
                 spotCircle(SpotCentre, radius, dashed = false, strokeWidth = 2.5f, alpha = 0.14f)
                 drawCircle(Pc.Blue, 6f, Offset(SpotCentre.x, SpotCentre.y))
@@ -248,7 +257,7 @@ fun SpotEditorScreen(state: SpotEditorState, repo: PingersRepository, nav: Navig
             MapButton(PIcons.Close, stringResource(R.string.cd_close), { nav.back() })
             PlaceSearchButton({ searching = true }, Modifier.weight(1f))
         }
-        BottomSheet {
+        BottomSheet(onHeight = { sheet = it }) {
             LabeledField(stringResource(if (state.forZone) R.string.zone_name else R.string.spot_name), state.name, repo::setSpotName, height = 52.dp)
             Segmented(
                 listOf(stringResource(R.string.spot_circle), stringResource(R.string.spot_draw_area)),
@@ -450,10 +459,12 @@ fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator
     val density = LocalDensity.current
     val w = words()
     val frame = state.mapFrame
+    var sheet by remember { mutableStateOf(0.dp) }
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
         InteractiveMap(
             Scenes.DrawArea,
             frame,
+            sheetHeight = sheet,
             onTap = repo::drawTapMap,
             overlay = { f ->
                 val points = state.points.map(f::toMap)
@@ -502,7 +513,7 @@ fun DrawAreaScreen(state: DrawAreaState, repo: PingersRepository, nav: Navigator
                 contentAlignment = Alignment.Center,
             ) { Text(stringResource(R.string.draw_title, state.spotName), style = body(14.sp, 600)) }
         }
-        BottomSheet(spacing = 14) {
+        BottomSheet(spacing = 14, onHeight = { sheet = it }) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
                 Text(
                     pluralStringResource(R.plurals.draw_points, state.points.size, state.points.size),

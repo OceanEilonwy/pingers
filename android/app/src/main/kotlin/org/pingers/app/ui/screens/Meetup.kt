@@ -214,8 +214,9 @@ fun MeetupScreen(state: MeetupState, repo: PingersRepository, nav: Navigator) {
     val w = words()
     val view = rememberMapState()
     var searching by remember { mutableStateOf(false) }
+    var sheet by remember { mutableStateOf(0.dp) }
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
-        InteractiveMap(Scenes.Meetup, state.mapFrame, view = view, onFindMe = repo::findMe, overlay = { f ->
+        InteractiveMap(Scenes.Meetup, state.mapFrame, view = view, sheetHeight = sheet, onFindMe = repo::findMe, overlay = { f ->
             val me = state.me?.let(f::toMap)
             val meetAt = state.meetPoint?.at?.let(f::toMap)
             if (me != null && meetAt != null) {
@@ -260,7 +261,7 @@ fun MeetupScreen(state: MeetupState, repo: PingersRepository, nav: Navigator) {
                 Text(stringResource(R.string.meetup_here, state.spotName, state.hereCount), style = body(14.sp, 600), maxLines = 1)
             }
         }
-        BottomSheet(spacing = 14) {
+        BottomSheet(spacing = 14, onHeight = { sheet = it }) {
             state.meetPoint?.let { mp ->
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Pc.OrangeTintSoft).padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
@@ -545,6 +546,7 @@ private val PinAt = MapPoint(195f, 256f)
 fun MeetPointScreen(state: MeetPointState, repo: PingersRepository, nav: Navigator) {
     SecureScreen()
     val density = LocalDensity.current
+    var sheet by remember { mutableStateOf(0.dp) }
     Box(Modifier.fillMaxSize().background(Pc.MapLand)) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val unit = maxWidth / Scenes.MeetPoint.width
@@ -556,7 +558,7 @@ fun MeetPointScreen(state: MeetPointState, repo: PingersRepository, nav: Navigat
                 Scenes.MeetPoint,
                 frame,
                 Modifier.semantics { contentDescription = hint },
-                chrome = fullScreenChrome(promptAt = 0.25f),
+                chrome = fullScreenChrome(promptAt = 0.25f, sheetHeight = sheet),
                 moveTo = repo::moveMeetPoint,
             ) { u, f ->
                 state.members.forEach { (p, c) ->
@@ -573,7 +575,7 @@ fun MeetPointScreen(state: MeetPointState, repo: PingersRepository, nav: Navigat
         Box(Modifier.statusBarsPadding().padding(start = 16.dp, top = 12.dp)) {
             MapButton(PIcons.Close, stringResource(R.string.cd_close), { nav.back() })
         }
-        BottomSheet(spacing = 14) {
+        BottomSheet(spacing = 14, onHeight = { sheet = it }) {
             Text(stringResource(R.string.mp_title), style = heading(22.sp), modifier = Modifier.semantics { heading() })
             Segmented(
                 listOf(stringResource(R.string.mp_pin), stringResource(R.string.mp_at_me), stringResource(R.string.mp_midpoint)),

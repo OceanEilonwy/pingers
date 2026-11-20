@@ -97,11 +97,14 @@ fun rememberMapState(zoom: Float = 1f): MapState = remember { MapState(zoom) }
 @Composable
 fun belowTopBar(): Dp = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 68.dp
 
-/** Notices for a full-screen map: attribution top left, clear of the controls on the right. */
-@Composable
-fun fullScreenChrome(promptAt: Float = 0.3f) = MapChrome(
-    attribution = Alignment.TopStart,
-    attributionPadding = PaddingValues(top = belowTopBar(), start = 12.dp),
+/**
+ * Notices for a full-screen map: the attribution bottom right, just above the sheet over the
+ * map ([sheetHeight], as [org.pingers.app.ui.screens.BottomSheet] reports it), so neither the
+ * top bar nor the sheet hides it.
+ */
+fun fullScreenChrome(promptAt: Float = 0.3f, sheetHeight: Dp = 0.dp) = MapChrome(
+    attribution = Alignment.BottomEnd,
+    attributionPadding = PaddingValues(end = 8.dp, bottom = sheetHeight + 6.dp),
     promptAt = promptAt,
 )
 
@@ -113,6 +116,8 @@ fun fullScreenChrome(promptAt: Float = 0.3f) = MapChrome(
  * pin): panning and "Go to my location" call it with the coordinate that should sit at the
  * frame's origin. Without it, the map keeps its own centre.
  *
+ * [sheetHeight] is the height of the sheet over the map's foot, to keep the attribution above it.
+ *
  * [onTap] gets the coordinate under a tap that was not a drag. [onFindMe] runs as well as
  * moving the map when "Go to my location" is pressed.
  */
@@ -122,7 +127,8 @@ fun InteractiveMap(
     frame: MapFrame,
     modifier: Modifier = Modifier,
     view: MapState = rememberMapState(),
-    chrome: MapChrome = fullScreenChrome(),
+    sheetHeight: Dp = 0.dp,
+    chrome: MapChrome = fullScreenChrome(sheetHeight = sheetHeight),
     controlsPadding: PaddingValues = PaddingValues(top = belowTopBar(), end = 12.dp),
     moveTo: ((Coordinate) -> Unit)? = null,
     onTap: ((Coordinate) -> Unit)? = null,
