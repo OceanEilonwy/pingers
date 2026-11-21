@@ -72,8 +72,27 @@ impl Client {
 
     pub(super) async fn wake(&self, input: WakeInput) -> Result<(), ClientError> {
         let outcome = self.crates.wake.run(input).await?;
+        let joined = let_in(&outcome.events);
         self.apply(outcome);
-        self.publish_snapshot().await.map(drop)
+        self.publish_snapshot().await?;
+        if joined {
+            self.check_new_party().await;
+        }
+        Ok(())
+    }
+
+    /// This device was just let into a Party, whose Spots are new to it. A Spot the device
+    /// already stands in has no OS enter event, and a wake reads joins after taking its fix, so
+    /// the entry check would wait for the next scheduled wake (up to 45 minutes). Run one now:
+    /// it takes a fix against the new Spots and asks for the confirming one 30 seconds later.
+    /// The join stands either way, and a failed wake is retried by the ordinary schedule, so its
+    /// error is not the join's. Runs once: a join it completes in turn waits for the schedule.
+    pub(super) async fn check_new_party(&self) {
+        let Ok(outcome) = self.crates.wake.run(WakeInput::Scheduled).await else {
+            return;
+        };
+        self.apply(outcome);
+        self.publish_snapshot().await.ok();
     }
 
     fn apply(&self, outcome: WakeOutcome) {
@@ -121,4 +140,11 @@ impl Client {
     pub(super) fn emit(&self, event: ClientEvent) {
         emit(self.events.as_ref(), event);
     }
+}
+
+/// Whether `events` say this device was just let into a Party.
+pub(super) fn let_in(events: &[ClientEvent]) -> bool {
+    events
+        .iter()
+        .any(|event| matches!(event, ClientEvent::LetIn(_)))
 }
