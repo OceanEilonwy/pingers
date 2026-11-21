@@ -119,6 +119,8 @@ struct State {
     calls: Vec<CrateCall>,
     failing: Option<CrateName>,
     outcome: WakeOutcome,
+    /// What the next `check_joins` returns; taken by it, so later calls return none.
+    join_events: Vec<ClientEvent>,
     parties: PartiesSection,
     pipeline: PipelineSection,
     server: ServerSection,
@@ -175,6 +177,7 @@ impl FakeCrates {
             calls: Vec::new(),
             failing: None,
             outcome: WakeOutcome::default(),
+            join_events: Vec::new(),
             parties: PartiesSection::default(),
             pipeline: PipelineSection {
                 settings,
@@ -237,6 +240,12 @@ impl FakeCrates {
     /// What every wake returns from now on.
     pub fn set_wake_outcome(&self, outcome: WakeOutcome) {
         self.lock().outcome = outcome;
+    }
+
+    /// What the next `check_joins` returns (a join completing, say); the call after it returns
+    /// none again.
+    pub fn set_join_events(&self, events: Vec<ClientEvent>) {
+        self.lock().join_events = events;
     }
 
     /// pingers-parties' section from now on.
@@ -397,7 +406,8 @@ impl PartiesPort for FakeCrates {
     }
 
     async fn check_joins(&self) -> Result<Vec<ClientEvent>, ClientError> {
-        self.answer(CrateName::Parties, CrateCall::CheckJoins, Vec::new())
+        let events = std::mem::take(&mut self.lock().join_events);
+        self.answer(CrateName::Parties, CrateCall::CheckJoins, events)
     }
 
     async fn decide_join(

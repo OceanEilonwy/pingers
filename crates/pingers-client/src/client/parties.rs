@@ -70,8 +70,13 @@ impl Client {
         let events = self
             .published(self.crates.parties.check_joins().await)
             .await?;
+        let joined = super::pipeline::let_in(&events);
         for event in events {
             self.emit(event);
+        }
+        // Just let in: check presence against the new Party's Spots now (as a wake does).
+        if joined {
+            self.check_new_party().await;
         }
         Ok(())
     }

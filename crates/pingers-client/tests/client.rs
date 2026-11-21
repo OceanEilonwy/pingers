@@ -555,7 +555,6 @@ async fn a_wake_outcome_goes_to_the_platform_and_the_events() -> Result<(), Test
         events: vec![
             ClientEvent::PartiesChanged,
             ClientEvent::JoinRequested(party),
-            ClientEvent::LetIn(party),
             ClientEvent::MeetupStarted(MEETUP),
             ClientEvent::MeetupUpdated(MEETUP),
             ClientEvent::MeetupEnded(MEETUP),
@@ -593,13 +592,69 @@ async fn a_wake_outcome_goes_to_the_platform_and_the_events() -> Result<(), Test
         [
             RecordedEvent::PartiesChanged,
             RecordedEvent::JoinRequested { party },
-            RecordedEvent::LetIn { party },
             RecordedEvent::MeetupStarted { meetup: MEETUP },
             RecordedEvent::MeetupUpdated { meetup: MEETUP },
             RecordedEvent::MeetupEnded { meetup: MEETUP },
             RecordedEvent::Notice(Notice::ClockSkew),
             RecordedEvent::PrivacyStatusChanged,
         ]
+    );
+    Ok(())
+}
+
+/// The wakes the fakes ran, in order.
+fn wakes(rig: &Rig) -> Vec<WakeInput> {
+    rig.fakes
+        .calls()
+        .into_iter()
+        .filter_map(|call| {
+            if let CrateCall::Wake(input) = call {
+                Some(input)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn being_let_in_during_a_wake_checks_presence_at_once() -> Result<(), TestError> {
+    // A wake reads joins after taking its fix, so the new Party's Spots were not checked: a
+    // second wake follows at once, and only one, though the fakes answer it with LetIn again.
+    let rig = rig().await?;
+    let party = PartyId::from_bytes([10; 16]);
+    rig.fakes.set_wake_outcome(WakeOutcome {
+        events: vec![ClientEvent::LetIn(party)],
+        ..WakeOutcome::default()
+    });
+    rig.client.on_wake().await?;
+    assert_eq!(wakes(&rig), [WakeInput::Scheduled, WakeInput::Scheduled]);
+    assert_eq!(
+        rig.events.events(),
+        [
+            RecordedEvent::LetIn { party },
+            RecordedEvent::LetIn { party }
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn being_let_in_on_asked_to_join_checks_presence_at_once() -> Result<(), TestError> {
+    let rig = rig().await?;
+    let party = PartyId::from_bytes([10; 16]);
+    rig.client.check_joins().await?;
+    assert!(wakes(&rig).is_empty(), "no join, no wake");
+    rig.fakes
+        .set_join_events(vec![ClientEvent::PartiesChanged, ClientEvent::LetIn(party)]);
+    rig.client.check_joins().await?;
+    let calls = rig.fakes.calls();
+    assert_eq!(calls.last(), Some(&CrateCall::Wake(WakeInput::Scheduled)));
+    assert_eq!(wakes(&rig), [WakeInput::Scheduled]);
+    assert!(
+        rig.events
+            .events()
+            .contains(&RecordedEvent::LetIn { party })
     );
     Ok(())
 }
