@@ -226,9 +226,12 @@ async fn poster_whose_fresh_fix_is_outside_the_spot_declines() -> Result<(), Tes
     Ok(())
 }
 
-/// No fix in time for the liveness check: decline.
+/// No fix to hand for the liveness check: a poster standing still in the Spot has taken none
+/// lately, and the one asked for arrives in a wake of its own. The knock is not declined: it
+/// stays undecided and in the mailbox, and the wake that brings the fix (reading mailboxes)
+/// decides it, here admitting Bob.
 #[tokio::test]
-async fn poster_without_a_fresh_fix_declines() -> Result<(), TestError> {
+async fn poster_without_a_fresh_fix_waits_for_it_then_admits() -> Result<(), TestError> {
     let town = Town::new()?;
     let mut alice = town.phone(0)?;
     let mut bob = town.phone(1)?;
@@ -236,15 +239,45 @@ async fn poster_without_a_fresh_fix_declines() -> Result<(), TestError> {
     let spot = town.spot("anchor")?;
     alice.enter(spot, anchor).await?;
     bob.enter(spot, anchor).await?;
+    let knock = bob
+        .board()
+        .sent_knocks
+        .first()
+        .map(|sent| sent.knock_mailbox);
+    let knock = knock.ok_or(TestError::Missing("sent knock"))?;
 
-    let answered = alice.wake(WakeTrigger::Push(PushReason::Mailbox)).await?;
+    // The push wake: the liveness fix is asked for but not to hand.
+    let pushed = alice.wake(WakeTrigger::Push(PushReason::Mailbox)).await?;
+    assert!(pushed.knock_decisions.is_empty());
+    assert_eq!(pushed.knocks_awaiting_fix, 1);
     assert_eq!(
-        answered
-            .knock_decisions
-            .first()
-            .map(|outcome| outcome.decision),
-        Some(KnockDecision::Decline)
+        alice
+            .platform
+            .fix_requests()
+            .last()
+            .map(|request| request.quality),
+        Some(pingers_testkit::FixQuality::High)
     );
+    assert!(alice.board().decided_knocks.is_empty());
+    let kept = town.world.lock().map_or(0, |world| world.posts(&knock));
+    assert_eq!(kept, 1, "the waiting knock stays in its mailbox");
+
+    // The fix arrives in its own wake; the shell has that wake read mailboxes.
+    let fix = spot.fix_inside(alice.now());
+    alice.platform.script_fix(fix);
+    alice.settings.mailbox_reads = crate::MailboxReads::EveryWake;
+    let fixed = alice.wake(WakeTrigger::Fix(fix)).await?;
+    assert_eq!(fixed.knocks_awaiting_fix, 0);
+    assert_eq!(
+        fixed.knock_decisions,
+        vec![KnockOutcome {
+            spot: anchor,
+            decision: KnockDecision::Accept(Admission::CreateMeetup),
+        }]
+    );
+    assert_eq!(alice.meetups.admitted().len(), 1);
+    let left = town.world.lock().map_or(1, |world| world.posts(&knock));
+    assert_eq!(left, 0, "decided, the knock is deleted");
     Ok(())
 }
 

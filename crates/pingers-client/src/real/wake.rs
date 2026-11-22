@@ -6,6 +6,7 @@
 //! of the shell comes back as the [`WakeOutcome`].
 
 use core::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
@@ -46,9 +47,13 @@ use crate::snapshot::{
 };
 use crate::{ClientError, Notice, Platform};
 
-/// How long a wake may run. Android gives a push or WorkManager wake about ten seconds of
-/// guaranteed time and more in practice; the wake keeps its state consistent if cut short.
-pub(crate) const WAKE_BUDGET: Duration = Duration::from_secs(20);
+/// How long a wake's pipeline may run. Android gives a receiver or push about ten seconds,
+/// and the Android shell cancels each core call after nine (`SINK_TIMEOUT_MILLIS`). A wake
+/// cancelled from outside saves nothing, schedules no next wake and requests no fix; one that
+/// runs out of its own budget ends its network steps, keeps its state consistent and is
+/// retried soon. So the budget stays under the shell's limit, with room for what the client
+/// does after the pipeline (joins, the snapshot).
+pub(crate) const WAKE_BUDGET: Duration = Duration::from_secs(7);
 
 /// The client's [`WakePort`].
 pub(crate) struct Wake {
@@ -60,6 +65,10 @@ pub(crate) struct Wake {
     state: AsyncMutex<Option<WakeState>>,
     /// The gate's answer in the last wake, and the last fix: in memory only.
     last: Mutex<(Option<GateDecision>, Option<Fix>)>,
+    /// A wake left knocks waiting for the liveness fix it asked for
+    /// ([`WakeReport::knocks_awaiting_fix`]): the wake that delivers a fix reads mailboxes.
+    /// In memory only: the fix comes back to this process, seconds later.
+    knocks_awaiting_fix: AtomicBool,
 }
 
 impl Wake {
@@ -76,6 +85,7 @@ impl Wake {
             net,
             state: AsyncMutex::new(None),
             last: Mutex::new((None, None)),
+            knocks_awaiting_fix: AtomicBool::new(false),
         }
     }
 
@@ -128,13 +138,23 @@ impl Wake {
             meetups: self.meetups.as_ref(),
             time: &time,
         };
+        let mut settings = stored.wake_settings(time.clock.now())?;
+        // The fix a knock's liveness check waited for: read the knock again, with it to hand.
+        if matches!(trigger, WakeTrigger::Fix(_))
+            && self.knocks_awaiting_fix.swap(false, Ordering::Relaxed)
+        {
+            settings.mailbox_reads = MailboxReads::EveryWake;
+        }
         let input = PipelineInput {
             trigger,
-            settings: stored.wake_settings(time.clock.now())?,
+            settings,
             budget: WAKE_BUDGET,
         };
         let mut rng = (self.backend.outside.rng)();
         let report = Box::pin(wake_state.run(&env, input, &mut rng)).await?;
+        if report.knocks_awaiting_fix > 0 {
+            self.knocks_awaiting_fix.store(true, Ordering::Relaxed);
+        }
         let snapshot = wake_state.snapshot();
         self.backend
             .store(move |session, _clock, _rng| wake_codec::save(session, &snapshot))

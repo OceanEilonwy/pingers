@@ -272,6 +272,10 @@ pub struct WakeReport {
     pub knocks_sent: usize,
     /// Knocks received and decided.
     pub knock_decisions: Vec<KnockOutcome>,
+    /// Knocks left undecided because the liveness fix was not to hand: it was asked for and
+    /// comes in a wake of its own. Their mailboxes are kept, so the shell should read
+    /// mailboxes in the wake that delivers that fix ([`MailboxReads::EveryWake`] for it).
+    pub knocks_awaiting_fix: usize,
     /// Welcomes handed to pingers-meetup-session.
     pub welcomes: usize,
     /// Notices.
@@ -335,6 +339,7 @@ struct Progress {
     matched: Vec<SpotRef>,
     knocks_sent: usize,
     knock_decisions: Vec<KnockOutcome>,
+    knocks_awaiting_fix: usize,
     welcomes: usize,
     notices: Vec<WakeNotice>,
 }
@@ -475,6 +480,7 @@ where
             matched: core::mem::take(&mut self.report.matched),
             knocks_sent: self.report.knocks_sent,
             knock_decisions: core::mem::take(&mut self.report.knock_decisions),
+            knocks_awaiting_fix: self.report.knocks_awaiting_fix,
             welcomes: self.report.welcomes,
             notices: core::mem::take(&mut self.report.notices),
             next_wake,
@@ -1200,12 +1206,18 @@ where
             received,
             mailboxes,
         } = self.receive_knocks(memory.board, keys, &leases).await;
-        if !received.is_empty() {
+        let awaiting_fix = if received.is_empty() {
+            Vec::new()
+        } else {
             self.decide_knocks(memory.device, memory.board, received)
-                .await;
-        }
+                .await
+        };
         // Decided (or not knocks at all): what was read can go, so it cannot fill the mailbox.
-        for mailbox in mailboxes {
+        // A knock awaiting its liveness fix stays, to be read again in the wake that brings it.
+        for mailbox in mailboxes
+            .into_iter()
+            .filter(|mailbox| !awaiting_fix.contains(mailbox))
+        {
             let port = self.env.server;
             if self
                 .port(WakeStep::Mailboxes, port.delete_read(keys.server, mailbox))
@@ -1317,16 +1329,23 @@ where
     }
 
     /// The liveness check and the decision on each received knock (design B.4.4 steps 4 to 6).
+    ///
+    /// Returns the knock mailboxes of knocks left undecided for want of a fix. A device that
+    /// stands still in a Spot has usually taken no fix lately, so the liveness fix is asked
+    /// for and arrives in a wake of its own, seconds later. Declining then would drop every
+    /// knock on a device that is really there; instead the knock waits, unrecorded and in its
+    /// mailbox, for the wake that brings the fix ([`WakeReport::knocks_awaiting_fix`]).
     async fn decide_knocks(
         &mut self,
         state: &mut WakeState,
         board: &mut Board,
         received: Vec<ReceivedKnock>,
-    ) {
+    ) -> Vec<MailboxId> {
         let Liveness {
             fix: fresh,
             sharing,
         } = self.liveness(state).await;
+        let mut awaiting_fix = Vec::new();
         let waiting: Vec<RecordRandomness> = board
             .sent_knocks
             .iter()
@@ -1341,6 +1360,14 @@ where
             } else {
                 PresenceState::Outside
             };
+            // Inside and allowed to share, with only the fix missing: it was asked for (the
+            // gate allowed it), so wait for it rather than decline.
+            if fresh.is_none() && sharing == Sharing::Allowed && spot_state == PresenceState::Inside
+            {
+                awaiting_fix.push(received.real.knock_mailbox);
+                self.report.knocks_awaiting_fix = self.report.knocks_awaiting_fix.saturating_add(1);
+                continue;
+            }
             let fresh_fix = match (fresh, tracked) {
                 (Some(fix), Some(tracked)) if tracked.presence.fence().contains(fix.coordinate) => {
                     FreshFix::InsideSpot
@@ -1380,6 +1407,7 @@ where
                 self.port(WakeStep::Handoff, meetups.admit(admission)).await;
             }
         }
+        awaiting_fix
     }
 
     /// A fresh GPS fix and the gate read again, for the liveness check, taken once per wake
