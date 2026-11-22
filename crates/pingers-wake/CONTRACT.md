@@ -16,7 +16,7 @@ pingers-meetup-session and the shell.
   budget }`, `WakeTrigger::{Fix, Geofence(GeofenceEvent), Scheduled, Push(PushReason),
   FocusChanged}`, `WakeSettings`, `MailboxReads`.
 - Output: `WakeReport { decision, transitions, upload, boards, matched, knocks_sent,
-  knock_decisions, welcomes, notices, next_wake, ending }`, `BoardReport { server, upload,
+  knock_decisions, knocks_awaiting_fix, welcomes, notices, next_wake, ending }`, `BoardReport { server, upload,
   ending }`, `UploadOutcome`, `KnockOutcome`, `WakeNotice`, `WakeEnding::{Completed,
   OutOfBudget(WakeStep), PortFailed { step, error }}`, `WakeStep`.
 - Ports (`ports` module): `DevicePort`, `PartyView` (+ `PartyInfo` with its `server`,
@@ -93,7 +93,11 @@ pingers-meetup-session and the shell.
   are kept per board; mailbox reads go to the board's server.
 - **Liveness**: one GPS fix per wake with knocks to decide, shared by every round;
   `FreshFix::InsideSpot` only for a fix inside the fence (not the exit band); Focus and the
-  gate are read again after the fix.
+  gate are read again after the fix. A knock on a Spot that is `Inside`, with sharing
+  allowed but no fix to hand (asked for, it comes in a wake of its own), is not decided:
+  it stays in its mailbox, unrecorded, and counts in `knocks_awaiting_fix`; the shell
+  reads mailboxes in the wake that delivers the fix (`MailboxReads::EveryWake`), which
+  decides it.
 - **Fixes**: the wake asks for one when the last is a minute old, a Spot is `Candidate` or
   unconfirmed, or sharing resumes; never while suppressed for a reason a fix cannot change.
 - **Next wake**: `RETRY_AFTER` if any part ended early; `ENTRY_FIX_SPACING` while a Spot waits
