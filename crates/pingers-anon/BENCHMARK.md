@@ -49,7 +49,7 @@ runs of `prove_bench 30`:
 
 An emulator runs x86_64 code on the host's cores under KVM, so this is near desktop speed, not a
 phone's: it shows the shipped build and the self-test work end to end on Android, not a device
-class. Against the 20 s wake budget (pingers-client `WAKE_BUDGET`) a proof is about 2 %; the
+class. Against the 7 s wake budget (pingers-client `WAKE_BUDGET`) a proof is about 6 %; the
 engine also proves only when the wake's remaining time covers the self-test's p95 plus the
 request (`MIN_REQUEST_TIME`, 2 s), and spends a Privacy Pass token otherwise. In a wake a proof
 reads the stored Merkle path and root (no tree rebuild); the tree is rebuilt only by the hourly
